@@ -487,6 +487,39 @@ function ImageDetectionPage({
     }
   }
 
+  async function detectSample(sample: { image: string; title: string }) {
+    if (isGuest && guestDetections >= 1) {
+      setStatus({ tone: "info", text: "访客免费检测次数已用完，请登录后继续检测" });
+      onNeedAuth();
+      return;
+    }
+    setBusy(true);
+    setResult(null);
+    setStatus({ tone: "info", text: `正在加载示例图片：${sample.title}` });
+    try {
+      const response = await fetch(sample.image);
+      if (!response.ok) {
+        throw new Error(`示例图片加载失败：${response.status}`);
+      }
+      const blob = await response.blob();
+      const ext = sample.image.split(".").pop()?.split("?")[0] || "jpg";
+      const sampleFile = new File([blob], `${sample.title}.${ext}`, {
+        type: blob.type || "image/jpeg"
+      });
+      setFile(sampleFile);
+      setPreview(URL.createObjectURL(sampleFile));
+      setStatus({ tone: "info", text: "正在分析示例图片……" });
+      const data = await detectImage(sampleFile);
+      setResult(data.result);
+      setStatus({ tone: "ok", text: "示例图片检测完成" });
+      await onDone();
+    } catch (error) {
+      setStatus({ tone: "error", text: errorMessage(error) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <main className="main">
       <div className="container">
@@ -511,7 +544,7 @@ function ImageDetectionPage({
             <div className="section-label"><i className="fa fa-info-circle" /> 当前状态</div>
             <StatusRow status={status} busy={busy} />
             <div className="card-divider" />
-            {result ? <ImageResult result={result} /> : <ImageSamples />}
+            {result ? <ImageResult result={result} /> : <ImageSamples onSelect={detectSample} busy={busy} />}
           </div>
         </div>
       </div>
@@ -775,14 +808,20 @@ function StatusRow({ status, busy }: { status: Status; busy: boolean }) {
   );
 }
 
-function ImageSamples() {
+function ImageSamples({
+  onSelect,
+  busy
+}: {
+  onSelect: (sample: { image: string; title: string }) => void;
+  busy: boolean;
+}) {
   return (
     <>
-      <div className="section-label"><i className="fa fa-th-large" style={{ color: "var(--warning)" }} /> 示例图片 <span className="label-muted">点击查看效果</span></div>
+      <div className="section-label"><i className="fa fa-th-large" style={{ color: "var(--warning)" }} /> 示例图片 <span className="label-muted">点击直接检测</span></div>
       <div className="sample-list">
-        <SampleItem image="/system/index1.jpg" title="AI生成图像示例" label="AI生成" fake />
-        <SampleItem image="/system/index2.jpg" title="真实拍摄图像示例" label="真实图像" />
-        <SampleItem image="/system/index3.jpg" title="内容检索示例图" label="AI生成" fake />
+        <SampleItem image="/system/index1.jpg" title="AI生成图像示例" label="AI生成" fake disabled={busy} onClick={onSelect} />
+        <SampleItem image="/system/index2.jpg" title="真实拍摄图像示例" label="真实图像" disabled={busy} onClick={onSelect} />
+        <SampleItem image="/system/index3.jpg" title="内容检索示例图" label="AI生成" fake disabled={busy} onClick={onSelect} />
       </div>
       <div className="card-divider" />
       <Tips items={["AIGC检测：识别SD、DALL-E、Midjourney等AI生成图像", "PS篡改检测：识别拼接、修补、克隆等篡改痕迹", "结果包含概率、置信度与简洁结论"]} />
@@ -805,9 +844,25 @@ function VideoSamples() {
   );
 }
 
-function SampleItem({ image, title, label, fake, play }: { image: string; title: string; label: string; fake?: boolean; play?: boolean }) {
+function SampleItem({
+  image,
+  title,
+  label,
+  fake,
+  play,
+  disabled,
+  onClick
+}: {
+  image: string;
+  title: string;
+  label: string;
+  fake?: boolean;
+  play?: boolean;
+  disabled?: boolean;
+  onClick?: (sample: { image: string; title: string }) => void;
+}) {
   return (
-    <div className="sample-item">
+    <button className="sample-item" type="button" disabled={disabled} onClick={() => onClick?.({ image, title })}>
       <div className="sample-thumb">
         <img src={image} alt={title} />
         {play && <i className="fa fa-play-circle play-icon" />}
@@ -819,7 +874,7 @@ function SampleItem({ image, title, label, fake, play }: { image: string; title:
           <span className="sample-hint">查看 <i className="fa fa-chevron-right" /></span>
         </div>
       </div>
-    </div>
+    </button>
   );
 }
 
