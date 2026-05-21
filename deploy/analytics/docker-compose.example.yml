@@ -1,0 +1,14 @@
+services:
+  umami:
+    image: docker.umami.is/umami-software/umami:postgresql-latest
+    container_name: realguard-umami
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3001:3000"
+    environment:
+      DATABASE_URL: postgresql://umami:${POSTGRES_PASSWORD}@172.17.0.1:5432/umami
+      DATABASE_TYPE: postgresql
+      APP_SECRET: ${APP_SECRET}
+      CLIENT_IP_HEADER: x-real-ip
+      DISABLE_TELEMETRY: "1"
+

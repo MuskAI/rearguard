@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>个人中心 - 数字内容侵权、分析、检索和存证综合平台系统</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link href="/static/css/font-awesome.min.css" rel="stylesheet">
+    <style>
+        :root{--primary:#2563eb;--primary-light:#3b82f6;--primary-dark:#1d4ed8;--accent:#06d6a0;--purple:#8b5cf6;--warning:#f59e0b;--danger:#ef4444;--success:#10b981;--bg-body:#f0f2f5;--bg-card:#fff;--bg-nav:rgba(255,255,255,.82);--bg-input:#f1f5f9;--border:#e2e8f0;--border-light:rgba(0,0,0,.06);--text-primary:#0f172a;--text-secondary:#475569;--text-muted:#94a3b8;--shadow-sm:0 1px 3px rgba(0,0,0,.06);--shadow-md:0 4px 12px rgba(0,0,0,.08);--shadow-lg:0 12px 40px rgba(0,0,0,.1);--shadow-card:0 1px 3px rgba(0,0,0,.04),0 4px 12px rgba(0,0,0,.04)}
+        [data-theme="dark"]{--bg-body:#0b0f1a;--bg-card:#151b2e;--bg-nav:rgba(15,23,42,.85);--bg-input:#1e293b;--border:#1e293b;--border-light:rgba(255,255,255,.06);--text-primary:#f1f5f9;--text-secondary:#94a3b8;--text-muted:#64748b;--shadow-sm:0 1px 3px rgba(0,0,0,.3);--shadow-md:0 4px 12px rgba(0,0,0,.4);--shadow-lg:0 12px 40px rgba(0,0,0,.5);--shadow-card:0 1px 3px rgba(0,0,0,.2),0 4px 12px rgba(0,0,0,.15)}
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:'Outfit','Noto Sans SC',sans-serif;background:var(--bg-body);color:var(--text-primary);transition:background .4s,color .4s;min-height:100vh;display:flex;flex-direction:column}
+        a{text-decoration:none;color:inherit}
+        .nav{position:fixed;top:0;left:0;right:0;z-index:100;background:var(--bg-nav);backdrop-filter:blur(20px) saturate(1.4);border-bottom:1px solid var(--border-light);transition:all .3s}
+        .nav-inner{max-width:1280px;margin:0 auto;padding:0 2rem;height:64px;display:flex;align-items:center;justify-content:space-between}
+        .nav-logo{display:flex;align-items:center;gap:10px;font-size:1.2rem;font-weight:700;color:var(--text-primary)}.nav-logo i{color:var(--primary);font-size:1.5rem}
+        .nav-links{display:flex;align-items:center;gap:2rem}.nav-links a{font-size:.9rem;font-weight:500;color:var(--text-secondary);transition:color .2s}.nav-links a:hover,.nav-links a.active{color:var(--primary)}
+        .dropdown{position:relative}.dropdown-trigger{display:flex;align-items:center;gap:4px;font-size:.9rem;font-weight:500;color:var(--text-secondary);cursor:pointer;background:none;border:none;font-family:inherit;transition:color .2s}.dropdown-trigger:hover{color:var(--primary)}.dropdown-trigger i.arrow{font-size:.6rem;transition:transform .3s}.dropdown:hover .dropdown-trigger i.arrow{transform:rotate(180deg)}.dropdown-menu{position:absolute;top:calc(100% + 12px);left:-16px;min-width:220px;padding:8px;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-lg);opacity:0;visibility:hidden;transform:translateY(-8px);transition:all .25s}.dropdown:hover .dropdown-menu{opacity:1;visibility:visible;transform:translateY(0)}.dropdown-label{padding:6px 12px;font-size:.7rem;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.08em}.dropdown-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;font-size:.85rem;color:var(--text-secondary);transition:all .15s}.dropdown-item:hover{background:rgba(37,99,235,.08);color:var(--primary)}.dropdown-item i{width:18px;text-align:center}.dropdown-item.disabled{opacity:.45;pointer-events:none}.dropdown-divider{height:1px;background:var(--border);margin:4px 8px}.badge-soon{font-size:.6rem;font-weight:600;background:linear-gradient(135deg,#f59e0b,#d97706);color:#fff;padding:1px 6px;border-radius:99px;margin-left:auto}
+        .theme-btn{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;background:var(--bg-input);border:1px solid var(--border);cursor:pointer;transition:all .2s;color:var(--text-secondary);font-size:1rem}.theme-btn:hover{background:var(--primary);color:#fff;border-color:var(--primary)}
+        .main{flex:1;padding-top:88px;padding-bottom:3rem}.container{max-width:960px;margin:0 auto;padding:0 2rem}
+
+        /* PROFILE BANNER */
+        .profile-banner{position:relative;border-radius:20px;overflow:hidden;margin-bottom:1.5rem;background:linear-gradient(135deg,#1e40af 0%,#7c3aed 50%,#2563eb 100%);padding:2rem 2rem 1.5rem;box-shadow:var(--shadow-md)}
+        .profile-banner::before{content:'';position:absolute;inset:0;background:url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.05'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")}
+        .banner-content{position:relative;display:flex;align-items:center;gap:1.5rem}
+        .avatar{width:76px;height:76px;border-radius:50%;background:rgba(255,255,255,.2);border:3px solid rgba(255,255,255,.3);display:flex;align-items:center;justify-content:center;font-size:2rem;color:#fff;font-weight:800;flex-shrink:0;backdrop-filter:blur(8px)}
+        .banner-info{flex:1;color:#fff}
+        .banner-name{font-size:1.3rem;font-weight:700;margin-bottom:.15rem}
+        .banner-phone{font-size:.82rem;opacity:.75;display:flex;align-items:center;gap:5px}
+        .banner-stats{display:flex;gap:1.5rem;margin-top:.75rem}
+        .b-stat{text-align:center;background:rgba(255,255,255,.12);border-radius:10px;padding:.5rem 1rem;backdrop-filter:blur(4px)}
+        .b-stat .num{font-size:1.15rem;font-weight:700}
+        .b-stat .label{font-size:.62rem;opacity:.7;margin-top:.1rem}
+
+        /* SECTION */
+        .section-title{font-size:1rem;font-weight:700;color:var(--text-primary);margin-bottom:.8rem;display:flex;align-items:center;gap:8px;padding-left:.25rem}
+        .section-title i{font-size:.9rem}
+        .card{background:var(--bg-card);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow-card);transition:all .3s;overflow:hidden;margin-bottom:1.5rem}
+
+        /* HISTORY GRID - 2x2 */
+        .history-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1.5rem}
+        @media(max-width:640px){.history-grid{grid-template-columns:1fr}}
+        .history-card{display:flex;align-items:center;gap:1rem;padding:1rem 1.2rem;background:var(--bg-card);border:1px solid var(--border);border-radius:14px;cursor:pointer;transition:all .25s;box-shadow:var(--shadow-card)}
+        .history-card:hover{border-color:var(--primary);transform:translateY(-2px);box-shadow:var(--shadow-md)}
+        .h-icon{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:1.1rem;flex-shrink:0}
+        .h-icon.blue{background:rgba(37,99,235,.1);color:var(--primary)}
+        .h-icon.orange{background:rgba(245,158,11,.1);color:var(--warning)}
+        .h-icon.green{background:rgba(6,214,160,.1);color:var(--accent)}
+        .h-icon.purple{background:rgba(139,92,246,.1);color:var(--purple)}
+        .h-body{flex:1;min-width:0}
+        .h-body .title{font-size:.85rem;font-weight:600;color:var(--text-primary);margin-bottom:.1rem}
+        .h-body .count{font-size:.72rem;color:var(--text-muted)}
+        .h-arrow{color:var(--text-muted);font-size:.7rem;transition:transform .2s}
+        .history-card:hover .h-arrow{transform:translateX(3px);color:var(--primary)}
+
+        /* MENU LIST */
+        .menu-list{list-style:none}
+        .menu-item{display:flex;align-items:center;gap:12px;padding:.85rem 1.25rem;cursor:pointer;transition:all .15s;color:var(--text-secondary);font-size:.85rem;border-bottom:1px solid var(--border)}
+        .menu-item:last-child{border-bottom:none}
+        .menu-item:hover{background:rgba(37,99,235,.03);color:var(--primary)}
+        .menu-item i.icon{width:20px;text-align:center;font-size:.95rem;color:var(--text-muted);transition:color .15s}
+        .menu-item:hover i.icon{color:var(--primary)}
+        .menu-item .m-arrow{margin-left:auto;font-size:.7rem;color:var(--text-muted);transition:transform .2s}
+        .menu-item:hover .m-arrow{transform:translateX(3px);color:var(--primary)}
+        .menu-item.danger{color:var(--danger)}.menu-item.danger i.icon{color:var(--danger)}
+        .menu-item.danger:hover{background:rgba(239,68,68,.03)}
+
+        /* MODAL */
+        .modal-overlay{display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.4);backdrop-filter:blur(6px);align-items:center;justify-content:center}
+        .modal-overlay.visible{display:flex}
+        .modal{background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:1.5rem;width:100%;max-width:400px;box-shadow:var(--shadow-lg)}
+        .modal h3{font-size:1.05rem;font-weight:700;color:var(--text-primary);margin-bottom:1.2rem;display:flex;align-items:center;gap:8px}
+        .modal h3 i{color:var(--primary)}
+        .form-group{margin-bottom:.9rem}
+        .form-label{display:block;font-size:.78rem;font-weight:500;color:var(--text-secondary);margin-bottom:.3rem}
+        .form-input{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--bg-input);color:var(--text-primary);font-size:.85rem;font-family:inherit;transition:all .2s}
+        .form-input:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px rgba(37,99,235,.1)}
+        .form-input::placeholder{color:var(--text-muted)}
+        .modal-actions{display:flex;gap:.75rem;margin-top:1rem}
+        .btn{padding:9px 20px;border-radius:10px;font-size:.84rem;font-weight:600;cursor:pointer;font-family:inherit;transition:all .2s;border:none;display:inline-flex;align-items:center;gap:6px}
+        .btn-primary-s{background:var(--primary);color:#fff}.btn-primary-s:hover{background:var(--primary-dark)}
+        .btn-secondary{background:var(--bg-input);color:var(--text-secondary);border:1px solid var(--border)}.btn-secondary:hover{border-color:var(--primary);color:var(--primary)}
+        .msg{font-size:.78rem;margin-top:.5rem;display:none}.msg.success{color:var(--success);display:block}.msg.error{color:var(--danger);display:block}
+        .share-box{display:flex;align-items:center;gap:.5rem;padding:.6rem;background:var(--bg-input);border-radius:10px;margin-top:.8rem}
+        .share-box input{flex:1;border:none;background:transparent;color:var(--text-primary);font-size:.8rem;font-family:inherit;outline:none}
+        .share-box button{padding:6px 14px;border-radius:8px;border:none;background:var(--primary);color:#fff;font-size:.75rem;font-weight:600;cursor:pointer;white-space:nowrap;font-family:inherit;transition:all .2s}
+        .share-box button:hover{background:var(--primary-dark)}
+
+        .footer{padding:1.5rem 0;background:var(--bg-card);border-top:1px solid var(--border);text-align:center;transition:all .4s;margin-top:auto}
+        .footer-logo{display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:.4rem;font-size:.95rem;font-weight:700;color:var(--text-primary)}.footer-logo i{color:var(--primary)}
+        .footer-copy{font-size:.7rem;color:var(--text-muted)}
+    </style>
+</head>
+<body>
+<header class="nav"><div class="nav-inner"><a href="/index" class="nav-logo"><i class="fa fa-eye"></i><span>数字内容侵权、分析、检索和存证综合平台</span></a><nav class="nav-links"><a href="/index">首页</a><div class="dropdown"><button class="dropdown-trigger"><span>功能</span><i class="fa fa-chevron-down arrow"></i></button><div class="dropdown-menu"><div class="dropdown-label">检测</div><a href="/image_upload" class="dropdown-item"><i class="fa fa-image"></i> 图像检测</a><a href="/video_upload" class="dropdown-item"><i class="fa fa-film"></i> 视频检测</a><div class="dropdown-divider"></div><div class="dropdown-label">检索</div><a href="/image_retrieve" class="dropdown-item"><i class="fa fa-search"></i> 图像检索</a><a href="/video_retrieve" class="dropdown-item"><i class="fa fa-play-circle"></i> 视频检索</a></div></div><a href="/introduce">关于我们</a><a href="/profile" class="active">我的</a><button class="theme-btn" id="themeToggle" title="切换主题"><i class="fa fa-moon-o"></i></button></nav></div></header>
+
+<!-- Modals -->
+<div class="modal-overlay" id="pwdModal"><div class="modal"><h3><i class="fa fa-lock"></i> 修改密码</h3><div class="form-group"><label class="form-label">当前密码</label><input type="password" class="form-input" id="oldPwd" placeholder="请输入当前密码"></div><div class="form-group"><label class="form-label">新密码</label><input type="password" class="form-input" id="newPwd" placeholder="请输入新密码"></div><div class="form-group"><label class="form-label">确认新密码</label><input type="password" class="form-input" id="confirmPwd" placeholder="请再次输入新密码"></div><div class="msg" id="pwdMsg"></div><div class="modal-actions"><button class="btn btn-primary-s" onclick="submitPwd()"><i class="fa fa-check"></i> 确认修改</button><button class="btn btn-secondary" onclick="closeModal('pwdModal')">取消</button></div></div></div>
+<div class="modal-overlay" id="shareModal"><div class="modal"><h3><i class="fa fa-share-alt"></i> 分享推荐</h3><p style="font-size:.85rem;color:var(--text-secondary);line-height:1.6;margin-bottom:.5rem;">将 数字内容侵权、分析、检索和存证综合平台分享给朋友，一起体验AI内容检测。</p><div class="share-box"><input type="text" id="shareUrl" readonly><button onclick="copyShare()"><i class="fa fa-copy"></i> 复制</button></div><div class="msg" id="shareMsg"></div><div class="modal-actions" style="margin-top:.8rem"><button class="btn btn-secondary" onclick="closeModal('shareModal')">关闭</button></div></div></div>
+
+<main class="main"><div class="container">
+    <!-- BANNER -->
+    <div class="profile-banner">
+        <div class="banner-content">
+            <div class="avatar">{{ user.username[0]|upper if user.username else 'U' }}</div>
+            <div class="banner-info">
+                <div class="banner-name">{{ user.username or '用户' }}</div>
+                <div class="banner-phone"><i class="fa fa-phone"></i> {{ user.phone or '-' }}</div>
+                <div class="banner-stats">
+                    <div class="b-stat"><div class="num">{{ detect_count }}</div><div class="label">图像鉴伪</div></div>
+                    <div class="b-stat"><div class="num">{{ image_retrieve_count }}</div><div class="label">图像侵权检索</div></div>
+                    <div class="b-stat"><div class="num">{{ video_retrieve_count }}</div><div class="label">视频侵权检索</div></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- HISTORY -->
+    <div class="section-title"><i class="fa fa-clock-o" style="color:var(--primary)"></i> 历史记录</div>
+    <div class="history-grid">
+        <div class="history-card" onclick="location.href='/history_photo'">
+            <div class="h-icon blue"><i class="fa fa-image"></i></div>
+            <div class="h-body"><div class="title">图像鉴伪</div><div class="count">{{ detect_count }} 条记录</div></div>
+            <i class="fa fa-chevron-right h-arrow"></i>
+        </div>
+        <div class="history-card" onclick="location.href='/history_video_detect'">
+            <div class="h-icon orange"><i class="fa fa-film"></i></div>
+            <div class="h-body"><div class="title">视频检测记录</div><div class="count">{{ video_detect_count }} 条记录</div></div>
+            <i class="fa fa-chevron-right h-arrow"></i>
+        </div>
+        <div class="history-card" onclick="location.href='/history_image_retrieve'">
+            <div class="h-icon green"><i class="fa fa-search"></i></div>
+            <div class="h-body"><div class="title">图像侵权检索</div><div class="count">{{ image_retrieve_count }} 条记录</div></div>
+            <i class="fa fa-chevron-right h-arrow"></i>
+        </div>
+        <div class="history-card" onclick="location.href='/history_video_retrieve'">
+            <div class="h-icon purple"><i class="fa fa-play-circle"></i></div>
+            <div class="h-body"><div class="title">视频侵权检索</div><div class="count">{{ video_retrieve_count }} 条记录</div></div>
+            <i class="fa fa-chevron-right h-arrow"></i>
+        </div>
+    </div>
+
+    <!-- ACCOUNT -->
+    <div class="section-title"><i class="fa fa-cog" style="color:var(--text-muted)"></i> 账户设置</div>
+    <div class="card">
+        <ul class="menu-list">
+            <li class="menu-item" onclick="openModal('pwdModal')"><i class="fa fa-lock icon"></i> 修改密码 <i class="fa fa-chevron-right m-arrow"></i></li>
+            <li class="menu-item" onclick="location.href='/introduce'"><i class="fa fa-info-circle icon"></i> 关于我们 <i class="fa fa-chevron-right m-arrow"></i></li>
+            <li class="menu-item" onclick="openShare()"><i class="fa fa-share-alt icon"></i> 分享推荐 <i class="fa fa-chevron-right m-arrow"></i></li>
+            <li class="menu-item danger" onclick="if(confirm('确定退出登录？'))location.href='/logout'"><i class="fa fa-sign-out icon"></i> 退出登录 <i class="fa fa-chevron-right m-arrow"></i></li>
+        </ul>
+    </div>
+</div></main>
+
+<footer class="footer"><div class="footer-logo"><i class="fa fa-eye"></i> 数字内容侵权、分析、检索和存证综合平台</div><p class="footer-copy">&copy; 2025 数字内容侵权、分析、检索和存证综合平台</p></footer>
+
+<script>
+(function(){
+    var b=document.body,t=document.getElementById('themeToggle'),ti=t.querySelector('i');
+    function setTheme(d){if(d){b.setAttribute('data-theme','dark');ti.className='fa fa-sun-o';}else{b.removeAttribute('data-theme');ti.className='fa fa-moon-o';}}
+    var s=localStorage.getItem('theme');if(s==='dark'||(!s&&window.matchMedia('(prefers-color-scheme:dark)').matches))setTheme(true);
+    t.addEventListener('click',function(){var d=b.hasAttribute('data-theme');setTheme(!d);localStorage.setItem('theme',d?'light':'dark');});
+    window.addEventListener('scroll',function(){document.querySelector('.nav').style.boxShadow=window.scrollY>50?'var(--shadow-md)':'none';});
+})();
+function openModal(id){document.getElementById(id).classList.add('visible');}
+function closeModal(id){document.getElementById(id).classList.remove('visible');var m=document.getElementById('pwdMsg');if(m){m.className='msg';m.textContent='';}}
+document.querySelectorAll('.modal-overlay').forEach(function(m){m.addEventListener('click',function(e){if(e.target===m)closeModal(m.id);});});
+function submitPwd(){
+    var o=document.getElementById('oldPwd').value.trim(),n=document.getElementById('newPwd').value.trim(),c=document.getElementById('confirmPwd').value.trim(),m=document.getElementById('pwdMsg');
+    if(!o||!n||!c){m.className='msg error';m.textContent='请填写所有字段';return;}
+    if(n!==c){m.className='msg error';m.textContent='两次输入的新密码不一致';return;}
+    if(n.length<4){m.className='msg error';m.textContent='新密码至少4位';return;}
+    fetch('/profile/change_password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({old_password:o,new_password:n})})
+    .then(function(r){return r.json();}).then(function(d){
+        if(d.status==='success'){m.className='msg success';m.textContent='密码修改成功';document.getElementById('oldPwd').value='';document.getElementById('newPwd').value='';document.getElementById('confirmPwd').value='';setTimeout(function(){closeModal('pwdModal');},1500);}
+        else{m.className='msg error';m.textContent=d.message||'修改失败';}
+    }).catch(function(){m.className='msg error';m.textContent='请求失败';});
+}
+function openShare(){document.getElementById('shareUrl').value=window.location.origin+'/index';openModal('shareModal');}
+function copyShare(){var i=document.getElementById('shareUrl');i.select();document.execCommand('copy');var m=document.getElementById('shareMsg');m.className='msg success';m.textContent='已复制到剪贴板';setTimeout(function(){m.className='msg';},2000);}
+</script>
+</body>
+</html>

@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 - 数字内容侵权、分析、检索和存证综合平台</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link href="/static/css/font-awesome.min.css" rel="stylesheet">
+    <style>
+        :root{--primary:#2563eb;--primary-dark:#1d4ed8;--accent:#06d6a0;--danger:#ef4444;--bg-body:#f0f2f5;--bg-card:#fff;--bg-nav:rgba(255,255,255,.82);--bg-input:#f1f5f9;--border:#e2e8f0;--border-light:rgba(0,0,0,.06);--text-primary:#0f172a;--text-secondary:#475569;--text-muted:#94a3b8;--shadow-md:0 4px 12px rgba(0,0,0,.08);--shadow-lg:0 12px 40px rgba(0,0,0,.1);--shadow-card:0 1px 3px rgba(0,0,0,.04),0 4px 12px rgba(0,0,0,.04)}
+        [data-theme="dark"]{--bg-body:#0b0f1a;--bg-card:#151b2e;--bg-nav:rgba(15,23,42,.85);--bg-input:#1e293b;--border:#1e293b;--border-light:rgba(255,255,255,.06);--text-primary:#f1f5f9;--text-secondary:#94a3b8;--text-muted:#64748b;--shadow-md:0 4px 12px rgba(0,0,0,.4);--shadow-lg:0 12px 40px rgba(0,0,0,.5);--shadow-card:0 1px 3px rgba(0,0,0,.2),0 4px 12px rgba(0,0,0,.15)}
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:'Outfit','Noto Sans SC',sans-serif;background:var(--bg-body);color:var(--text-primary);transition:background .4s,color .4s;min-height:100vh;display:flex;flex-direction:column}
+        a{text-decoration:none;color:inherit}
+        .nav{position:fixed;top:0;left:0;right:0;z-index:100;background:var(--bg-nav);backdrop-filter:blur(20px) saturate(1.4);border-bottom:1px solid var(--border-light);transition:all .3s}
+        .nav-inner{max-width:1280px;margin:0 auto;padding:0 2rem;height:64px;display:flex;align-items:center;justify-content:space-between}
+        .nav-logo{display:flex;align-items:center;gap:10px;font-size:1.2rem;font-weight:700;color:var(--text-primary)}
+        .nav-logo i{color:var(--primary);font-size:1.5rem}
+        .nav-links{display:flex;align-items:center;gap:2rem}
+        .nav-links a{font-size:.9rem;font-weight:500;color:var(--text-secondary);transition:color .2s}
+        .nav-links a:hover{color:var(--primary)}
+        .theme-btn{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;background:var(--bg-input);border:1px solid var(--border);cursor:pointer;transition:all .2s;color:var(--text-secondary);font-size:1rem}
+        .theme-btn:hover{background:var(--primary);color:#fff;border-color:var(--primary)}
+        .main{flex:1;display:flex;align-items:center;justify-content:center;padding:80px 1rem 2rem}
+        .login-card{width:100%;max-width:420px;background:var(--bg-card);border:1px solid var(--border);border-radius:20px;padding:2.5rem;box-shadow:var(--shadow-lg);transition:all .4s}
+        .login-card h2{font-size:1.6rem;font-weight:700;text-align:center;margin-bottom:.4rem;color:var(--text-primary)}
+        .login-card .sub{text-align:center;color:var(--text-muted);font-size:.9rem;margin-bottom:2rem}
+        .form-group{margin-bottom:1.2rem}
+        .form-label{display:block;font-size:.82rem;font-weight:500;color:var(--text-secondary);margin-bottom:.4rem}
+        .input-wrap{position:relative}
+        .input-wrap i{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--text-muted);font-size:.9rem}
+        .input-wrap input{width:100%;padding:12px 14px 12px 42px;border:1px solid var(--border);border-radius:12px;background:var(--bg-input);color:var(--text-primary);font-size:.9rem;font-family:inherit;transition:all .2s}
+        .input-wrap input:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px rgba(37,99,235,.12)}
+        .input-wrap input::placeholder{color:var(--text-muted)}
+        .btn-primary{width:100%;padding:13px;border:none;border-radius:12px;background:var(--primary);color:#fff;font-size:.95rem;font-weight:600;cursor:pointer;font-family:inherit;transition:all .2s;display:flex;align-items:center;justify-content:center;gap:8px;margin-top:1.5rem}
+        .btn-primary:hover{background:var(--primary-dark)}
+        .login-tabs{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:4px;margin-bottom:1.3rem;border:1px solid var(--border);border-radius:12px;background:var(--bg-input)}
+        .login-tab{height:38px;border:0;border-radius:9px;background:transparent;color:var(--text-secondary);font-size:.88rem;font-weight:600;font-family:inherit;cursor:pointer;transition:all .2s}
+        .login-tab.active{background:var(--bg-card);color:var(--primary);box-shadow:var(--shadow-card)}
+        .login-panel{display:none}
+        .login-panel.active{display:block}
+        .code-row{display:grid;grid-template-columns:1fr 116px;gap:8px}
+        .btn-code{border:1px solid var(--border);border-radius:12px;background:var(--bg-card);color:var(--primary);font-size:.84rem;font-weight:600;font-family:inherit;cursor:pointer;transition:all .2s}
+        .btn-code:hover:not(:disabled){border-color:var(--primary);box-shadow:0 0 0 3px rgba(37,99,235,.08)}
+        .btn-code:disabled{color:var(--text-muted);cursor:not-allowed}
+        .form-footer{text-align:center;margin-top:1.2rem;font-size:.85rem;color:var(--text-muted)}
+        .form-footer a{color:var(--primary);font-weight:600}
+        .form-footer a:hover{text-decoration:underline}
+        .error-msg{color:var(--danger);font-size:.8rem;margin-left:8px}
+        .footer{padding:2rem 0;background:var(--bg-card);border-top:1px solid var(--border);text-align:center;transition:all .4s}
+        .footer-logo{display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:.5rem;font-size:1rem;font-weight:700;color:var(--text-primary)}
+        .footer-logo i{color:var(--primary)}
+        .footer-copy{font-size:.75rem;color:var(--text-muted)}
+    </style>
+</head>
+<body>
+<header class="nav">
+    <div class="nav-inner">
+        <a href="/index" class="nav-logo"><i class="fa fa-eye"></i><span>数字内容侵权、分析、检索和存证综合平台</span></a>
+        <nav class="nav-links">
+            <a href="/index">首页</a>
+            <a href="/introduce">关于我们</a>
+            <button class="theme-btn" id="themeToggle" title="切换主题"><i class="fa fa-moon-o"></i></button>
+        </nav>
+    </div>
+</header>
+<main class="main">
+    <div class="login-card">
+        <h2>账户登录</h2>
+        <p class="sub">登录您的账户以使用全部功能</p>
+        <div class="login-tabs">
+            <button type="button" class="login-tab {% if login_mode != 'sms' %}active{% endif %}" data-login-tab="password">密码登录</button>
+            <button type="button" class="login-tab {% if login_mode == 'sms' %}active{% endif %}" data-login-tab="sms">验证码登录</button>
+        </div>
+        <form action="/login_verify" method="post" class="login-panel {% if login_mode != 'sms' %}active{% endif %}" data-login-panel="password">
+            <div class="form-group">
+                <label class="form-label">手机号</label>
+                <div class="input-wrap">
+                    <i class="fa fa-phone"></i>
+                    <input type="text" name="phone" placeholder="请输入手机号" required>
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">密码</label>
+                <div class="input-wrap">
+                    <i class="fa fa-lock"></i>
+                    <input type="password" name="secret" placeholder="请输入密码" required>
+                </div>
+            </div>
+            <button type="submit" class="btn-primary"><i class="fa fa-sign-in"></i> 登录</button>
+        </form>
+        <form action="/login_sms_verify" method="post" class="login-panel {% if login_mode == 'sms' %}active{% endif %}" data-login-panel="sms">
+            <div class="form-group">
+                <label class="form-label">手机号</label>
+                <div class="input-wrap">
+                    <i class="fa fa-phone"></i>
+                    <input type="text" name="phone" data-sms-phone="login" placeholder="请输入手机号" required>
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">短信验证码</label>
+                <div class="code-row">
+                    <div class="input-wrap">
+                        <i class="fa fa-shield"></i>
+                        <input type="text" name="sms_code" placeholder="请输入验证码" required>
+                    </div>
+                    <button type="button" class="btn-code" data-sms-btn="login">获取验证码</button>
+                </div>
+            </div>
+            <button type="submit" class="btn-primary"><i class="fa fa-sign-in"></i> 验证码登录</button>
+        </form>
+        <div class="form-footer">
+            还没有账户？<a href="/register">立即注册</a>
+            {% if error %}<span class="error-msg">{{ error }}</span>{% endif %}
+        </div>
+    </div>
+</main>
+<footer class="footer">
+    <div class="footer-logo"><i class="fa fa-eye"></i> 数字内容侵权、分析、检索和存证综合平台</div>
+    <p class="footer-copy">&copy; 2025 数字内容侵权、分析、检索和存证综合平台</p>
+</footer>
+<script>
+(function(){
+    var b=document.body,t=document.getElementById('themeToggle'),i=t.querySelector('i');
+    function set(d){if(d){b.setAttribute('data-theme','dark');i.className='fa fa-sun-o';}else{b.removeAttribute('data-theme');i.className='fa fa-moon-o';}}
+    var s=localStorage.getItem('theme');
+    if(s==='dark'||(!s&&window.matchMedia('(prefers-color-scheme:dark)').matches))set(true);
+    t.addEventListener('click',function(){var d=b.hasAttribute('data-theme');set(!d);localStorage.setItem('theme',d?'light':'dark');});
+})();
+(function(){
+    var tabs=document.querySelectorAll('[data-login-tab]');
+    tabs.forEach(function(tab){
+        tab.addEventListener('click',function(){
+            var mode=tab.getAttribute('data-login-tab');
+            tabs.forEach(function(item){item.classList.toggle('active',item===tab);});
+            document.querySelectorAll('[data-login-panel]').forEach(function(panel){
+                panel.classList.toggle('active',panel.getAttribute('data-login-panel')===mode);
+            });
+        });
+    });
+    function countdown(btn, seconds){
+        btn.disabled=true;
+        var left=seconds;
+        btn.textContent=left+'秒后重发';
+        var timer=setInterval(function(){
+            left-=1;
+            if(left<=0){clearInterval(timer);btn.disabled=false;btn.textContent='获取验证码';return;}
+            btn.textContent=left+'秒后重发';
+        },1000);
+    }
+    document.querySelectorAll('[data-sms-btn]').forEach(function(btn){
+        btn.addEventListener('click',function(){
+            var scene=btn.getAttribute('data-sms-btn');
+            var phoneInput=document.querySelector('[data-sms-phone="'+scene+'"]');
+            var phone=phoneInput ? phoneInput.value.trim() : '';
+            if(!/^1[3-9]\d{9}$/.test(phone)){alert('请输入正确的手机号');return;}
+            btn.disabled=true;
+            btn.textContent='发送中...';
+            fetch('/sms/send_code',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:phone,scene:scene})})
+                .then(function(res){return res.json().then(function(data){return {ok:res.ok,data:data};});})
+                .then(function(result){
+                    alert(result.data.message || (result.ok ? '验证码已发送' : '发送失败'));
+                    if(result.ok){countdown(btn,60);}else{btn.disabled=false;btn.textContent='获取验证码';}
+                })
+                .catch(function(){alert('验证码发送失败，请稍后重试');btn.disabled=false;btn.textContent='获取验证码';});
+        });
+    });
+})();
+</script>
+</body>
+</html>

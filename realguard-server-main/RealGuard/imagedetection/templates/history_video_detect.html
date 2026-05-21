@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>视频检测记录 - 数字内容侵权、分析、检索和存证综合平台</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link href="/static/css/font-awesome.min.css" rel="stylesheet">
+    <style>
+        :root{--primary:#2563eb;--primary-dark:#1d4ed8;--accent:#06d6a0;--danger:#ef4444;--success:#10b981;--warning:#f59e0b;--bg-body:#f0f2f5;--bg-card:#fff;--bg-nav:rgba(255,255,255,.82);--bg-input:#f1f5f9;--border:#e2e8f0;--border-light:rgba(0,0,0,.06);--text-primary:#0f172a;--text-secondary:#475569;--text-muted:#94a3b8;--shadow-md:0 4px 12px rgba(0,0,0,.08);--shadow-lg:0 12px 40px rgba(0,0,0,.1);--shadow-card:0 1px 3px rgba(0,0,0,.04),0 4px 12px rgba(0,0,0,.04)}
+        [data-theme="dark"]{--bg-body:#0b0f1a;--bg-card:#151b2e;--bg-nav:rgba(15,23,42,.85);--bg-input:#1e293b;--border:#1e293b;--border-light:rgba(255,255,255,.06);--text-primary:#f1f5f9;--text-secondary:#94a3b8;--text-muted:#64748b;--shadow-md:0 4px 12px rgba(0,0,0,.4);--shadow-lg:0 12px 40px rgba(0,0,0,.5);--shadow-card:0 1px 3px rgba(0,0,0,.2),0 4px 12px rgba(0,0,0,.15)}
+        *{margin:0;padding:0;box-sizing:border-box}body{font-family:'Outfit','Noto Sans SC',sans-serif;background:var(--bg-body);color:var(--text-primary);transition:background .4s,color .4s;min-height:100vh;display:flex;flex-direction:column}a{text-decoration:none;color:inherit}
+
+        /* NAV */
+        .nav{position:fixed;top:0;left:0;right:0;z-index:100;background:var(--bg-nav);backdrop-filter:blur(20px) saturate(1.4);border-bottom:1px solid var(--border-light);transition:all .3s}.nav-inner{max-width:1280px;margin:0 auto;padding:0 2rem;height:64px;display:flex;align-items:center;justify-content:space-between}.nav-logo{display:flex;align-items:center;gap:10px;font-size:1.2rem;font-weight:700;color:var(--text-primary)}.nav-logo i{color:var(--primary);font-size:1.5rem}.nav-links{display:flex;align-items:center;gap:2rem}.nav-links a{font-size:.9rem;font-weight:500;color:var(--text-secondary);transition:color .2s}.nav-links a:hover,.nav-links a.active{color:var(--primary)}
+        .dropdown{position:relative}.dropdown-trigger{display:flex;align-items:center;gap:4px;font-size:.9rem;font-weight:500;color:var(--text-secondary);cursor:pointer;background:none;border:none;font-family:inherit;transition:color .2s}.dropdown-trigger:hover{color:var(--primary)}.dropdown-trigger i{font-size:.6rem;transition:transform .3s}.dropdown:hover .dropdown-trigger i{transform:rotate(180deg)}.dropdown-menu{position:absolute;top:calc(100% + 12px);left:-16px;min-width:220px;padding:8px;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-lg);opacity:0;visibility:hidden;transform:translateY(-8px);transition:all .25s}.dropdown:hover .dropdown-menu{opacity:1;visibility:visible;transform:translateY(0)}.dropdown-label{padding:6px 12px;font-size:.7rem;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.08em}.dropdown-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;font-size:.85rem;color:var(--text-secondary);transition:all .15s}.dropdown-item:hover{background:rgba(37,99,235,.08);color:var(--primary)}.dropdown-item i{width:18px;text-align:center}.dropdown-divider{height:1px;background:var(--border);margin:4px 8px}
+        .theme-btn{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;background:var(--bg-input);border:1px solid var(--border);cursor:pointer;transition:all .2s;color:var(--text-secondary);font-size:1rem}.theme-btn:hover{background:var(--primary);color:#fff;border-color:var(--primary)}
+
+        /* MAIN */
+        .main{flex:1;padding-top:88px;padding-bottom:3rem}.container{max-width:1280px;margin:0 auto;padding:0 2rem}
+        .page-header{margin-bottom:2rem;display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:1rem}
+        .page-header-left h1{font-size:1.6rem;font-weight:700;color:var(--text-primary);margin-bottom:.3rem;display:flex;align-items:center;gap:10px}.page-header-left h1 i{color:var(--primary)}.page-header-left p{font-size:.9rem;color:var(--text-secondary)}
+        .page-header-right{display:flex;gap:.5rem;flex-wrap:wrap}
+        .filter-btn{padding:8px 16px;border-radius:10px;font-size:.8rem;font-weight:600;cursor:pointer;font-family:inherit;transition:all .2s;border:1px solid var(--border);background:var(--bg-card);color:var(--text-muted)}
+        .go-upload-btn{padding:8px 16px;border-radius:10px;font-size:.8rem;font-weight:600;cursor:pointer;font-family:inherit;transition:all .2s;border:1px solid var(--primary);background:var(--primary);color:#fff}
+        .go-upload-btn:hover{background:var(--primary-dark);border-color:var(--primary-dark)}
+        .filter-btn.active{background:var(--primary);color:#fff;border-color:var(--primary)}
+        .filter-btn:hover:not(.active){border-color:var(--primary);color:var(--primary)}
+        .card{background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:1.5rem;box-shadow:var(--shadow-card);transition:all .3s}
+        .empty-state{text-align:center;padding:4rem 0;color:var(--text-muted)}.empty-state i{font-size:3rem;margin-bottom:1rem;display:block}
+
+        /* Grid 5 cols */
+        .history-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:1.2rem}
+        @media(max-width:1200px){.history-grid{grid-template-columns:repeat(4,1fr)}}@media(max-width:960px){.history-grid{grid-template-columns:repeat(3,1fr)}}@media(max-width:640px){.history-grid{grid-template-columns:repeat(2,1fr)}}
+
+        /* History card */
+        .h-card{background:var(--bg-card);border:1px solid var(--border);border-radius:14px;overflow:hidden;transition:all .3s;cursor:pointer;position:relative}
+        .h-card:hover{transform:translateY(-4px);box-shadow:var(--shadow-md);border-color:var(--primary)}
+        .h-thumb{position:relative;height:150px;overflow:hidden;background:#0f172a}
+        .h-thumb img,.h-thumb video{width:100%;height:100%;object-fit:cover;transition:transform .35s;display:block}.h-card:hover .h-thumb img,.h-card:hover .h-thumb video{transform:scale(1.06)}
+        .h-thumb-placeholder{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,.35);gap:4px}
+        .h-thumb-placeholder i{font-size:2rem}.h-thumb-placeholder span{font-size:.6rem}
+        .h-badge{position:absolute;top:8px;right:8px;padding:3px 10px;border-radius:99px;font-size:.65rem;font-weight:700;color:#fff;z-index:2}
+        .h-badge.fake{background:var(--danger)}.h-badge.real{background:var(--success)}
+        .h-type-badge{position:absolute;top:8px;left:8px;padding:2px 8px;border-radius:99px;font-size:.58rem;font-weight:600;color:#fff;background:rgba(0,0,0,.5);backdrop-filter:blur(4px);z-index:2;display:flex;align-items:center;gap:3px}
+        .h-overlay{position:absolute;inset:0;background:rgba(37,99,235,.15);display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .3s;z-index:1}
+        .h-card:hover .h-overlay{opacity:1}
+        .h-overlay span{background:var(--primary);color:#fff;padding:5px 14px;border-radius:8px;font-size:.75rem;font-weight:600;box-shadow:0 2px 8px rgba(0,0,0,.2)}
+        .h-play-icon{position:absolute;bottom:8px;left:8px;width:28px;height:28px;border-radius:50%;background:rgba(0,0,0,.5);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;color:#fff;font-size:.7rem;z-index:2;transition:transform .2s}
+        .h-card:hover .h-play-icon{transform:scale(1.1)}
+        .h-body{padding:.75rem}
+        .h-name{font-size:.75rem;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:.4rem}
+        .h-prob{display:flex;justify-content:space-between;font-size:.7rem;margin-bottom:.2rem}.h-prob span:first-child{color:var(--text-muted)}.h-prob .val{font-weight:700}
+        .h-bar{height:4px;border-radius:2px;background:var(--bg-input);overflow:hidden;margin-bottom:.4rem}
+        .h-bar-fill{height:100%;border-radius:2px}.h-bar-fill.red{background:var(--danger)}.h-bar-fill.green{background:var(--success)}
+        .h-meta{display:flex;justify-content:space-between;align-items:center}
+        .h-time{font-size:.65rem;color:var(--text-muted)}
+        .h-conf{font-size:.6rem;padding:2px 6px;border-radius:99px;background:var(--bg-input);color:var(--text-muted);font-weight:600}
+
+        /* Pagination */
+        .pagination{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:2rem}
+        .page-btn{min-width:38px;height:38px;display:flex;align-items:center;justify-content:center;border-radius:10px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-secondary);font-size:.82rem;font-weight:500;cursor:pointer;font-family:inherit;transition:all .2s}
+        .page-btn:hover{border-color:var(--primary);color:var(--primary)}.page-btn.active{background:var(--primary);color:#fff;border-color:var(--primary)}.page-btn:disabled{opacity:.4;cursor:not-allowed}
+        .page-ellipsis{color:var(--text-muted);font-size:.82rem;padding:0 4px}
+
+        .footer{padding:2rem 0;background:var(--bg-card);border-top:1px solid var(--border);text-align:center;transition:all .4s;margin-top:auto}.footer-logo{display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:.5rem;font-size:1rem;font-weight:700;color:var(--text-primary)}.footer-logo i{color:var(--primary)}.footer-copy{font-size:.75rem;color:var(--text-muted)}
+    </style>
+</head>
+<body>
+<header class="nav">
+    <div class="nav-inner">
+        <a href="/index" class="nav-logo"><i class="fa fa-eye"></i><span>数字内容侵权、分析、检索和存证综合平台</span></a>
+        <nav class="nav-links">
+            <a href="/index">首页</a>
+            <div class="dropdown">
+                <button class="dropdown-trigger"><span>功能</span><i class="fa fa-chevron-down"></i></button>
+                <div class="dropdown-menu">
+                    <div class="dropdown-label">检测</div><a href="/image_upload" class="dropdown-item"><i class="fa fa-image"></i> 图像检测</a><a href="/video_upload" class="dropdown-item"><i class="fa fa-film"></i> 视频检测</a><div class="dropdown-divider"></div><div class="dropdown-label">检索</div><a href="/image_retrieve" class="dropdown-item"><i class="fa fa-search"></i> 图像检索</a><a href="/video_retrieve" class="dropdown-item"><i class="fa fa-play-circle"></i> 视频检索</a>
+                </div>
+            </div>
+            <a href="/history_video_detect" class="active">历史记录</a>
+            <a href="/introduce">关于我们</a>
+            <button class="theme-btn" id="themeToggle" title="切换主题"><i class="fa fa-moon-o"></i></button>
+        </nav>
+    </div>
+</header>
+
+<main class="main">
+    <div class="container">
+        <div class="page-header">
+            <div class="page-header-left">
+                <h1><i class="fa fa-history"></i> 视频检测记录</h1>
+                <p>共 {{ records|length }} 条记录，点击查看详细检测结果</p>
+            </div>
+            <div class="page-header-right">
+                <button class="go-upload-btn" onclick="location.href='/video_upload'"><i class="fa fa-upload"></i> 返回视频检测上传</button>
+                <button class="filter-btn active" onclick="filterRecords('all',this)">全部</button>
+                <button class="filter-btn" onclick="filterRecords('fake',this)"><i class="fa fa-times-circle"></i> AI生成</button>
+                <button class="filter-btn" onclick="filterRecords('real',this)"><i class="fa fa-check-circle"></i> 真实</button>
+            </div>
+        </div>
+        <div class="card">
+            {% if records|length == 0 %}
+            <div class="empty-state">
+                <i class="fa fa-inbox"></i>
+                <p>暂无视频检测记录</p>
+                <p style="font-size:.82rem;margin-top:.5rem;"><a href="/video_upload" style="color:var(--primary);font-weight:600;">去检测一个视频</a></p>
+            </div>
+            {% else %}
+            <div class="history-grid" id="historyGrid"></div>
+            <div class="pagination" id="pagination"></div>
+            {% endif %}
+        </div>
+    </div>
+</main>
+
+<footer class="footer">
+    <div class="footer-logo"><i class="fa fa-eye"></i> 数字内容侵权、分析、检索和存证综合平台</div>
+    <p class="footer-copy">&copy; 2025 数字内容侵权、分析、检索和存证综合平台</p>
+</footer>
+
+<script>
+(function(){
+    /* ── Theme ── */
+    var b=document.body,t=document.getElementById('themeToggle'),ti=t.querySelector('i');
+    function setTheme(d){if(d){b.setAttribute('data-theme','dark');ti.className='fa fa-sun-o';}else{b.removeAttribute('data-theme');ti.className='fa fa-moon-o';}}
+    var s=localStorage.getItem('theme');if(s==='dark'||(!s&&window.matchMedia('(prefers-color-scheme:dark)').matches))setTheme(true);
+    t.addEventListener('click',function(){var d=b.hasAttribute('data-theme');setTheme(!d);localStorage.setItem('theme',d?'light':'dark');});
+    window.addEventListener('scroll',function(){document.querySelector('.nav').style.boxShadow=window.scrollY>50?'var(--shadow-md)':'none';});
+
+    /* ── Data ── */
+    var allRecords=[
+        {% for r in records %}
+        {
+            itemid:"{{ r.itemid }}",
+            filename:"{{ r.filename }}",
+            video_url:"{{ r.video_url|default('') }}",
+            thumbnail_url:"{{ r.thumbnail_url|default('') }}",
+            fake_percentage:{{ r.fake_percentage|default(0) }},
+            real_percentage:{{ r.real_percentage|default(0) }},
+            final_label:"{{ r.final_label|default('') }}",
+            confidence:"{{ r.confidence|default('') }}",
+            createtime:"{{ r.createtime }}"
+        }{% if not loop.last %},{% endif %}
+        {% endfor %}
+    ];
+
+    if(allRecords.length===0) return;
+
+    var filtered=allRecords.slice();
+    var ITEMS_PER_PAGE=15;
+    var currentPage=1;
+    var grid=document.getElementById('historyGrid');
+    var pagWrap=document.getElementById('pagination');
+
+    /* ── Filter ── */
+    window.filterRecords=function(type,btn){
+        document.querySelectorAll('.filter-btn').forEach(function(b){b.classList.remove('active');});
+        btn.classList.add('active');
+        if(type==='all') filtered=allRecords.slice();
+        else if(type==='fake') filtered=allRecords.filter(function(r){return r.final_label.indexOf('AI')>=0;});
+        else filtered=allRecords.filter(function(r){return r.final_label.indexOf('AI')<0;});
+        currentPage=1; renderPage();
+    };
+
+    /* ── Build thumbnail HTML ── */
+    function buildThumb(r){
+        var thumbSrc=r.thumbnail_url||'';
+        if(!thumbSrc && r.video_url){
+            thumbSrc=r.video_url+'?x-oss-process=video/snapshot,t_1000,m_fast';
+        }
+        var html='';
+        if(thumbSrc){
+            html+='<img src="'+thumbSrc+'" alt="'+r.filename+'" onerror="thumbFallback(this,\''+encodeURI(r.video_url)+'\')">';
+        } else if(r.video_url){
+            html+='<video src="'+r.video_url+'" muted preload="metadata" onloadeddata="this.currentTime=1" onerror="videoThumbError(this)"></video>';
+        } else {
+            html+='<div class="h-thumb-placeholder"><i class="fa fa-film"></i><span>无预览</span></div>';
+        }
+        return html;
+    }
+
+    /* Fallback helpers */
+    window.thumbFallback=function(img, videoUrl){
+        img.style.display='none';
+        var parent=img.parentNode;
+        if(videoUrl && videoUrl!==''){
+            var v=document.createElement('video');
+            v.src=decodeURI(videoUrl); v.muted=true; v.preload='metadata';
+            v.style.cssText='width:100%;height:100%;object-fit:cover;display:block';
+            v.onloadeddata=function(){v.currentTime=1;};
+            v.onerror=function(){
+                v.style.display='none';
+                parent.insertAdjacentHTML('beforeend','<div class="h-thumb-placeholder"><i class="fa fa-film"></i><span>无预览</span></div>');
+            };
+            parent.appendChild(v);
+        } else {
+            parent.insertAdjacentHTML('beforeend','<div class="h-thumb-placeholder"><i class="fa fa-film"></i><span>无预览</span></div>');
+        }
+    };
+    window.videoThumbError=function(v){
+        v.style.display='none';
+        v.parentNode.insertAdjacentHTML('beforeend','<div class="h-thumb-placeholder"><i class="fa fa-film"></i><span>无预览</span></div>');
+    };
+
+    /* ── Render ── */
+    function renderPage(){
+        var total=filtered.length;
+        var totalPages=Math.ceil(total/ITEMS_PER_PAGE);
+        var start=(currentPage-1)*ITEMS_PER_PAGE;
+        var items=filtered.slice(start,start+ITEMS_PER_PAGE);
+        grid.innerHTML='';
+
+        if(items.length===0){
+            grid.innerHTML='<div style="grid-column:1/-1;text-align:center;padding:3rem;color:var(--text-muted)"><i class="fa fa-filter" style="font-size:2rem;display:block;margin-bottom:.5rem"></i>无匹配记录</div>';
+            pagWrap.innerHTML=''; return;
+        }
+
+        items.forEach(function(r){
+            var isFake=r.final_label.indexOf('AI')>=0;
+            var fakePct=Number(r.fake_percentage)||0;
+            var card=document.createElement('div');
+            card.className='h-card';
+            card.onclick=function(){window.location.href='/video_result?itemid='+r.itemid;};
+            card.innerHTML=
+                '<div class="h-thumb">'+
+                    buildThumb(r)+
+                    '<span class="h-badge '+(isFake?'fake':'real')+'">'+(isFake?'AI生成':'真实')+'</span>'+
+                    '<span class="h-type-badge"><i class="fa fa-film"></i> 视频</span>'+
+                    '<div class="h-play-icon"><i class="fa fa-play"></i></div>'+
+                    '<div class="h-overlay"><span><i class="fa fa-eye"></i> 查看详情</span></div>'+
+                '</div>'+
+                '<div class="h-body">'+
+                    '<div class="h-name" title="'+r.filename+'">'+r.filename+'</div>'+
+                    '<div class="h-prob"><span>AI概率</span><span class="val" style="color:'+(isFake?'var(--danger)':'var(--success)')+'">'+fakePct.toFixed(1)+'%</span></div>'+
+                    '<div class="h-bar"><div class="h-bar-fill '+(isFake?'red':'green')+'" style="width:'+fakePct+'%"></div></div>'+
+                    '<div class="h-meta"><span class="h-time"><i class="fa fa-clock-o"></i> '+r.createtime+'</span>'+(r.confidence?'<span class="h-conf">'+r.confidence+'</span>':'')+'</div>'+
+                '</div>';
+            grid.appendChild(card);
+        });
+        renderPagination(totalPages);
+    }
+
+    /* ── Pagination ── */
+    function renderPagination(tp){
+        pagWrap.innerHTML=''; if(tp<=1)return;
+        addBtn('<i class="fa fa-chevron-left"></i>',currentPage>1,function(){currentPage--;renderPage();scrollTop();});
+        getPN(currentPage,tp).forEach(function(p){
+            if(p==='...'){var e=document.createElement('span');e.className='page-ellipsis';e.textContent='...';pagWrap.appendChild(e);}
+            else addBtn(p,true,function(){currentPage=p;renderPage();scrollTop();},p===currentPage);
+        });
+        addBtn('<i class="fa fa-chevron-right"></i>',currentPage<tp,function(){currentPage++;renderPage();scrollTop();});
+    }
+    function addBtn(html,enabled,fn,active){var btn=document.createElement('button');btn.className='page-btn'+(active?' active':'');btn.innerHTML=html;btn.disabled=!enabled;btn.onclick=fn;pagWrap.appendChild(btn);}
+    function getPN(c,t){if(t<=7){var a=[];for(var i=1;i<=t;i++)a.push(i);return a;}if(c<=3)return[1,2,3,4,'...',t];if(c>=t-2)return[1,'...',t-3,t-2,t-1,t];return[1,'...',c-1,c,c+1,'...',t];}
+    function scrollTop(){grid.scrollIntoView({behavior:'smooth',block:'start'});}
+
+    renderPage();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>关于我们 - 数字内容侵权、分析、检索和存证综合平台</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link href="/static/css/font-awesome.min.css" rel="stylesheet">
+    <style>
+        :root{--primary:#2563eb;--primary-dark:#1d4ed8;--accent:#06d6a0;--bg-body:#f0f2f5;--bg-card:#fff;--bg-nav:rgba(255,255,255,.82);--bg-input:#f1f5f9;--border:#e2e8f0;--border-light:rgba(0,0,0,.06);--text-primary:#0f172a;--text-secondary:#475569;--text-muted:#94a3b8;--shadow-md:0 4px 12px rgba(0,0,0,.08);--shadow-lg:0 12px 40px rgba(0,0,0,.1);--shadow-card:0 1px 3px rgba(0,0,0,.04),0 4px 12px rgba(0,0,0,.04)}
+        [data-theme="dark"]{--bg-body:#0b0f1a;--bg-card:#151b2e;--bg-nav:rgba(15,23,42,.85);--bg-input:#1e293b;--border:#1e293b;--border-light:rgba(255,255,255,.06);--text-primary:#f1f5f9;--text-secondary:#94a3b8;--text-muted:#64748b;--shadow-md:0 4px 12px rgba(0,0,0,.4);--shadow-lg:0 12px 40px rgba(0,0,0,.5);--shadow-card:0 1px 3px rgba(0,0,0,.2),0 4px 12px rgba(0,0,0,.15)}
+        *{margin:0;padding:0;box-sizing:border-box}body{font-family:'Outfit','Noto Sans SC',sans-serif;background:var(--bg-body);color:var(--text-primary);transition:background .4s,color .4s;min-height:100vh;display:flex;flex-direction:column}a{text-decoration:none;color:inherit}
+        .nav{position:fixed;top:0;left:0;right:0;z-index:100;background:var(--bg-nav);backdrop-filter:blur(20px) saturate(1.4);border-bottom:1px solid var(--border-light);transition:all .3s}
+        .nav-inner{max-width:1280px;margin:0 auto;padding:0 2rem;height:64px;display:flex;align-items:center;justify-content:space-between}
+        .nav-logo{display:flex;align-items:center;gap:10px;font-size:1.2rem;font-weight:700;color:var(--text-primary)}.nav-logo i{color:var(--primary);font-size:1.5rem}
+        .nav-links{display:flex;align-items:center;gap:2rem}.nav-links a{font-size:.9rem;font-weight:500;color:var(--text-secondary);transition:color .2s}.nav-links a:hover,.nav-links a.active{color:var(--primary)}
+        .theme-btn{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;background:var(--bg-input);border:1px solid var(--border);cursor:pointer;transition:all .2s;color:var(--text-secondary);font-size:1rem}.theme-btn:hover{background:var(--primary);color:#fff;border-color:var(--primary)}
+        .main{flex:1;padding-top:88px;padding-bottom:3rem}.container{max-width:960px;margin:0 auto;padding:0 2rem}
+        .hero{text-align:center;margin-bottom:3rem}
+        .hero h1{font-size:clamp(1.8rem,4vw,2.6rem);font-weight:800;margin-bottom:.75rem;color:var(--text-primary)}
+        .hero p{font-size:1rem;color:var(--text-secondary);max-width:600px;margin:0 auto;line-height:1.7}
+        .section{margin-bottom:2.5rem}
+        .section h2{font-size:1.3rem;font-weight:700;margin-bottom:1rem;color:var(--text-primary);display:flex;align-items:center;gap:8px}
+        .section h2 i{color:var(--primary)}
+        .card{background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:1.5rem;box-shadow:var(--shadow-card);transition:all .3s}
+        .card p{font-size:.9rem;color:var(--text-secondary);line-height:1.8}
+        .features{display:grid;grid-template-columns:repeat(3,1fr);gap:1.2rem;margin-top:1rem}
+        @media(max-width:768px){.features{grid-template-columns:1fr}}
+        .feature{padding:1.5rem;background:var(--bg-card);border:1px solid var(--border);border-radius:14px;text-align:center;transition:all .3s}
+        .feature:hover{transform:translateY(-4px);box-shadow:var(--shadow-md)}
+        .feature-icon{width:48px;height:48px;border-radius:12px;display:flex;align-items:center;justify-content:center;margin:0 auto 1rem;font-size:1.2rem}
+        .feature h3{font-size:.95rem;font-weight:700;margin-bottom:.4rem;color:var(--text-primary)}
+        .feature p{font-size:.82rem;color:var(--text-secondary);line-height:1.5}
+        .tech-list{display:flex;flex-wrap:wrap;gap:.6rem;margin-top:1rem}
+        .tech-tag{padding:6px 14px;border-radius:99px;font-size:.78rem;font-weight:500;background:var(--bg-input);color:var(--text-secondary);border:1px solid var(--border)}
+        .footer{padding:2rem 0;background:var(--bg-card);border-top:1px solid var(--border);text-align:center;transition:all .4s;margin-top:auto}
+        .footer-logo{display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:.5rem;font-size:1rem;font-weight:700;color:var(--text-primary)}.footer-logo i{color:var(--primary)}
+        .footer-copy{font-size:.75rem;color:var(--text-muted)}
+    </style>
+</head>
+<body>
+<header class="nav">
+    <div class="nav-inner">
+        <a href="/index" class="nav-logo"><i class="fa fa-eye"></i><span>数字内容侵权、分析、检索和存证综合平台</span></a>
+        <nav class="nav-links">
+            <a href="/index">首页</a>
+            <a href="/image_upload">图像检测</a>
+            <a href="/introduce" class="active">关于我们</a>
+            <button class="theme-btn" id="themeToggle" title="切换主题"><i class="fa fa-moon-o"></i></button>
+        </nav>
+    </div>
+</header>
+
+<main class="main">
+    <div class="container">
+        <div class="hero">
+            <h1>RealGuard 多模态AIGC检测平台</h1>
+            <p>基于深度学习与多Agent协同的智能内容真伪识别系统，覆盖图像检测、视频检测和多模态检索。</p>
+        </div>
+
+        <div class="section">
+            <h2><i class="fa fa-info-circle"></i> 平台介绍</h2>
+            <div class="card">
+                <p>RealGuard 是一个多模态 AIGC 智能检测平台，致力于解决AI生成内容的真伪鉴别问题。随着 Stable Diffusion、DALL-E、Midjourney 等生成式AI技术的快速发展，AI生成的图像和视频已越来越难以用肉眼辨别。本平台通过多Agent协同系统，综合运用预训练检测器、视觉分析和元数据取证技术，为用户提供准确、可解释的检测结果。</p>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2><i class="fa fa-cogs"></i> 核心能力</h2>
+            <div class="features">
+                <div class="feature">
+                    <div class="feature-icon" style="background:rgba(37,99,235,.1);color:var(--primary);"><i class="fa fa-image"></i></div>
+                    <h3>AIGC图像检测</h3>
+                    <p>基于多Agent协同的深度检测，识别各类AI生成图像</p>
+                </div>
+                <div class="feature">
+                    <div class="feature-icon" style="background:rgba(6,214,160,.1);color:var(--accent);"><i class="fa fa-search"></i></div>
+                    <h3>多模态检索</h3>
+                    <p>以图搜图、以视频搜视频，海量数据库快速定位</p>
+                </div>
+                <div class="feature">
+                    <div class="feature-icon" style="background:rgba(139,92,246,.1);color:#8b5cf6;"><i class="fa fa-paint-brush"></i></div>
+                    <h3>PS篡改检测</h3>
+                    <p>识别图像拼接、修补、克隆等后处理篡改痕迹</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2><i class="fa fa-microchip"></i> 技术栈</h2>
+            <div class="card">
+                <div class="tech-list">
+                    <span class="tech-tag">PyTorch</span>
+                    <span class="tech-tag">ONNX Runtime</span>
+                    <span class="tech-tag">Flask</span>
+                    <span class="tech-tag">Qwen-VL</span>
+                    <span class="tech-tag">CLIP</span>
+                    <span class="tech-tag">Milvus</span>
+                    <span class="tech-tag">MySQL</span>
+                    <span class="tech-tag">ExifTool</span>
+                    <span class="tech-tag">PIL</span>
+                    <span class="tech-tag">微信小程序</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</main>
+
+<footer class="footer">
+    <div class="footer-logo"><i class="fa fa-eye"></i> 数字内容侵权、分析、检索和存证综合平台</div>
+    <p class="footer-copy">&copy; 2025 数字内容侵权、分析、检索和存证综合平台</p>
+</footer>
+
+<script>
+(function(){
+    var b=document.body,t=document.getElementById('themeToggle'),i=t.querySelector('i');
+    function set(d){if(d){b.setAttribute('data-theme','dark');i.className='fa fa-sun-o';}else{b.removeAttribute('data-theme');i.className='fa fa-moon-o';}}
+    var s=localStorage.getItem('theme');
+    if(s==='dark'||(!s&&window.matchMedia('(prefers-color-scheme:dark)').matches))set(true);
+    t.addEventListener('click',function(){var d=b.hasAttribute('data-theme');set(!d);localStorage.setItem('theme',d?'light':'dark');});
+    window.addEventListener('scroll',function(){document.querySelector('.nav').style.boxShadow=window.scrollY>50?'var(--shadow-md)':'none';});
+})();
+</script>
+</body>
+</html>

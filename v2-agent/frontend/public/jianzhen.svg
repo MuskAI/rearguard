@@ -1,0 +1,18 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g" x1="6" y1="6" x2="58" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#e8654f"/>
+      <stop offset="1" stop-color="#a82d20"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="#0d0b0a"/>
+  <rect x="6.5" y="6.5" width="51" height="51" rx="14" stroke="url(#g)" stroke-width="3.5"/>
+  <g stroke="url(#g)" stroke-width="2.6" stroke-linecap="round">
+    <path d="M17 22 L17 17 L22 17"/>
+    <path d="M47 22 L47 17 L42 17"/>
+    <path d="M17 42 L17 47 L22 47"/>
+    <path d="M47 42 L47 47 L42 47"/>
+  </g>
+  <text x="32" y="35" text-anchor="middle" dominant-baseline="central" font-size="26" font-weight="800"
+        fill="url(#g)" font-family="'Songti SC','STSong','Source Han Serif SC','Noto Serif SC',serif">真</text>
+</svg>

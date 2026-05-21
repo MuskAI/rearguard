@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>视频检测结果 - 数字内容侵权、分析、检索和存证综合平台系统</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link href="/static/css/font-awesome.min.css" rel="stylesheet">
+    <style>
+        :root{--primary:#2563eb;--primary-light:#3b82f6;--primary-dark:#1d4ed8;--accent:#06d6a0;--warning:#f59e0b;--danger:#ef4444;--success:#10b981;--bg-body:#f0f2f5;--bg-card:#fff;--bg-card-alt:#f8fafc;--bg-nav:rgba(255,255,255,.82);--bg-input:#f1f5f9;--border:#e2e8f0;--border-light:rgba(0,0,0,.06);--text-primary:#0f172a;--text-secondary:#475569;--text-muted:#94a3b8;--shadow-sm:0 1px 3px rgba(0,0,0,.06);--shadow-md:0 4px 12px rgba(0,0,0,.08);--shadow-lg:0 12px 40px rgba(0,0,0,.1);--shadow-card:0 1px 3px rgba(0,0,0,.04),0 4px 12px rgba(0,0,0,.04)}
+        [data-theme="dark"]{--bg-body:#0b0f1a;--bg-card:#151b2e;--bg-card-alt:#1a2139;--bg-nav:rgba(15,23,42,.85);--bg-input:#1e293b;--border:#1e293b;--border-light:rgba(255,255,255,.06);--text-primary:#f1f5f9;--text-secondary:#94a3b8;--text-muted:#64748b;--shadow-sm:0 1px 3px rgba(0,0,0,.3);--shadow-md:0 4px 12px rgba(0,0,0,.4);--shadow-lg:0 12px 40px rgba(0,0,0,.5);--shadow-card:0 1px 3px rgba(0,0,0,.2),0 4px 12px rgba(0,0,0,.15)}
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:'Outfit','Noto Sans SC',sans-serif;background:var(--bg-body);color:var(--text-primary);transition:background .4s,color .4s;min-height:100vh;display:flex;flex-direction:column}
+        a{text-decoration:none;color:inherit}
+        .nav{position:fixed;top:0;left:0;right:0;z-index:100;background:var(--bg-nav);backdrop-filter:blur(20px) saturate(1.4);border-bottom:1px solid var(--border-light);transition:all .3s}
+        .nav-inner{max-width:1280px;margin:0 auto;padding:0 2rem;height:64px;display:flex;align-items:center;justify-content:space-between}
+        .nav-logo{display:flex;align-items:center;gap:10px;font-size:1.2rem;font-weight:700;color:var(--text-primary)}.nav-logo i{color:var(--primary);font-size:1.5rem}
+        .nav-links{display:flex;align-items:center;gap:2rem}.nav-links a{font-size:.9rem;font-weight:500;color:var(--text-secondary);transition:color .2s}.nav-links a:hover,.nav-links a.active{color:var(--primary)}
+        .dropdown{position:relative}.dropdown-trigger{display:flex;align-items:center;gap:4px;font-size:.9rem;font-weight:500;color:var(--text-secondary);cursor:pointer;background:none;border:none;font-family:inherit;transition:color .2s}.dropdown-trigger:hover{color:var(--primary)}.dropdown-trigger i{font-size:.6rem;transition:transform .3s}.dropdown:hover .dropdown-trigger i{transform:rotate(180deg)}.dropdown-menu{position:absolute;top:calc(100% + 12px);left:-16px;min-width:220px;padding:8px;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-lg);opacity:0;visibility:hidden;transform:translateY(-8px);transition:all .25s}.dropdown:hover .dropdown-menu{opacity:1;visibility:visible;transform:translateY(0)}.dropdown-label{padding:6px 12px;font-size:.7rem;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.08em}.dropdown-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;font-size:.85rem;color:var(--text-secondary);transition:all .15s}.dropdown-item:hover{background:rgba(37,99,235,.08);color:var(--primary)}.dropdown-item.active-item{background:rgba(37,99,235,.1);color:var(--primary);font-weight:600}.dropdown-item i{width:18px;text-align:center}.dropdown-divider{height:1px;background:var(--border);margin:4px 8px}
+        .theme-btn{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;background:var(--bg-input);border:1px solid var(--border);cursor:pointer;transition:all .2s;color:var(--text-secondary);font-size:1rem}.theme-btn:hover{background:var(--primary);color:#fff;border-color:var(--primary)}
+        .main{flex:1;padding-top:84px;padding-bottom:2rem}.container{max-width:1280px;margin:0 auto;padding:0 2rem}
+        .page-header{margin-bottom:1.2rem}.page-header h1{font-size:1.4rem;font-weight:700;color:var(--text-primary);margin-bottom:.15rem;display:flex;align-items:center;gap:8px}.page-header h1 i{color:var(--primary)}.page-header p{font-size:.82rem;color:var(--text-secondary)}
+        .layout{display:grid;grid-template-columns:1.15fr 1fr;gap:1.25rem}
+        @media(max-width:960px){.layout{grid-template-columns:1fr}}
+        .card{background:var(--bg-card);border:1px solid var(--border);border-radius:14px;padding:1.25rem;box-shadow:var(--shadow-card);transition:all .3s;display:flex;flex-direction:column}
+        .section-label{font-size:.84rem;font-weight:700;color:var(--text-primary);margin-bottom:.8rem;display:flex;align-items:center;gap:7px}.section-label i{color:var(--primary)}
+        .card-divider{height:1px;background:var(--border);margin:.8rem 0}
+        .video-box{background:#0f172a;border-radius:10px;overflow:hidden;display:flex;align-items:center;justify-content:center;min-height:260px;margin-bottom:.8rem}
+        .video-box video{width:100%;max-height:360px;object-fit:contain;display:block}
+        /* Verdict banner */
+        .verdict-banner{display:flex;align-items:center;gap:10px;padding:.7rem .9rem;border-radius:10px;margin-bottom:.6rem}
+        .verdict-banner.fake{background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2)}
+        .verdict-banner.real{background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2)}
+        .verdict-icon{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:1rem;flex-shrink:0}
+        .verdict-banner.fake .verdict-icon{background:rgba(239,68,68,.12);color:var(--danger)}
+        .verdict-banner.real .verdict-icon{background:rgba(16,185,129,.12);color:var(--success)}
+        .verdict-text{flex:1}.verdict-label{font-size:.9rem;font-weight:700}.verdict-sub{font-size:.68rem;color:var(--text-muted);margin-top:1px}
+        /* Probability bar */
+        .prob-section{margin-bottom:.6rem}
+        .prob-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+        .prob-title{font-size:.72rem;font-weight:600;color:var(--text-secondary)}
+        .prob-value{font-size:.72rem;font-weight:700}
+        .prob-value.fake-val{color:var(--danger)}.prob-value.real-val{color:var(--success)}
+        .prob-bar{height:8px;background:var(--bg-input);border-radius:99px;overflow:hidden}
+        .prob-bar-inner{height:100%;border-radius:99px;transition:width .8s ease}
+        .prob-bar-inner.fake-bar{background:linear-gradient(90deg,#f59e0b,#ef4444)}
+        .prob-bar-inner.real-bar{background:linear-gradient(90deg,#06d6a0,#10b981)}
+        /* Detail grid */
+        .detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+        .detail-item{padding:6px 9px;background:var(--bg-input);border-radius:8px;display:flex;flex-direction:column;gap:2px}
+        .detail-label{font-size:.62rem;color:var(--text-muted);font-weight:500}
+        .detail-value{font-size:.78rem;font-weight:600;color:var(--text-primary)}
+        /* Explanation */
+        .explain-box{padding:.6rem .8rem;background:var(--bg-input);border-radius:10px;font-size:.76rem;color:var(--text-secondary);line-height:1.5;border-left:3px solid var(--primary)}
+        /* Actions */
+        .actions{display:flex;gap:.6rem;margin-top:auto;padding-top:.8rem}
+        .btn{flex:1;padding:10px;border:none;border-radius:10px;font-size:.82rem;font-weight:600;cursor:pointer;font-family:inherit;transition:all .2s;display:flex;align-items:center;justify-content:center;gap:6px}
+        .btn-primary-s{background:var(--primary);color:#fff}.btn-primary-s:hover{background:var(--primary-dark)}
+        .btn-secondary-s{background:var(--bg-input);color:var(--text-secondary);border:1px solid var(--border)}.btn-secondary-s:hover{border-color:var(--primary);color:var(--primary)}
+        .footer{padding:1.5rem 0;background:var(--bg-card);border-top:1px solid var(--border);text-align:center;transition:all .4s;margin-top:auto}
+        .footer-logo{display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:.4rem;font-size:.95rem;font-weight:700;color:var(--text-primary)}.footer-logo i{color:var(--primary)}
+        .footer-copy{font-size:.7rem;color:var(--text-muted)}
+    </style>
+</head>
+<body>
+<header class="nav"><div class="nav-inner"><a href="/index" class="nav-logo"><i class="fa fa-eye"></i><span>数字内容侵权、分析、检索和存证综合平台</span></a><nav class="nav-links"><a href="/index">首页</a><div class="dropdown"><button class="dropdown-trigger"><span>功能</span><i class="fa fa-chevron-down"></i></button><div class="dropdown-menu"><div class="dropdown-label">检测</div><a href="/image_upload" class="dropdown-item"><i class="fa fa-image"></i> 图像检测</a><a href="/video_upload" class="dropdown-item active-item"><i class="fa fa-film"></i> 视频检测</a><div class="dropdown-divider"></div><div class="dropdown-label">检索</div><a href="/image_retrieve" class="dropdown-item"><i class="fa fa-search"></i> 图像检索</a><a href="/video_retrieve" class="dropdown-item"><i class="fa fa-play-circle"></i> 视频检索</a></div></div><a href="/history_video_detect">历史记录</a><a href="/introduce">关于我们</a><button class="theme-btn" id="themeToggle" title="切换主题"><i class="fa fa-moon-o"></i></button></nav></div></header>
+<main class="main"><div class="container">
+    <div class="page-header"><h1><i class="fa fa-bar-chart"></i> 视频检测结果</h1><p>查看视频鉴伪分析的详细结果</p></div>
+    <div class="layout">
+        <!-- LEFT: video player -->
+        <div class="card">
+            <div class="section-label"><i class="fa fa-play-circle"></i> 视频预览</div>
+            <div class="video-box"><video id="video" controls preload="metadata"></video></div>
+            <div class="section-label"><i class="fa fa-file-text-o"></i> 分析说明</div>
+            <div class="explain-box" id="explanation">等待数据加载...</div>
+            <div class="actions">
+                <button class="btn btn-primary-s" onclick="location.href='/video_upload'"><i class="fa fa-plus"></i> 再测一个</button>
+                <button class="btn btn-secondary-s" onclick="location.href='/history_video_detect'"><i class="fa fa-history"></i> 历史记录</button>
+            </div>
+        </div>
+        <!-- RIGHT: results panel -->
+        <div class="card">
+            <div class="section-label"><i class="fa fa-gavel"></i> 检测判定</div>
+            <div class="verdict-banner fake" id="verdictBanner">
+                <div class="verdict-icon"><i class="fa fa-exclamation-triangle"></i></div>
+                <div class="verdict-text"><div class="verdict-label" id="finalLabel">-</div><div class="verdict-sub" id="filename">-</div></div>
+            </div>
+            <div class="card-divider"></div>
+            <div class="section-label"><i class="fa fa-pie-chart"></i> 概率分析</div>
+            <div class="prob-section">
+                <div class="prob-header"><span class="prob-title">AI生成概率</span><span class="prob-value fake-val" id="fakePct">-</span></div>
+                <div class="prob-bar"><div class="prob-bar-inner fake-bar" id="fakeBar" style="width:0"></div></div>
+            </div>
+            <div class="prob-section">
+                <div class="prob-header"><span class="prob-title">真实概率</span><span class="prob-value real-val" id="realPct">-</span></div>
+                <div class="prob-bar"><div class="prob-bar-inner real-bar" id="realBar" style="width:0"></div></div>
+            </div>
+            <div class="card-divider"></div>
+            <div class="section-label"><i class="fa fa-sliders"></i> 详细指标</div>
+            <div class="detail-grid">
+                <div class="detail-item"><span class="detail-label">置信度</span><span class="detail-value" id="confidence">-</span></div>
+                <div class="detail-item"><span class="detail-label">编码器</span><span class="detail-value" id="encoder">-</span></div>
+                <div class="detail-item"><span class="detail-label">分析帧数</span><span class="detail-value" id="frameCount">-</span></div>
+                <div class="detail-item"><span class="detail-label">D3 标准差</span><span class="detail-value" id="d3Std">-</span></div>
+                <div class="detail-item"><span class="detail-label">文件大小</span><span class="detail-value" id="fileSize">-</span></div>
+                <div class="detail-item"><span class="detail-label">视频时长</span><span class="detail-value" id="duration">-</span></div>
+                <div class="detail-item"><span class="detail-label">分辨率</span><span class="detail-value" id="resolution">-</span></div>
+                <div class="detail-item"><span class="detail-label">视频格式</span><span class="detail-value" id="videoFormat">-</span></div>
+            </div>
+        </div>
+    </div>
+</div></main>
+<footer class="footer"><div class="footer-logo"><i class="fa fa-eye"></i> 数字内容侵权、分析、检索和存证综合平台</div><p class="footer-copy">&copy; 2025 数字内容侵权、分析、检索和存证综合平台</p></footer>
+<script>
+(function(){
+    var b=document.body,t=document.getElementById('themeToggle'),ti=t.querySelector('i');
+    function setTheme(d){if(d){b.setAttribute('data-theme','dark');ti.className='fa fa-sun-o';}else{b.removeAttribute('data-theme');ti.className='fa fa-moon-o';}}
+    var s=localStorage.getItem('theme');if(s==='dark'||(!s&&window.matchMedia('(prefers-color-scheme:dark)').matches))setTheme(true);
+    t.addEventListener('click',function(){var d=b.hasAttribute('data-theme');setTheme(!d);localStorage.setItem('theme',d?'light':'dark');});
+    window.addEventListener('scroll',function(){document.querySelector('.nav').style.boxShadow=window.scrollY>50?'var(--shadow-md)':'none';});
+
+    var $=function(id){return document.getElementById(id);};
+    function setVideoSrc(url){
+        var v = $('video');
+        if(!url) return;
+        if(v.dataset.src === url) return;
+        v.dataset.src = url;
+        v.src = url;
+    }
+    function render(r){
+        if(!r)return;
+        $('filename').textContent=r.filename||'-';
+        var lbl=r.final_label||'-';
+        $('finalLabel').textContent=lbl;
+        var isFake=lbl.indexOf('AI')>=0;
+        var banner=$('verdictBanner');
+        banner.className='verdict-banner '+(isFake?'fake':'real');
+        banner.querySelector('.verdict-icon').innerHTML=isFake?'<i class="fa fa-exclamation-triangle"></i>':'<i class="fa fa-check-circle"></i>';
+        var fake=Number(r.fake_percentage||0),real=Number(r.real_percentage||0);
+        $('fakePct').textContent=fake.toFixed(1)+'%';
+        $('realPct').textContent=real.toFixed(1)+'%';
+        setTimeout(function(){
+            $('fakeBar').style.width=Math.max(0,Math.min(100,fake))+'%';
+            $('realBar').style.width=Math.max(0,Math.min(100,real))+'%';
+        },100);
+        $('confidence').textContent=r.confidence||'-';
+        $('encoder').textContent=r.encoder||'-';
+        $('frameCount').textContent=r.frame_count!=null?r.frame_count:'-';
+        $('d3Std').textContent=r.d3_std!=null?r.d3_std:'-';
+        var m=r.meta||{};
+        $('fileSize').textContent=m.file_size||'-';
+        $('duration').textContent=m.duration||'-';
+        $('resolution').textContent=m.resolution||'-';
+        $('videoFormat').textContent=m.video_format||'-';
+        $('explanation').textContent=r.explanation||'暂无分析说明';
+        setVideoSrc(r.video_url);
+    }
+    var id=new URLSearchParams(location.search).get('itemid');
+    if(id){
+        fetch('/video_upload/result?itemid='+encodeURIComponent(id))
+            .then(function(r){return r.json();})
+            .then(function(d){if(d.status==='success')render(d.result);});
+    } else {
+        var c=sessionStorage.getItem('video_detect_result');
+        if(c){try{render(JSON.parse(c));}catch(e){}}
+    }
+})();
+</script>
+</body>
+</html>

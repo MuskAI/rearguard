@@ -1,0 +1,16 @@
+services:
+  backend:
+    build: ./backend
+    env_file:
+      - ./backend/.env        # 必须先创建（见 backend/.env.example）
+    expose:
+      - "8848"
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"             # 对外访问端口；改成 80:80 可用默认端口
+    depends_on:
+      - backend
+    restart: unless-stopped

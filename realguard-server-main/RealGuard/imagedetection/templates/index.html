@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>数字内容侵权、分析、检索和存证综合平台</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-light: #3b82f6;
+            --primary-dark: #1d4ed8;
+            --accent: #06d6a0;
+            --accent-dark: #05b384;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --success: #10b981;
+
+            /* Light mode */
+            --bg-body: #f0f2f5;
+            --bg-card: #ffffff;
+            --bg-card-alt: #f8fafc;
+            --bg-hero: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+            --bg-section-alt: #ffffff;
+            --bg-section: #f0f2f5;
+            --bg-nav: rgba(255,255,255,0.82);
+            --bg-input: #f1f5f9;
+            --border: #e2e8f0;
+            --border-light: rgba(0,0,0,0.06);
+            --text-primary: #0f172a;
+            --text-secondary: #475569;
+            --text-muted: #94a3b8;
+            --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+            --shadow-lg: 0 12px 40px rgba(0,0,0,0.1);
+            --shadow-card: 0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.04);
+            --glass-bg: rgba(255,255,255,0.6);
+            --glass-border: rgba(255,255,255,0.3);
+        }
+
+        [data-theme="dark"] {
+            --bg-body: #0b0f1a;
+            --bg-card: #151b2e;
+            --bg-card-alt: #1a2139;
+            --bg-hero: linear-gradient(135deg, #0b0f1a 0%, #151b2e 50%, #0b0f1a 100%);
+            --bg-section-alt: #111827;
+            --bg-section: #0b0f1a;
+            --bg-nav: rgba(15,23,42,0.85);
+            --bg-input: #1e293b;
+            --border: #1e293b;
+            --border-light: rgba(255,255,255,0.06);
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.4);
+            --shadow-lg: 0 12px 40px rgba(0,0,0,0.5);
+            --shadow-card: 0 1px 3px rgba(0,0,0,0.2), 0 4px 12px rgba(0,0,0,0.15);
+            --glass-bg: rgba(15,23,42,0.6);
+            --glass-border: rgba(255,255,255,0.06);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Outfit', 'Noto Sans SC', sans-serif;
+            background: var(--bg-body);
+            color: var(--text-primary);
+            transition: background 0.4s ease, color 0.4s ease;
+            overflow-x: hidden;
+        }
+
+        a { text-decoration: none; color: inherit; }
+
+        /* ===== NAV ===== */
+        .nav {
+            position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+            background: var(--bg-nav);
+            backdrop-filter: blur(20px) saturate(1.4);
+            border-bottom: 1px solid var(--border-light);
+            transition: all 0.3s ease;
+        }
+        .nav-inner {
+            max-width: 1280px; margin: 0 auto;
+            padding: 0 2rem;
+            height: 64px;
+            display: flex; align-items: center; justify-content: space-between;
+        }
+        .nav-logo {
+            display: flex; align-items: center; gap: 10px;
+            font-size: 1.2rem; font-weight: 700;
+            color: var(--text-primary);
+        }
+        .nav-logo i { color: var(--primary); font-size: 1.5rem; }
+        .nav-links { display: flex; align-items: center; gap: 2rem; }
+        .nav-links a {
+            font-size: 0.9rem; font-weight: 500;
+            color: var(--text-secondary);
+            transition: color 0.2s;
+            position: relative;
+        }
+        .nav-links a:hover, .nav-links a.active { color: var(--primary); }
+        .nav-links a.active::after {
+            content: ''; position: absolute; bottom: -4px; left: 0; right: 0;
+            height: 2px; background: var(--primary); border-radius: 1px;
+        }
+
+        /* Dropdown */
+        .dropdown { position: relative; }
+        .dropdown-trigger {
+            display: flex; align-items: center; gap: 4px;
+            font-size: 0.9rem; font-weight: 500;
+            color: var(--text-secondary);
+            cursor: pointer; background: none; border: none;
+            font-family: inherit;
+            transition: color 0.2s;
+        }
+        .dropdown-trigger:hover { color: var(--primary); }
+        .dropdown-trigger i { font-size: 0.6rem; transition: transform 0.3s; }
+        .dropdown:hover .dropdown-trigger i { transform: rotate(180deg); }
+        .dropdown-menu {
+            position: absolute; top: calc(100% + 12px); left: -16px;
+            min-width: 220px; padding: 8px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            box-shadow: var(--shadow-lg);
+            opacity: 0; visibility: hidden;
+            transform: translateY(-8px);
+            transition: all 0.25s ease;
+        }
+        .dropdown:hover .dropdown-menu {
+            opacity: 1; visibility: visible; transform: translateY(0);
+        }
+        .dropdown-label {
+            padding: 6px 12px; font-size: 0.7rem;
+            color: var(--text-muted); font-weight: 600;
+            text-transform: uppercase; letter-spacing: 0.08em;
+        }
+        .dropdown-item {
+            display: flex; align-items: center; gap: 10px;
+            padding: 10px 12px; border-radius: 8px;
+            font-size: 0.85rem; color: var(--text-secondary);
+            transition: all 0.15s;
+        }
+        .dropdown-item:hover { background: rgba(37,99,235,0.08); color: var(--primary); }
+        .dropdown-item i { width: 18px; text-align: center; }
+        .dropdown-item.disabled {
+            opacity: 0.45; pointer-events: none;
+        }
+        .dropdown-divider { height: 1px; background: var(--border); margin: 4px 8px; }
+        .badge-soon {
+            font-size: 0.6rem; font-weight: 600;
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            color: #fff; padding: 1px 6px; border-radius: 99px;
+            margin-left: auto;
+        }
+
+        /* Theme toggle */
+        .theme-btn {
+            width: 40px; height: 40px; border-radius: 10px;
+            display: flex; align-items: center; justify-content: center;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            cursor: pointer; transition: all 0.2s;
+            color: var(--text-secondary); font-size: 1rem;
+        }
+        .theme-btn:hover {
+            background: var(--primary); color: #fff;
+            border-color: var(--primary);
+        }
+
+        /* ===== HERO CAROUSEL ===== */
+        .hero-section {
+            padding-top: 80px;
+            padding-bottom: 0;
+        }
+        .hero-container {
+            max-width: 1280px; margin: 0 auto; padding: 0 2rem;
+        }
+        .carousel-wrapper {
+            position: relative;
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: var(--shadow-lg);
+            aspect-ratio: 2.6 / 1;
+            min-height: 380px;
+        }
+        .carousel-track {
+            display: flex;
+            height: 100%;
+            transition: transform 0.7s cubic-bezier(0.65, 0, 0.35, 1);
+        }
+        .carousel-slide {
+            min-width: 100%;
+            position: relative;
+            overflow: hidden;
+        }
+        .carousel-slide img {
+            width: 100%; height: 100%; object-fit: cover;
+            transition: transform 6s ease;
+        }
+        .carousel-slide.active img {
+            transform: scale(1.08);
+        }
+        .carousel-overlay {
+            position: absolute; inset: 0;
+            display: flex; align-items: center;
+            padding: 0 5%;
+        }
+        .slide-1 .carousel-overlay {
+            background: linear-gradient(135deg, rgba(15,23,42,0.85) 0%, rgba(37,99,235,0.4) 60%, transparent 100%);
+        }
+        .slide-2 .carousel-overlay {
+            background: linear-gradient(135deg, rgba(6,214,160,0.3) 0%, rgba(15,23,42,0.85) 50%, rgba(15,23,42,0.7) 100%);
+        }
+        .slide-3 .carousel-overlay {
+            background: linear-gradient(135deg, rgba(37,99,235,0.5) 0%, rgba(15,23,42,0.8) 40%, rgba(139,92,246,0.3) 100%);
+        }
+        .hero-content { max-width: 560px; }
+        .hero-tag {
+            display: inline-flex; align-items: center; gap: 6px;
+            padding: 6px 14px; border-radius: 99px;
+            background: rgba(255,255,255,0.12);
+            border: 1px solid rgba(255,255,255,0.15);
+            color: rgba(255,255,255,0.9);
+            font-size: 0.75rem; font-weight: 500;
+            margin-bottom: 1.2rem;
+            backdrop-filter: blur(8px);
+        }
+        .hero-tag .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+        .hero-title {
+            font-size: clamp(1.8rem, 4vw, 2.8rem);
+            font-weight: 800; color: #fff;
+            line-height: 1.15; margin-bottom: 1rem;
+            letter-spacing: -0.02em;
+        }
+        .hero-desc {
+            font-size: 1rem; color: rgba(255,255,255,0.75);
+            line-height: 1.7; margin-bottom: 1.8rem;
+            max-width: 460px;
+        }
+        .hero-btn {
+            display: inline-flex; align-items: center; gap: 8px;
+            padding: 12px 28px; border-radius: 12px;
+            font-size: 0.9rem; font-weight: 600;
+            background: #fff; color: var(--primary);
+            transition: all 0.25s;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        }
+        .hero-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.2); }
+
+        /* Carousel controls */
+        .carousel-nav-btn {
+            position: absolute; top: 50%; transform: translateY(-50%);
+            width: 44px; height: 44px; border-radius: 12px;
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255,255,255,0.15);
+            color: #fff; font-size: 1rem;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; transition: all 0.25s; z-index: 10;
+        }
+        .carousel-nav-btn:hover { background: rgba(255,255,255,0.25); }
+        .carousel-nav-btn.prev { left: 1.5rem; }
+        .carousel-nav-btn.next { right: 1.5rem; }
+
+        .carousel-indicators {
+            position: absolute; bottom: 1.5rem; left: 50%; transform: translateX(-50%);
+            display: flex; gap: 8px; z-index: 10;
+        }
+        .carousel-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: rgba(255,255,255,0.35);
+            cursor: pointer; transition: all 0.35s;
+        }
+        .carousel-dot.active {
+            width: 32px; border-radius: 4px;
+            background: #fff;
+        }
+
+        /* Progress bar on carousel */
+        .carousel-progress {
+            position: absolute; bottom: 0; left: 0; right: 0;
+            height: 3px; background: rgba(255,255,255,0.1); z-index: 10;
+        }
+        .carousel-progress-bar {
+            height: 100%; background: var(--primary-light);
+            width: 0; transition: width 0.1s linear;
+        }
+
+        /* ===== FEATURES SECTION ===== */
+        .section {
+            padding: 5rem 0;
+            transition: background 0.4s ease;
+        }
+        .section-alt { background: var(--bg-section-alt); }
+        .section-default { background: var(--bg-section); }
+        .container { max-width: 1280px; margin: 0 auto; padding: 0 2rem; }
+        .section-header { text-align: center; margin-bottom: 3.5rem; }
+        .section-title {
+            font-size: clamp(1.5rem, 3vw, 2.2rem);
+            font-weight: 700; margin-bottom: 0.75rem;
+            color: var(--text-primary);
+        }
+        .section-desc {
+            font-size: 1rem; color: var(--text-secondary);
+            max-width: 540px; margin: 0 auto; line-height: 1.6;
+        }
+
+        /* Feature cards */
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1.5rem;
+        }
+        @media (max-width: 1024px) { .features-grid { grid-template-columns: repeat(2, 1fr); } }
+        @media (max-width: 640px) { .features-grid { grid-template-columns: 1fr; } }
+
+        .feature-card {
+            position: relative;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 2rem 1.5rem;
+            transition: all 0.35s cubic-bezier(0.25,1,0.5,1);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            min-height: 280px;
+        }
+        .feature-card::before {
+            content: '';
+            position: absolute; top: 0; left: 0; right: 0; height: 3px;
+            background: var(--card-accent);
+            opacity: 0; transition: opacity 0.3s;
+        }
+        .feature-card:hover::before { opacity: 1; }
+        .feature-card:hover {
+            transform: translateY(-6px);
+            box-shadow: var(--shadow-lg);
+            border-color: transparent;
+        }
+        .feature-card.disabled-card {
+            opacity: 0.6; cursor: default;
+        }
+        .feature-card.disabled-card:hover { transform: none; box-shadow: none; }
+
+        .feature-icon {
+            width: 52px; height: 52px; border-radius: 14px;
+            display: flex; align-items: center; justify-content: center;
+            margin-bottom: 1.2rem;
+            font-size: 1.4rem;
+            transition: all 0.3s;
+        }
+        .feature-card:hover .feature-icon {
+            transform: scale(1.1);
+        }
+        .feature-card h3 {
+            font-size: 1.1rem; font-weight: 700;
+            margin-bottom: 0.5rem;
+            color: var(--text-primary);
+        }
+        .feature-card p {
+            font-size: 0.85rem; color: var(--text-secondary);
+            line-height: 1.65; margin-bottom: 1.2rem;
+        }
+        .feature-link {
+            font-size: 0.82rem; font-weight: 600;
+            color: var(--primary);
+            display: inline-flex; align-items: center; gap: 6px;
+            margin-top: auto;
+        }
+        .feature-link i { transition: transform 0.2s; }
+        .feature-card:hover .feature-link i { transform: translateX(4px); }
+        .coming-badge {
+            position: absolute; top: 12px; right: 12px;
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            color: #fff; font-size: 0.65rem; font-weight: 700;
+            padding: 3px 10px; border-radius: 99px;
+        }
+
+        /* ===== EXAMPLES SECTION ===== */
+        .examples-grid {
+            display: grid; grid-template-columns: repeat(2, 1fr);
+            gap: 2rem;
+        }
+        @media (max-width: 768px) { .examples-grid { grid-template-columns: 1fr; } }
+
+        .example-card {
+            display: flex; border-radius: 16px; overflow: hidden;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            box-shadow: var(--shadow-card);
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+        .example-card:hover { box-shadow: var(--shadow-md); }
+        .example-img {
+            width: 40%; min-height: 220px; position: relative; overflow: hidden;
+        }
+        .example-img img {
+            width: 100%; height: 100%; object-fit: cover;
+            transition: transform 0.5s;
+        }
+        .example-card:hover .example-img img { transform: scale(1.05); }
+        .example-badge {
+            position: absolute; top: 12px; right: 12px;
+            padding: 4px 12px; border-radius: 99px;
+            font-size: 0.72rem; font-weight: 600; color: #fff;
+        }
+        .example-badge.fake { background: var(--danger); }
+        .example-badge.real { background: var(--success); }
+        .example-body { width: 60%; padding: 1.5rem; display: flex; flex-direction: column; justify-content: center; }
+        .example-body h3 {
+            font-size: 1rem; font-weight: 700;
+            margin-bottom: 0.5rem; color: var(--text-primary);
+        }
+        .example-body > p {
+            font-size: 0.82rem; color: var(--text-secondary);
+            margin-bottom: 1rem; line-height: 1.5;
+        }
+        .bar-group { margin-bottom: 0.75rem; }
+        .bar-label {
+            display: flex; justify-content: space-between; margin-bottom: 4px;
+        }
+        .bar-label span { font-size: 0.75rem; color: var(--text-muted); }
+        .bar-label .val { font-weight: 600; }
+        .bar-track {
+            height: 6px; border-radius: 3px;
+            background: var(--bg-input);
+            overflow: hidden;
+        }
+        .bar-fill {
+            height: 100%; border-radius: 3px;
+            transition: width 1s cubic-bezier(0.22,1,0.36,1);
+        }
+        .bar-fill.green { background: var(--success); }
+        .bar-fill.red { background: var(--danger); }
+
+        /* Case detail modal */
+        .case-modal-overlay{
+            position:fixed; inset:0; z-index:9999;
+            display:none; align-items:center; justify-content:center;
+            background:rgba(0,0,0,.45); backdrop-filter:blur(4px);
+            padding:1rem;
+        }
+        .case-modal-overlay.visible{display:flex}
+        .case-modal{
+            width:min(980px,96vw); max-height:90vh; overflow:auto;
+            background:var(--bg-card); border:1px solid var(--border);
+            border-radius:16px; box-shadow:var(--shadow-lg); padding:1.2rem;
+        }
+        .case-modal-head{
+            display:flex; justify-content:space-between; align-items:center; margin-bottom:.8rem;
+        }
+        .case-modal-title{font-size:1rem; font-weight:700; color:var(--text-primary)}
+        .case-modal-close{
+            width:34px; height:34px; border-radius:10px; border:1px solid var(--border);
+            background:var(--bg-input); color:var(--text-secondary); cursor:pointer;
+        }
+        .case-modal-grid{display:grid; grid-template-columns:320px 1fr; gap:1rem}
+        @media (max-width: 820px){.case-modal-grid{grid-template-columns:1fr}}
+        .case-modal-img{width:100%; border-radius:12px; border:1px solid var(--border)}
+        .case-kv{display:grid; grid-template-columns:repeat(3,1fr); gap:.6rem; margin:.8rem 0}
+        @media (max-width: 640px){.case-kv{grid-template-columns:repeat(2,1fr)}}
+        .case-kv-item{background:var(--bg-input); border-radius:10px; padding:.6rem; text-align:center}
+        .case-kv-item .k{font-size:.72rem; color:var(--text-muted)}
+        .case-kv-item .v{font-size:.82rem; font-weight:600; color:var(--text-primary)}
+        .case-block{background:var(--bg-input); border-radius:12px; padding:.9rem; margin-top:.7rem}
+        .case-block h4{font-size:.86rem; margin-bottom:.45rem; color:var(--text-primary)}
+        .case-block p,.case-block li{font-size:.78rem; color:var(--text-secondary); line-height:1.65}
+        .case-block ul{padding-left:1rem}
+
+        /* ===== STATS ===== */
+        .stats-grid {
+            display: grid; grid-template-columns: repeat(4, 1fr);
+            gap: 1.5rem;
+        }
+        @media (max-width: 768px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
+        .stat-card {
+            text-align: center;
+            padding: 2rem 1rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            transition: all 0.3s;
+        }
+        .stat-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-md); }
+        .stat-val {
+            font-size: 2.4rem; font-weight: 800;
+            color: var(--primary);
+            font-variant-numeric: tabular-nums;
+            margin-bottom: 0.3rem;
+        }
+        .stat-label {
+            font-size: 0.85rem; color: var(--text-muted);
+        }
+
+        /* ===== FOOTER ===== */
+        .footer {
+            padding: 3rem 0;
+            background: var(--bg-card);
+            border-top: 1px solid var(--border);
+            text-align: center;
+            transition: all 0.4s;
+        }
+        .footer-logo {
+            display: flex; align-items: center; justify-content: center;
+            gap: 8px; margin-bottom: 0.75rem;
+            font-size: 1.1rem; font-weight: 700;
+            color: var(--text-primary);
+        }
+        .footer-logo i { color: var(--primary); }
+        .footer-copy { font-size: 0.8rem; color: var(--text-muted); }
+
+        /* ===== ANIMATIONS ===== */
+        .fade-up {
+            opacity: 0; transform: translateY(30px);
+            transition: opacity 0.6s ease, transform 0.6s ease;
+        }
+        .fade-up.visible { opacity: 1; transform: translateY(0); }
+        .fade-up:nth-child(2) { transition-delay: 0.1s; }
+        .fade-up:nth-child(3) { transition-delay: 0.2s; }
+        .fade-up:nth-child(4) { transition-delay: 0.3s; }
+
+        @media (max-width: 640px) {
+            .example-card { flex-direction: column; }
+            .example-img, .example-body { width: 100%; }
+            .example-img { min-height: 180px; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- NAV -->
+<header class="nav">
+    <div class="nav-inner">
+        <a href="/index" class="nav-logo">
+            <i class="fa fa-eye"></i>
+            <span>数字内容侵权、分析、检索和存证综合平台</span>
+        </a>
+        <nav class="nav-links">
+            <a href="/index" class="active">首页</a>
+            <div class="dropdown">
+                <button class="dropdown-trigger">
+                    <span>功能</span>
+                    <i class="fa fa-chevron-down"></i>
+                </button>
+                <div class="dropdown-menu">
+                    <div class="dropdown-label">检测</div>
+                    <a href="/image_upload" class="dropdown-item">
+                        <i class="fa fa-image"></i> 图像鉴伪
+                    </a>
+                    <a href="/video_upload" class="dropdown-item">
+                        <i class="fa fa-film"></i> 视频鉴伪
+                    </a>
+                    <div class="dropdown-divider"></div>
+                    <div class="dropdown-label">检索</div>
+                    <a href="/image_retrieve" class="dropdown-item">
+                        <i class="fa fa-search"></i> 图像侵权检索
+                    </a>
+                    <a href="/video_retrieve" class="dropdown-item">
+                        <i class="fa fa-play-circle"></i> 视频侵权检索
+                    </a>
+                </div>
+            </div>
+            <a href="/profile">我的</a>
+            <button class="theme-btn" id="themeToggle" title="切换主题">
+                <i class="fa fa-moon-o"></i>
+            </button>
+        </nav>
+    </div>
+</header>
+
+<!-- HERO CAROUSEL -->
+<section class="hero-section">
+    <div class="hero-container">
+        <div class="carousel-wrapper" id="carousel">
+            <div class="carousel-track" id="carouselTrack">
+                <div class="carousel-slide slide-1 active">
+                    <img src="../static/system/AIGC.jpg" alt="AIGC">
+                    <div class="carousel-overlay">
+                        <div class="hero-content">
+                            <div class="hero-tag"><span class="dot"></span> 多模态AI检测平台</div>
+                            <h2 class="hero-title">RealGuard<br>智能内容检测</h2>
+                            <p class="hero-desc">覆盖图像、视频多模态内容检测与检索，从源头发现疑似侵权内容，保障数字内容安全。</p>
+                            <a href="/image_upload" class="hero-btn">
+                                <i class="fa fa-rocket"></i> 开始检测
+                            </a>
+                        </div>
+                    </div>
+                </div>
+                <div class="carousel-slide slide-2">
+                    <img src="../static/system/index1.jpg" alt="图像检测">
+                    <div class="carousel-overlay">
+                        <div class="hero-content">
+                            <div class="hero-tag"><span class="dot"></span> 深度学习驱动</div>
+                            <h2 class="hero-title">图像侵权<br>智能检测</h2>
+                            <p class="hero-desc">基于前沿深度学习算法，精准识别AI生成图像、PS篡改等疑似侵权内容。</p>
+                            <a href="/image_upload" class="hero-btn">
+                                <i class="fa fa-image"></i> 图像鉴伪
+                            </a>
+                        </div>
+                    </div>
+                </div>
+                <div class="carousel-slide slide-3">
+                    <img src="../static/system/index3.jpg" alt="内容检索">
+                    <div class="carousel-overlay">
+                        <div class="hero-content">
+                            <div class="hero-tag"><span class="dot"></span> 海量数据检索</div>
+                            <h2 class="hero-title">多模态<br>侵权检索</h2>
+                            <p class="hero-desc">检索疑似侵权的图像，检索疑似侵权的视频，在海量数据库中快速定位相似可疑内容。</p>
+                            <a href="/image_retrieve" class="hero-btn">
+                                <i class="fa fa-search"></i> 开始检索
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="carousel-nav-btn prev" onclick="moveSlide(-1)"><i class="fa fa-chevron-left"></i></div>
+            <div class="carousel-nav-btn next" onclick="moveSlide(1)"><i class="fa fa-chevron-right"></i></div>
+            <div class="carousel-indicators" id="carouselDots"></div>
+            <div class="carousel-progress"><div class="carousel-progress-bar" id="progressBar"></div></div>
+        </div>
+    </div>
+</section>
+
+<!-- FEATURES -->
+<section class="section section-alt">
+    <div class="container">
+        <div class="section-header fade-up">
+            <h2 class="section-title">核心功能</h2>
+            <p class="section-desc">图像鉴伪、视频侵权检测、图像侵权检索、视频侵权检索，全方位覆盖多模态内容安全场景</p>
+        </div>
+        <div class="features-grid">
+            <a href="/image_upload" class="feature-card fade-up" style="--card-accent: var(--primary);">
+                <div class="feature-icon" style="background: rgba(37,99,235,0.1); color: var(--primary);">
+                    <i class="fa fa-image"></i>
+                </div>
+                <h3>图像鉴伪</h3>
+                <p>基于深度学习的图像真伪识别，支持多种场景的AIGC图像检测</p>
+                <span class="feature-link">进入功能 <i class="fa fa-arrow-right"></i></span>
+            </a>
+            <a href="/video_upload" class="feature-card fade-up" style="--card-accent: var(--warning);">
+                <div class="feature-icon" style="background: rgba(245,158,11,0.1); color: var(--warning);">
+                    <i class="fa fa-film"></i>
+                </div>
+                <h3>视频鉴伪</h3>
+                <p>针对视频内容的 AI 生成检测与篡改识别，帧级分析定位可疑片段。</p>
+                <span class="feature-link">进入功能 <i class="fa fa-arrow-right"></i></span>
+            </a>
+            <a href="/image_retrieve" class="feature-card fade-up" style="--card-accent: var(--accent);">
+                <div class="feature-icon" style="background: rgba(6,214,160,0.1); color: var(--accent-dark);">
+                    <i class="fa fa-search"></i>
+                </div>
+                <h3>图像侵权检索</h3>
+                <p>检索疑似侵权的图像，在图像数据库中快速定位可疑图像内容。</p>
+                <span class="feature-link">进入功能 <i class="fa fa-arrow-right"></i></span>
+            </a>
+            <a href="/video_retrieve" class="feature-card fade-up" style="--card-accent: #8b5cf6;">
+                <div class="feature-icon" style="background: rgba(139,92,246,0.1); color: #8b5cf6;">
+                    <i class="fa fa-play-circle"></i>
+                </div>
+                <h3>视频侵权检索</h3>
+                <p>检索疑似侵权的视频，在数据库中快速定位相似可疑视频内容。</p>
+                <span class="feature-link">进入功能 <i class="fa fa-arrow-right"></i></span>
+            </a>
+        </div>
+    </div>
+</section>
+
+<!-- EXAMPLES -->
+<section class="section section-default">
+    <div class="container">
+        <div class="section-header fade-up">
+            <h2 class="section-title">识别示例</h2>
+            <p class="section-desc">点击案例查看简洁检测结果</p>
+        </div>
+        <div class="examples-grid">
+            <div class="example-card fade-up" data-case="case1">
+                <div class="example-img">
+                    <img src="../static/system/case1.webp" alt="案例一">
+                    <span class="example-badge fake">伪造图像</span>
+                </div>
+                <div class="example-body">
+                    <h3>案例一：泳池场景人物图像</h3>
+                    <p>综合判断为 AI 生成（53.8%），点击查看检测结果。</p>
+                    <div class="bar-group">
+                        <div class="bar-label">
+                            <span>图片为真</span>
+                            <span class="val" style="color: var(--success);">46.2%</span>
+                        </div>
+                        <div class="bar-track"><div class="bar-fill green" style="width: 46.2%;"></div></div>
+                    </div>
+                    <div class="bar-group">
+                        <div class="bar-label">
+                            <span>图片为假</span>
+                            <span class="val" style="color: var(--danger);">53.8%</span>
+                        </div>
+                        <div class="bar-track"><div class="bar-fill red" style="width: 53.8%;"></div></div>
+                    </div>
+                </div>
+            </div>
+            <div class="example-card fade-up" data-case="case2">
+                <div class="example-img">
+                    <img src="../static/system/case2.webp" alt="案例二">
+                    <span class="example-badge fake">伪造图像</span>
+                </div>
+                <div class="example-body">
+                    <h3>案例二：几何色块人像图像</h3>
+                    <p>综合判断为 AI 生成（73.9%），点击查看检测结果。</p>
+                    <div class="bar-group">
+                        <div class="bar-label">
+                            <span>图片为真</span>
+                            <span class="val" style="color: var(--success);">26.1%</span>
+                        </div>
+                        <div class="bar-track"><div class="bar-fill green" style="width: 26.1%;"></div></div>
+                    </div>
+                    <div class="bar-group">
+                        <div class="bar-label">
+                            <span>图片为假</span>
+                            <span class="val" style="color: var(--danger);">73.9%</span>
+                        </div>
+                        <div class="bar-track"><div class="bar-fill red" style="width: 73.9%;"></div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<div class="case-modal-overlay" id="caseModal">
+    <div class="case-modal">
+        <div class="case-modal-head">
+            <div class="case-modal-title" id="caseTitle">案例详情</div>
+            <button class="case-modal-close" id="caseClose"><i class="fa fa-times"></i></button>
+        </div>
+        <div class="case-modal-grid">
+            <div>
+                <img class="case-modal-img" id="caseImage" src="" alt="案例图">
+                <div class="case-kv">
+                    <div class="case-kv-item"><div class="k">置信度</div><div class="v" id="caseConf">-</div></div>
+                    <div class="case-kv-item"><div class="k">文件大小</div><div class="v" id="caseSize">-</div></div>
+                    <div class="case-kv-item"><div class="k">格式</div><div class="v" id="caseFmt">-</div></div>
+                    <div class="case-kv-item"><div class="k">分辨率</div><div class="v" id="caseRes">-</div></div>
+                    <div class="case-kv-item"><div class="k">检测模型</div><div class="v" id="caseModel">-</div></div>
+                    <div class="case-kv-item"><div class="k">元数据</div><div class="v" id="caseMeta">-</div></div>
+                </div>
+            </div>
+            <div>
+                <div class="case-block">
+                    <h4>检测说明</h4>
+                    <p id="caseReason"></p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- STATS -->
+<section class="section section-alt">
+    <div class="container">
+        <div class="stats-grid">
+            <div class="stat-card fade-up">
+                <div class="stat-val" data-target="99.8" data-suffix="%">0</div>
+                <div class="stat-label">识别准确率</div>
+            </div>
+            <div class="stat-card fade-up">
+                <div class="stat-val" data-target="10000" data-suffix="+" data-comma="true">0</div>
+                <div class="stat-label">企业用户</div>
+            </div>
+            <div class="stat-card fade-up">
+                <div class="stat-val" data-target="5000000" data-suffix="+" data-comma="true">0</div>
+                <div class="stat-label">每日处理任务</div>
+            </div>
+            <div class="stat-card fade-up">
+                <div class="stat-val" data-target="0.3" data-suffix="s">0</div>
+                <div class="stat-label">平均响应时间</div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- FOOTER -->
+<footer class="footer">
+    <div class="footer-logo"><i class="fa fa-eye"></i> 数字内容侵权、分析、检索和存证综合平台</div>
+    <p class="footer-copy">&copy; 2025 数字内容侵权、分析、检索和存证综合平台</p>
+</footer>
+
+<script>
+(function(){
+    // ===== Theme =====
+    var body = document.body;
+    var themeBtn = document.getElementById('themeToggle');
+    var themeIcon = themeBtn.querySelector('i');
+
+    function setTheme(dark) {
+        if (dark) {
+            body.setAttribute('data-theme', 'dark');
+            themeIcon.className = 'fa fa-sun-o';
+        } else {
+            body.removeAttribute('data-theme');
+            themeIcon.className = 'fa fa-moon-o';
+        }
+    }
+
+    var saved = localStorage.getItem('theme');
+    if (saved === 'dark' || (!saved && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        setTheme(true);
+    }
+
+    themeBtn.addEventListener('click', function() {
+        var isDark = body.hasAttribute('data-theme');
+        setTheme(!isDark);
+        localStorage.setItem('theme', isDark ? 'light' : 'dark');
+    });
+
+    // ===== Carousel =====
+    var track = document.getElementById('carouselTrack');
+    var slides = track.querySelectorAll('.carousel-slide');
+    var dotsWrap = document.getElementById('carouselDots');
+    var progressBar = document.getElementById('progressBar');
+    var current = 0;
+    var total = slides.length;
+    var interval = 6000;
+    var autoTimer, progressTimer, progressStart;
+
+    for (var i = 0; i < total; i++) {
+        var dot = document.createElement('div');
+        dot.className = 'carousel-dot' + (i === 0 ? ' active' : '');
+        dot.setAttribute('data-i', i);
+        dot.addEventListener('click', function(){ goTo(parseInt(this.getAttribute('data-i'))); });
+        dotsWrap.appendChild(dot);
+    }
+
+    function goTo(idx) {
+        current = ((idx % total) + total) % total;
+        track.style.transform = 'translateX(-' + (current * 100) + '%)';
+        for (var j = 0; j < slides.length; j++) slides[j].classList.toggle('active', j === current);
+        var dots = dotsWrap.children;
+        for (var j = 0; j < dots.length; j++) dots[j].classList.toggle('active', j === current);
+        startProgress();
+    }
+
+    function startProgress() {
+        progressBar.style.transition = 'none';
+        progressBar.style.width = '0';
+        void progressBar.offsetWidth;
+        progressBar.style.transition = 'width ' + interval + 'ms linear';
+        progressBar.style.width = '100%';
+    }
+
+    window.moveSlide = function(dir) { goTo(current + dir); resetAuto(); };
+
+    function resetAuto() {
+        clearInterval(autoTimer);
+        autoTimer = setInterval(function(){ goTo(current + 1); }, interval);
+    }
+
+    startProgress();
+    resetAuto();
+
+    // ===== Fade-up =====
+    var fadeEls = document.querySelectorAll('.fade-up');
+    var obs = new IntersectionObserver(function(entries) {
+        entries.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add('visible'); obs.unobserve(e.target); }});
+    }, {threshold: 0.15});
+    fadeEls.forEach(function(el){ obs.observe(el); });
+
+    // ===== Stat counter =====
+    var statEls = document.querySelectorAll('.stat-val');
+    var statObs = new IntersectionObserver(function(entries) {
+        entries.forEach(function(e){ if(e.isIntersecting){ animStat(e.target); statObs.unobserve(e.target); }});
+    }, {threshold: 0.5});
+    statEls.forEach(function(el){ statObs.observe(el); });
+
+    function animStat(el) {
+        var target = parseFloat(el.getAttribute('data-target'));
+        var suffix = el.getAttribute('data-suffix') || '';
+        var useComma = el.getAttribute('data-comma') === 'true';
+        var isFloat = target % 1 !== 0;
+        var dur = 1800, start = performance.now();
+        function step(now) {
+            var p = Math.min((now - start) / dur, 1);
+            var ease = p === 1 ? 1 : 1 - Math.pow(2, -10 * p);
+            var val = ease * target;
+            if (isFloat) el.textContent = val.toFixed(1) + suffix;
+            else {
+                var v = Math.round(val);
+                el.textContent = (useComma ? v.toLocaleString() : v) + suffix;
+            }
+            if (p < 1) requestAnimationFrame(step);
+        }
+        requestAnimationFrame(step);
+    }
+
+    // Scroll nav shadow
+    window.addEventListener('scroll', function() {
+        var nav = document.querySelector('.nav');
+        if (window.scrollY > 50) nav.style.boxShadow = 'var(--shadow-md)';
+        else nav.style.boxShadow = 'none';
+    });
+
+    var caseData = {
+        case1: {
+            title: "案例一：泳池场景人物图像",
+            image: "/static/system/case1.webp",
+            confidence: "中",
+            size: "17.9KB",
+            format: "WEBP",
+            resolution: "1024x765",
+            model: "AIGC检测",
+            metadata: "无",
+            reason:
+                "综合检测结果显示该图像更偏向 AI 生成。\n" +
+                "当前置信度：中。\n" +
+                "图像缺少可验证的相机元数据。",
+            issues: []
+        },
+        case2: {
+            title: "案例二：几何色块人像图像",
+            image: "/static/system/case2.webp",
+            confidence: "高",
+            size: "14.4KB",
+            format: "WEBP",
+            resolution: "1024x765",
+            model: "AIGC检测",
+            metadata: "无",
+            reason:
+                "综合检测结果显示该图像更偏向 AI 生成。\n" +
+                "当前置信度：高。\n" +
+                "图像缺少可验证的相机元数据。",
+            issues: []
+        }
+    };
+
+    var caseModal = document.getElementById('caseModal');
+    var caseClose = document.getElementById('caseClose');
+    function openCaseDetail(key){
+        var d = caseData[key]; if(!d) return;
+        document.getElementById('caseTitle').textContent = d.title;
+        document.getElementById('caseImage').src = d.image;
+        document.getElementById('caseConf').textContent = d.confidence;
+        document.getElementById('caseSize').textContent = d.size;
+        document.getElementById('caseFmt').textContent = d.format;
+        document.getElementById('caseRes').textContent = d.resolution;
+        document.getElementById('caseModel').textContent = d.model;
+        document.getElementById('caseMeta').textContent = d.metadata;
+        document.getElementById('caseReason').textContent = d.reason;
+        var ul = document.getElementById('caseIssues');
+        if (ul) {
+            ul.innerHTML = '';
+            d.issues.forEach(function(it){
+                var li = document.createElement('li');
+                li.textContent = it;
+                ul.appendChild(li);
+            });
+        }
+        caseModal.classList.add('visible');
+    }
+    function closeCaseDetail(){ caseModal.classList.remove('visible'); }
+    document.querySelectorAll('.example-card[data-case]').forEach(function(card){
+        card.addEventListener('click', function(){ openCaseDetail(card.getAttribute('data-case')); });
+    });
+    caseClose.addEventListener('click', closeCaseDetail);
+    caseModal.addEventListener('click', function(e){ if(e.target === caseModal) closeCaseDetail(); });
+    document.addEventListener('keydown', function(e){ if(e.key === 'Escape') closeCaseDetail(); });
+})();
+</script>
+</body>
+</html>

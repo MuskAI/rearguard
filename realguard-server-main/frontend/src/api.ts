@@ -1,0 +1,170 @@
+export type ApiResult<T> = T & {
+  status?: "success" | "error";
+  message?: string;
+};
+
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
+
+async function parseResponse<T>(response: Response): Promise<ApiResult<T>> {
+  const contentType = response.headers.get("content-type") || "";
+  const data = contentType.includes("application/json")
+    ? await response.json()
+    : { status: "error", message: await response.text() };
+
+  if (!response.ok || data.status === "error" || data.success === false) {
+    throw new Error(data.message || `请求失败：${response.status}`);
+  }
+  return data;
+}
+
+export async function jsonRequest<T>(path: string, init: RequestInit = {}) {
+  const headers = new Headers(init.headers);
+  if (init.body && !(init.body instanceof FormData)) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers,
+    credentials: "include"
+  });
+  return parseResponse<T>(response);
+}
+
+export function sendSmsCode(phone: string, scene: "login" | "register") {
+  return jsonRequest<{ success: boolean; debug_code?: string; expires_in?: number }>("/sms/send_code", {
+    method: "POST",
+    body: JSON.stringify({ phone, scene })
+  });
+}
+
+export function loginByPassword(phone: string, secret: string) {
+  return jsonRequest<{ user: User }>("/api/login/password", {
+    method: "POST",
+    body: JSON.stringify({ phone, secret })
+  });
+}
+
+export function loginBySms(phone: string, smsCode: string) {
+  return jsonRequest<{ user: User }>("/api/login/sms", {
+    method: "POST",
+    body: JSON.stringify({ phone, sms_code: smsCode })
+  });
+}
+
+export function registerUser(payload: { phone: string; secret: string; username: string; sms_code: string }) {
+  return jsonRequest<{ message: string }>("/api/register", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function getMe() {
+  return jsonRequest<{ user: User; counters: Counters }>("/api/me");
+}
+
+export function logout() {
+  return jsonRequest<Record<string, never>>("/api/logout", { method: "POST" });
+}
+
+export function detectImage(file: File) {
+  const body = new FormData();
+  body.append("image", file);
+  return jsonRequest<{ result: ImageDetectionResult }>("/image_upload/detect", { method: "POST", body });
+}
+
+export function detectVideo(payload: { file?: File; videoUrl?: string; fastMode: boolean }) {
+  const body = new FormData();
+  if (payload.file) body.append("video_file", payload.file);
+  if (payload.videoUrl) body.append("video_url", payload.videoUrl);
+  body.append("fast_mode", payload.fastMode ? "1" : "0");
+  return jsonRequest<{ result: VideoDetectionResult }>("/video_upload/detect", { method: "POST", body });
+}
+
+export function getLibraries(searchType: "image" | "video") {
+  return jsonRequest<{ libraries: string[]; selected: string; root_path: string }>(
+    `/retrieve/libraries?search_type=${searchType}`
+  );
+}
+
+export function retrieveSearch(payload: {
+  file: File;
+  searchType: "image" | "video";
+  dataset: string;
+  topK: number;
+}) {
+  const body = new FormData();
+  body.append("image", payload.file);
+  body.append("search_type", payload.searchType);
+  body.append("dataset", payload.dataset);
+  body.append("top_k", String(payload.topK));
+  return jsonRequest<{ results: RetrieveItem[]; base_url: string; query_file_url: string; dataset: string }>(
+    "/retrieve/search",
+    { method: "POST", body }
+  );
+}
+
+export function getHistory(kind: "image-detections" | "video-detections") {
+  return jsonRequest<{ records: HistoryRecord[] }>(`/api/history/${kind}`);
+}
+
+export function getRetrievalHistory(searchType: "image" | "video") {
+  return jsonRequest<{ records: HistoryRecord[] }>(`/api/history/retrievals?search_type=${searchType}`);
+}
+
+export type User = {
+  Userid: number;
+  username: string;
+  phone: string;
+  openid?: string;
+};
+
+export type Counters = {
+  image_detect: number;
+  video_detect: number;
+  image_retrieve: number;
+  video_retrieve: number;
+};
+
+export type ImageDetectionResult = {
+  itemid: number;
+  final_label: string;
+  probability: number;
+  confidence: string;
+  explanation: string;
+  image_url: string;
+  filename: string;
+  file_size?: string;
+  resolution?: string;
+  img_format?: string;
+  visual_issues?: string[];
+};
+
+export type VideoDetectionResult = {
+  itemid: number;
+  filename: string;
+  video_url: string;
+  fake_percentage: number;
+  real_percentage: number;
+  final_label: string;
+  confidence: string;
+  explanation: string;
+  frame_count?: number;
+  d3_std?: number;
+  encoder?: string;
+  meta?: Record<string, string>;
+};
+
+export type RetrieveItem = {
+  id: string;
+  rank: number;
+  score: number;
+  product?: {
+    product_name?: string;
+    illegal_type?: string;
+    illegal_basis?: string;
+    product_images?: string;
+  };
+};
+
+export type HistoryRecord = Record<string, unknown>;

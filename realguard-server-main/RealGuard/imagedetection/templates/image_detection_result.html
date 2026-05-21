@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>检测结果 - 数字内容侵权、分析、检索和存证综合平台</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link href="/static/css/font-awesome.min.css" rel="stylesheet">
+    <style>
+        :root{--primary:#2563eb;--primary-light:#3b82f6;--primary-dark:#1d4ed8;--accent:#06d6a0;--warning:#f59e0b;--danger:#ef4444;--success:#10b981;--bg-body:#f0f2f5;--bg-card:#fff;--bg-card-alt:#f8fafc;--bg-nav:rgba(255,255,255,.82);--bg-input:#f1f5f9;--border:#e2e8f0;--border-light:rgba(0,0,0,.06);--text-primary:#0f172a;--text-secondary:#475569;--text-muted:#94a3b8;--shadow-sm:0 1px 3px rgba(0,0,0,.06);--shadow-md:0 4px 12px rgba(0,0,0,.08);--shadow-lg:0 12px 40px rgba(0,0,0,.1);--shadow-card:0 1px 3px rgba(0,0,0,.04),0 4px 12px rgba(0,0,0,.04)}
+        [data-theme="dark"]{--bg-body:#0b0f1a;--bg-card:#151b2e;--bg-card-alt:#1a2139;--bg-nav:rgba(15,23,42,.85);--bg-input:#1e293b;--border:#1e293b;--border-light:rgba(255,255,255,.06);--text-primary:#f1f5f9;--text-secondary:#94a3b8;--text-muted:#64748b;--shadow-sm:0 1px 3px rgba(0,0,0,.3);--shadow-md:0 4px 12px rgba(0,0,0,.4);--shadow-lg:0 12px 40px rgba(0,0,0,.5);--shadow-card:0 1px 3px rgba(0,0,0,.2),0 4px 12px rgba(0,0,0,.15)}
+        *{margin:0;padding:0;box-sizing:border-box}body{font-family:'Outfit','Noto Sans SC',sans-serif;background:var(--bg-body);color:var(--text-primary);transition:background .4s,color .4s;min-height:100vh;display:flex;flex-direction:column}a{text-decoration:none;color:inherit}
+        .nav{position:fixed;top:0;left:0;right:0;z-index:100;background:var(--bg-nav);backdrop-filter:blur(20px) saturate(1.4);border-bottom:1px solid var(--border-light);transition:all .3s}.nav-inner{max-width:1280px;margin:0 auto;padding:0 2rem;height:64px;display:flex;align-items:center;justify-content:space-between}.nav-logo{display:flex;align-items:center;gap:10px;font-size:1.2rem;font-weight:700;color:var(--text-primary)}.nav-logo i{color:var(--primary);font-size:1.5rem}.nav-links{display:flex;align-items:center;gap:2rem}.nav-links a{font-size:.9rem;font-weight:500;color:var(--text-secondary);transition:color .2s}.nav-links a:hover,.nav-links a.active{color:var(--primary)}.dropdown{position:relative}.dropdown-trigger{display:flex;align-items:center;gap:4px;font-size:.9rem;font-weight:500;color:var(--text-secondary);cursor:pointer;background:none;border:none;font-family:inherit;transition:color .2s}.dropdown-trigger:hover{color:var(--primary)}.dropdown-trigger i{font-size:.6rem;transition:transform .3s}.dropdown:hover .dropdown-trigger i{transform:rotate(180deg)}.dropdown-menu{position:absolute;top:calc(100% + 12px);left:-16px;min-width:220px;padding:8px;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-lg);opacity:0;visibility:hidden;transform:translateY(-8px);transition:all .25s}.dropdown:hover .dropdown-menu{opacity:1;visibility:visible;transform:translateY(0)}.dropdown-label{padding:6px 12px;font-size:.7rem;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.08em}.dropdown-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;font-size:.85rem;color:var(--text-secondary);transition:all .15s}.dropdown-item:hover{background:rgba(37,99,235,.08);color:var(--primary)}.dropdown-item i{width:18px;text-align:center}.dropdown-item.disabled{opacity:.45;pointer-events:none}.dropdown-divider{height:1px;background:var(--border);margin:4px 8px}.badge-soon{font-size:.6rem;font-weight:600;background:linear-gradient(135deg,#f59e0b,#d97706);color:#fff;padding:1px 6px;border-radius:99px;margin-left:auto}
+        .theme-btn{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;background:var(--bg-input);border:1px solid var(--border);cursor:pointer;transition:all .2s;color:var(--text-secondary);font-size:1rem}.theme-btn:hover{background:var(--primary);color:#fff;border-color:var(--primary)}
+        .main{flex:1;padding-top:88px;padding-bottom:3rem}.container{max-width:1080px;margin:0 auto;padding:0 2rem}
+        .back-link{display:inline-flex;align-items:center;gap:6px;font-size:.85rem;font-weight:500;color:var(--text-muted);margin-bottom:1.5rem;transition:color .2s}.back-link:hover{color:var(--primary)}
+        .card{background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:1.5rem;box-shadow:var(--shadow-card);transition:all .3s}
+        .card-title{font-size:1.1rem;font-weight:700;color:var(--text-primary);margin-bottom:1.5rem;display:flex;align-items:center;gap:12px;flex-wrap:wrap}.card-title i{color:var(--primary)}
+        .title-main{display:flex;align-items:center;gap:8px}
+        .title-feedback{display:flex;align-items:center;gap:.5rem;justify-content:flex-end}
+        .result-grid{display:grid;grid-template-columns:320px 1fr;gap:2rem}@media(max-width:900px){.result-grid{grid-template-columns:1fr}}
+        .result-image{border-radius:14px;overflow:hidden;background:var(--bg-input);height:380px;display:flex;align-items:center;justify-content:center}
+        .result-image img{max-width:100%;max-height:100%;display:block;object-fit:contain}
+        .result-details{display:flex;flex-direction:column;gap:1.2rem}
+        .verdict{display:flex;align-items:center;gap:1rem;padding:1.2rem;border-radius:14px}.verdict.fake{background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2)}.verdict.real{background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2)}
+        .verdict-icon{width:56px;height:56px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:1.6rem;color:#fff;flex-shrink:0}.verdict.fake .verdict-icon{background:var(--danger)}.verdict.real .verdict-icon{background:var(--success)}
+        .verdict-text h3{font-size:1.2rem;font-weight:700;margin-bottom:.2rem}.verdict.fake .verdict-text h3{color:var(--danger)}.verdict.real .verdict-text h3{color:var(--success)}.verdict-text p{font-size:.82rem;color:var(--text-secondary)}
+        .prob-bars{display:flex;flex-direction:column;gap:.8rem}.prob-bar-item label{display:flex;justify-content:space-between;font-size:.78rem;margin-bottom:4px}.prob-bar-item label span:first-child{color:var(--text-secondary)}.prob-bar-item label .val{font-weight:700}
+        .bar-track{height:8px;border-radius:4px;background:var(--bg-input);overflow:hidden}.bar-fill{height:100%;border-radius:4px;transition:width 1s cubic-bezier(.22,1,.36,1)}.bar-fill.green{background:var(--success)}.bar-fill.red{background:var(--danger)}.bar-fill.blue{background:var(--primary)}
+        .info-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.8rem}@media(max-width:600px){.info-grid{grid-template-columns:repeat(2,1fr)}}
+        .info-item{padding:.75rem;background:var(--bg-input);border-radius:10px;text-align:center}.info-item .label{font-size:.7rem;color:var(--text-muted);margin-bottom:.2rem}.info-item .value{font-size:.85rem;font-weight:600;color:var(--text-primary)}
+        /* Clickable metadata item */
+        .info-item.clickable{cursor:pointer;transition:all .2s;border:1px solid transparent}.info-item.clickable:hover{border-color:var(--primary);background:rgba(37,99,235,.05)}.info-item.clickable .value{color:var(--primary)}.info-item.clickable .click-hint{font-size:.58rem;color:var(--text-muted);margin-top:.15rem}
+        .explanation-box{padding:1.2rem;background:var(--bg-input);border-radius:12px;margin-top:1.5rem}
+        .explanation-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:.6rem}
+        .explanation-box h4{font-size:.88rem;font-weight:700;color:var(--text-primary);display:flex;align-items:center;gap:6px}
+        .explanation-box h4 i{color:var(--primary)}
+        .exp-detail-btn{padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card);font-size:.72rem;color:var(--text-secondary);cursor:pointer;font-family:inherit}
+        .exp-detail-btn:hover{border-color:var(--primary);color:var(--primary)}
+        .explanation-box p{font-size:.82rem;color:var(--text-secondary);line-height:1.8;white-space:pre-wrap}
+        .agent-raw{display:none;margin-top:.75rem;padding:.85rem;border-radius:10px;background:var(--bg-card);border:1px solid var(--border);font-size:.75rem;color:var(--text-secondary);line-height:1.7;white-space:pre-wrap;max-height:260px;overflow:auto}
+        .agent-raw.visible{display:block}
+        .issues-box{padding:1.2rem;background:var(--bg-input);border-radius:12px;margin-top:1rem}
+        .issues-box h4{font-size:.88rem;font-weight:700;color:var(--text-primary);display:flex;align-items:center;gap:6px;margin-bottom:.65rem}
+        .issues-box h4 i{color:var(--warning)}
+        .issues-list{margin:0;padding-left:1.05rem;color:var(--text-secondary);font-size:.82rem;line-height:1.85}
+        .issues-list li{padding-left:.1rem}
+        .fb-btn{padding:9px 16px;border-radius:10px;font-size:.8rem;font-weight:600;cursor:pointer;font-family:inherit;border:1px solid var(--border);background:var(--bg-card);color:var(--text-secondary);display:inline-flex;align-items:center;gap:6px;transition:all .2s}
+        .fb-btn:hover{border-color:var(--primary);color:var(--primary)}
+        .fb-btn:disabled{opacity:.55;cursor:not-allowed}
+        .fb-btn.active-up{border-color:var(--success);color:var(--success);background:rgba(16,185,129,.1)}
+        .fb-btn.active-down{border-color:var(--danger);color:var(--danger);background:rgba(239,68,68,.1)}
+        .feedback-msg{margin-top:.45rem;font-size:.72rem;color:var(--text-muted);display:none;text-align:right}
+        .feedback-inline{margin-top:.6rem}
+        .feedback-msg.visible{display:block}
+        .actions{display:flex;gap:1rem;margin-top:1.5rem}
+        .btn-outline{padding:10px 20px;border-radius:10px;font-size:.85rem;font-weight:600;cursor:pointer;font-family:inherit;transition:all .2s;display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-secondary)}.btn-outline:hover{border-color:var(--primary);color:var(--primary)}
+        .btn-solid{padding:10px 20px;border-radius:10px;font-size:.85rem;font-weight:600;cursor:pointer;font-family:inherit;transition:all .2s;display:inline-flex;align-items:center;gap:6px;border:none;background:var(--primary);color:#fff}.btn-solid:hover{background:var(--primary-dark)}
+        .sample-badge{display:inline-flex;align-items:center;gap:5px;padding:4px 12px;border-radius:8px;font-size:.75rem;font-weight:600;background:rgba(245,158,11,.1);color:var(--warning);margin-bottom:1rem}
+        .loading-state{text-align:center;padding:5rem 0}
+
+        /* METADATA MODAL */
+        .modal-overlay{display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.4);backdrop-filter:blur(6px);align-items:center;justify-content:center}
+        .modal-overlay.visible{display:flex}
+        .modal{background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:1.5rem;width:100%;max-width:640px;box-shadow:var(--shadow-lg);max-height:80vh;display:flex;flex-direction:column}
+        .modal-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem}
+        .modal-header h3{font-size:1.05rem;font-weight:700;color:var(--text-primary);display:flex;align-items:center;gap:8px}.modal-header h3 i{color:var(--primary)}
+        .modal-close{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;background:var(--bg-input);border:1px solid var(--border);cursor:pointer;color:var(--text-muted);font-size:.9rem;transition:all .2s}.modal-close:hover{background:var(--danger);color:#fff;border-color:var(--danger)}
+        .meta-summary{display:flex;gap:.75rem;margin-bottom:1rem;flex-wrap:wrap}
+        .meta-tag{padding:3px 10px;border-radius:99px;font-size:.68rem;font-weight:600}
+        .meta-tag.blue{background:rgba(37,99,235,.1);color:var(--primary)}
+        .meta-tag.green{background:rgba(16,185,129,.1);color:var(--success)}
+        .meta-tag.red{background:rgba(239,68,68,.1);color:var(--danger)}
+        .meta-tag.gray{background:var(--bg-input);color:var(--text-muted)}
+        .meta-search{width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:10px;background:var(--bg-input);color:var(--text-primary);font-size:.82rem;font-family:inherit;margin-bottom:.75rem;transition:border-color .2s}.meta-search:focus{outline:none;border-color:var(--primary)}
+        .meta-search::placeholder{color:var(--text-muted)}
+        .meta-table-wrap{overflow-y:auto;flex:1;border:1px solid var(--border);border-radius:10px}
+        .meta-table{width:100%;border-collapse:collapse;font-size:.78rem}
+        .meta-table th{position:sticky;top:0;background:var(--bg-input);padding:8px 12px;text-align:left;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border);font-size:.72rem;text-transform:uppercase;letter-spacing:.04em}
+        .meta-table td{padding:7px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+        .meta-table tr:last-child td{border-bottom:none}
+        .meta-table tr:hover{background:rgba(37,99,235,.03)}
+        .meta-table .key{color:var(--text-secondary);font-weight:500;white-space:nowrap;width:40%}
+        .meta-table .val{color:var(--text-primary);word-break:break-all}
+        .meta-empty{text-align:center;padding:2rem;color:var(--text-muted);font-size:.82rem}
+        .meta-category{padding:6px 12px;background:var(--bg-card-alt,var(--bg-input));font-size:.7rem;font-weight:600;color:var(--primary);text-transform:uppercase;letter-spacing:.04em}
+
+        .footer{padding:2rem 0;background:var(--bg-card);border-top:1px solid var(--border);text-align:center;transition:all .4s;margin-top:auto}.footer-logo{display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:.5rem;font-size:1rem;font-weight:700;color:var(--text-primary)}.footer-logo i{color:var(--primary)}.footer-copy{font-size:.75rem;color:var(--text-muted)}
+    </style>
+</head>
+<body>
+<header class="nav">
+    <div class="nav-inner">
+        <a href="/index" class="nav-logo"><i class="fa fa-eye"></i><span>数字内容侵权、分析、检索和存证综合平台</span></a>
+        <nav class="nav-links">
+            <a href="/index">首页</a>
+            <div class="dropdown">
+                <button class="dropdown-trigger"><span>功能</span><i class="fa fa-chevron-down"></i></button>
+                <div class="dropdown-menu">
+                    <div class="dropdown-label">检测</div><a href="/image_upload" class="dropdown-item active-item"><i class="fa fa-image"></i> 图像鉴伪</a><a href="/video_upload" class="dropdown-item"><i class="fa fa-film"></i> 视频侵权检测</a><div class="dropdown-divider"></div><div class="dropdown-label">检索</div><a href="/image_retrieve" class="dropdown-item"><i class="fa fa-search"></i> 图像侵权检索</a><a href="/video_retrieve" class="dropdown-item"><i class="fa fa-play-circle"></i> 视频侵权检索</a>
+                </div>
+            </div>
+            <a href="/introduce">关于我们</a><a href="/profile">我的</a>
+            <button class="theme-btn" id="themeToggle" title="切换主题"><i class="fa fa-moon-o"></i></button>
+        </nav>
+    </div>
+</header>
+
+<!-- METADATA MODAL -->
+<div class="modal-overlay" id="metaModal">
+    <div class="modal">
+        <div class="modal-header">
+            <h3><i class="fa fa-database"></i> 元数据详情</h3>
+            <button class="modal-close" onclick="closeMetaModal()"><i class="fa fa-times"></i></button>
+        </div>
+        <div class="meta-summary" id="metaSummary"></div>
+        <input type="text" class="meta-search" id="metaSearch" placeholder="搜索元数据字段..." oninput="filterMeta()">
+        <div class="meta-table-wrap">
+            <table class="meta-table">
+                <thead><tr><th>字段名</th><th>值</th></tr></thead>
+                <tbody id="metaTableBody"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+
+<main class="main">
+    <div class="container">
+        <a href="/image_upload" class="back-link"><i class="fa fa-arrow-left"></i> 返回上传页面</a>
+        <div class="card" id="loadingCard"><div class="loading-state"><p style="color:var(--text-secondary);">正在加载检测结果...</p></div></div>
+        <div id="resultCard" style="display:none;">
+            <div class="card">
+                <div class="card-title">
+                    <div class="title-main"><i class="fa fa-bar-chart"></i> 检测结果</div>
+                </div>
+                <div id="sampleBadge" style="display:none;"><div class="sample-badge"><i class="fa fa-star"></i> 示例演示结果</div></div>
+                <div class="result-grid">
+                    <div class="result-image"><img id="resultImg" src="" alt="检测图片"></div>
+                    <div class="result-details">
+                        <div class="verdict" id="verdict">
+                            <div class="verdict-icon" id="verdictIcon"><i class="fa fa-question"></i></div>
+                            <div class="verdict-text"><h3 id="verdictLabel">-</h3><p id="verdictSub">-</p></div>
+                        </div>
+                        <div class="prob-bars">
+                            <div class="prob-bar-item"><label><span>综合AI生成概率</span><span class="val" id="probVal" style="color:var(--danger)">-</span></label><div class="bar-track"><div class="bar-fill red" id="probBar" style="width:0%"></div></div></div>
+                            <div class="prob-bar-item"><label><span>检测器原始AI概率</span><span class="val" id="detProbVal" style="color:var(--primary)">-</span></label><div class="bar-track"><div class="bar-fill blue" id="detProbBar" style="width:0%"></div></div></div>
+                        </div>
+                        <div class="info-grid">
+                            <div class="info-item"><div class="label">置信度</div><div class="value" id="infoConf">-</div></div>
+                            <div class="info-item"><div class="label">文件大小</div><div class="value" id="infoSize">-</div></div>
+                            <div class="info-item"><div class="label">格式</div><div class="value" id="infoFmt">-</div></div>
+                            <div class="info-item"><div class="label">分辨率</div><div class="value" id="infoRes">-</div></div>
+                            <div class="info-item"><div class="label">检测模型</div><div class="value" id="infoModel">-</div></div>
+                            <div class="info-item clickable" id="metaItem" onclick="openMetaModal()">
+                                <div class="label">元数据</div>
+                                <div class="value" id="infoMeta">-</div>
+                                <div class="click-hint"><i class="fa fa-external-link"></i> 点击查看详情</div>
+                            </div>
+                        </div>
+                        <div class="feedback-inline">
+                            <div class="title-feedback" id="titleFeedback" style="display:none;">
+                                <button type="button" class="fb-btn" id="fbUp" title="满意"><i class="fa fa-thumbs-o-up"></i> 满意</button>
+                                <button type="button" class="fb-btn" id="fbDown" title="不满意"><i class="fa fa-thumbs-o-down"></i> 不满意</button>
+                            </div>
+                            <p class="feedback-msg" id="feedbackMsg"></p>
+                        </div>
+                    </div>
+                </div>
+                <div class="explanation-box">
+                    <div class="explanation-head">
+                        <h4><i class="fa fa-file-text-o"></i> 推理说明</h4>
+                        <button type="button" class="exp-detail-btn" id="agentToggle" style="display:none;"><i class="fa fa-eye"></i> 查看Agent推理</button>
+                    </div>
+                    <p id="explanationText">-</p>
+                    <div class="agent-raw" id="agentRaw"></div>
+                </div>
+                <div class="issues-box">
+                    <h4><i class="fa fa-exclamation-triangle"></i> 视觉可疑点</h4>
+                    <ul class="issues-list" id="visualIssuesList"></ul>
+                </div>
+                <div class="actions">
+                    <a href="/image_upload" class="btn-solid"><i class="fa fa-plus"></i> 继续检测</a>
+                    <a href="/history_photo" class="btn-outline"><i class="fa fa-history"></i> 历史记录</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</main>
+
+<footer class="footer"><div class="footer-logo"><i class="fa fa-eye"></i> 数字内容侵权、分析、检索和存证综合平台</div><p class="footer-copy">&copy; 2025 数字内容侵权、分析、检索和存证综合平台</p></footer>
+
+<script>
+(function(){
+    var b=document.body,t=document.getElementById('themeToggle'),ti=t.querySelector('i');
+    function setTheme(d){if(d){b.setAttribute('data-theme','dark');ti.className='fa fa-sun-o';}else{b.removeAttribute('data-theme');ti.className='fa fa-moon-o';}}
+    var s=localStorage.getItem('theme');if(s==='dark'||(!s&&window.matchMedia('(prefers-color-scheme:dark)').matches))setTheme(true);
+    t.addEventListener('click',function(){var d=b.hasAttribute('data-theme');setTheme(!d);localStorage.setItem('theme',d?'light':'dark');});
+    window.addEventListener('scroll',function(){document.querySelector('.nav').style.boxShadow=window.scrollY>50?'var(--shadow-md)':'none';});
+
+    var loadingCard=document.getElementById('loadingCard'),resultCard=document.getElementById('resultCard');
+    var currentMetadata = {};
+    var currentItemId = null;
+    var sampleKeyParam = null;
+
+    /* exiftool 将光圈/快门/镜头等放在 Composite 命名空间，UI 上不应归为「合成信息」 */
+    var CAMERA_FROM_COMPOSITE = {
+        'Composite:Aperture': true,
+        'Composite:ApertureValue': true,
+        'Composite:ShutterSpeed': true,
+        'Composite:ShutterSpeedValue': true,
+        'Composite:ExposureTime': true,
+        'Composite:LensID': true,
+        'Composite:LensSpec': true,
+        'Composite:FocalLength': true,
+        'Composite:FocalLength35efl': true,
+        'Composite:ISO': true,
+        'Composite:LightValue': true,
+        'Composite:ScaleFactor35efl': true
+    };
+    function categoryKeyForMetaKey(key) {
+        if (CAMERA_FROM_COMPOSITE[key]) return 'Camera';
+        var parts = key.split(':');
+        return parts.length > 1 ? parts[0] : 'Other';
+    }
+
+    var sampleData={
+        index1:{final_label:'AI生成图像',probability:0.91,detector_probability:0.91,confidence:'高',explanation:'综合检测器、视觉细节与元数据线索，图像整体更偏向 AI 生成。\n视觉层面存在一定不自然特征，支持当前判定。\n图像缺少可验证的相机元数据，增加了内容真实性风险。\n当前置信度：高。',visual_issues:['图像整体纹理过于均匀，缺乏自然拍摄的随机细节。','光影过渡略显生硬，局部边缘融合不够自然。'],image_url:'/static/system/index1.jpg',filename:'index1.jpg',file_size:'示例',img_format:'JPEG',resolution:'示例',all_metadata:{},_model:'aigc'},
+        index2:{final_label:'真实图像',probability:0.02,detector_probability:0.02,confidence:'高',explanation:'综合检测器、视觉细节与元数据线索，图像整体更偏向真实拍摄。\n视觉层面整体较自然，未发现明显 AI 生成痕迹。\n已提取元数据，为真实性判断提供辅助线索。\n当前置信度：高。',visual_issues:['无明显视觉可疑点。'],image_url:'/static/system/index2.jpg',filename:'index2.jpg',file_size:'示例',img_format:'JPEG',resolution:'示例',all_metadata:{'EXIF:Model':'Camera','EXIF:Make':'Manufacturer'},_model:'aigc'},
+        index3:{final_label:'AI生成图像',probability:0.87,detector_probability:0.87,confidence:'高',explanation:'综合检测器、视觉细节与元数据线索，图像整体更偏向 AI 生成。\n视觉层面存在一定不自然特征，支持当前判定。\n图像缺少可验证的相机元数据，增加了内容真实性风险。\n当前置信度：高。',visual_issues:['背景元素透视关系略有偏差。','部分边缘融合不自然，纹理缺乏自然拍摄的随机性。'],image_url:'/static/system/index3.jpg',filename:'index3.jpg',file_size:'示例',img_format:'JPEG',resolution:'示例',all_metadata:{},_model:'aigc'}
+    };
+
+    var params=new URLSearchParams(window.location.search);
+    var sampleKey=params.get('sample');
+    sampleKeyParam = sampleKey;
+    var itemid=params.get('itemid');
+
+    function tryParseStored(){
+        var raw=sessionStorage.getItem('detect_result');
+        if(!raw)return null;
+        try{return JSON.parse(raw);}catch(e){return null;}
+    }
+
+    if(sampleKey && sampleData[sampleKey]){
+        document.getElementById('sampleBadge').style.display='block';
+        renderResult(sampleData[sampleKey]);showResult();
+    } else if(itemid){
+        var st=tryParseStored();
+        if(st&&String(st.itemid)===String(itemid)){
+            st._model=sessionStorage.getItem('detect_model')||'aigc';
+            renderResult(st);showResult();
+            sessionStorage.removeItem('detect_result');
+            sessionStorage.removeItem('detect_model');
+        } else {
+            fetch('/image_upload/result?itemid='+encodeURIComponent(itemid))
+            .then(function(r){return r.json();})
+            .then(function(data){
+                if(data.status==='success'){renderResult(data.result);showResult();}
+                else{showError(data.message||'未找到记录');}
+            }).catch(function(err){showError('加载失败: '+err.message);});
+        }
+    } else {
+        var stored=tryParseStored();
+        if(stored){
+            stored._model=sessionStorage.getItem('detect_model')||'aigc';
+            renderResult(stored);showResult();
+            sessionStorage.removeItem('detect_result');
+            sessionStorage.removeItem('detect_model');
+        } else { showError(null); }
+    }
+
+    function showResult(){loadingCard.style.display='none';resultCard.style.display='block';}
+    function showError(msg){
+        loadingCard.innerHTML='<div style="text-align:center;padding:4rem;color:var(--text-muted)"><i class="fa fa-'+(msg?'exclamation-triangle':'inbox')+'" style="font-size:2.5rem;display:block;margin-bottom:1rem;'+(msg?'color:var(--danger)':'')+'"></i><p>'+(msg||'暂无检测结果')+'</p><a href="/image_upload" style="color:var(--primary);font-weight:600;display:inline-block;margin-top:1rem;"><i class="fa fa-arrow-left"></i> 去检测一张图片</a></div>';
+    }
+
+    function renderResult(r){
+        var pNum = Number(r.probability);
+        if (isNaN(pNum)) pNum = 0;
+        /* 裁决与综合 AI 概率一致：≥50% 视为 AI 生成，避免与 LLM 文案矛盾 */
+        var isFake = pNum >= 0.5;
+        var verdictLabel = isFake ? 'AI生成图像' : '真实图像';
+        var prob=(pNum*100).toFixed(1);
+        var detectorNum = Number(r.detector_probability);
+        if (isNaN(detectorNum)) detectorNum = pNum;
+        detectorNum = Math.max(0, Math.min(1, detectorNum));
+        var detProb=(detectorNum*100).toFixed(1);
+
+        currentItemId=null;
+        if(r.itemid!==undefined&&r.itemid!==null&&r.itemid!==''){
+            var nid=parseInt(r.itemid,10);
+            if(!isNaN(nid)&&nid>0)currentItemId=nid;
+        }
+
+        document.getElementById('resultImg').src=r.image_url;
+        var v=document.getElementById('verdict');v.className='verdict '+(isFake?'fake':'real');
+        document.getElementById('verdictIcon').innerHTML='<i class="fa '+(isFake?'fa-times':'fa-check')+'"></i>';
+        document.getElementById('verdictLabel').textContent=verdictLabel;
+        document.getElementById('verdictSub').textContent='置信度: '+(r.confidence||'-')+'  |  综合 AI 生成概率: '+prob+'%';
+
+        document.getElementById('probVal').textContent=prob+'%';
+        document.getElementById('probVal').style.color=isFake?'var(--danger)':'var(--success)';
+        document.getElementById('detProbVal').textContent=detProb+'%';
+
+        requestAnimationFrame(function(){
+            var pb=document.getElementById('probBar');pb.style.width=prob+'%';pb.className='bar-fill '+(isFake?'red':'green');
+            document.getElementById('detProbBar').style.width=detProb+'%';
+        });
+
+        document.getElementById('infoConf').textContent=r.confidence||'-';
+        document.getElementById('infoSize').textContent=r.file_size||'-';
+        document.getElementById('infoFmt').textContent=r.img_format||'-';
+        document.getElementById('infoRes').textContent=r.resolution||'-';
+        document.getElementById('infoModel').textContent=(r._model==='ps'?'PS篡改检测':'AIGC检测');
+
+        // Metadata
+        currentMetadata = r.all_metadata || {};
+        var mc = Object.keys(currentMetadata).length;
+        var metaEl = document.getElementById('infoMeta');
+        if (mc > 0) {
+            metaEl.textContent = mc + '个字段';
+            document.getElementById('metaItem').style.cursor = 'pointer';
+            document.getElementById('metaItem').querySelector('.click-hint').innerHTML = '<i class="fa fa-external-link"></i> 点击查看详情';
+        } else {
+            metaEl.textContent = '无';
+            document.getElementById('metaItem').querySelector('.click-hint').textContent = '无元数据信息';
+        }
+
+        document.getElementById('explanationText').textContent=cleanExplanation(r)||'暂无说明';
+        renderVisualIssues(r);
+        renderAgentReasoning(r);
+
+        setupFeedbackUI(r);
+    }
+
+    function cleanExplanation(r) {
+        var text = String((r && r.explanation) || '').trim();
+        var label = (r && r.final_label) || '';
+        var conf = (r && r.confidence) || '';
+        var meta = (r && r.all_metadata) || {};
+        var hasMeta = Object.keys(meta).length > 0;
+        if (!text) {
+            text = label === '真实图像' ? '综合检测结果显示该图像更偏向真实拍摄。' : '综合检测结果显示该图像更偏向 AI 生成。';
+        }
+        var detailed = /\*\*|P_detector|P_visual|P_metadata|权重|加权计算|判断依据|视觉可疑点|^- /m.test(text);
+        if (!detailed) return text;
+        var lines = [];
+        lines.push(label === '真实图像' ? '综合检测结果显示该图像更偏向真实拍摄。' : '综合检测结果显示该图像更偏向 AI 生成。');
+        if (conf) lines.push('当前置信度：' + conf + '。');
+        lines.push(hasMeta ? '已结合元数据进行辅助研判。' : '图像缺少可验证的相机元数据。');
+        return lines.join('\n');
+    }
+
+    function renderVisualIssues(r) {
+        var list = document.getElementById('visualIssuesList');
+        var raw = r && r.visual_issues;
+        var items = [];
+        if (Array.isArray(raw)) {
+            items = raw;
+        } else if (raw) {
+            items = String(raw).split(/\n+/);
+        }
+        items = items.map(function (x) {
+            return String(x || '').replace(/^[-·•*\d.、)\s]+/, '').trim();
+        }).filter(Boolean);
+        if (!items.length) {
+            items = (r && r.final_label === '真实图像') ? ['无明显视觉可疑点。'] : ['暂未提取到明确的视觉可疑点。'];
+        }
+        list.innerHTML = '';
+        items.slice(0, 6).forEach(function (item) {
+            var li = document.createElement('li');
+            li.textContent = item;
+            list.appendChild(li);
+        });
+    }
+
+    function renderAgentReasoning(r) {
+        var btn = document.getElementById('agentToggle');
+        var rawBox = document.getElementById('agentRaw');
+        var raw = String((r && r.agent_reasoning) || '').trim();
+        rawBox.classList.remove('visible');
+        rawBox.textContent = '';
+        if (!raw) {
+            btn.style.display = 'none';
+            return;
+        }
+        rawBox.textContent = raw;
+        btn.style.display = 'inline-flex';
+        btn.onclick = function () {
+            var visible = rawBox.classList.toggle('visible');
+            btn.innerHTML = visible ? '<i class="fa fa-eye-slash"></i> 收起Agent推理' : '<i class="fa fa-eye"></i> 查看Agent推理';
+        };
+    }
+
+    function setupFeedbackUI(r) {
+        var titleFeedback = document.getElementById('titleFeedback');
+        var msg = document.getElementById('feedbackMsg');
+        var up = document.getElementById('fbUp');
+        var down = document.getElementById('fbDown');
+        msg.classList.remove('visible');
+        msg.textContent = '';
+        up.classList.remove('active-up');
+        down.classList.remove('active-down');
+        if (sampleKeyParam) {
+            titleFeedback.style.display = 'none';
+            return;
+        }
+        titleFeedback.style.display = 'flex';
+        if (!currentItemId) {
+            up.disabled = true;
+            down.disabled = true;
+            titleFeedback.style.display = 'none';
+            msg.textContent = '未获得检测记录编号，反馈无法入库。请完成检测后由系统自动跳转，或从「历史记录」打开本条结果。';
+            msg.classList.add('visible');
+            return;
+        }
+        up.disabled = false;
+        down.disabled = false;
+        var fb = Number(r.feedback);
+        if (fb === 1) up.classList.add('active-up');
+        else if (fb === -1) down.classList.add('active-down');
+    }
+
+    function submitFeedback(val) {
+        if (!currentItemId) return;
+        var up = document.getElementById('fbUp');
+        var down = document.getElementById('fbDown');
+        var msg = document.getElementById('feedbackMsg');
+        up.disabled = true;
+        down.disabled = true;
+        fetch('/image_upload/feedback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ itemid: currentItemId, feedback: val })
+        }).then(function (res) { return res.json().then(function (d) { return { ok: res.ok, d: d }; }); })
+        .then(function (o) {
+            up.disabled = false;
+            down.disabled = false;
+            if (o.ok && o.d.status === 'success') {
+                up.classList.remove('active-up');
+                down.classList.remove('active-down');
+                var fb = Number(o.d.feedback);
+                if (fb === 1) up.classList.add('active-up');
+                if (fb === -1) down.classList.add('active-down');
+                if (o.d.feedback === null || o.d.feedback === undefined) {
+                    msg.textContent = '已取消反馈。';
+                } else if (fb === 1) {
+                    msg.textContent = '感谢反馈，已记录您的认可。';
+                } else {
+                    msg.textContent = '感谢反馈，我们会持续改进检测效果。';
+                }
+                msg.classList.add('visible');
+            } else {
+                msg.textContent = (o.d && o.d.message) ? o.d.message : '提交失败，请稍后重试';
+                msg.classList.add('visible');
+            }
+        }).catch(function () {
+            up.disabled = false;
+            down.disabled = false;
+            msg.textContent = '网络错误，请稍后重试';
+            msg.classList.add('visible');
+        });
+    }
+
+    document.getElementById('fbUp').addEventListener('click', function () {
+        var isActive = this.classList.contains('active-up');
+        submitFeedback(isActive ? 0 : 1);
+    });
+    document.getElementById('fbDown').addEventListener('click', function () {
+        var isActive = this.classList.contains('active-down');
+        submitFeedback(isActive ? 0 : -1);
+    });
+
+    // ===== METADATA MODAL =====
+    var allMetaRows = [];
+
+    window.openMetaModal = function() {
+        var keys = Object.keys(currentMetadata);
+        if (keys.length === 0) return;
+
+        // Summary tags
+        var summaryEl = document.getElementById('metaSummary');
+        var mk = Object.keys(currentMetadata);
+        var hasCamera = currentMetadata['EXIF:Make'] || currentMetadata['EXIF:Model'] ||
+            currentMetadata['EXIF:LensModel'] || currentMetadata['EXIF:LensMake'] ||
+            mk.some(function (k) { return !!CAMERA_FROM_COMPOSITE[k]; });
+        var hasGPS = currentMetadata['Composite:GPSPosition'] || currentMetadata['EXIF:GPSLatitude'];
+        var hasDate = currentMetadata['EXIF:DateTimeOriginal'] || currentMetadata['EXIF:CreateDate'];
+        summaryEl.innerHTML =
+            '<span class="meta-tag blue"><i class="fa fa-database"></i> ' + keys.length + ' 个字段</span>' +
+            (hasCamera ? '<span class="meta-tag green"><i class="fa fa-camera"></i> 含相机信息</span>' : '<span class="meta-tag red"><i class="fa fa-camera"></i> 无相机信息</span>') +
+            (hasGPS ? '<span class="meta-tag green"><i class="fa fa-map-marker"></i> 含GPS</span>' : '') +
+            (hasDate ? '<span class="meta-tag green"><i class="fa fa-calendar"></i> 含拍摄时间</span>' : '');
+
+        // Build table rows grouped by category
+        allMetaRows = [];
+        var categories = {};
+        for (var i = 0; i < keys.length; i++) {
+            var key = keys[i];
+            var cat = categoryKeyForMetaKey(key);
+            var parts = key.split(':');
+            var field = parts.length > 1 ? parts.slice(1).join(':') : key;
+            if (!categories[cat]) categories[cat] = [];
+            categories[cat].push({ key: key, field: field, value: String(currentMetadata[key]) });
+        }
+
+        var tbody = document.getElementById('metaTableBody');
+        tbody.innerHTML = '';
+        var catOrder = ['EXIF', 'Camera', 'Composite', 'ICC_Profile', 'MPF', 'Other'];
+        var catNames = {
+            'EXIF': 'EXIF 信息',
+            'Camera': '拍摄参数 / 镜头与曝光',
+            'Composite': '合成信息（派生字段）',
+            'ICC_Profile': '色彩配置',
+            'MPF': 'MPF 信息',
+            'Other': '其他'
+        };
+
+        // Sort categories
+        var sortedCats = Object.keys(categories).sort(function(a, b) {
+            var ai = catOrder.indexOf(a), bi = catOrder.indexOf(b);
+            if (ai === -1) ai = 99;
+            if (bi === -1) bi = 99;
+            return ai - bi;
+        });
+
+        for (var c = 0; c < sortedCats.length; c++) {
+            var catKey = sortedCats[c];
+            var items = categories[catKey];
+            // Category header row
+            var catRow = document.createElement('tr');
+            catRow.innerHTML = '<td colspan="2" class="meta-category"><i class="fa fa-folder-o"></i> ' + (catNames[catKey] || catKey) + ' (' + items.length + ')</td>';
+            catRow.setAttribute('data-cat', 'true');
+            tbody.appendChild(catRow);
+
+            for (var j = 0; j < items.length; j++) {
+                var tr = document.createElement('tr');
+                tr.setAttribute('data-key', items[j].key.toLowerCase());
+                tr.setAttribute('data-val', items[j].value.toLowerCase());
+                tr.innerHTML = '<td class="key">' + esc(items[j].field) + '</td><td class="val">' + esc(items[j].value) + '</td>';
+                tbody.appendChild(tr);
+                allMetaRows.push(tr);
+            }
+        }
+
+        document.getElementById('metaSearch').value = '';
+        document.getElementById('metaModal').classList.add('visible');
+    };
+
+    window.closeMetaModal = function() {
+        document.getElementById('metaModal').classList.remove('visible');
+    };
+
+    // Close on overlay click
+    document.getElementById('metaModal').addEventListener('click', function(e) {
+        if (e.target === this) closeMetaModal();
+    });
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            closeMetaModal();
+        }
+    });
+
+    window.filterMeta = function() {
+        var query = document.getElementById('metaSearch').value.toLowerCase().trim();
+        var tbody = document.getElementById('metaTableBody');
+        var rows = tbody.querySelectorAll('tr');
+        for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            if (row.getAttribute('data-cat') === 'true') {
+                // Category rows: show if any child in this category matches
+                row.style.display = '';
+                continue;
+            }
+            var k = row.getAttribute('data-key') || '';
+            var v = row.getAttribute('data-val') || '';
+            if (!query || k.indexOf(query) !== -1 || v.indexOf(query) !== -1) {
+                row.style.display = '';
+            } else {
+                row.style.display = 'none';
+            }
+        }
+        // Hide category headers if all their children are hidden
+        var catRows = tbody.querySelectorAll('tr[data-cat="true"]');
+        for (var c = 0; c < catRows.length; c++) {
+            var next = catRows[c].nextElementSibling;
+            var hasVisible = false;
+            while (next && next.getAttribute('data-cat') !== 'true') {
+                if (next.style.display !== 'none') hasVisible = true;
+                next = next.nextElementSibling;
+            }
+            catRows[c].style.display = hasVisible ? '' : 'none';
+        }
+    };
+
+    function esc(s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+})();
+</script>
+</body>
+</html>
