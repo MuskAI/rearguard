@@ -439,6 +439,7 @@ a { text-decoration: none; color: inherit; }
 .sample-label { font-size: 0.56rem; font-weight: 700; padding: 1px 6px; border-radius: 99px; color: #fff; display: inline-flex; align-items: center; gap: 2px; }
 .sample-label.fake { background: var(--danger); }
 .sample-label.real { background: var(--success); }
+.sample-label.neutral { background: var(--primary); }
 .sample-hint { font-size: 0.56rem; color: var(--text-muted); margin-left: auto; }
 .tips-list { list-style: none; }
 .tips-list li { display: flex; align-items: flex-start; gap: 5px; font-size: 0.72rem; color: var(--text-secondary); margin-bottom: 0.35rem; line-height: 1.4; }

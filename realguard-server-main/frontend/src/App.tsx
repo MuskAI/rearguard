@@ -819,9 +819,9 @@ function ImageSamples({
     <>
       <div className="section-label"><i className="fa fa-th-large" style={{ color: "var(--warning)" }} /> 示例图片 <span className="label-muted">点击直接检测</span></div>
       <div className="sample-list">
-        <SampleItem image="/system/index1.jpg" title="AI生成图像示例" label="AI生成" fake disabled={busy} onClick={onSelect} />
-        <SampleItem image="/system/index2.jpg" title="真实拍摄图像示例" label="真实图像" disabled={busy} onClick={onSelect} />
-        <SampleItem image="/system/index3.jpg" title="内容检索示例图" label="AI生成" fake disabled={busy} onClick={onSelect} />
+        <SampleItem image="/system/index1.jpg" title="示例图片 1" label="点击检测" neutral disabled={busy} onClick={onSelect} />
+        <SampleItem image="/system/index2.jpg" title="示例图片 2" label="点击检测" neutral disabled={busy} onClick={onSelect} />
+        <SampleItem image="/system/index3.jpg" title="示例图片 3" label="点击检测" neutral disabled={busy} onClick={onSelect} />
       </div>
       <div className="card-divider" />
       <Tips items={["AIGC检测：识别SD、DALL-E、Midjourney等AI生成图像", "PS篡改检测：识别拼接、修补、克隆等篡改痕迹", "结果包含概率、置信度与简洁结论"]} />
@@ -849,6 +849,7 @@ function SampleItem({
   title,
   label,
   fake,
+  neutral,
   play,
   disabled,
   onClick
@@ -857,10 +858,14 @@ function SampleItem({
   title: string;
   label: string;
   fake?: boolean;
+  neutral?: boolean;
   play?: boolean;
   disabled?: boolean;
   onClick?: (sample: { image: string; title: string }) => void;
 }) {
+  const labelClass = neutral ? "neutral" : fake ? "fake" : "real";
+  const labelIcon = neutral ? "fa-search" : fake ? "fa-times" : "fa-check";
+
   return (
     <button className="sample-item" type="button" disabled={disabled} onClick={() => onClick?.({ image, title })}>
       <div className="sample-thumb">
@@ -870,7 +875,7 @@ function SampleItem({
       <div className="sample-body">
         <div className="sample-name">{title}</div>
         <div className="sample-meta">
-          <span className={`sample-label ${fake ? "fake" : "real"}`}><i className={`fa ${fake ? "fa-times" : "fa-check"}`} /> {label}</span>
+          <span className={`sample-label ${labelClass}`}><i className={`fa ${labelIcon}`} /> {label}</span>
           <span className="sample-hint">查看 <i className="fa fa-chevron-right" /></span>
         </div>
       </div>
