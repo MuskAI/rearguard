@@ -15,7 +15,7 @@ import re
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from . import forensics
+from . import forensics, synthid_detector
 
 load_dotenv()
 
@@ -79,6 +79,55 @@ def _verdict_from_score(score: float) -> str:
     if score >= 0.5:
         return "suspected_fake"
     return "real"
+
+
+def _merge_synthid(result: dict, data: bytes) -> dict:
+    """Attach optional SynthID evidence and fold strong hits into verdict."""
+    synthid = synthid_detector.detect(data)
+    result["synthid"] = synthid
+
+    # Keep the dimension list stable for the frontend while making clear that
+    # a disabled/unavailable module is not evidence for or against authenticity.
+    if synthid.get("supported"):
+        score = float(synthid.get("confidence") or 0.0)
+        detected = bool(synthid.get("detected"))
+        if not detected:
+            score = min(score, 0.35)
+        result["dimensions"].append({
+            "key": "synthid",
+            "label": "SynthID水印取证",
+            "score": round(score, 2),
+            "result": (
+                f"检测到疑似 Gemini 水印，相位匹配 {synthid.get('phaseMatch', 0)}"
+                if detected
+                else "未检测到可靠 Gemini 水印"
+            ),
+        })
+
+        if detected and float(synthid.get("confidence") or 0.0) >= 0.85:
+            result["confidence"] = round(max(float(result.get("confidence", 0.0)), float(synthid["confidence"])), 2)
+            result["verdict"] = "highly_suspected_fake"
+            result["explanation"] = (
+                f"{result.get('explanation', '')}\n"
+                "SynthID 水印取证检测到高置信度 Gemini 隐形水印信号，"
+                "该信号通常与 Google Gemini 生成图像相关，因此作为强 AI 生成辅助证据纳入最终判定。"
+            ).strip()
+        elif detected and float(synthid.get("confidence") or 0.0) >= 0.6 and result.get("verdict") == "real":
+            result["confidence"] = round(max(float(result.get("confidence", 0.0)), float(synthid["confidence"])), 2)
+            result["verdict"] = "suspected_fake"
+            result["explanation"] = (
+                f"{result.get('explanation', '')}\n"
+                "SynthID 水印取证发现中等置信度 Gemini 水印信号，当前结论上调为疑似伪造。"
+            ).strip()
+    else:
+        result.setdefault("dimensions", []).append({
+            "key": "synthid",
+            "label": "SynthID水印取证",
+            "score": 0.0,
+            "result": str(synthid.get("note") or "未启用"),
+        })
+
+    return result
 
 
 def _extract_json(text: str) -> dict | None:
@@ -445,7 +494,7 @@ def analyze(file_type: str, filename: str, data: bytes) -> dict:
     if file_type == "image":
         result = analyze_image_vlm(data)
         if result:
-            return result
+            return _merge_synthid(result, data)
     elif file_type == "document":
         try:
             text = data.decode("utf-8", errors="ignore")
@@ -456,4 +505,7 @@ def analyze(file_type: str, filename: str, data: bytes) -> dict:
             if result:
                 return result
     # video / audio / 失败回退
-    return mock_analysis(file_type, data)
+    result = mock_analysis(file_type, data)
+    if file_type == "image":
+        return _merge_synthid(result, data)
+    return result

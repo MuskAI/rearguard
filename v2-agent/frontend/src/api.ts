@@ -29,7 +29,23 @@ export interface DetectResult {
   dimensions: Dimension[];
   regions: Region[];
   explanation: string;
+  synthid?: SynthIDResult;
   disclaimer: string;
+}
+
+export interface SynthIDResult {
+  enabled: boolean;
+  supported: boolean;
+  detected: boolean | null;
+  confidence: number;
+  phaseMatch: number;
+  profile: string | null;
+  modelProfile: string;
+  exactProfileMatch?: boolean;
+  evidenceLevel: "strong" | "medium" | "weak" | "none" | "unavailable";
+  note: string;
+  error: string | null;
+  elapsedMs?: number;
 }
 
 export interface HistoryItem {

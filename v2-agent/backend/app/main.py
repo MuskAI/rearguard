@@ -12,7 +12,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import detector, provenance
+from . import detector, provenance, synthid_detector
 
 app = FastAPI(title="鉴真 AI 鉴伪智能体", version="0.2.0")
 
@@ -48,6 +48,7 @@ def health() -> dict:
         "status": "ok",
         "model": detector.VLM_MODEL,
         "vlmEnabled": bool(detector.API_KEY),
+        "synthid": synthid_detector.status(),
     }
 
 
@@ -84,6 +85,7 @@ async def detect(file: UploadFile = File(...), fileType: str | None = Form(defau
         "dimensions": analysis["dimensions"],
         "regions": analysis["regions"],
         "explanation": analysis["explanation"],
+        "synthid": analysis.get("synthid"),
         "disclaimer": (
             "本结果由演示用 Mock 算法生成，不构成权威鉴定结论。"
             if analysis["source"] == "mock"

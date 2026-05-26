@@ -55,6 +55,10 @@ lingjian/
 | `DASHSCOPE_API_KEY` | 强烈建议 | 阿里云 DashScope API Key。**缺失或无效时，图像/文本检测自动回退 Mock**（C2PA 验证不依赖它，照常工作）。 | `sk-xxxxxxxx` |
 | `DASHSCOPE_BASE_URL` | 否 | OpenAI 兼容端点 | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
 | `VLM_MODEL` | 否 | 视觉语言模型名 | `qwen3-vl-flash` |
+| `SYNTHID_ENABLED` | 否 | 是否启用 Gemini SynthID 水印取证增强。只调用检测逻辑，不调用去水印/绕过逻辑。 | `false` |
+| `SYNTHID_REPO_PATH` | 否 | `reverse-SynthID` 仓库部署路径。 | `/opt/reverse-SynthID` |
+| `SYNTHID_CODEBOOK_PATH` | 否 | V4 codebook 路径。 | `/opt/reverse-SynthID/artifacts/spectral_codebook_v4.npz` |
+| `SYNTHID_MODEL_PROFILE` | 否 | 使用的 SynthID 模型配置。 | `gemini-3.1-flash-image-preview` |
 
 `backend/.env` 内容模板：
 
@@ -62,6 +66,10 @@ lingjian/
 DASHSCOPE_API_KEY=在此填入你的_DashScope_Key
 DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 VLM_MODEL=qwen3-vl-flash
+SYNTHID_ENABLED=false
+SYNTHID_REPO_PATH=/opt/reverse-SynthID
+SYNTHID_CODEBOOK_PATH=/opt/reverse-SynthID/artifacts/spectral_codebook_v4.npz
+SYNTHID_MODEL_PROFILE=gemini-3.1-flash-image-preview
 ```
 
 > 安全：`.env` 不要提交进仓库 / 不要打进分发包。仓库已 gitignore。
@@ -107,7 +115,7 @@ npm run build          # 产物在 dist/
 2. **DASHSCOPE_API_KEY 决定能力**：无 key → 图像/文本检测返回 Mock（响应里 `source: "mock"`）；有 key → `source: "vlm"`。前端不会报错，但结果含义不同。
 3. **上传体积**：nginx 已设 `client_max_body_size 25m`，裸机反代请同样放宽；取证分析（`/api/forensics`）响应较大（7 张内联 base64 图，约 3MB），已设 120s 超时。
 4. **CORS**：后端 `allow_origins=["*"]`，便于演示。生产建议收紧为你的域名。
-5. **能力边界**：视频/音频检测为 Mock；C2PA 仅验证签名有效性，不内置 OpenAI/Adobe 官方信任根（无法断言"出自某官方"）；SynthID 未实现。
+5. **能力边界**：视频/音频检测为 Mock；C2PA 仅验证签名有效性，不内置 OpenAI/Adobe 官方信任根（无法断言"出自某官方"）；SynthID 仅作为 Gemini 水印辅助证据，未检出不能证明图片真实。
 6. **出网**：后端需能访问 `dashscope.aliyuncs.com`（VLM 调用）。内网/受限环境请放行或仅用 Mock + C2PA。
 
 ## 7. API 速览

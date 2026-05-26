@@ -22,6 +22,11 @@ export default function ResultCard({
   const meta = VERDICT_META[result.verdict];
   const [showOverlay, setShowOverlay] = useState(true);
   const isImage = result.fileMeta.type === "image" && previewUrl;
+  const synthid = result.synthid;
+  const synthidTone =
+    synthid?.evidenceLevel === "strong" ? "#d8412f" :
+    synthid?.evidenceLevel === "medium" || synthid?.evidenceLevel === "weak" ? "#d99a2b" :
+    "#3fb6a8";
 
   return (
     <div className="rounded-2xl border border-ink-600 bg-ink-800 overflow-hidden shadow-sm">
@@ -110,6 +115,34 @@ export default function ResultCard({
             <span className="text-brand-cyan font-medium">判定依据：</span>
             {result.explanation}
           </div>
+
+          {synthid && (
+            <div
+              className="rounded-lg border p-3 text-sm leading-relaxed"
+              style={{ borderColor: `${synthidTone}55`, background: `${synthidTone}0f` }}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                <span className="font-medium" style={{ color: synthidTone }}>
+                  SynthID 水印取证
+                </span>
+                <span className="text-xs text-ink-500">
+                  {synthid.supported
+                    ? synthid.detected
+                      ? `置信度 ${Math.round(synthid.confidence * 100)}%`
+                      : "未检出"
+                    : "未启用"}
+                </span>
+              </div>
+              <p className="text-ink-950">{synthid.note}</p>
+              {synthid.supported && (
+                <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] text-ink-500">
+                  <span>相位匹配：{Math.round(synthid.phaseMatch * 100)}%</span>
+                  <span>模型配置：{synthid.modelProfile}</span>
+                  <span>Profile：{synthid.profile || "自动匹配"}</span>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-500">
             <span>文件：{result.fileMeta.name}</span>
