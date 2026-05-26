@@ -49,6 +49,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [forensicsBusy, setForensicsBusy] = useState(false);
   const [provenanceBusy, setProvenanceBusy] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [activeId, setActiveId] = useState<string>();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -182,41 +183,69 @@ export default function App() {
   };
 
   return (
-    <div className="h-full flex">
+    <div className="h-full flex flex-col md:flex-row">
       <Sidebar
         history={history}
         activeId={activeId}
         onSelect={onSelectHistory}
         onNew={newChat}
         onDelete={onDelete}
+        className="hidden md:flex"
       />
 
-      <main className="flex-1 flex flex-col min-w-0">
-        <header className="px-6 py-3 border-b border-ink-700 bg-ink-800/90 flex items-center justify-between">
-          <div>
-            <h1 className="font-serif text-xl font-semibold text-rice tracking-wide">AI 鉴伪工作台</h1>
-            <p className="text-xs text-ink-500">支持图像 / 视频 / 音频 / 文档的伪造与 AIGC 检测</p>
+      {historyOpen && (
+        <div className="fixed inset-0 z-50 md:hidden">
+          <button
+            className="absolute inset-0 bg-black/35"
+            onClick={() => setHistoryOpen(false)}
+            aria-label="关闭历史记录遮罩"
+          />
+          <Sidebar
+            history={history}
+            activeId={activeId}
+            onSelect={onSelectHistory}
+            onNew={newChat}
+            onDelete={onDelete}
+            onClose={() => setHistoryOpen(false)}
+            className="relative h-full w-[86vw] max-w-80"
+          />
+        </div>
+      )}
+
+      <main className="flex-1 flex flex-col min-w-0 min-h-0">
+        <header className="px-4 sm:px-6 py-3 border-b border-ink-700 bg-ink-800/95 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="font-serif text-lg sm:text-xl font-semibold text-rice tracking-wide truncate">AI 鉴伪工作台</h1>
+            <p className="text-[11px] sm:text-xs text-ink-500 truncate">图像 / 视频 / 音频 / 文档的伪造与 AIGC 检测</p>
           </div>
-          <span className="text-xs px-2.5 py-1 rounded-full bg-jade/10 text-jade border border-jade/30">
-            ● 模型在线
-          </span>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => setHistoryOpen(true)}
+              className="md:hidden h-9 px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950"
+            >
+              历史
+            </button>
+            <span className="hidden sm:inline text-xs px-2.5 py-1 rounded-full bg-jade/10 text-jade border border-jade/30">
+              ● 模型在线
+            </span>
+          </div>
         </header>
 
-        <div ref={scrollRef} className="flex-1 overflow-y-auto bg-grid px-6 py-6 space-y-5">
+        <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto bg-grid px-3 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-5">
           {messages.length === 0 && <EmptyState onUpload={() => fileInputRef.current?.click()} />}
 
           {messages.map((m, i) => {
             if (m.kind === "user") {
               return (
                 <div key={i} className="flex justify-end">
-                  <div className="max-w-[70%] rounded-2xl rounded-tr-sm bg-cinnabar/10 border border-cinnabar/25 px-4 py-2.5 shadow-sm">
+                  <div className="max-w-[88%] sm:max-w-[70%] rounded-2xl rounded-tr-sm bg-cinnabar/10 border border-cinnabar/25 px-3 sm:px-4 py-2.5 shadow-sm">
                     <p className="text-sm text-ink-950">{m.text}</p>
                     {m.fileName && (
-                      <div className="mt-2 flex items-center gap-2">
+                      <div className="mt-2 flex items-center gap-2 min-w-0">
                         {m.previewUrl && (
                           <img src={m.previewUrl} className="h-16 w-16 object-cover rounded-md" />
                         )}
-                        <span className="text-xs text-ink-500">📎 {m.fileName}</span>
+                        <span className="text-xs text-ink-500 truncate">📎 {m.fileName}</span>
                       </div>
                     )}
                   </div>
@@ -225,9 +254,9 @@ export default function App() {
             }
             if (m.kind === "progress") {
               return (
-                <div key={i} className="flex gap-3">
+                <div key={i} className="flex gap-2 sm:gap-3">
                   <AgentAvatar />
-                  <div className="rounded-2xl rounded-tl-sm bg-ink-800 border border-ink-600 px-4 py-3 space-y-1.5 shadow-sm">
+                  <div className="min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-ink-800 border border-ink-600 px-3 sm:px-4 py-3 space-y-1.5 shadow-sm">
                     {PROGRESS_STEPS.map((step, idx) => (
                       <div
                         key={idx}
@@ -249,9 +278,9 @@ export default function App() {
             }
             if (m.kind === "loading") {
               return (
-                <div key={i} className="flex gap-3">
+                <div key={i} className="flex gap-2 sm:gap-3">
                   <AgentAvatar />
-                  <div className="rounded-2xl rounded-tl-sm bg-ink-800 border border-ink-600 px-4 py-3 flex items-center gap-2 text-sm text-brand-cyan shadow-sm">
+                  <div className="min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-ink-800 border border-ink-600 px-3 sm:px-4 py-3 flex items-center gap-2 text-sm text-brand-cyan shadow-sm">
                     <span className="animate-pulse">◌</span> {m.text}
                   </div>
                 </div>
@@ -259,7 +288,7 @@ export default function App() {
             }
             if (m.kind === "forensics") {
               return (
-                <div key={i} className="flex gap-3">
+                <div key={i} className="flex gap-2 sm:gap-3">
                   <AgentAvatar />
                   <div className="flex-1 min-w-0 max-w-4xl">
                     <ForensicGallery report={m.report} />
@@ -269,7 +298,7 @@ export default function App() {
             }
             if (m.kind === "provenance") {
               return (
-                <div key={i} className="flex gap-3">
+                <div key={i} className="flex gap-2 sm:gap-3">
                   <AgentAvatar />
                   <div className="flex-1 min-w-0 max-w-2xl">
                     <ProvenanceCard report={m.report} />
@@ -278,7 +307,7 @@ export default function App() {
               );
             }
             return (
-              <div key={i} className="flex gap-3">
+              <div key={i} className="flex gap-2 sm:gap-3">
                 <AgentAvatar />
                 <div className="flex-1 min-w-0 max-w-3xl">
                   <ResultCard
@@ -303,8 +332,8 @@ export default function App() {
           })}
         </div>
 
-        <div className="border-t border-ink-700 bg-ink-800/95 px-6 py-4">
-          <div className="flex flex-wrap gap-2 mb-3">
+        <div className="border-t border-ink-700 bg-ink-800/95 px-3 sm:px-6 py-3 sm:py-4">
+          <div className="grid grid-cols-2 gap-2 mb-3 sm:flex sm:flex-wrap">
             {QUICK_COMMANDS.map((q) => (
               <button
                 key={q.label}
@@ -316,15 +345,15 @@ export default function App() {
               </button>
             ))}
           </div>
-          <div className="flex items-center gap-3 rounded-xl bg-ink-900 border border-ink-600 px-4 py-3">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 rounded-xl bg-ink-900 border border-ink-600 px-3 sm:px-4 py-3">
             <button
               disabled={busy}
               onClick={() => fileInputRef.current?.click()}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-brand-cyan to-brand-blue text-white font-medium text-sm disabled:opacity-50 shadow-sm"
+              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-gradient-to-r from-brand-cyan to-brand-blue text-white font-medium text-sm disabled:opacity-50 shadow-sm"
             >
               {busy ? "检测中…" : "上传文件检测"}
             </button>
-            <span className="text-sm text-ink-500">
+            <span className="text-xs sm:text-sm text-ink-500 leading-relaxed">
               支持 拖拽 / 点击上传 图像·视频·音频·文档，或粘贴链接
             </span>
             <input
@@ -351,11 +380,11 @@ function AgentAvatar() {
 
 function EmptyState({ onUpload }: { onUpload: () => void }) {
   return (
-    <div className="h-full flex flex-col items-center justify-center text-center gap-4 py-20">
+    <div className="h-full flex flex-col items-center justify-center text-center gap-4 py-16 sm:py-20 px-4">
       <Logo size={76} idSuffix="hero" />
-      <div>
+      <div className="w-full max-w-sm">
         <h2 className="font-serif text-2xl font-semibold text-rice tracking-wide">鉴真伪 · 明真相</h2>
-        <p className="text-sm text-ink-500 mt-2 max-w-md leading-relaxed">
+        <p className="text-sm text-ink-500 mt-2 leading-relaxed">
           上传任意图像、视频、音频或文档，我会判断它是否为 AI 生成、深度伪造或经过篡改，并给出可信度与依据。
         </p>
       </div>

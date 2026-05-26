@@ -7,25 +7,39 @@ interface Props {
   onSelect: (item: HistoryItem) => void;
   onNew: () => void;
   onDelete: (taskId: string) => void;
+  className?: string;
+  onClose?: () => void;
 }
 
 const TYPE_ICON: Record<string, string> = {
   image: "🖼", video: "🎬", audio: "🎵", document: "📄",
 };
 
-export default function Sidebar({ history, activeId, onSelect, onNew, onDelete }: Props) {
+export default function Sidebar({ history, activeId, onSelect, onNew, onDelete, className = "", onClose }: Props) {
   return (
-    <aside className="w-64 shrink-0 bg-ink-900 border-r border-ink-700 flex flex-col shadow-sm">
+    <aside className={`w-64 shrink-0 bg-ink-900 border-r border-ink-700 flex flex-col shadow-sm ${className}`}>
       <div className="p-4 flex items-center gap-2.5">
         <Logo size={36} idSuffix="side" />
-        <div>
+        <div className="flex-1 min-w-0">
           <div className="font-serif text-xl font-semibold text-rice leading-tight tracking-[0.15em]">鉴真</div>
           <div className="text-[10px] text-cinnabar-light tracking-[0.2em]">AI 鉴伪智能体</div>
         </div>
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="md:hidden h-8 w-8 rounded-lg border border-ink-600 text-ink-500"
+            aria-label="关闭历史记录"
+          >
+            ✕
+          </button>
+        )}
       </div>
 
       <button
-        onClick={onNew}
+        onClick={() => {
+          onNew();
+          onClose?.();
+        }}
         className="mx-4 mb-3 py-2 rounded-lg bg-cinnabar text-white text-sm hover:bg-cinnabar-dark transition shadow-sm"
       >
         + 新建检测
@@ -41,7 +55,10 @@ export default function Sidebar({ history, activeId, onSelect, onNew, onDelete }
           return (
             <div
               key={h.taskId}
-              onClick={() => onSelect(h)}
+              onClick={() => {
+                onSelect(h);
+                onClose?.();
+              }}
               className={`group px-2.5 py-2 rounded-lg cursor-pointer flex items-center gap-2 ${
                 activeId === h.taskId ? "bg-ink-700" : "hover:bg-ink-800"
               }`}

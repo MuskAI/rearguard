@@ -8,12 +8,12 @@ export default function ForensicGallery({ report }: { report: ForensicReport }) 
   return (
     <div className="rounded-2xl border border-ink-600 bg-ink-800 overflow-hidden shadow-sm">
       <div
-        className="px-5 py-3 border-b border-ink-600 flex items-center justify-between"
+        className="px-4 sm:px-5 py-3 border-b border-ink-600 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
         style={{ background: `linear-gradient(90deg, ${meta.color}22, transparent)` }}
       >
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 min-w-0">
           <span className="text-lg">🧬</span>
-          <span className="font-serif text-lg font-semibold text-rice">可解释性取证分析</span>
+          <span className="font-serif text-base sm:text-lg font-semibold text-rice">可解释性取证分析</span>
           <span className="text-xs text-ink-500">（共 {report.items.length} 项）</span>
         </div>
         <span className="text-xs font-medium" style={{ color: meta.color }}>
@@ -21,7 +21,7 @@ export default function ForensicGallery({ report }: { report: ForensicReport }) 
         </span>
       </div>
 
-      <div className="p-5">
+      <div className="p-4 sm:p-5">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {report.items.map((it) => {
             const s = STATUS_META[it.status];
@@ -64,7 +64,7 @@ export default function ForensicGallery({ report }: { report: ForensicReport }) 
 
       {zoom && (
         <div
-          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-8"
+          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 sm:p-8"
           onClick={() => setZoom(null)}
         >
           <div className="max-w-4xl max-h-full flex flex-col items-center gap-3" onClick={(e) => e.stopPropagation()}>

@@ -2,8 +2,8 @@ import { ProvenanceReport } from "../api";
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="flex gap-3 py-1.5 border-b border-ink-700 last:border-0">
-      <span className="text-ink-500 w-24 shrink-0">{label}</span>
+    <div className="flex flex-col sm:flex-row sm:gap-3 py-1.5 border-b border-ink-700 last:border-0">
+      <span className="text-ink-500 sm:w-24 shrink-0">{label}</span>
       <span className="text-ink-950 break-all">{value}</span>
     </div>
   );
@@ -16,17 +16,17 @@ export default function ProvenanceCard({ report }: { report: ProvenanceReport })
   return (
     <div className="rounded-2xl border border-ink-600 bg-ink-800 overflow-hidden shadow-sm">
       <div
-        className="px-5 py-3 border-b border-ink-600 flex items-center gap-2"
+        className="px-4 sm:px-5 py-3 border-b border-ink-600 flex flex-wrap items-center gap-2"
         style={{ background: has ? "linear-gradient(90deg,rgba(63,182,168,0.14),transparent)" : "linear-gradient(90deg,rgba(77,66,58,0.4),transparent)" }}
       >
         <span className="text-lg">🔏</span>
-        <span className="font-serif text-lg font-semibold text-rice">内容凭证验证</span>
+        <span className="font-serif text-base sm:text-lg font-semibold text-rice">内容凭证验证</span>
         <span className="text-xs text-ink-500">C2PA Content Credentials</span>
       </div>
 
-      <div className="p-5 space-y-4">
+      <div className="p-4 sm:p-5 space-y-4">
         {/* 总状态 */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-start gap-3">
           <span className="text-2xl">{has ? (valid ? "✅" : "⚠️") : "🪪"}</span>
           <div>
             <div className="font-semibold text-ink-950">

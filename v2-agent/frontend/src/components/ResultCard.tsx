@@ -32,25 +32,25 @@ export default function ResultCard({
     <div className="rounded-2xl border border-ink-600 bg-ink-800 overflow-hidden shadow-sm">
       {/* header */}
       <div
-        className="flex items-center justify-between px-5 py-3 border-b border-ink-600"
+        className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-4 sm:px-5 py-3 border-b border-ink-600"
         style={{ background: `linear-gradient(90deg, ${meta.color}22, transparent)` }}
       >
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 min-w-0">
           <span className="h-2.5 w-2.5 rounded-full" style={{ background: meta.color }} />
           <span className="font-serif text-lg font-semibold" style={{ color: meta.color }}>
             {meta.label}
           </span>
           <span className="text-xs text-ink-500">· {TYPE_LABEL[result.fileMeta.type]}检测</span>
         </div>
-        <span className="text-xs text-ink-500">{result.modelVersion}</span>
+        <span className="text-xs text-ink-500 break-all">{result.modelVersion}</span>
       </div>
 
-      <div className="p-5 grid grid-cols-1 md:grid-cols-[auto_1fr] gap-5">
+      <div className="p-4 sm:p-5 grid grid-cols-1 md:grid-cols-[auto_1fr] gap-4 sm:gap-5">
         {/* left: ring + preview */}
         <div className="flex flex-col items-center gap-4">
           <ConfidenceRing value={result.confidence} color={meta.color} />
           {isImage && (
-            <div className="relative w-44 rounded-lg overflow-hidden border border-ink-600">
+            <div className="relative w-full max-w-64 md:w-44 rounded-lg overflow-hidden border border-ink-600">
               <img src={previewUrl} alt={result.fileMeta.name} className="w-full block" />
               {showOverlay &&
                 result.regions.map((rg, i) => (
@@ -91,9 +91,9 @@ export default function ResultCard({
           <div className="space-y-2.5">
             {result.dimensions.map((d) => (
               <div key={d.key}>
-                <div className="flex justify-between text-xs mb-1">
-                  <span className="text-ink-950">{d.label}</span>
-                  <span className="text-ink-500">
+                <div className="flex items-start justify-between gap-3 text-xs mb-1">
+                  <span className="text-ink-950 shrink-0">{d.label}</span>
+                  <span className="text-ink-500 text-right break-words">
                     {d.result} · {Math.round(d.score * 100)}
                   </span>
                 </div>
@@ -121,7 +121,7 @@ export default function ResultCard({
               className="rounded-lg border p-3 text-sm leading-relaxed"
               style={{ borderColor: `${synthidTone}55`, background: `${synthidTone}0f` }}
             >
-              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 sm:gap-2 mb-2">
                 <span className="font-medium" style={{ color: synthidTone }}>
                   SynthID 水印取证
                 </span>
@@ -135,7 +135,7 @@ export default function ResultCard({
               </div>
               <p className="text-ink-950">{synthid.note}</p>
               {synthid.supported && (
-                <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] text-ink-500">
+                <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] text-ink-500 break-words">
                   <span>相位匹配：{Math.round(synthid.phaseMatch * 100)}%</span>
                   <span>模型配置：{synthid.modelProfile}</span>
                   <span>Profile：{synthid.profile || "自动匹配"}</span>
@@ -151,10 +151,10 @@ export default function ResultCard({
             <span>报告号：{result.reportId}</span>
           </div>
 
-          <div className="flex flex-wrap gap-2">
+          <div className="grid grid-cols-1 sm:flex sm:flex-wrap gap-2">
             <button
               onClick={() => window.print()}
-              className="px-3 py-1.5 text-xs rounded-lg bg-cinnabar/10 text-cinnabar border border-cinnabar/30 hover:bg-cinnabar/15"
+              className="px-3 py-2 sm:py-1.5 text-xs rounded-lg bg-cinnabar/10 text-cinnabar border border-cinnabar/30 hover:bg-cinnabar/15"
             >
               生成鉴定报告
             </button>
@@ -162,7 +162,7 @@ export default function ResultCard({
               <button
                 onClick={onForensics}
                 disabled={forensicsBusy}
-              className="px-3 py-1.5 text-xs rounded-lg bg-brand-magenta/10 text-brand-magenta border border-brand-magenta/30 hover:bg-brand-magenta/15 disabled:opacity-50"
+              className="px-3 py-2 sm:py-1.5 text-xs rounded-lg bg-brand-magenta/10 text-brand-magenta border border-brand-magenta/30 hover:bg-brand-magenta/15 disabled:opacity-50"
               >
                 {forensicsBusy ? "分析中…" : "🧬 可解释性取证分析"}
               </button>
@@ -171,7 +171,7 @@ export default function ResultCard({
               <button
                 onClick={onProvenance}
                 disabled={provenanceBusy}
-              className="px-3 py-1.5 text-xs rounded-lg bg-jade/10 text-jade border border-jade/30 hover:bg-jade/15 disabled:opacity-50"
+              className="px-3 py-2 sm:py-1.5 text-xs rounded-lg bg-jade/10 text-jade border border-jade/30 hover:bg-jade/15 disabled:opacity-50"
               >
                 {provenanceBusy ? "验证中…" : "🔏 内容凭证验证"}
               </button>
