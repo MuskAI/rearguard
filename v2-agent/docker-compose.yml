@@ -3,6 +3,8 @@ services:
     build: ./backend
     env_file:
       - ./backend/.env        # 必须先创建（见 backend/.env.example）
+    volumes:
+      - v2-data:/opt/jianzhen-v2/data
     expose:
       - "8848"
     restart: unless-stopped
@@ -14,3 +16,6 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
+
+volumes:
+  v2-data:

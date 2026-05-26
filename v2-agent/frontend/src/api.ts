@@ -21,10 +21,12 @@ export interface DetectResult {
   taskId: string;
   reportId: string;
   createdAt: string;
-  fileMeta: { name: string; type: FileType; size: string };
+  fileMeta: { name: string; type: FileType; size: string; resolution?: string | null; sha256?: string; thumbnail?: string | null };
   verdict: Verdict;
   confidence: number;
   modelVersion: string;
+  source: string;
+  cacheHit?: boolean;
   elapsedMs: number;
   dimensions: Dimension[];
   regions: Region[];
@@ -56,6 +58,8 @@ export interface HistoryItem {
   verdict: Verdict;
   confidence: number;
   createdAt: string;
+  thumbnail?: string | null;
+  cacheHit?: boolean;
 }
 
 export async function detect(file: File, fileType?: FileType): Promise<DetectResult> {
@@ -137,6 +141,29 @@ export async function fetchHistory(): Promise<HistoryItem[]> {
 
 export async function deleteHistory(taskId: string): Promise<void> {
   await fetch(`/v2-api/history/${taskId}`, { method: "DELETE" });
+}
+
+export interface Metrics {
+  summary: {
+    totalDetections: number;
+    recentDetections: number;
+    todayDetections: number;
+    uniqueClientsToday: number;
+    requestsToday: number;
+    avgLatencyMs: number;
+    cacheEntries: number;
+    cacheHitRate: number;
+  };
+  byDay: { date: string; detections: number }[];
+  byType: Partial<Record<FileType, number>>;
+  byVerdict: Partial<Record<Verdict | "unknown", number>>;
+  recentErrors: { createdAt: string; status: number; path: string }[];
+}
+
+export async function fetchMetrics(): Promise<Metrics> {
+  const res = await fetch("/v2-api/metrics");
+  if (!res.ok) throw new Error("加载监控指标失败");
+  return res.json();
 }
 
 export const VERDICT_META: Record<Verdict, { label: string; color: string; ring: string }> = {

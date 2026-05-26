@@ -11,10 +11,6 @@ interface Props {
   onClose?: () => void;
 }
 
-const TYPE_ICON: Record<string, string> = {
-  image: "🖼", video: "🎬", audio: "🎵", document: "📄",
-};
-
 export default function Sidebar({ history, activeId, onSelect, onNew, onDelete, className = "", onClose }: Props) {
   return (
     <aside className={`w-64 shrink-0 bg-ink-900 border-r border-ink-700 flex flex-col shadow-sm ${className}`}>
@@ -63,12 +59,24 @@ export default function Sidebar({ history, activeId, onSelect, onNew, onDelete, 
                 activeId === h.taskId ? "bg-ink-700" : "hover:bg-ink-800"
               }`}
             >
-              <span className="text-base">{TYPE_ICON[h.type] ?? "📎"}</span>
+              {h.thumbnail ? (
+                <img
+                  src={h.thumbnail}
+                  alt={h.name}
+                  className="h-9 w-9 shrink-0 rounded-md object-cover border border-ink-600"
+                  loading="lazy"
+                />
+              ) : (
+                <span className="h-9 w-9 shrink-0 rounded-md bg-ink-800 border border-ink-600 grid place-items-center text-xs text-ink-500">
+                  {TYPE_LABEL[h.type].slice(0, 1)}
+                </span>
+              )}
               <div className="flex-1 min-w-0">
                 <div className="text-sm text-ink-950 truncate">{h.name}</div>
                 <div className="text-[10px] flex items-center gap-1.5">
                   <span style={{ color: meta.color }}>{meta.label}</span>
                   <span className="text-ink-500">· {TYPE_LABEL[h.type]}</span>
+                  {h.cacheHit && <span className="text-jade">缓存</span>}
                 </div>
               </div>
               <button

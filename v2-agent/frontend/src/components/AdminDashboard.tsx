@@ -1,0 +1,158 @@
+import { useEffect, useMemo, useState } from "react";
+import { Metrics, TYPE_LABEL, VERDICT_META, fetchMetrics } from "../api";
+
+function pct(value: number) {
+  return `${Math.round(value * 100)}%`;
+}
+
+function compactDate(value: string) {
+  return value.slice(5).replace("-", "/");
+}
+
+export default function AdminDashboard({ onBack }: { onBack: () => void }) {
+  const [metrics, setMetrics] = useState<Metrics | null>(null);
+  const [error, setError] = useState<string>("");
+
+  const load = () =>
+    fetchMetrics()
+      .then((data) => {
+        setMetrics(data);
+        setError("");
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : "加载失败"));
+
+  useEffect(() => {
+    load();
+    const timer = window.setInterval(load, 30000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const maxDay = useMemo(
+    () => Math.max(1, ...(metrics?.byDay.map((d) => d.detections) ?? [1])),
+    [metrics],
+  );
+
+  if (!metrics) {
+    return (
+      <main className="flex-1 min-w-0 bg-grid p-4 sm:p-6 overflow-y-auto">
+        <div className="text-sm text-ink-500">{error || "正在加载监控数据…"}</div>
+      </main>
+    );
+  }
+
+  const cards = [
+    { label: "今日检测", value: metrics.summary.todayDetections },
+    { label: "总检测量", value: metrics.summary.totalDetections },
+    { label: "今日访客IP", value: metrics.summary.uniqueClientsToday },
+    { label: "平均耗时", value: `${metrics.summary.avgLatencyMs}ms` },
+    { label: "缓存命中率", value: pct(metrics.summary.cacheHitRate) },
+    { label: "缓存样本", value: metrics.summary.cacheEntries },
+  ];
+
+  return (
+    <main className="flex-1 min-w-0 bg-grid overflow-y-auto">
+      <header className="sticky top-0 z-10 px-4 sm:px-6 py-3 border-b border-ink-700 bg-ink-800/95 flex items-center justify-between gap-3">
+        <div>
+          <h1 className="font-serif text-lg sm:text-xl font-semibold text-rice tracking-wide">监控大屏</h1>
+          <p className="text-[11px] sm:text-xs text-ink-500">检测流量、缓存效率与接口健康状态</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={load}
+            className="h-9 px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950 hover:border-jade/50"
+          >
+            刷新
+          </button>
+          <button
+            onClick={onBack}
+            className="h-9 px-3 rounded-lg bg-cinnabar text-xs text-white"
+          >
+            返回检测
+          </button>
+        </div>
+      </header>
+
+      <div className="p-4 sm:p-6 space-y-4 sm:space-y-5">
+        {error && <div className="rounded-lg border border-cinnabar/30 bg-cinnabar/10 p-3 text-sm text-cinnabar">{error}</div>}
+
+        <section className="grid grid-cols-2 lg:grid-cols-6 gap-3">
+          {cards.map((card) => (
+            <div key={card.label} className="rounded-xl border border-ink-600 bg-ink-800 p-3 sm:p-4">
+              <div className="text-[11px] text-ink-500">{card.label}</div>
+              <div className="mt-1 text-xl sm:text-2xl font-semibold text-rice">{card.value}</div>
+            </div>
+          ))}
+        </section>
+
+        <section className="grid grid-cols-1 xl:grid-cols-[1.5fr_1fr] gap-4">
+          <div className="rounded-xl border border-ink-600 bg-ink-800 p-4">
+            <div className="flex items-center justify-between gap-3 mb-4">
+              <h2 className="font-serif text-base font-semibold text-rice">近 14 日检测趋势</h2>
+              <span className="text-xs text-ink-500">最近 {metrics.summary.recentDetections} 次</span>
+            </div>
+            <div className="h-56 flex items-end gap-1.5 sm:gap-2">
+              {metrics.byDay.map((day) => (
+                <div key={day.date} className="flex-1 min-w-0 flex flex-col items-center justify-end gap-2">
+                  <div className="w-full rounded-t bg-gradient-to-t from-jade to-cinnabar/80 min-h-1" style={{ height: `${(day.detections / maxDay) * 100}%` }} />
+                  <div className="text-[10px] text-ink-500 whitespace-nowrap">{compactDate(day.date)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-ink-600 bg-ink-800 p-4">
+            <h2 className="font-serif text-base font-semibold text-rice mb-4">判定分布</h2>
+            <div className="space-y-3">
+              {(["real", "suspected_fake", "highly_suspected_fake"] as const).map((key) => {
+                const meta = VERDICT_META[key];
+                const count = metrics.byVerdict[key] ?? 0;
+                const total = Math.max(1, Object.values(metrics.byVerdict).reduce((a, b) => a + (b ?? 0), 0));
+                return (
+                  <div key={key}>
+                    <div className="flex justify-between text-xs mb-1">
+                      <span style={{ color: meta.color }}>{meta.label}</span>
+                      <span className="text-ink-500">{count}</span>
+                    </div>
+                    <div className="h-2 rounded-full bg-ink-600 overflow-hidden">
+                      <div className="h-full rounded-full" style={{ width: `${(count / total) * 100}%`, background: meta.color }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </section>
+
+        <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="rounded-xl border border-ink-600 bg-ink-800 p-4">
+            <h2 className="font-serif text-base font-semibold text-rice mb-4">内容类型</h2>
+            <div className="grid grid-cols-2 gap-2">
+              {(["image", "video", "audio", "document"] as const).map((type) => (
+                <div key={type} className="rounded-lg bg-ink-900 border border-ink-600 p-3">
+                  <div className="text-xs text-ink-500">{TYPE_LABEL[type]}</div>
+                  <div className="mt-1 text-lg font-semibold text-rice">{metrics.byType[type] ?? 0}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-ink-600 bg-ink-800 p-4">
+            <h2 className="font-serif text-base font-semibold text-rice mb-4">接口异常</h2>
+            {metrics.recentErrors.length === 0 ? (
+              <div className="rounded-lg bg-jade/10 border border-jade/25 p-3 text-sm text-jade">最近未记录到 4xx/5xx 异常。</div>
+            ) : (
+              <div className="space-y-2">
+                {metrics.recentErrors.map((item) => (
+                  <div key={`${item.createdAt}-${item.path}`} className="flex items-center justify-between gap-2 rounded-lg bg-ink-900 border border-ink-600 p-2 text-xs">
+                    <span className="text-ink-950 truncate">{item.path}</span>
+                    <span className="text-cinnabar">{item.status}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}

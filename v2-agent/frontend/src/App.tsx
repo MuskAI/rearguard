@@ -17,6 +17,7 @@ import ResultCard from "./components/ResultCard";
 import ForensicGallery from "./components/ForensicGallery";
 import ProvenanceCard from "./components/ProvenanceCard";
 import Logo from "./components/Logo";
+import AdminDashboard from "./components/AdminDashboard";
 
 type Message =
   | { kind: "user"; text: string; fileName: string; previewUrl?: string }
@@ -50,6 +51,7 @@ export default function App() {
   const [forensicsBusy, setForensicsBusy] = useState(false);
   const [provenanceBusy, setProvenanceBusy] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [view, setView] = useState<"detect" | "monitor">(() => (window.location.hash === "#monitor" ? "monitor" : "detect"));
   const [activeId, setActiveId] = useState<string>();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -58,6 +60,12 @@ export default function App() {
 
   useEffect(() => {
     loadHistory();
+  }, []);
+
+  useEffect(() => {
+    const onHash = () => setView(window.location.hash === "#monitor" ? "monitor" : "detect");
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
   useEffect(() => {
@@ -182,6 +190,19 @@ export default function App() {
     setActiveId(undefined);
   };
 
+  if (view === "monitor") {
+    return (
+      <div className="h-full flex">
+        <AdminDashboard
+          onBack={() => {
+            window.location.hash = "";
+            setView("detect");
+          }}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="h-full flex flex-col md:flex-row">
       <Sidebar
@@ -228,6 +249,15 @@ export default function App() {
             <span className="hidden sm:inline text-xs px-2.5 py-1 rounded-full bg-jade/10 text-jade border border-jade/30">
               ● 模型在线
             </span>
+            <button
+              onClick={() => {
+                window.location.hash = "monitor";
+                setView("monitor");
+              }}
+              className="h-9 px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950 hover:border-jade/50"
+            >
+              监控
+            </button>
           </div>
         </header>
 

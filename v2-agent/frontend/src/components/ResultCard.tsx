@@ -21,7 +21,8 @@ export default function ResultCard({
 }: Props) {
   const meta = VERDICT_META[result.verdict];
   const [showOverlay, setShowOverlay] = useState(true);
-  const isImage = result.fileMeta.type === "image" && previewUrl;
+  const effectivePreview = previewUrl || result.fileMeta.thumbnail || undefined;
+  const isImage = result.fileMeta.type === "image" && effectivePreview;
   const synthid = result.synthid;
   const synthidTone =
     synthid?.evidenceLevel === "strong" ? "#d8412f" :
@@ -41,6 +42,11 @@ export default function ResultCard({
             {meta.label}
           </span>
           <span className="text-xs text-ink-500">· {TYPE_LABEL[result.fileMeta.type]}检测</span>
+          {result.cacheHit && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-jade/10 text-jade border border-jade/30">
+              缓存复用
+            </span>
+          )}
         </div>
         <span className="text-xs text-ink-500 break-all">{result.modelVersion}</span>
       </div>
@@ -51,7 +57,7 @@ export default function ResultCard({
           <ConfidenceRing value={result.confidence} color={meta.color} />
           {isImage && (
             <div className="relative w-full max-w-64 md:w-44 rounded-lg overflow-hidden border border-ink-600">
-              <img src={previewUrl} alt={result.fileMeta.name} className="w-full block" />
+              <img src={effectivePreview} alt={result.fileMeta.name} className="w-full block" />
               {showOverlay &&
                 result.regions.map((rg, i) => (
                   <div
