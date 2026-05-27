@@ -824,6 +824,10 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
 
   const filterOptions = getHistoryFilterOptions(tab);
   const activeSummary = getHistoryActiveSummary(tab, filter, query);
+  const matchSummary =
+    filteredRecords.length === records.length
+      ? `当前展示 ${filteredRecords.length} 条记录`
+      : `当前匹配 ${filteredRecords.length} / ${records.length} 条记录`;
 
   return (
     <main className="main">
@@ -871,6 +875,7 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
                     </span>
                   ))}
                 </div>
+                <div className="history-active-meta">{matchSummary}</div>
                 {(filter !== "all" || query.trim()) && (
                   <button
                     type="button"
