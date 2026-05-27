@@ -254,7 +254,11 @@ export interface Metrics {
     cacheEntries: number;
     cacheHitRate: number;
   };
-  byDay: { date: string; detections: number }[];
+  byDay: {
+    date: string;
+    detections: number;
+    sources: { vlm: number; mock: number; "maps-only": number; unknown: number };
+  }[];
   byType: Partial<Record<FileType, number>>;
   byVerdict: Partial<Record<Verdict | "unknown", number>>;
   bySource: Partial<Record<"vlm" | "mock" | "maps-only" | "unknown", number>>;

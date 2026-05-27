@@ -39,6 +39,12 @@ export default function AdminDashboard({
     () => Math.max(1, ...(metrics?.byDay.map((d) => d.detections) ?? [1])),
     [metrics],
   );
+  const sourceColors = {
+    vlm: "#3fb6a8",
+    mock: "#d8412f",
+    "maps-only": "#d99a2b",
+    unknown: "#7c8aa5",
+  } as const;
 
   if (!metrics) {
     return (
@@ -155,6 +161,37 @@ export default function AdminDashboard({
                 );
               })}
             </div>
+          </div>
+        </section>
+
+        <section className="rounded-xl border border-ink-600 bg-ink-800 p-4">
+          <div className="flex items-center justify-between gap-3 mb-4">
+            <h2 className="font-serif text-base font-semibold text-rice">按来源日趋势</h2>
+            <div className="flex flex-wrap gap-3 text-[11px] text-ink-500">
+              <span><span style={{ color: sourceColors.vlm }}>■</span> VLM</span>
+              <span><span style={{ color: sourceColors.mock }}>■</span> Mock</span>
+              <span><span style={{ color: sourceColors["maps-only"] }}>■</span> 仅证据图</span>
+            </div>
+          </div>
+          <div className="h-56 flex items-end gap-1.5 sm:gap-2">
+            {metrics.byDay.map((day) => (
+              <div key={`${day.date}-source`} className="flex-1 min-w-0 flex flex-col items-center justify-end gap-2">
+                <div className="w-full h-full flex flex-col justify-end rounded-t overflow-hidden bg-ink-900/40">
+                  {(["vlm", "mock", "maps-only"] as const).map((key) => {
+                    const total = Math.max(1, day.detections);
+                    const height = `${(day.sources[key] / total) * ((day.detections / maxDay) * 100)}%`;
+                    return (
+                      <div
+                        key={key}
+                        style={{ height, background: sourceColors[key] }}
+                        title={`${compactDate(day.date)} ${key}: ${day.sources[key]}`}
+                      />
+                    );
+                  })}
+                </div>
+                <div className="text-[10px] text-ink-500 whitespace-nowrap">{compactDate(day.date)}</div>
+              </div>
+            ))}
           </div>
         </section>
 

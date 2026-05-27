@@ -222,7 +222,9 @@ def test_metrics_include_source_and_evidence_breakdown(client):
     payload = metrics.json()
     assert "bySource" in payload
     assert "sourceVerdict" in payload
+    assert "byDay" in payload
     assert "evidence" in payload
     assert payload["evidence"]["forensicsCompleted"] >= 1
     assert payload["evidence"]["provenanceCompleted"] >= 1
     assert payload["sourceVerdict"]
+    assert "sources" in payload["byDay"][0]

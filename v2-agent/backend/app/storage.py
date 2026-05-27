@@ -417,7 +417,17 @@ def metrics(days: int = 14) -> dict[str, Any]:
     days_list = []
     for i in range(days):
         day = (since + timedelta(days=i)).date().isoformat()
-        days_list.append({"date": day, "detections": by_day.get(day, 0)})
+        day_sources = {"vlm": 0, "mock": 0, "maps-only": 0, "unknown": 0}
+        for row in history_rows:
+            if row["created_at"][:10] != day:
+                continue
+            source = str(json.loads(row["result_json"]).get("source", "unknown"))
+            day_sources[source if source in day_sources else "unknown"] += 1
+        days_list.append({
+            "date": day,
+            "detections": by_day.get(day, 0),
+            "sources": day_sources,
+        })
 
     total_recent = sum(by_day.values())
     today_detections = by_day.get(today, 0)
