@@ -170,6 +170,16 @@ def _image_history_search_fields(record):
     ]
 
 
+def _image_history_matches_filter(record, filter_key):
+    if filter_key == "guest":
+        return bool(record.get("is_guest_record"))
+    if filter_key == "metadata":
+        return bool(record.get("has_metadata"))
+    if filter_key == "issues":
+        return bool(record.get("has_visual_issues"))
+    return True
+
+
 def _video_history_record(item):
     fake_pct = round(float(item.get("fake") or item.get("fake_percentage") or 0), 1)
     return {
@@ -198,6 +208,16 @@ def _video_history_search_fields(record):
         "结论",
         "置信度",
     ]
+
+
+def _video_history_matches_filter(record, filter_key):
+    if filter_key == "guest":
+        return bool(record.get("is_guest_record"))
+    if filter_key == "ai":
+        return "AI" in str(record.get("final_label") or "")
+    if filter_key == "real":
+        return "真实" in str(record.get("final_label") or "")
+    return True
 
 
 def _retrieval_history_record(item, phone, search_type):
@@ -378,19 +398,20 @@ def image_detection_history():
             "SELECT * FROM data WHERE phone = %s OR openid = %s ORDER BY createtime DESC",
             (actor["phone"], actor["openid"]),
         )
-    records = []
+    query_records = []
     for item in rows or []:
         record = _image_history_record(item)
-        if filter_key == "guest" and not record["is_guest_record"]:
-            continue
-        if filter_key == "metadata" and not record["has_metadata"]:
-            continue
-        if filter_key == "issues" and not record["has_visual_issues"]:
-            continue
         if not _contains_history_query(_image_history_search_fields(record), query):
             continue
-        records.append(record)
-    return jsonify({"status": "success", "records": records[:limit], "total": len(records)})
+        query_records.append(record)
+    filter_counts = {
+        "all": len(query_records),
+        "guest": sum(1 for record in query_records if record["is_guest_record"]),
+        "metadata": sum(1 for record in query_records if record["has_metadata"]),
+        "issues": sum(1 for record in query_records if record["has_visual_issues"]),
+    }
+    records = [record for record in query_records if _image_history_matches_filter(record, filter_key)]
+    return jsonify({"status": "success", "records": records[:limit], "total": len(records), "filter_counts": filter_counts})
 
 
 @api_blueprint.route("/media/thumbnail/image/<int:itemid>")
@@ -461,19 +482,20 @@ def video_detection_history():
             "SELECT * FROM video_data WHERE phone = %s OR openid = %s ORDER BY createtime DESC",
             (actor["phone"], actor["openid"]),
         )
-    records = []
+    query_records = []
     for item in rows or []:
         record = _video_history_record(item)
-        if filter_key == "guest" and not record["is_guest_record"]:
-            continue
-        if filter_key == "ai" and "AI" not in str(record["final_label"] or ""):
-            continue
-        if filter_key == "real" and "真实" not in str(record["final_label"] or ""):
-            continue
         if not _contains_history_query(_video_history_search_fields(record), query):
             continue
-        records.append(record)
-    return jsonify({"status": "success", "records": records[:limit], "total": len(records)})
+        query_records.append(record)
+    filter_counts = {
+        "all": len(query_records),
+        "guest": sum(1 for record in query_records if record["is_guest_record"]),
+        "ai": sum(1 for record in query_records if "AI" in str(record["final_label"] or "")),
+        "real": sum(1 for record in query_records if "真实" in str(record["final_label"] or "")),
+    }
+    records = [record for record in query_records if _video_history_matches_filter(record, filter_key)]
+    return jsonify({"status": "success", "records": records[:limit], "total": len(records), "filter_counts": filter_counts})
 
 
 @api_blueprint.route("/history/retrievals")

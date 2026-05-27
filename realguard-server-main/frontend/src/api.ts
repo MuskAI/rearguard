@@ -108,6 +108,14 @@ export function getLibraries(searchType: "image" | "video") {
   );
 }
 
+export type HistoryFilterKey = "all" | "guest" | "metadata" | "issues" | "ai" | "real";
+
+export interface HistoryListResponse {
+  records: HistoryRecord[];
+  total?: number;
+  filter_counts?: Partial<Record<HistoryFilterKey, number>>;
+}
+
 export function retrieveSearch(payload: {
   file: File;
   searchType: "image" | "video";
@@ -125,12 +133,26 @@ export function retrieveSearch(payload: {
   );
 }
 
-export function getHistory(kind: "image-detections" | "video-detections") {
-  return jsonRequest<{ records: HistoryRecord[] }>(`/api/history/${kind}`);
+export function getHistory(
+  kind: "image-detections" | "video-detections",
+  params?: { query?: string; filter?: HistoryFilterKey; limit?: number },
+) {
+  const search = new URLSearchParams();
+  if (params?.query?.trim()) search.set("query", params.query.trim());
+  if (params?.filter && params.filter !== "all") search.set("filter", params.filter);
+  if (params?.limit) search.set("limit", String(params.limit));
+  const qs = search.toString();
+  return jsonRequest<HistoryListResponse>(`/api/history/${kind}${qs ? `?${qs}` : ""}`);
 }
 
-export function getRetrievalHistory(searchType: "image" | "video") {
-  return jsonRequest<{ records: HistoryRecord[] }>(`/api/history/retrievals?search_type=${searchType}`);
+export function getRetrievalHistory(
+  searchType: "image" | "video",
+  params?: { query?: string; limit?: number },
+) {
+  const search = new URLSearchParams({ search_type: searchType });
+  if (params?.query?.trim()) search.set("query", params.query.trim());
+  if (params?.limit) search.set("limit", String(params.limit));
+  return jsonRequest<HistoryListResponse>(`/api/history/retrievals?${search.toString()}`);
 }
 
 export type User = {

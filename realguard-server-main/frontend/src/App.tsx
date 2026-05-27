@@ -1,6 +1,8 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   Counters,
+  HistoryFilterKey,
+  HistoryListResponse,
   HistoryRecord,
   ImageDetectionResult,
   RetrieveItem,
@@ -27,7 +29,6 @@ type PageKey = "home" | "image" | "video" | "retrieve" | "history";
 type Status = { tone: "ok" | "error" | "info"; text: string } | null;
 type AuthMode = "password" | "sms" | "register";
 type HistoryTabKey = "image" | "video" | "imageRetrieve" | "videoRetrieve";
-type HistoryFilterKey = "all" | "guest" | "metadata" | "issues" | "ai" | "real";
 type HistorySummaryCard = { label: string; value: number | string; filterKey?: HistoryFilterKey };
 
 const emptyCounters: Counters = {
@@ -726,6 +727,8 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
   const [query, setQuery] = useState(() => getInitialHistoryQuery());
   const [copied, setCopied] = useState(false);
   const [historyBusy, setHistoryBusy] = useState(false);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyFilterCounts, setHistoryFilterCounts] = useState<Partial<Record<HistoryFilterKey, number>>>({});
   const historyRequestIdRef = useRef(0);
 
   async function loadHistoryRecords(targetTab: HistoryTabKey, preserveOnError = false) {
@@ -735,19 +738,23 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
     setHistoryBusy(true);
     const request =
       targetTab === "image"
-        ? getHistory("image-detections")
+        ? getHistory("image-detections", { query, filter, limit: 1000 })
         : targetTab === "video"
-          ? getHistory("video-detections")
-          : getRetrievalHistory(targetTab === "imageRetrieve" ? "image" : "video");
+          ? getHistory("video-detections", { query, filter, limit: 1000 })
+          : getRetrievalHistory(targetTab === "imageRetrieve" ? "image" : "video", { query, limit: 1000 });
     try {
-      const data = await request;
+      const data: HistoryListResponse = await request;
       if (historyRequestIdRef.current !== requestId) return;
       setRecords(data.records || []);
+      setHistoryTotal(Number(data.total || 0));
+      setHistoryFilterCounts(data.filter_counts || {});
       setStatus(null);
     } catch (error) {
       if (historyRequestIdRef.current !== requestId) return;
       if (!preserveOnError) {
         setRecords([]);
+        setHistoryTotal(0);
+        setHistoryFilterCounts({});
       }
       setStatus({ tone: "error", text: errorMessage(error) });
     } finally {
@@ -758,8 +765,9 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
   }
 
   useEffect(() => {
+    if (!isHistoryFilterSupported(tab, filter)) return;
     void loadHistoryRecords(tab);
-  }, [tab]);
+  }, [tab, filter, query]);
 
   useEffect(() => {
     if (!isHistoryFilterSupported(tab, filter)) {
@@ -786,62 +794,41 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
     return () => window.clearTimeout(timer);
   }, [copied]);
 
-  const queriedRecords = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return records;
-    return records.filter((record) => {
-      return getSearchableHistoryFields(record).some((field) => field.toLowerCase().includes(q));
-    });
-  }, [records, query]);
-
-  const filteredRecords = useMemo(() => {
-    return queriedRecords.filter((record) => matchesHistoryFilter(record, tab, filter));
-  }, [queriedRecords, tab, filter]);
-
   const summaryCards = useMemo<HistorySummaryCard[]>(() => {
-    const baseRecords = tab === "image" || tab === "video" ? queriedRecords : filteredRecords;
     if (tab === "image") {
       return [
-        { label: "当前记录", value: baseRecords.length, filterKey: "all" as HistoryFilterKey },
-        { label: "访客记录", value: baseRecords.filter((record) => Boolean(record.is_guest_record)).length, filterKey: "guest" as HistoryFilterKey },
-        { label: "带元数据", value: baseRecords.filter((record) => Boolean(record.has_metadata)).length, filterKey: "metadata" as HistoryFilterKey },
-        { label: "有可疑点", value: baseRecords.filter((record) => Boolean(record.has_visual_issues)).length, filterKey: "issues" as HistoryFilterKey },
+        { label: "当前记录", value: historyFilterCounts.all ?? historyTotal, filterKey: "all" as HistoryFilterKey },
+        { label: "访客记录", value: historyFilterCounts.guest ?? 0, filterKey: "guest" as HistoryFilterKey },
+        { label: "带元数据", value: historyFilterCounts.metadata ?? 0, filterKey: "metadata" as HistoryFilterKey },
+        { label: "有可疑点", value: historyFilterCounts.issues ?? 0, filterKey: "issues" as HistoryFilterKey },
       ];
     }
     if (tab === "video") {
       return [
-        { label: "当前记录", value: baseRecords.length, filterKey: "all" as HistoryFilterKey },
-        { label: "访客记录", value: baseRecords.filter((record) => Boolean(record.is_guest_record)).length, filterKey: "guest" as HistoryFilterKey },
-        { label: "AI结论", value: baseRecords.filter((record) => String(record.final_label || "").includes("AI")).length, filterKey: "ai" as HistoryFilterKey },
-        { label: "真实结论", value: baseRecords.filter((record) => String(record.final_label || "").includes("真实")).length, filterKey: "real" as HistoryFilterKey },
+        { label: "当前记录", value: historyFilterCounts.all ?? historyTotal, filterKey: "all" as HistoryFilterKey },
+        { label: "访客记录", value: historyFilterCounts.guest ?? 0, filterKey: "guest" as HistoryFilterKey },
+        { label: "AI结论", value: historyFilterCounts.ai ?? 0, filterKey: "ai" as HistoryFilterKey },
+        { label: "真实结论", value: historyFilterCounts.real ?? 0, filterKey: "real" as HistoryFilterKey },
       ];
     }
-    const resultCount = baseRecords.reduce((sum, record) => sum + Number(record.result_count || 0), 0);
-    const topKAvg = baseRecords.length
-      ? Math.round((baseRecords.reduce((sum, record) => sum + Number(record.top_k || 0), 0) / baseRecords.length) * 10) / 10
+    const resultCount = records.reduce((sum, record) => sum + Number(record.result_count || 0), 0);
+    const topKAvg = records.length
+      ? Math.round((records.reduce((sum, record) => sum + Number(record.top_k || 0), 0) / records.length) * 10) / 10
       : 0;
     return [
-      { label: "当前查询", value: baseRecords.length },
+      { label: "当前查询", value: historyTotal || records.length },
       { label: "命中总数", value: resultCount },
       { label: "平均Top-K", value: topKAvg },
       { label: "查询类型", value: tab === "imageRetrieve" ? "图像" : "视频" },
     ];
-  }, [filteredRecords, queriedRecords, tab]);
+  }, [historyFilterCounts, historyTotal, records, tab]);
 
   const filterOptions = getHistoryFilterOptions(tab);
-  const filterCounts = useMemo(() => {
-    return Object.fromEntries(
-      filterOptions.map((option) => [
-        option.key,
-        queriedRecords.filter((record) => matchesHistoryFilter(record, tab, option.key)).length,
-      ]),
-    ) as Partial<Record<HistoryFilterKey, number>>;
-  }, [filterOptions, queriedRecords, tab]);
   const activeSummary = getHistoryActiveSummary(tab, filter, query);
   const matchSummary =
-    filteredRecords.length === records.length
-      ? `当前展示 ${filteredRecords.length} 条记录`
-      : `当前匹配 ${filteredRecords.length} / ${records.length} 条记录`;
+    records.length === historyTotal
+      ? `当前展示 ${records.length} 条记录`
+      : `当前匹配 ${records.length} / ${historyTotal} 条记录`;
 
   async function copyCurrentView() {
     const url = window.location.href;
@@ -950,13 +937,13 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
                       onClick={() => setFilter(option.key)}
                     >
                       <span>{option.label}</span>
-                      <span className="history-filter-count">{filterCounts[option.key] ?? 0}</span>
+                      <span className="history-filter-count">{historyFilterCounts[option.key] ?? 0}</span>
                     </button>
                   ))}
                 </div>
               )}
-              {filteredRecords.length ? (
-                <HistoryRecords records={filteredRecords} tab={tab} query={query} />
+              {records.length ? (
+                <HistoryRecords records={records} tab={tab} query={query} />
               ) : (
                 <EmptyState
                   icon="fa-filter"
@@ -974,6 +961,15 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
               text={status.text}
               actions={[
                 { label: historyBusy ? "加载中" : "重试加载", onClick: () => { void loadHistoryRecords(tab); } },
+                { label: tab === "video" ? "去视频鉴伪" : tab === "image" ? "去图像鉴伪" : "去侵权检索", onClick: () => setPage(tab === "video" ? "video" : tab === "image" ? "image" : "retrieve") },
+              ]}
+            />
+          ) : !status && (filter !== "all" || query.trim()) ? (
+            <EmptyState
+              icon="fa-filter"
+              text="当前筛选条件下暂无记录"
+              actions={[
+                { label: "清除条件", onClick: () => { setFilter("all"); setQuery(""); } },
                 { label: tab === "video" ? "去视频鉴伪" : tab === "image" ? "去图像鉴伪" : "去侵权检索", onClick: () => setPage(tab === "video" ? "video" : tab === "image" ? "image" : "retrieve") },
               ]}
             />
