@@ -168,8 +168,10 @@ def list_history(limit: int = 100) -> list[dict[str, Any]]:
     with _connect() as conn:
         rows = conn.execute(
             """
-            SELECT task_id, report_id, created_at, file_type, file_name, result_json, thumbnail
-            FROM history
+            SELECT h.task_id, h.report_id, h.created_at, h.file_type, h.file_name, h.result_json, h.thumbnail,
+                   a.forensics_json, a.provenance_json
+            FROM history h
+            LEFT JOIN history_artifacts a ON a.task_id = h.task_id
             ORDER BY created_at DESC
             LIMIT ?
             """,
@@ -189,6 +191,8 @@ def list_history(limit: int = 100) -> list[dict[str, Any]]:
                 "createdAt": row["created_at"],
                 "thumbnail": row["thumbnail"],
                 "cacheHit": bool(result.get("cacheHit")),
+                "hasForensics": bool(row["forensics_json"]),
+                "hasProvenance": bool(row["provenance_json"]),
             }
         )
     return items

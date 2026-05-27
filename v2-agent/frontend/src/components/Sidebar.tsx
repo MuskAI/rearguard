@@ -84,6 +84,20 @@ export default function Sidebar({ history, message, activeId, onSelect, onNew, o
                   <span className="text-ink-500">· {TYPE_LABEL[h.type]}</span>
                   {h.cacheHit && <span className="text-jade">缓存</span>}
                 </div>
+                {(h.hasForensics || h.hasProvenance) && (
+                  <div className="mt-1 flex items-center gap-1.5 text-[10px]">
+                    {h.hasForensics && (
+                      <span className="px-1.5 py-0.5 rounded-full bg-brand-magenta/10 text-brand-magenta border border-brand-magenta/30">
+                        取证
+                      </span>
+                    )}
+                    {h.hasProvenance && (
+                      <span className="px-1.5 py-0.5 rounded-full bg-jade/10 text-jade border border-jade/30">
+                        凭证
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
               <button
                 onClick={(e) => {

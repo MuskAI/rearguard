@@ -135,10 +135,14 @@ def test_history_artifacts_persist_into_history_and_download(client):
             },
         },
     )
+    listing = client.get("/api/history", headers={"X-Jianzhen-Token": "test-token"})
     history = client.get(f"/api/history/{task_id}", headers={"X-Jianzhen-Token": "test-token"})
     download = client.get(f"/api/report/{report_id}/download", headers={"X-Jianzhen-Token": "test-token"})
 
     assert save.status_code == 200
+    assert listing.status_code == 200
+    assert listing.json()["items"][0]["hasForensics"] is True
+    assert listing.json()["items"][0]["hasProvenance"] is True
     assert history.status_code == 200
     payload = history.json()
     assert payload["forensics"]["summary"] == "未见明显异常。"

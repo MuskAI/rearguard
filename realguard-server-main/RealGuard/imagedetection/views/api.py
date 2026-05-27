@@ -219,6 +219,7 @@ def image_detection_history():
                 "final_label": "AI生成图像" if fake_pct >= 50 else "真实图像",
                 "confidence": item.get("clarity", ""),
                 "createtime": format_createtime(item.get("createtime", "")),
+                "report_url": f"/image_upload/report?itemid={item.get('itemid')}",
             }
         )
     return jsonify({"status": "success", "records": records})
@@ -286,6 +287,7 @@ def video_detection_history():
                 "final_label": item.get("final_label", ""),
                 "confidence": item.get("confidence") or item.get("confidence_level", ""),
                 "createtime": format_createtime(item.get("createtime", "")),
+                "report_url": f"/video_upload/report?itemid={item.get('itemid')}",
             }
         )
     return jsonify({"status": "success", "records": records})

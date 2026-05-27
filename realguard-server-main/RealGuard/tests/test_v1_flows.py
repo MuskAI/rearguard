@@ -271,3 +271,41 @@ def test_retrieve_search_uses_selected_library_and_persists_history(client, monk
     _, params = insert_calls[0]
     assert params[2] == "image"
     assert json.loads(params[8])[0]["id"].startswith("libA/")
+
+
+def test_history_detection_records_include_report_urls(client, monkeypatch):
+    _login_session(client)
+
+    def fake_detection_sql(sql, params=None, fetch=True):
+        if sql == "SELECT * FROM data WHERE phone = %s ORDER BY createtime DESC":
+            return [{
+                "itemid": 51,
+                "filename": "img.png",
+                "fake": 51.5,
+                "clarity": "中",
+                "openid": "openid-1",
+                "phone": "13800000000",
+                "createtime": "2026-05-27 15:00:00",
+            }]
+        if sql == "SELECT * FROM video_data WHERE phone = %s ORDER BY createtime DESC":
+            return [{
+                "itemid": 61,
+                "filename": "vid.mp4",
+                "fake": 78.2,
+                "final_label": "AI生成视频",
+                "confidence": "高",
+                "openid": "openid-1",
+                "phone": "13800000000",
+                "createtime": "2026-05-27 15:02:00",
+            }]
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+    monkeypatch.setattr(api, "excute_detection_sql", fake_detection_sql)
+
+    image_response = client.get("/api/history/image-detections")
+    video_response = client.get("/api/history/video-detections")
+
+    assert image_response.status_code == 200
+    assert video_response.status_code == 200
+    assert image_response.get_json()["records"][0]["report_url"] == "/image_upload/report?itemid=51"
+    assert video_response.get_json()["records"][0]["report_url"] == "/video_upload/report?itemid=61"

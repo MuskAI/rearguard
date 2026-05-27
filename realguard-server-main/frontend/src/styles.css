@@ -535,6 +535,8 @@ td { color: var(--text-primary); }
 .history-title { font-size: 0.84rem; font-weight: 700; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 0.55rem; }
 .history-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 0.25rem 0; font-size: 0.74rem; color: var(--text-muted); }
 .history-row strong { color: var(--text-secondary); font-weight: 600; text-align: right; overflow-wrap: anywhere; }
+.history-actions { margin-top: 0.55rem; display: flex; justify-content: flex-end; }
+.history-action-btn { min-height: 34px; padding: 0 12px; font-size: 0.74rem; }
 .empty-state { min-height: 240px; display: grid; place-items: center; align-content: center; gap: 10px; color: var(--text-muted); }
 .empty-state i { font-size: 2rem; }
 .notice { padding: 10px 12px; border-radius: 10px; font-size: 0.82rem; margin: 0.6rem 0; }

@@ -129,6 +129,8 @@ export interface HistoryItem {
   createdAt: string;
   thumbnail?: string | null;
   cacheHit?: boolean;
+  hasForensics?: boolean;
+  hasProvenance?: boolean;
 }
 
 export interface HealthStatus {
