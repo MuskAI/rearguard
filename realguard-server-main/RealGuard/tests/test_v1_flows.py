@@ -393,6 +393,110 @@ def test_history_detection_records_include_report_urls(client, monkeypatch):
     assert video_response.get_json()["records"][0]["report_url"] == "/video_upload/report?itemid=61"
 
 
+def test_history_endpoints_support_query_filter_and_limit(client, monkeypatch):
+    _login_session(client)
+
+    def fake_detection_sql(sql, params=None, fetch=True):
+        if sql == "SELECT * FROM data WHERE phone = %s OR openid = %s ORDER BY createtime DESC":
+            return [
+                {
+                    "itemid": 101,
+                    "filename": "meta-hit.png",
+                    "fake": 42.0,
+                    "clarity": "高",
+                    "openid": "openid-1",
+                    "phone": "13800000000",
+                    "createtime": "2026-05-27 18:00:00",
+                    "explantation": "视觉可疑点\n- 边缘纹理断裂",
+                },
+                {
+                    "itemid": 102,
+                    "filename": "plain.png",
+                    "fake": 12.0,
+                    "clarity": "低",
+                    "openid": "openid-1",
+                    "phone": "13800000000",
+                    "createtime": "2026-05-27 18:01:00",
+                    "explantation": "",
+                },
+            ]
+        if sql == "SELECT * FROM video_data WHERE phone = %s OR openid = %s ORDER BY createtime DESC":
+            return [
+                {
+                    "itemid": 201,
+                    "filename": "ai-video.mp4",
+                    "fake": 88.0,
+                    "final_label": "AI生成视频",
+                    "confidence": "高",
+                    "openid": "openid-1",
+                    "phone": "13800000000",
+                    "createtime": "2026-05-27 18:10:00",
+                },
+                {
+                    "itemid": 202,
+                    "filename": "real-video.mp4",
+                    "fake": 18.0,
+                    "final_label": "真实视频",
+                    "confidence": "中",
+                    "openid": "openid-1",
+                    "phone": "13800000000",
+                    "createtime": "2026-05-27 18:11:00",
+                },
+            ]
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+    def fake_execute(sql, params=None, fetch=True):
+        assert sql == "SELECT * FROM retrieve_data WHERE phone = %s AND search_type = %s ORDER BY createtime DESC"
+        return [
+            {
+                "itemid": 301,
+                "filename": "query-a.png",
+                "search_type": params[1],
+                "result_count": 3,
+                "top_k": 10,
+                "file_size": "3KB",
+                "createtime": "2026-05-27 18:20:00",
+                "results_json": "[]",
+            },
+            {
+                "itemid": 302,
+                "filename": "query-b.png",
+                "search_type": params[1],
+                "result_count": 1,
+                "top_k": 5,
+                "file_size": "2KB",
+                "createtime": "2026-05-27 18:21:00",
+                "results_json": "[]",
+            },
+        ]
+
+    monkeypatch.setattr(api, "excute_detection_sql", fake_detection_sql)
+    monkeypatch.setattr(api, "excute_sql", fake_execute)
+    monkeypatch.setattr(api, "_has_detection_metadata", lambda itemid: itemid == 101)
+
+    image_response = client.get("/api/history/image-detections?filter=metadata&query=元数据&limit=1")
+    video_response = client.get("/api/history/video-detections?filter=ai&query=AI结论&limit=1")
+    retrieve_response = client.get("/api/history/retrievals?search_type=image&query=query-a&limit=1")
+
+    assert image_response.status_code == 200
+    image_payload = image_response.get_json()
+    assert image_payload["total"] == 1
+    assert len(image_payload["records"]) == 1
+    assert image_payload["records"][0]["itemid"] == 101
+
+    assert video_response.status_code == 200
+    video_payload = video_response.get_json()
+    assert video_payload["total"] == 1
+    assert len(video_payload["records"]) == 1
+    assert video_payload["records"][0]["itemid"] == 201
+
+    assert retrieve_response.status_code == 200
+    retrieve_payload = retrieve_response.get_json()
+    assert retrieve_payload["total"] == 1
+    assert len(retrieve_payload["records"]) == 1
+    assert retrieve_payload["records"][0]["itemid"] == 301
+
+
 def test_retrieval_history_records_include_report_urls(client, monkeypatch):
     _login_session(client)
 
@@ -417,6 +521,18 @@ def test_retrieval_history_records_include_report_urls(client, monkeypatch):
     assert video_response.status_code == 200
     assert image_response.get_json()["records"][0]["report_url"] == "/history_retrieve/report?itemid=71"
     assert video_response.get_json()["records"][0]["report_url"] == "/history_retrieve/report?itemid=71"
+
+
+def test_history_endpoints_reject_invalid_filter_or_limit(client):
+    bad_image_limit = client.get("/api/history/image-detections?limit=0")
+    bad_image_filter = client.get("/api/history/image-detections?filter=bad")
+    bad_video_filter = client.get("/api/history/video-detections?filter=oops")
+    bad_retrieval_limit = client.get("/api/history/retrievals?search_type=image&limit=abc")
+
+    assert bad_image_limit.status_code == 400
+    assert bad_image_filter.status_code == 400
+    assert bad_video_filter.status_code == 400
+    assert bad_retrieval_limit.status_code == 400
 
 
 def test_retrieval_report_downloads_attachment(client, monkeypatch):

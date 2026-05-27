@@ -113,6 +113,120 @@ def _thumbnail_cache_path(item):
     return THUMBNAIL_CACHE_DIR / f"{digest}.webp"
 
 
+def _history_limit(default=500):
+    raw = str(request.args.get("limit", default) or default).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return None, (jsonify({"status": "error", "message": "limit 必须为整数"}), 400)
+    if value <= 0 or value > 1000:
+        return None, (jsonify({"status": "error", "message": "limit 仅支持 1 到 1000"}), 400)
+    return value, None
+
+
+def _history_query():
+    return str(request.args.get("query") or "").strip().lower()
+
+
+def _contains_history_query(fields, query):
+    if not query:
+        return True
+    return any(query in str(field or "").lower() for field in fields)
+
+
+def _image_history_record(item):
+    fake_pct = round(float(item.get("fake", 0) or 0), 1)
+    issue_count = _history_visual_issue_count(item)
+    return {
+        "itemid": item.get("itemid"),
+        "filename": item.get("filename", ""),
+        "image_url": _detection_static_url("image", item),
+        "thumbnail_url": _thumbnail_url(item),
+        "real_prob": round(100 - fake_pct, 1),
+        "fake_prob": fake_pct,
+        "final_label": "AI生成图像" if fake_pct >= 50 else "真实图像",
+        "confidence": item.get("clarity", ""),
+        "createtime": format_createtime(item.get("createtime", "")),
+        "report_url": f"/image_upload/report?itemid={item.get('itemid')}",
+        "is_guest_record": _is_guest_detection_record(item),
+        "has_metadata": _has_detection_metadata(item.get("itemid")),
+        "has_visual_issues": issue_count > 0,
+        "visual_issue_count": issue_count,
+    }
+
+
+def _image_history_search_fields(record):
+    issue_count = int(record.get("visual_issue_count") or 0)
+    return [
+        record.get("filename", ""),
+        record.get("final_label", ""),
+        record.get("confidence", ""),
+        record.get("createtime", ""),
+        "访客" if record.get("is_guest_record") else "",
+        "元数据" if record.get("has_metadata") else "",
+        f"可疑点 {issue_count}" if issue_count > 0 else ("可疑点" if record.get("has_visual_issues") else ""),
+        "结论",
+        "置信度",
+    ]
+
+
+def _video_history_record(item):
+    fake_pct = round(float(item.get("fake") or item.get("fake_percentage") or 0), 1)
+    return {
+        "itemid": item.get("itemid"),
+        "filename": item.get("filename", ""),
+        "video_url": _detection_static_url("video", item),
+        "real_percentage": round(100 - fake_pct, 1),
+        "fake_percentage": fake_pct,
+        "final_label": item.get("final_label", ""),
+        "confidence": item.get("confidence") or item.get("confidence_level", ""),
+        "createtime": format_createtime(item.get("createtime", "")),
+        "report_url": f"/video_upload/report?itemid={item.get('itemid')}",
+        "is_guest_record": _is_guest_detection_record(item),
+    }
+
+
+def _video_history_search_fields(record):
+    return [
+        record.get("filename", ""),
+        record.get("final_label", ""),
+        record.get("confidence", ""),
+        record.get("createtime", ""),
+        "访客" if record.get("is_guest_record") else "",
+        "AI结论" if "AI" in str(record.get("final_label") or "") else "",
+        "真实结论" if "真实" in str(record.get("final_label") or "") else "",
+        "结论",
+        "置信度",
+    ]
+
+
+def _retrieval_history_record(item, phone, search_type):
+    return {
+        "itemid": item.get("itemid"),
+        "filename": item.get("filename", ""),
+        "file_url": f"/static/uploads/{phone}/retrieve/{item.get('filename', '')}",
+        "search_type": search_type,
+        "result_count": item.get("result_count", 0),
+        "top_k": item.get("top_k", 10),
+        "file_size": item.get("file_size", ""),
+        "createtime": format_createtime(item.get("createtime", "")),
+        "results": json.loads(item.get("results_json") or "[]"),
+        "report_url": f"/history_retrieve/report?itemid={item.get('itemid')}",
+    }
+
+
+def _retrieval_history_search_fields(record):
+    return [
+        record.get("filename", ""),
+        record.get("createtime", ""),
+        record.get("result_count", ""),
+        record.get("top_k", ""),
+        record.get("search_type", ""),
+        "数量",
+        "Top-K",
+    ]
+
+
 @api_blueprint.route("/me")
 def me():
     user, error = _auth_required()
@@ -247,6 +361,13 @@ def image_detection_history():
     actor, error = _history_identity(allow_empty=True)
     if error:
         return error
+    limit, limit_error = _history_limit()
+    if limit_error:
+        return limit_error
+    query = _history_query()
+    filter_key = str(request.args.get("filter") or "all").strip()
+    if filter_key not in {"all", "guest", "metadata", "issues"}:
+        return jsonify({"status": "error", "message": "filter 不受支持"}), 400
 
     if actor["mode"] == "guest":
         rows = excute_detection_sql("SELECT * FROM data WHERE openid = %s ORDER BY createtime DESC", (actor["openid"],))
@@ -259,27 +380,17 @@ def image_detection_history():
         )
     records = []
     for item in rows or []:
-        fake_pct = round(float(item.get("fake", 0) or 0), 1)
-        issue_count = _history_visual_issue_count(item)
-        records.append(
-            {
-                "itemid": item.get("itemid"),
-                "filename": item.get("filename", ""),
-                "image_url": _detection_static_url("image", item),
-                "thumbnail_url": _thumbnail_url(item),
-                "real_prob": round(100 - fake_pct, 1),
-                "fake_prob": fake_pct,
-                "final_label": "AI生成图像" if fake_pct >= 50 else "真实图像",
-                "confidence": item.get("clarity", ""),
-                "createtime": format_createtime(item.get("createtime", "")),
-                "report_url": f"/image_upload/report?itemid={item.get('itemid')}",
-                "is_guest_record": _is_guest_detection_record(item),
-                "has_metadata": _has_detection_metadata(item.get("itemid")),
-                "has_visual_issues": issue_count > 0,
-                "visual_issue_count": issue_count,
-            }
-        )
-    return jsonify({"status": "success", "records": records})
+        record = _image_history_record(item)
+        if filter_key == "guest" and not record["is_guest_record"]:
+            continue
+        if filter_key == "metadata" and not record["has_metadata"]:
+            continue
+        if filter_key == "issues" and not record["has_visual_issues"]:
+            continue
+        if not _contains_history_query(_image_history_search_fields(record), query):
+            continue
+        records.append(record)
+    return jsonify({"status": "success", "records": records[:limit], "total": len(records)})
 
 
 @api_blueprint.route("/media/thumbnail/image/<int:itemid>")
@@ -333,6 +444,13 @@ def video_detection_history():
     actor, error = _history_identity(allow_empty=True)
     if error:
         return error
+    limit, limit_error = _history_limit()
+    if limit_error:
+        return limit_error
+    query = _history_query()
+    filter_key = str(request.args.get("filter") or "all").strip()
+    if filter_key not in {"all", "guest", "ai", "real"}:
+        return jsonify({"status": "error", "message": "filter 不受支持"}), 400
 
     if actor["mode"] == "guest":
         rows = excute_detection_sql("SELECT * FROM video_data WHERE openid = %s ORDER BY createtime DESC", (actor["openid"],))
@@ -345,22 +463,17 @@ def video_detection_history():
         )
     records = []
     for item in rows or []:
-        fake_pct = round(float(item.get("fake") or item.get("fake_percentage") or 0), 1)
-        records.append(
-            {
-                "itemid": item.get("itemid"),
-                "filename": item.get("filename", ""),
-                "video_url": _detection_static_url("video", item),
-                "real_percentage": round(100 - fake_pct, 1),
-                "fake_percentage": fake_pct,
-                "final_label": item.get("final_label", ""),
-                "confidence": item.get("confidence") or item.get("confidence_level", ""),
-                "createtime": format_createtime(item.get("createtime", "")),
-                "report_url": f"/video_upload/report?itemid={item.get('itemid')}",
-                "is_guest_record": _is_guest_detection_record(item),
-            }
-        )
-    return jsonify({"status": "success", "records": records})
+        record = _video_history_record(item)
+        if filter_key == "guest" and not record["is_guest_record"]:
+            continue
+        if filter_key == "ai" and "AI" not in str(record["final_label"] or ""):
+            continue
+        if filter_key == "real" and "真实" not in str(record["final_label"] or ""):
+            continue
+        if not _contains_history_query(_video_history_search_fields(record), query):
+            continue
+        records.append(record)
+    return jsonify({"status": "success", "records": records[:limit], "total": len(records)})
 
 
 @api_blueprint.route("/history/retrievals")
@@ -368,6 +481,10 @@ def retrieval_history():
     actor, error = _history_identity(allow_empty=True)
     if error:
         return error
+    limit, limit_error = _history_limit()
+    if limit_error:
+        return limit_error
+    query = _history_query()
 
     search_type = request.args.get("search_type", "image")
     if search_type not in ("image", "video"):
@@ -384,18 +501,8 @@ def retrieval_history():
         )
     records = []
     for item in rows or []:
-        records.append(
-            {
-                "itemid": item.get("itemid"),
-                "filename": item.get("filename", ""),
-                "file_url": f"/static/uploads/{phone}/retrieve/{item.get('filename', '')}",
-                "search_type": search_type,
-                "result_count": item.get("result_count", 0),
-                "top_k": item.get("top_k", 10),
-                "file_size": item.get("file_size", ""),
-                "createtime": format_createtime(item.get("createtime", "")),
-                "results": json.loads(item.get("results_json") or "[]"),
-                "report_url": f"/history_retrieve/report?itemid={item.get('itemid')}",
-            }
-        )
-    return jsonify({"status": "success", "records": records})
+        record = _retrieval_history_record(item, phone, search_type)
+        if not _contains_history_query(_retrieval_history_search_fields(record), query):
+            continue
+        records.append(record)
+    return jsonify({"status": "success", "records": records[:limit], "total": len(records)})
