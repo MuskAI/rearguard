@@ -129,6 +129,22 @@ npm ci
 npm run dev
 ```
 
+## 验证
+
+V1 安全回归测试：
+
+```bash
+uv venv realguard-server-main/RealGuard/.venv-test --python 3.13
+uv pip install --python realguard-server-main/RealGuard/.venv-test/bin/python flask pymysql pillow requests werkzeug pytest
+realguard-server-main/RealGuard/.venv-test/bin/pytest realguard-server-main/RealGuard/tests/test_v1_security.py
+```
+
+V2 接口保护与报告导出测试：
+
+```bash
+v2-agent/backend/.venv/bin/pytest v2-agent/backend/tests/test_api_protection.py
+```
+
 ## 生产部署参考
 
 推荐进程与端口：
