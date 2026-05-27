@@ -26,6 +26,8 @@ import {
 type PageKey = "home" | "image" | "video" | "retrieve" | "history";
 type Status = { tone: "ok" | "error" | "info"; text: string } | null;
 type AuthMode = "password" | "sms" | "register";
+type HistoryTabKey = "image" | "video" | "imageRetrieve" | "videoRetrieve";
+type HistoryFilterKey = "all" | "guest" | "metadata" | "issues" | "ai";
 
 const emptyCounters: Counters = {
   image_detect: 0,
@@ -52,6 +54,15 @@ function App() {
   useEffect(() => {
     document.body.dataset.device = deviceType;
   }, [deviceType]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (page === "home") params.delete("page");
+    else params.set("page", page);
+    const next = params.toString();
+    window.history.replaceState({}, "", `${window.location.pathname}${next ? `?${next}` : ""}`);
+  }, [page]);
 
   useEffect(() => {
     if (isDemoMode()) {
@@ -707,10 +718,10 @@ function RetrievePage({ onDone }: { onDone: () => Promise<void> }) {
 }
 
 function HistoryPage() {
-  const [tab, setTab] = useState<"image" | "video" | "imageRetrieve" | "videoRetrieve">("image");
+  const [tab, setTab] = useState<HistoryTabKey>(() => getInitialHistoryTab());
   const [records, setRecords] = useState<HistoryRecord[]>([]);
   const [status, setStatus] = useState<Status>(null);
-  const [filter, setFilter] = useState<"all" | "guest" | "metadata" | "issues" | "ai">("all");
+  const [filter, setFilter] = useState<HistoryFilterKey>(() => getInitialHistoryFilter(getInitialHistoryTab()));
 
   useEffect(() => {
     setStatus({ tone: "info", text: "正在加载历史记录" });
@@ -732,8 +743,21 @@ function HistoryPage() {
   }, [tab]);
 
   useEffect(() => {
-    setFilter("all");
+    if (!isHistoryFilterSupported(tab, filter)) {
+      setFilter("all");
+    }
   }, [tab]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    params.set("page", "history");
+    params.set("historyTab", tab);
+    if (filter !== "all" && isHistoryFilterSupported(tab, filter)) params.set("historyFilter", filter);
+    else params.delete("historyFilter");
+    const next = params.toString();
+    window.history.replaceState({}, "", `${window.location.pathname}${next ? `?${next}` : ""}`);
+  }, [tab, filter]);
 
   const filteredRecords = useMemo(() => {
     if (tab === "image") {
@@ -779,21 +803,7 @@ function HistoryPage() {
     ];
   }, [records, tab]);
 
-  const filterOptions =
-    tab === "image"
-      ? [
-          { key: "all", label: "全部" },
-          { key: "guest", label: "访客" },
-          { key: "metadata", label: "元数据" },
-          { key: "issues", label: "可疑点" },
-        ]
-      : tab === "video"
-        ? [
-            { key: "all", label: "全部" },
-            { key: "guest", label: "访客" },
-            { key: "ai", label: "AI结论" },
-          ]
-        : [];
+  const filterOptions = getHistoryFilterOptions(tab);
 
   return (
     <main className="main">
@@ -824,7 +834,7 @@ function HistoryPage() {
                       key={option.key}
                       type="button"
                       className={`history-filter-btn ${filter === option.key ? "active" : ""}`}
-                      onClick={() => setFilter(option.key as typeof filter)}
+                      onClick={() => setFilter(option.key)}
                     >
                       {option.label}
                     </button>
@@ -1388,6 +1398,41 @@ function getInitialPage(): PageKey {
   if (typeof window === "undefined") return "home";
   const value = new URLSearchParams(window.location.search).get("page") as PageKey | null;
   return value && ["home", "image", "video", "retrieve", "history"].includes(value) ? value : "home";
+}
+
+function getInitialHistoryTab(): HistoryTabKey {
+  if (typeof window === "undefined") return "image";
+  const value = new URLSearchParams(window.location.search).get("historyTab") as HistoryTabKey | null;
+  return value && ["image", "video", "imageRetrieve", "videoRetrieve"].includes(value) ? value : "image";
+}
+
+function getInitialHistoryFilter(tab: HistoryTabKey): HistoryFilterKey {
+  if (typeof window === "undefined") return "all";
+  const value = new URLSearchParams(window.location.search).get("historyFilter") as HistoryFilterKey | null;
+  return value && isHistoryFilterSupported(tab, value) ? value : "all";
+}
+
+function getHistoryFilterOptions(tab: HistoryTabKey): Array<{ key: HistoryFilterKey; label: string }> {
+  if (tab === "image") {
+    return [
+      { key: "all", label: "全部" },
+      { key: "guest", label: "访客" },
+      { key: "metadata", label: "元数据" },
+      { key: "issues", label: "可疑点" },
+    ];
+  }
+  if (tab === "video") {
+    return [
+      { key: "all", label: "全部" },
+      { key: "guest", label: "访客" },
+      { key: "ai", label: "AI结论" },
+    ];
+  }
+  return [];
+}
+
+function isHistoryFilterSupported(tab: HistoryTabKey, filter: HistoryFilterKey) {
+  return getHistoryFilterOptions(tab).some((option) => option.key === filter) || filter === "all";
 }
 
 function getStorage() {
