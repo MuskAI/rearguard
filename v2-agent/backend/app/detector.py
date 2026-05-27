@@ -15,7 +15,7 @@ import re
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from . import forensics, synthid_detector, visible_watermark_detector
+from . import document_utils, forensics, synthid_detector, visible_watermark_detector
 
 load_dotenv()
 
@@ -626,22 +626,25 @@ def mock_analysis(file_type: str, data: bytes) -> dict:
 
 def analyze(file_type: str, filename: str, data: bytes) -> dict:
     """统一入口：能用真实模型就用，否则回退 Mock。"""
+    extracted = None
     if file_type == "image":
         result = analyze_image_vlm(data)
         if result:
             result = _merge_synthid(result, data)
             return _merge_visible_watermark(result, file_type, filename, data)
     elif file_type == "document":
-        try:
-            text = data.decode("utf-8", errors="ignore")
-        except Exception:
-            text = ""
-        if text.strip():
-            result = analyze_text_vlm(text)
+        extracted = document_utils.extract_text(filename, data)
+        if extracted.text.strip():
+            result = analyze_text_vlm(extracted.text)
             if result:
+                if extracted.note:
+                    result["explanation"] = f"{result['explanation']}\n文档处理：{extracted.note}。"
                 return result
     # video / audio / 失败回退
     result = mock_analysis(file_type, data)
+    if file_type == "document":
+        note = extracted.note if extracted else "未提取到可分析正文，已回退演示判定"
+        result["explanation"] = f"{result['explanation']}\n文档处理：{note}。"
     if file_type == "image":
         result = _merge_synthid(result, data)
         return _merge_visible_watermark(result, file_type, filename, data)

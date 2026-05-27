@@ -445,7 +445,7 @@ export default function App() {
               {busy ? "检测中…" : "上传文件检测"}
             </button>
             <span className="text-xs sm:text-sm text-ink-500 leading-relaxed">
-              支持点击上传。图像与纯文本默认走模型；视频、音频和复杂文档当前可能回退为演示判定。
+              支持点击上传。图像和可提取正文的文档（txt/md/docx）默认走模型；视频、音频和其他复杂文档当前可能回退为演示判定。
             </span>
             <input
               ref={fileInputRef}
@@ -475,7 +475,7 @@ function CapabilityBanner({ health }: { health: HealthStatus | null }) {
     health == null
       ? "尚未获取到后端状态，检测能力与访问控制信息可能不完整。"
       : health.vlmEnabled
-      ? "图像与纯文本检测使用真实模型；视频、音频仍为演示判定。"
+      ? "图像与可提取正文的文档（txt/md/docx）使用真实模型；视频、音频和其他复杂文档仍为演示判定。"
       : "当前处于 Mock 回退模式，检测结果仅用于演示流程。";
   return (
     <div className="rounded-xl border border-ink-600 bg-ink-800 px-4 py-3 text-xs sm:text-sm text-ink-500 leading-relaxed">

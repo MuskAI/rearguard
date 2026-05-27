@@ -43,7 +43,7 @@ V1 RealGuard：
 V2 鉴伪 Agent：
 
 - 图像、视频、音频、文档入口统一上传。
-- 图像检测与纯文本检测调用 DashScope OpenAI 兼容接口，默认模型为 `qwen3-vl-flash`。
+- 图像检测与可提取正文的文档检测（`txt` / `md` / `docx`）调用 DashScope OpenAI 兼容接口，默认模型为 `qwen3-vl-flash`。
 - 视频、音频和复杂文档当前保留演示判定链路，前端会明确显示回退状态。
 - 支持导出自包含 HTML 鉴定报告，便于留档与分享给复核方。
 - ELA、噪声残差、频域、光照梯度等可解释性取证可视化。
@@ -142,7 +142,7 @@ realguard-server-main/RealGuard/.venv-test/bin/pytest realguard-server-main/Real
 V2 接口保护与报告导出测试：
 
 ```bash
-v2-agent/backend/.venv/bin/pytest v2-agent/backend/tests/test_api_protection.py
+v2-agent/backend/.venv/bin/pytest v2-agent/backend/tests
 ```
 
 ## 生产部署参考

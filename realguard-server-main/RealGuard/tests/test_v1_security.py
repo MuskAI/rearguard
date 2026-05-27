@@ -9,7 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from imagedetection import creat_app  # noqa: E402
-from imagedetection.views import detection, historical_record, login  # noqa: E402
+from imagedetection.views import api, detection, historical_record, login  # noqa: E402
 
 
 @pytest.fixture
@@ -121,3 +121,44 @@ def test_retrieve_history_result_uses_user_phone_and_local_proxy(client, monkeyp
     assert payload["base_url"] == "/retrieve/library-file/image/"
     assert payload["query_file_url"] == "/static/uploads/13800000000/retrieve/query.png"
     assert seen
+
+
+def test_login_sms_auto_created_user_uses_hashed_placeholder_secret(client, monkeypatch):
+    insert_params = {}
+    lookup_count = {"value": 0}
+
+    monkeypatch.setattr(api, "_verify_sms_code", lambda scene, phone, code: (True, ""))
+    monkeypatch.setattr(api, "_sync_detection_user", lambda *args, **kwargs: None)
+
+    def fake_find_user(phone):
+        lookup_count["value"] += 1
+        if lookup_count["value"] == 1:
+            return None
+        return {
+            "Userid": 8,
+            "phone": phone,
+            "username": phone,
+            "openid": "",
+            "secret": "unused",
+        }
+
+    def fake_execute(sql, params=None, fetch=True):
+        if sql == "INSERT INTO user (phone, secret, username, openid) VALUES (%s, %s, %s, %s)":
+            insert_params["value"] = params
+            return 1
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+    monkeypatch.setattr(api, "_find_user_by_phone", fake_find_user)
+    monkeypatch.setattr(api, "excute_sql", fake_execute)
+
+    response = client.post(
+        "/api/login/sms",
+        json={"phone": "13800000000", "sms_code": "123456"},
+    )
+
+    assert response.status_code == 200
+    assert "value" in insert_params
+    _, stored_secret, _, _ = insert_params["value"]
+    assert stored_secret
+    assert stored_secret != ""
+    assert login._is_password_hash(stored_secret)
