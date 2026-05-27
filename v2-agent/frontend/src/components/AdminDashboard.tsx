@@ -20,7 +20,7 @@ export default function AdminDashboard({
 }) {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [error, setError] = useState<string>("");
-  const [days, setDays] = useState<7 | 14 | 30>(14);
+  const [days, setDays] = useState<7 | 14 | 30>(() => getInitialMonitorDays());
 
   const load = () =>
     fetchMetrics(days)
@@ -34,6 +34,15 @@ export default function AdminDashboard({
     load();
     const timer = window.setInterval(load, 30000);
     return () => window.clearInterval(timer);
+  }, [days]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (days === 14) params.delete("monitorDays");
+    else params.set("monitorDays", String(days));
+    const next = params.toString();
+    window.history.replaceState({}, "", `${window.location.pathname}${next ? `?${next}` : ""}${window.location.hash}`);
   }, [days]);
 
   const maxDay = useMemo(
@@ -410,4 +419,10 @@ export default function AdminDashboard({
       </div>
     </main>
   );
+}
+
+function getInitialMonitorDays(): 7 | 14 | 30 {
+  if (typeof window === "undefined") return 14;
+  const raw = Number(new URLSearchParams(window.location.search).get("monitorDays") || "14");
+  return raw === 7 || raw === 30 ? raw : 14;
 }
