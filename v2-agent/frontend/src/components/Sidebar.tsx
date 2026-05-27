@@ -117,7 +117,7 @@ export default function Sidebar({
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索名称 / 报告号"
+              placeholder="搜索名称 / 报告号 / 来源 / 水印"
               className="w-full bg-transparent text-xs text-ink-950 placeholder:text-ink-500 outline-none"
             />
           </div>
@@ -233,12 +233,13 @@ export default function Sidebar({
                 </span>
               )}
               <div className="flex-1 min-w-0">
-                <div className="text-sm text-ink-950 truncate">{h.name}</div>
+                <div className="text-sm text-ink-950 truncate">{renderHighlightedText(h.name, query)}</div>
+                <div className="text-[10px] text-ink-500 truncate">#{renderHighlightedText(h.reportId, query)}</div>
                 <div className="text-[10px] flex items-center gap-1.5">
-                  <span style={{ color: meta.color }}>{meta.label}</span>
+                  <span style={{ color: meta.color }}>{renderHighlightedText(meta.label, query)}</span>
                   <span className="text-ink-500">· {TYPE_LABEL[h.type]}</span>
-                  {h.source === "vlm" && <span className="text-brand-cyan">VLM</span>}
-                  {h.source === "mock" && <span className="text-cinnabar">Mock</span>}
+                  {h.source === "vlm" && <span className="text-brand-cyan">{renderHighlightedText("VLM", query)}</span>}
+                  {h.source === "mock" && <span className="text-cinnabar">{renderHighlightedText("Mock", query)}</span>}
                   {h.cacheHit && <span className="text-jade">缓存</span>}
                 </div>
                 {(h.hasForensics || h.hasProvenance || h.hasVisibleWatermark || h.hasSynthid) && (
@@ -255,7 +256,7 @@ export default function Sidebar({
                     )}
                     {h.hasVisibleWatermark && (
                       <span className="px-1.5 py-0.5 rounded-full bg-cinnabar/10 text-cinnabar border border-cinnabar/30">
-                        {h.visibleWatermarkProvider ? `${h.visibleWatermarkProvider} 水印` : "水印"}
+                        {renderHighlightedText(h.visibleWatermarkProvider ? `${h.visibleWatermarkProvider} 水印` : "水印", query)}
                       </span>
                     )}
                     {h.hasSynthid && (
@@ -298,4 +299,24 @@ function getInitialHistoryFilter() {
   return value === "vlm" || value === "mock" || value === "forensics" || value === "provenance" || value === "watermark"
     ? value
     : "all";
+}
+
+function renderHighlightedText(text: string, query: string) {
+  const trimmed = query.trim();
+  if (!trimmed) return text;
+  const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`(${escaped})`, "ig");
+  const lower = trimmed.toLowerCase();
+  return text.split(pattern).map((part, index) =>
+    part.toLowerCase() === lower ? (
+      <mark
+        key={`${part}-${index}`}
+        className="rounded bg-cinnabar/20 px-0.5 text-cinnabar"
+      >
+        {part}
+      </mark>
+    ) : (
+      <span key={`${part}-${index}`}>{part}</span>
+    ),
+  );
 }
