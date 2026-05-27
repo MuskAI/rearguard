@@ -16,6 +16,7 @@ interface Props {
 export default function Sidebar({ history, message, activeId, onSelect, onNew, onDelete, className = "", onClose }: Props) {
   const [query, setQuery] = useState(() => getInitialHistoryQuery());
   const [filter, setFilter] = useState<"all" | "vlm" | "mock" | "forensics" | "provenance" | "watermark">(() => getInitialHistoryFilter());
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -27,6 +28,12 @@ export default function Sidebar({ history, message, activeId, onSelect, onNew, o
     const next = params.toString();
     window.history.replaceState({}, "", `${window.location.pathname}${next ? `?${next}` : ""}${window.location.hash}`);
   }, [filter, query]);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1800);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
 
   const filteredHistory = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -46,6 +53,16 @@ export default function Sidebar({ history, message, activeId, onSelect, onNew, o
       return fields.some((field) => String(field).toLowerCase().includes(q));
     });
   }, [filter, history, query]);
+
+  async function copyCurrentView() {
+    const url = window.location.href;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+    } catch {
+      window.prompt("复制当前历史视图链接", url);
+    }
+  }
 
   return (
     <aside className={`w-64 shrink-0 bg-ink-900 border-r border-ink-700 flex flex-col shadow-sm ${className}`}>
@@ -110,6 +127,17 @@ export default function Sidebar({ history, message, activeId, onSelect, onNew, o
               </button>
             ))}
           </div>
+          <button
+            type="button"
+            onClick={copyCurrentView}
+            className={`w-full px-2 py-1.5 rounded-md text-[10px] border ${
+              copied
+                ? "border-jade/40 bg-jade/10 text-jade"
+                : "border-ink-600 bg-ink-800 text-ink-500"
+            }`}
+          >
+            {copied ? "已复制当前视图链接" : "复制当前视图链接"}
+          </button>
           <div className="text-[10px] text-ink-500">
             当前显示 {filteredHistory.length} / {history.length}
           </div>
