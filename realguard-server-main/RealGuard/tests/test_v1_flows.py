@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from imagedetection import creat_app  # noqa: E402
-from imagedetection.views import api, detection, retrieve  # noqa: E402
+from imagedetection.views import api, detection, historical_record, retrieve  # noqa: E402
 
 
 class _FakeResponse:
@@ -309,3 +309,62 @@ def test_history_detection_records_include_report_urls(client, monkeypatch):
     assert video_response.status_code == 200
     assert image_response.get_json()["records"][0]["report_url"] == "/image_upload/report?itemid=51"
     assert video_response.get_json()["records"][0]["report_url"] == "/video_upload/report?itemid=61"
+
+
+def test_retrieval_history_records_include_report_urls(client, monkeypatch):
+    _login_session(client)
+
+    def fake_execute(sql, params=None, fetch=True):
+        assert sql == "SELECT * FROM retrieve_data WHERE phone = %s AND search_type = %s ORDER BY createtime DESC"
+        return [{
+            "itemid": 71,
+            "filename": "query.png",
+            "search_type": params[1],
+            "result_count": 4,
+            "top_k": 10,
+            "file_size": "2KB",
+            "createtime": "2026-05-27 15:30:00",
+        }]
+
+    monkeypatch.setattr(api, "excute_sql", fake_execute)
+
+    image_response = client.get("/api/history/retrievals?search_type=image")
+    video_response = client.get("/api/history/retrievals?search_type=video")
+
+    assert image_response.status_code == 200
+    assert video_response.status_code == 200
+    assert image_response.get_json()["records"][0]["report_url"] == "/history_retrieve/report?itemid=71"
+    assert video_response.get_json()["records"][0]["report_url"] == "/history_retrieve/report?itemid=71"
+
+
+def test_retrieval_report_downloads_attachment(client, monkeypatch):
+    _login_session(client)
+
+    def fake_execute(sql, params=None, fetch=True):
+        if sql == "SELECT * FROM retrieve_data WHERE itemid = %s AND phone = %s":
+            assert params == ("81", "13800000000")
+            return [{
+                "itemid": 81,
+                "filename": "query.png",
+                "search_type": "image",
+                "result_count": 2,
+                "top_k": 5,
+                "file_size": "3KB",
+                "createtime": "2026-05-27 15:40:00",
+                "results_json": json.dumps([
+                    {"id": "libA/a.png", "score": 0.92, "product": {"product_images": "libA/a.png"}},
+                    {"id": "libA/b.png", "score": 0.88, "product": {"product_images": "libA/b.png"}},
+                ]),
+            }]
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+    monkeypatch.setattr(api, "excute_sql", fake_execute)
+    monkeypatch.setattr(historical_record, "excute_sql", fake_execute)
+
+    response = client.get("/history_retrieve/report?itemid=81")
+
+    assert response.status_code == 200
+    text = response.get_data(as_text=True)
+    assert "attachment;" in response.headers["Content-Disposition"]
+    assert "检索报告" in text
+    assert "libA/a.png" in text

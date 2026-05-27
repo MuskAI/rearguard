@@ -321,6 +321,7 @@ def retrieval_history():
                 "file_size": item.get("file_size", ""),
                 "createtime": format_createtime(item.get("createtime", "")),
                 "results": json.loads(item.get("results_json") or "[]"),
+                "report_url": f"/history_retrieve/report?itemid={item.get('itemid')}",
             }
         )
     return jsonify({"status": "success", "records": records})

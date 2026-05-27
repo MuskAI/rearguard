@@ -1,7 +1,8 @@
 import os
 import json
-from flask import Blueprint, render_template, request, session, jsonify
+from flask import Blueprint, render_template, request, session, jsonify, Response
 
+from imagedetection.views import reporting
 from imagedetection.views.utils import excute_sql, excute_detection_sql, format_createtime
 
 historical_record_blueprint = Blueprint('historical_record_blueprint', __name__)
@@ -111,6 +112,7 @@ def history_image_retrieve():
                 "top_k": item.get('top_k', 10),
                 "file_size": item.get('file_size', ''),
                 "createtime": format_createtime(item['createtime']),
+                "report_url": f"/history_retrieve/report?itemid={item['itemid']}",
             })
     return render_template('history_image_retrieve.html', records=records, username=phone)
 
@@ -136,6 +138,7 @@ def history_video_retrieve():
                 "top_k": item.get('top_k', 10),
                 "file_size": item.get('file_size', ''),
                 "createtime": format_createtime(item['createtime']),
+                "report_url": f"/history_retrieve/report?itemid={item['itemid']}",
             })
     return render_template('history_video_retrieve.html', records=records, username=phone)
 
@@ -180,3 +183,35 @@ def retrieve_result_api():
         'file_size': item.get('file_size', ''),
         'createtime': format_createtime(item.get('createtime', '')),
     })
+
+
+@historical_record_blueprint.route('/history_retrieve/report')
+def retrieve_report_api():
+    if 'user_info' not in session or session['user_info'] is None:
+        return jsonify({'status': 'error', 'message': '用户未登录'}), 401
+
+    itemid = request.args.get('itemid')
+    phone = session['user_info'].get('phone', '')
+    if not itemid:
+        return jsonify({'status': 'error', 'message': '缺少参数'}), 400
+
+    rows = excute_sql("SELECT * FROM retrieve_data WHERE itemid = %s AND phone = %s", (itemid, phone))
+    if not rows:
+        return jsonify({'status': 'error', 'message': '未找到记录'}), 404
+
+    item = rows[0]
+    filename = item.get('filename', '')
+    search_type = item.get('search_type', 'image')
+    query_file_url = f"/static/uploads/{phone}/retrieve/{filename}"
+    base_url = '/retrieve/library-file/image/' if search_type == 'image' else '/retrieve/library-file/video/'
+    try:
+        results_data = json.loads(item.get('results_json') or '[]')
+    except Exception:
+        results_data = []
+
+    html = reporting.retrieval_report_content(item, query_file_url, base_url, results_data)
+    return Response(
+        html,
+        mimetype='text/html',
+        headers={'Content-Disposition': reporting.attachment_header(reporting.retrieval_report_filename(itemid))},
+    )

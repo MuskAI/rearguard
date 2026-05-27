@@ -9,6 +9,7 @@ import {
   detectImage,
   detectVideo,
   downloadImageReport,
+  downloadRetrieveReport,
   downloadVideoReport,
   getHistory,
   getLibraries,
@@ -1038,6 +1039,17 @@ function HistoryRecords({
                       if (tab === "image") downloadImageReport(Number(record.itemid));
                       else if (tab === "video") downloadVideoReport(Number(record.itemid));
                     }}
+                  >
+                    <i className="fa fa-download" /> 报告
+                  </button>
+                </div>
+              )}
+              {!!record.result_count && reportUrl && (
+                <div className="history-actions">
+                  <button
+                    className="btn-code history-action-btn"
+                    type="button"
+                    onClick={() => downloadRetrieveReport(Number(record.itemid))}
                   >
                     <i className="fa fa-download" /> 报告
                   </button>

@@ -98,6 +98,10 @@ export function downloadVideoReport(itemid: number) {
   triggerDownload(`/video_upload/report?itemid=${encodeURIComponent(String(itemid))}`);
 }
 
+export function downloadRetrieveReport(itemid: number) {
+  triggerDownload(`/history_retrieve/report?itemid=${encodeURIComponent(String(itemid))}`);
+}
+
 export function getLibraries(searchType: "image" | "video") {
   return jsonRequest<{ libraries: string[]; selected: string; root_path: string }>(
     `/retrieve/libraries?search_type=${searchType}`
