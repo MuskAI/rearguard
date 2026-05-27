@@ -58,6 +58,7 @@ export interface VisibleWatermarkHit {
   method: string;
   frame: number | null;
   scores: Record<string, number>;
+  crop?: string | null;
 }
 
 export interface VisibleWatermarkResult {

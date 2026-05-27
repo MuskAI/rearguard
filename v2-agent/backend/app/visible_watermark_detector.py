@@ -34,6 +34,7 @@ class WatermarkHit:
     method: str
     frame: int | None = None
     scores: dict[str, float] | None = None
+    crop: str | None = None
 
 
 def status() -> dict[str, Any]:
@@ -264,6 +265,7 @@ def _hit_to_dict(hit: WatermarkHit) -> dict[str, Any]:
         "method": hit.method,
         "frame": hit.frame,
         "scores": hit.scores or {},
+        "crop": hit.crop,
     }
 
 
@@ -273,6 +275,42 @@ def _detect_frame(image: np.ndarray) -> WatermarkHit | None:
     if hit:
         return hit
     return _generic_corner_overlay(image)
+
+
+def _attach_crop(image: np.ndarray, hit: WatermarkHit, *, padding: float = 0.45) -> WatermarkHit:
+    """Attach a small evidence crop around the detected watermark."""
+    h, w = image.shape[:2]
+    x, y, bw, bh = hit.bbox
+    x1 = int(max(0, (x - bw * padding) * w))
+    y1 = int(max(0, (y - bh * padding) * h))
+    x2 = int(min(w, (x + bw * (1 + padding)) * w))
+    y2 = int(min(h, (y + bh * (1 + padding)) * h))
+    if x2 <= x1 or y2 <= y1:
+        return hit
+
+    crop = image[y1:y2, x1:x2].copy()
+    if crop.size == 0:
+        return hit
+
+    # Draw a thin local box so users can see the exact evidence position inside
+    # the crop. This is an annotation on the evidence copy, not a media edit.
+    bx1 = int(max(0, x * w - x1))
+    by1 = int(max(0, y * h - y1))
+    bx2 = int(min(x2 - x1 - 1, (x + bw) * w - x1))
+    by2 = int(min(y2 - y1 - 1, (y + bh) * h - y1))
+    cv2.rectangle(crop, (bx1, by1), (bx2, by2), (216, 65, 47), 1)
+
+    max_side = max(crop.shape[:2])
+    if max_side > 180:
+        scale = 180 / max_side
+        crop = cv2.resize(crop, (max(1, int(crop.shape[1] * scale)), max(1, int(crop.shape[0] * scale))), interpolation=cv2.INTER_AREA)
+
+    ok, buf = cv2.imencode(".webp", crop, [int(cv2.IMWRITE_WEBP_QUALITY), 58])
+    if ok:
+        import base64
+
+        hit.crop = "data:image/webp;base64," + base64.b64encode(buf.tobytes()).decode()
+    return hit
 
 
 def detect_image(data: bytes) -> dict[str, Any]:
@@ -286,6 +324,7 @@ def detect_image(data: bytes) -> dict[str, Any]:
     hit = _detect_frame(img)
     if not hit:
         return _empty("未检测到已知可见 AI 水印或稳定角标水印", started, supported=True)
+    _attach_crop(img, hit)
     return _result([hit], "image", started)
 
 
@@ -314,6 +353,7 @@ def detect_video(data: bytes, suffix: str = ".mp4", max_frames: int = 18) -> dic
             hit = _detect_frame(frame)
             if hit:
                 hit.frame = frame_id
+                _attach_crop(frame, hit)
                 hits.append(hit)
         cap.release()
 

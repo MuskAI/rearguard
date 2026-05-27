@@ -174,13 +174,51 @@ export default function ResultCard({
               </div>
               <p className="text-ink-950">{visibleWatermark.note}</p>
               {visibleWatermark.detected && (
-                <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] text-ink-500 break-words">
-                  <span>来源：{visibleWatermark.provider || "未知角标"}</span>
-                  <span>
-                    命中：{visibleWatermark.temporal.positiveFrames}/{visibleWatermark.temporal.sampledFrames || 1}
-                  </span>
-                  <span>跳动：{visibleWatermark.temporal.moving ? "是" : "否"}</span>
-                </div>
+                <>
+                  <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] text-ink-500 break-words">
+                    <span>来源：{visibleWatermark.provider || "未知角标"}</span>
+                    <span>
+                      命中：{visibleWatermark.temporal.positiveFrames}/{visibleWatermark.temporal.sampledFrames || 1}
+                    </span>
+                    <span>跳动：{visibleWatermark.temporal.moving ? "是" : "否"}</span>
+                  </div>
+                  <div className="mt-3 border-t border-ink-600/70 pt-3">
+                    <div className="text-xs font-medium text-ink-950 mb-2">中间证据</div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {visibleWatermark.hits.slice(0, 4).map((hit, idx) => (
+                        <div key={`${hit.method}-${idx}`} className="flex gap-3 min-w-0">
+                          {hit.crop ? (
+                            <img
+                              src={hit.crop}
+                              alt="可见水印裁剪证据"
+                              className="h-20 w-20 shrink-0 rounded-md object-contain bg-ink-900 border border-ink-600"
+                              loading="lazy"
+                            />
+                          ) : (
+                            <div className="h-20 w-20 shrink-0 rounded-md bg-ink-900 border border-ink-600" />
+                          )}
+                          <div className="min-w-0 text-[11px] text-ink-500 leading-relaxed">
+                            <div className="text-ink-950 font-medium">抠图 {idx + 1}</div>
+                            <div>方法：{hit.method}</div>
+                            <div>置信度：{Math.round(hit.confidence * 100)}%</div>
+                            {hit.frame !== null && <div>帧：{hit.frame}</div>}
+                            <div>
+                              位置：x {Math.round(hit.bbox.x * 100)}%, y {Math.round(hit.bbox.y * 100)}%
+                            </div>
+                            {Object.keys(hit.scores).length > 0 && (
+                              <div className="break-words">
+                                分数：
+                                {Object.entries(hit.scores)
+                                  .map(([key, value]) => `${key} ${Math.round(value * 100)}%`)
+                                  .join(" / ")}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
               )}
             </div>
           )}
