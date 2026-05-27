@@ -65,6 +65,7 @@ export default function App() {
   const [activeId, setActiveId] = useState<string>();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const restoredHistoryItemRef = useRef(false);
 
   const loadHealth = () =>
     fetchHealth()
@@ -88,10 +89,56 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (restoredHistoryItemRef.current || history.length === 0) return;
+    const initialHistoryItem = getInitialHistoryItem();
+    if (!initialHistoryItem) {
+      restoredHistoryItemRef.current = true;
+      return;
+    }
+    const target = history.find((item) => item.taskId === initialHistoryItem || item.reportId === initialHistoryItem);
+    restoredHistoryItemRef.current = true;
+    if (target) {
+      void onSelectHistory(target);
+    }
+  }, [history]);
+
+  useEffect(() => {
+    if (restoredHistoryItemRef.current || history.length === 0) return;
+    const initialHistoryItem = getInitialHistoryItem();
+    if (!initialHistoryItem) {
+      restoredHistoryItemRef.current = true;
+      return;
+    }
+    const target = history.find((item) => item.taskId === initialHistoryItem || item.reportId === initialHistoryItem);
+    restoredHistoryItemRef.current = true;
+    if (target) {
+      void onSelectHistory(target);
+    }
+  }, [history]);
+
+  useEffect(() => {
     const onHash = () => setView(window.location.hash === "#monitor" ? "monitor" : "detect");
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (activeId) params.set("historyItem", activeId);
+    else params.delete("historyItem");
+    const next = params.toString();
+    window.history.replaceState({}, "", `${window.location.pathname}${next ? `?${next}` : ""}${window.location.hash}`);
+  }, [activeId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (activeId) params.set("historyItem", activeId);
+    else params.delete("historyItem");
+    const next = params.toString();
+    window.history.replaceState({}, "", `${window.location.pathname}${next ? `?${next}` : ""}${window.location.hash}`);
+  }, [activeId]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -516,6 +563,11 @@ function CapabilityBanner({ health }: { health: HealthStatus | null }) {
       {tokenProtected && " 历史记录、报告与监控指标需要访问令牌。"}
     </div>
   );
+}
+
+function getInitialHistoryItem() {
+  if (typeof window === "undefined") return "";
+  return new URLSearchParams(window.location.search).get("historyItem") || "";
 }
 
 function EmptyState({ onUpload }: { onUpload: () => void }) {
