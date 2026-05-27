@@ -13,7 +13,7 @@ import io
 from datetime import datetime, timezone
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import Response
@@ -170,6 +170,7 @@ def health() -> dict:
             "/api/history",
             "/api/report/{report_id}",
             "/api/report/{report_id}/download",
+            "/api/report/{report_id}/export",
             "/api/metrics",
         ] if ACCESS_TOKEN else [],
         "calibration": detector.calibration_status(),
@@ -298,6 +299,28 @@ def report_download(report_id: str, request: Request) -> Response:
         raise HTTPException(status_code=404, detail="报告不存在")
     filename = reporting.download_filename(item)
     html = reporting.build_report_html(item)
+    return Response(
+        content=html,
+        media_type="text/html; charset=utf-8",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+        },
+    )
+
+
+@app.post("/api/report/{report_id}/export")
+def report_export(report_id: str, request: Request, payload: dict | None = Body(default=None)) -> Response:
+    _require_protected_access(request)
+    item = storage.get_history(report_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="报告不存在")
+    filename = reporting.download_filename(item)
+    body = payload or {}
+    html = reporting.build_report_html(
+        item,
+        forensics=body.get("forensics"),
+        provenance=body.get("provenance"),
+    )
     return Response(
         content=html,
         media_type="text/html; charset=utf-8",

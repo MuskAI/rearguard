@@ -139,12 +139,94 @@ def _render_optional_blocks(result: dict) -> str:
     return "\n".join(blocks)
 
 
+def _render_forensics_block(forensics: dict | None) -> str:
+    if not forensics:
+        return ""
+    items = []
+    for item in forensics.get("items", []) or []:
+        items.append(
+            f"""
+            <tr>
+              <td>{escape(_safe_text(item.get('title')))}</td>
+              <td>{escape(_safe_text(item.get('status')))}</td>
+              <td>{escape(_safe_text(item.get('finding')))}</td>
+            </tr>
+            """
+        )
+    if not items:
+        items.append('<tr><td colspan="3" class="muted">未附带取证分析条目</td></tr>')
+    source = _safe_text(forensics.get("source"))
+    model = _safe_text(forensics.get("modelVersion"))
+    return f"""
+    <section class="card">
+      <h2>可解释性取证分析</h2>
+      <p>{escape(_safe_text(forensics.get("summary"), "未附带综合取证总结"))}</p>
+      <div class="meta-grid compact">
+        <div><span>结论</span><strong>{escape(_safe_text(forensics.get("verdict")))}</strong></div>
+        <div><span>置信度</span><strong>{_fmt_percent(forensics.get("confidence"))}</strong></div>
+        <div><span>来源</span><strong>{escape(model if source == 'vlm' else source)}</strong></div>
+      </div>
+      <table>
+        <thead>
+          <tr><th>项目</th><th>状态</th><th>发现</th></tr>
+        </thead>
+        <tbody>{''.join(items)}</tbody>
+      </table>
+    </section>
+    """
+
+
+def _render_provenance_block(provenance: dict | None) -> str:
+    if not provenance:
+        return ""
+    actions = provenance.get("actions", []) or []
+    ingredients = provenance.get("ingredients", []) or []
+    action_parts = []
+    for item in actions:
+        label = escape(_safe_text(item.get("action")))
+        agent = _safe_text(item.get("softwareAgent"), "")
+        agent_suffix = f"（{escape(agent)}）" if agent else ""
+        action_parts.append(f"<li>{label}{agent_suffix}</li>")
+    action_items = "".join(action_parts) or "<li class='muted'>未记录编辑动作</li>"
+
+    ingredient_parts = []
+    for item in ingredients:
+        title = escape(_safe_text(item.get("title")))
+        relationship = escape(_safe_text(item.get("relationship")))
+        ingredient_parts.append(f"<li>{title} / {relationship}</li>")
+    ingredient_items = "".join(ingredient_parts) or "<li class='muted'>未记录素材来源</li>"
+    return f"""
+    <section class="card">
+      <h2>内容凭证验证（C2PA）</h2>
+      <div class="meta-grid compact">
+        <div><span>凭证</span><strong>{'检测到' if provenance.get('hasCredentials') else '未检测到'}</strong></div>
+        <div><span>签名校验</span><strong>{escape(_safe_text(provenance.get('validationState')))}</strong></div>
+        <div><span>AI 声明</span><strong>{escape(_safe_text(provenance.get('isAiGenerated')))}</strong></div>
+        <div><span>生成工具</span><strong>{escape(_safe_text(provenance.get('generator')))}</strong></div>
+        <div><span>签发者</span><strong>{escape(_safe_text(provenance.get('issuer')))}</strong></div>
+        <div><span>签名算法</span><strong>{escape(_safe_text(provenance.get('signatureAlg')))}</strong></div>
+      </div>
+      <div class="grid single-gap">
+        <div>
+          <h3>编辑动作</h3>
+          <ul>{action_items}</ul>
+        </div>
+        <div>
+          <h3>素材来源</h3>
+          <ul>{ingredient_items}</ul>
+        </div>
+      </div>
+      <p class="footnote">SynthID 说明：{escape(_safe_text((provenance.get('synthid') or {}).get('note')))}</p>
+    </section>
+    """
+
+
 def download_filename(result: dict) -> str:
     report_id = _safe_text(result.get("reportId"), "report")
     return f"jianzhen-report-{report_id}.html"
 
 
-def build_report_html(result: dict) -> str:
+def build_report_html(result: dict, *, forensics: dict | None = None, provenance: dict | None = None) -> str:
     meta = VERDICT_META.get(result.get("verdict"), {"label": "未知结论", "color": "#4d423a"})
     file_meta = result.get("fileMeta", {}) or {}
     preview = file_meta.get("preview") or file_meta.get("thumbnail") or ""
@@ -217,6 +299,10 @@ def build_report_html(result: dict) -> str:
       margin: 0 0 12px;
       font-size: 18px;
     }}
+    h3 {{
+      margin: 0 0 10px;
+      font-size: 15px;
+    }}
     p {{
       margin: 0;
       line-height: 1.7;
@@ -232,6 +318,10 @@ def build_report_html(result: dict) -> str:
     }}
     .grid {{
       grid-template-columns: 1fr 1fr;
+    }}
+    .grid.single-gap {{
+      gap: 16px;
+      margin-top: 16px;
     }}
     .card {{
       padding: 20px;
@@ -317,6 +407,15 @@ def build_report_html(result: dict) -> str:
       color: var(--muted);
       line-height: 1.7;
     }}
+    ul {{
+      margin: 0;
+      padding-left: 18px;
+      color: var(--ink);
+      line-height: 1.7;
+    }}
+    li {{
+      margin: 0 0 6px;
+    }}
     @media print {{
       body {{ background: white; }}
       .page {{ max-width: none; padding: 0; }}
@@ -381,6 +480,8 @@ def build_report_html(result: dict) -> str:
     </section>
 
     {_render_optional_blocks(result)}
+    {_render_forensics_block(forensics)}
+    {_render_provenance_block(provenance)}
 
     <section class="card">
       <h2>使用说明与限制</h2>

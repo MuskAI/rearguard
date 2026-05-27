@@ -242,11 +242,27 @@ export async function fetchMetrics(): Promise<Metrics> {
   return parseJson(res, "加载监控指标失败");
 }
 
-export async function downloadReport(reportId: string): Promise<string> {
+export async function downloadReport(
+  reportId: string,
+  extras?: { forensics?: ForensicReport | null; provenance?: ProvenanceReport | null },
+): Promise<string> {
   const fallbackName = `jianzhen-report-${reportId}.html`;
-  const res = await fetch(`/v2-api/report/${encodeURIComponent(reportId)}/download`, {
-    headers: withAuthHeaders(),
-  });
+  const hasExtras = Boolean(extras?.forensics || extras?.provenance);
+  const res = await fetch(
+    `/v2-api/report/${encodeURIComponent(reportId)}${hasExtras ? "/export" : "/download"}`,
+    hasExtras
+      ? {
+          method: "POST",
+          headers: withAuthHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({
+            forensics: extras?.forensics ?? null,
+            provenance: extras?.provenance ?? null,
+          }),
+        }
+      : {
+          headers: withAuthHeaders(),
+        },
+  );
   if (!res.ok) {
     await parseJson<Record<string, never>>(res, "下载报告失败");
   }

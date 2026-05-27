@@ -53,6 +53,8 @@ export default function App() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyMessage, setHistoryMessage] = useState("");
   const [health, setHealth] = useState<HealthStatus | null>(null);
+  const [forensicsByTask, setForensicsByTask] = useState<Record<string, ForensicReport>>({});
+  const [provenanceByTask, setProvenanceByTask] = useState<Record<string, ProvenanceReport>>({});
   const [messages, setMessages] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
   const [forensicsBusy, setForensicsBusy] = useState(false);
@@ -139,7 +141,7 @@ export default function App() {
     }
   };
 
-  const onForensics = async (file: File) => {
+  const onForensics = async (file: File, taskId: string) => {
     if (forensicsBusy) return;
     setForensicsBusy(true);
     setMessages((m) => [
@@ -149,6 +151,7 @@ export default function App() {
     ]);
     try {
       const report = await runForensics(file);
+      setForensicsByTask((prev) => ({ ...prev, [taskId]: report }));
       setMessages((m) => [
         ...m.filter((msg) => msg.kind !== "loading"),
         { kind: "forensics", report },
@@ -163,7 +166,7 @@ export default function App() {
     }
   };
 
-  const onProvenance = async (file: File) => {
+  const onProvenance = async (file: File, taskId: string) => {
     if (provenanceBusy) return;
     setProvenanceBusy(true);
     setMessages((m) => [
@@ -173,6 +176,7 @@ export default function App() {
     ]);
     try {
       const report = await runProvenance(file);
+      setProvenanceByTask((prev) => ({ ...prev, [taskId]: report }));
       setMessages((m) => [
         ...m.filter((msg) => msg.kind !== "loading"),
         { kind: "provenance", report },
@@ -404,15 +408,17 @@ export default function App() {
                   <ResultCard
                     result={m.result}
                     previewUrl={m.previewUrl}
+                    forensicsReport={forensicsByTask[m.result.taskId]}
+                    provenanceReport={provenanceByTask[m.result.taskId]}
                     onForensics={
                       m.file && m.result.fileMeta.type === "image"
-                        ? () => onForensics(m.file!)
+                        ? () => onForensics(m.file!, m.result.taskId)
                         : undefined
                     }
                     forensicsBusy={forensicsBusy}
                     onProvenance={
                       m.file && m.result.fileMeta.type === "image"
-                        ? () => onProvenance(m.file!)
+                        ? () => onProvenance(m.file!, m.result.taskId)
                         : undefined
                     }
                     provenanceBusy={provenanceBusy}

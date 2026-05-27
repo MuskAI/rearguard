@@ -38,6 +38,7 @@ def test_health_exposes_access_protection(client):
     assert response.status_code == 200
     assert payload["accessProtectionEnabled"] is True
     assert "/api/report/{report_id}/download" in payload["protectedEndpoints"]
+    assert "/api/report/{report_id}/export" in payload["protectedEndpoints"]
 
 
 def test_report_download_returns_attachment_html(client):
@@ -57,3 +58,45 @@ def test_report_download_returns_attachment_html(client):
     assert "attachment;" in response.headers["content-disposition"]
     assert report_id in response.text
     assert "鉴真 AI 鉴伪鉴定报告" in response.text
+
+
+def test_report_export_includes_forensics_and_provenance_sections(client):
+    detect = client.post(
+        "/api/detect",
+        files={"file": ("sample.txt", b"hello world from pytest", "text/plain")},
+    )
+    report_id = detect.json()["reportId"]
+
+    response = client.post(
+        f"/api/report/{report_id}/export",
+        headers={"X-Jianzhen-Token": "test-token"},
+        json={
+            "forensics": {
+                "verdict": "suspected_fake",
+                "confidence": 0.71,
+                "summary": "频域与光照存在可疑矛盾。",
+                "items": [
+                    {"key": "fft", "title": "频域分析", "status": "warn", "finding": "出现规则纹理"},
+                ],
+                "modelVersion": "qwen3-vl-flash",
+                "source": "vlm",
+            },
+            "provenance": {
+                "hasCredentials": True,
+                "validationState": "valid",
+                "generator": "OpenAI",
+                "issuer": "Test Issuer",
+                "signatureAlg": "ES256",
+                "isAiGenerated": True,
+                "actions": [{"action": "c2pa.created", "softwareAgent": "OpenAI Images"}],
+                "ingredients": [{"title": "source.png", "relationship": "parentOf"}],
+                "synthid": {"note": "未检测到 SynthID"},
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert "可解释性取证分析" in response.text
+    assert "频域与光照存在可疑矛盾" in response.text
+    assert "内容凭证验证（C2PA）" in response.text
+    assert "OpenAI Images" in response.text

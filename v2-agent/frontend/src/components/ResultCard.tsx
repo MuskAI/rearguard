@@ -1,10 +1,12 @@
 import { useState } from "react";
-import { DetectResult, VERDICT_META, TYPE_LABEL, downloadReport } from "../api";
+import { DetectResult, ForensicReport, ProvenanceReport, VERDICT_META, TYPE_LABEL, downloadReport } from "../api";
 import ConfidenceRing from "./ConfidenceRing";
 
 interface Props {
   result: DetectResult;
   previewUrl?: string;
+  forensicsReport?: ForensicReport;
+  provenanceReport?: ProvenanceReport;
   onForensics?: () => void;
   forensicsBusy?: boolean;
   onProvenance?: () => void;
@@ -14,6 +16,8 @@ interface Props {
 export default function ResultCard({
   result,
   previewUrl,
+  forensicsReport,
+  provenanceReport,
   onForensics,
   forensicsBusy,
   onProvenance,
@@ -39,7 +43,10 @@ export default function ResultCard({
     if (reportBusy) return;
     setReportBusy(true);
     try {
-      await downloadReport(result.reportId);
+      await downloadReport(result.reportId, {
+        forensics: forensicsReport,
+        provenance: provenanceReport,
+      });
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "下载报告失败");
     } finally {
@@ -249,7 +256,7 @@ export default function ResultCard({
               disabled={reportBusy}
               className="px-3 py-2 sm:py-1.5 text-xs rounded-lg bg-cinnabar/10 text-cinnabar border border-cinnabar/30 hover:bg-cinnabar/15 disabled:opacity-50"
             >
-              {reportBusy ? "导出中…" : "下载鉴定报告"}
+              {reportBusy ? "导出中…" : forensicsReport || provenanceReport ? "下载完整鉴定报告" : "下载鉴定报告"}
             </button>
             {onForensics && (
               <button
