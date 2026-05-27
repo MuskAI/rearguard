@@ -1012,6 +1012,9 @@ function HistoryRecords({
         const meta = String(record.confidence || record.top_k || "-");
         const reportUrl = String(record.report_url || "");
         const guestRecord = Boolean(record.is_guest_record);
+        const hasMetadata = Boolean(record.has_metadata);
+        const hasIssues = Boolean(record.has_visual_issues);
+        const issueCount = Number(record.visual_issue_count || 0);
         return (
           <article className="history-record" key={`${record.itemid || index}`}>
             <a className="history-media" href={mediaUrl || undefined} target={mediaUrl ? "_blank" : undefined} rel="noreferrer" aria-label={mediaUrl ? `查看 ${title}` : title}>
@@ -1031,6 +1034,14 @@ function HistoryRecords({
               {guestRecord && (
                 <div className="history-tags">
                   <span className="history-tag guest"><i className="fa fa-user-secret" /> 访客</span>
+                  {hasMetadata && <span className="history-tag meta"><i className="fa fa-info-circle" /> 元数据</span>}
+                  {hasIssues && <span className="history-tag issue"><i className="fa fa-exclamation-triangle" /> 可疑点{issueCount > 0 ? ` ${issueCount}` : ""}</span>}
+                </div>
+              )}
+              {!guestRecord && (hasMetadata || hasIssues) && (
+                <div className="history-tags">
+                  {hasMetadata && <span className="history-tag meta"><i className="fa fa-info-circle" /> 元数据</span>}
+                  {hasIssues && <span className="history-tag issue"><i className="fa fa-exclamation-triangle" /> 可疑点{issueCount > 0 ? ` ${issueCount}` : ""}</span>}
                 </div>
               )}
               <div className="history-row"><span>时间</span><strong>{String(record.createtime || "-")}</strong></div>

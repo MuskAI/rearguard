@@ -536,6 +536,8 @@ td { color: var(--text-primary); }
 .history-tags { display: flex; gap: 6px; margin-bottom: 0.45rem; flex-wrap: wrap; }
 .history-tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 0.68rem; font-weight: 700; }
 .history-tag.guest { color: var(--primary); background: rgba(37,99,235,0.08); border: 1px solid rgba(37,99,235,0.16); }
+.history-tag.meta { color: var(--success); background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.16); }
+.history-tag.issue { color: var(--danger); background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.16); }
 .history-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 0.25rem 0; font-size: 0.74rem; color: var(--text-muted); }
 .history-row strong { color: var(--text-secondary); font-weight: 600; text-align: right; overflow-wrap: anywhere; }
 .history-actions { margin-top: 0.55rem; display: flex; justify-content: flex-end; }

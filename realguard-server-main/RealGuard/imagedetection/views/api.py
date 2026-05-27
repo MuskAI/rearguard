@@ -61,6 +61,31 @@ def _is_guest_detection_record(item):
     return (not str((item or {}).get("phone") or "").strip()) and str((item or {}).get("openid") or "").startswith("guest-")
 
 
+def _has_detection_metadata(itemid):
+    rows = excute_detection_sql(
+        "SELECT 1 AS ok FROM exif WHERE data_itemid = %s AND all_metadata IS NOT NULL AND all_metadata <> '' LIMIT 1",
+        (itemid,),
+    )
+    return bool(rows)
+
+
+def _history_visual_issue_count(item):
+    issues = []
+    in_issues = False
+    for raw_line in str((item or {}).get("explantation") or (item or {}).get("explanation") or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line == "视觉可疑点" or line.startswith("视觉可疑点"):
+            in_issues = True
+            continue
+        if in_issues:
+            cleaned = line.lstrip("-·•*0123456789.、) ").strip()
+            if cleaned:
+                issues.append(cleaned)
+    return len(issues)
+
+
 def _thumbnail_url(item):
     itemid = item.get("itemid")
     return f"/api/media/thumbnail/image/{itemid}" if itemid else ""
@@ -231,6 +256,7 @@ def image_detection_history():
     records = []
     for item in rows or []:
         fake_pct = round(float(item.get("fake", 0) or 0), 1)
+        issue_count = _history_visual_issue_count(item)
         records.append(
             {
                 "itemid": item.get("itemid"),
@@ -244,6 +270,9 @@ def image_detection_history():
                 "createtime": format_createtime(item.get("createtime", "")),
                 "report_url": f"/image_upload/report?itemid={item.get('itemid')}",
                 "is_guest_record": _is_guest_detection_record(item),
+                "has_metadata": _has_detection_metadata(item.get("itemid")),
+                "has_visual_issues": issue_count > 0,
+                "visual_issue_count": issue_count,
             }
         )
     return jsonify({"status": "success", "records": records})

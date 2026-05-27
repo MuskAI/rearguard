@@ -205,10 +205,12 @@ def test_guest_history_returns_guest_image_records(client, monkeypatch):
                 "openid": "guest-abc",
                 "phone": "",
                 "createtime": "2026-05-27 16:00:00",
+                "explantation": "视觉可疑点\n- 边缘过度平滑",
             }]
         raise AssertionError(f"unexpected SQL: {sql}")
 
     monkeypatch.setattr(api, "excute_detection_sql", fake_detection_sql)
+    monkeypatch.setattr(api, "_has_detection_metadata", lambda itemid: itemid == 35)
 
     response = client.get("/api/history/image-detections")
 
@@ -217,6 +219,9 @@ def test_guest_history_returns_guest_image_records(client, monkeypatch):
     assert record["itemid"] == 35
     assert record["is_guest_record"] is True
     assert record["report_url"] == "/image_upload/report?itemid=35"
+    assert record["has_metadata"] is True
+    assert record["has_visual_issues"] is True
+    assert record["visual_issue_count"] == 1
 
 
 def test_guest_thumbnail_uses_guest_openid_lookup(client, monkeypatch, tmp_path):
@@ -344,6 +349,7 @@ def test_history_detection_records_include_report_urls(client, monkeypatch):
                 "openid": "openid-1",
                 "phone": "13800000000",
                 "createtime": "2026-05-27 15:00:00",
+                "explantation": "视觉可疑点\n- 背景纹理重复",
             }]
         if sql == "SELECT * FROM video_data WHERE phone = %s OR openid = %s ORDER BY createtime DESC":
             assert params == ("13800000000", "openid-1")
@@ -360,6 +366,7 @@ def test_history_detection_records_include_report_urls(client, monkeypatch):
         raise AssertionError(f"unexpected SQL: {sql}")
 
     monkeypatch.setattr(api, "excute_detection_sql", fake_detection_sql)
+    monkeypatch.setattr(api, "_has_detection_metadata", lambda itemid: itemid == 51)
 
     image_response = client.get("/api/history/image-detections")
     video_response = client.get("/api/history/video-detections")
@@ -367,6 +374,9 @@ def test_history_detection_records_include_report_urls(client, monkeypatch):
     assert image_response.status_code == 200
     assert video_response.status_code == 200
     assert image_response.get_json()["records"][0]["report_url"] == "/image_upload/report?itemid=51"
+    assert image_response.get_json()["records"][0]["has_metadata"] is True
+    assert image_response.get_json()["records"][0]["has_visual_issues"] is True
+    assert image_response.get_json()["records"][0]["visual_issue_count"] == 1
     assert video_response.get_json()["records"][0]["report_url"] == "/video_upload/report?itemid=61"
 
 
