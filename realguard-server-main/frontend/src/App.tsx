@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   Counters,
   HistoryRecord,
@@ -726,8 +726,11 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
   const [query, setQuery] = useState(() => getInitialHistoryQuery());
   const [copied, setCopied] = useState(false);
   const [historyBusy, setHistoryBusy] = useState(false);
+  const historyRequestIdRef = useRef(0);
 
   async function loadHistoryRecords(targetTab: HistoryTabKey, preserveOnError = false) {
+    const requestId = historyRequestIdRef.current + 1;
+    historyRequestIdRef.current = requestId;
     setStatus({ tone: "info", text: "正在加载历史记录" });
     setHistoryBusy(true);
     const request =
@@ -738,15 +741,19 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
           : getRetrievalHistory(targetTab === "imageRetrieve" ? "image" : "video");
     try {
       const data = await request;
+      if (historyRequestIdRef.current !== requestId) return;
       setRecords(data.records || []);
       setStatus(null);
     } catch (error) {
+      if (historyRequestIdRef.current !== requestId) return;
       if (!preserveOnError) {
         setRecords([]);
       }
       setStatus({ tone: "error", text: errorMessage(error) });
     } finally {
-      setHistoryBusy(false);
+      if (historyRequestIdRef.current === requestId) {
+        setHistoryBusy(false);
+      }
     }
   }
 
