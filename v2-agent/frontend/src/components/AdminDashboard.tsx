@@ -9,6 +9,15 @@ function compactDate(value: string) {
   return value.slice(5).replace("-", "/");
 }
 
+function formatClockTime(value: Date) {
+  return value.toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
 export default function AdminDashboard({
   onBack,
   onConfigureAccess,
@@ -22,14 +31,22 @@ export default function AdminDashboard({
   const [error, setError] = useState<string>("");
   const [days, setDays] = useState<7 | 14 | 30>(() => getInitialMonitorDays());
   const [copied, setCopied] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<string>("");
 
-  const load = () =>
-    fetchMetrics(days)
-      .then((data) => {
-        setMetrics(data);
-        setError("");
-      })
-      .catch((e) => setError(e instanceof Error ? e.message : "加载失败"));
+  const load = async () => {
+    setRefreshing(true);
+    try {
+      const data = await fetchMetrics(days);
+      setMetrics(data);
+      setError("");
+      setLastUpdatedAt(formatClockTime(new Date()));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "加载失败");
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   useEffect(() => {
     load();
@@ -157,9 +174,10 @@ export default function AdminDashboard({
           </button>
           <button
             onClick={load}
+            disabled={refreshing}
             className="h-9 px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950 hover:border-jade/50"
           >
-            刷新
+            {refreshing ? "刷新中" : "刷新"}
           </button>
           <button
             onClick={onBack}
@@ -176,6 +194,8 @@ export default function AdminDashboard({
         <section className="rounded-xl border border-ink-600 bg-ink-900 px-4 py-3 text-xs sm:text-sm text-ink-500">
           <span className="text-ink-950 font-medium">当前视图：</span>
           {days} 天窗口
+          {lastUpdatedAt ? ` · 最近成功更新 ${lastUpdatedAt}` : " · 正在拉取监控数据"}
+          {" · 每 30 秒自动刷新"}
           {copied ? " · 视图链接已复制" : " · 可复制当前监控视图链接"}
         </section>
 
