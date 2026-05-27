@@ -725,24 +725,33 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
   const [filter, setFilter] = useState<HistoryFilterKey>(() => getInitialHistoryFilter(getInitialHistoryTab()));
   const [query, setQuery] = useState(() => getInitialHistoryQuery());
   const [copied, setCopied] = useState(false);
+  const [historyBusy, setHistoryBusy] = useState(false);
+
+  async function loadHistoryRecords(targetTab: HistoryTabKey, preserveOnError = false) {
+    setStatus({ tone: "info", text: "正在加载历史记录" });
+    setHistoryBusy(true);
+    const request =
+      targetTab === "image"
+        ? getHistory("image-detections")
+        : targetTab === "video"
+          ? getHistory("video-detections")
+          : getRetrievalHistory(targetTab === "imageRetrieve" ? "image" : "video");
+    try {
+      const data = await request;
+      setRecords(data.records || []);
+      setStatus(null);
+    } catch (error) {
+      if (!preserveOnError) {
+        setRecords([]);
+      }
+      setStatus({ tone: "error", text: errorMessage(error) });
+    } finally {
+      setHistoryBusy(false);
+    }
+  }
 
   useEffect(() => {
-    setStatus({ tone: "info", text: "正在加载历史记录" });
-    const request =
-      tab === "image"
-        ? getHistory("image-detections")
-        : tab === "video"
-          ? getHistory("video-detections")
-          : getRetrievalHistory(tab === "imageRetrieve" ? "image" : "video");
-    request
-      .then((data) => {
-        setRecords(data.records || []);
-        setStatus(null);
-      })
-      .catch((error) => {
-        setRecords([]);
-        setStatus({ tone: "error", text: errorMessage(error) });
-      });
+    void loadHistoryRecords(tab);
   }, [tab]);
 
   useEffect(() => {
@@ -901,6 +910,16 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
                 <div className="history-active-meta">{matchSummary}</div>
                 <button
                   type="button"
+                  className="btn-code history-refresh-btn"
+                  onClick={() => {
+                    void loadHistoryRecords(tab, true);
+                  }}
+                  disabled={historyBusy}
+                >
+                  {historyBusy ? "刷新中" : "刷新记录"}
+                </button>
+                <button
+                  type="button"
                   className={`btn-code history-copy-btn ${
                     copied ? "history-copy-btn-copied" : ""
                   }`}
@@ -949,6 +968,15 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
                 />
               )}
             </>
+          ) : status?.tone === "error" ? (
+            <EmptyState
+              icon="fa-exclamation-triangle"
+              text={status.text}
+              actions={[
+                { label: historyBusy ? "加载中" : "重试加载", onClick: () => { void loadHistoryRecords(tab); } },
+                { label: tab === "video" ? "去视频鉴伪" : tab === "image" ? "去图像鉴伪" : "去侵权检索", onClick: () => setPage(tab === "video" ? "video" : tab === "image" ? "image" : "retrieve") },
+              ]}
+            />
           ) : !status && (
             <EmptyState
               icon="fa-clock-o"

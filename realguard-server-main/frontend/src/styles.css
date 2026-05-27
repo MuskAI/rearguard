@@ -518,6 +518,7 @@ td { color: var(--text-primary); }
 .history-active-tag { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; background: var(--bg-input); border: 1px solid var(--border); font-size: 0.74rem; color: var(--text-secondary); }
 .history-active-tag strong { color: var(--text-primary); font-weight: 700; }
 .history-active-meta { margin-left: auto; font-size: 0.76rem; color: var(--text-muted); align-self: center; }
+.history-refresh-btn { flex: 0 0 auto; min-height: 38px; padding: 0 14px; }
 .history-copy-btn { min-height: 38px; padding: 0 14px; }
 .history-copy-btn-copied { border-color: rgba(16,185,129,0.28); background: rgba(16,185,129,0.12); color: var(--success); }
 .history-reset-btn { flex: 0 0 auto; min-height: 38px; padding: 0 14px; }
