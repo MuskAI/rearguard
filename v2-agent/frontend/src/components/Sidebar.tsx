@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { HistoryItem, VERDICT_META, TYPE_LABEL } from "../api";
 import Logo from "./Logo";
 
@@ -14,8 +14,19 @@ interface Props {
 }
 
 export default function Sidebar({ history, message, activeId, onSelect, onNew, onDelete, className = "", onClose }: Props) {
-  const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<"all" | "vlm" | "mock" | "forensics" | "provenance" | "watermark">("all");
+  const [query, setQuery] = useState(() => getInitialHistoryQuery());
+  const [filter, setFilter] = useState<"all" | "vlm" | "mock" | "forensics" | "provenance" | "watermark">(() => getInitialHistoryFilter());
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (query.trim()) params.set("historyQuery", query.trim());
+    else params.delete("historyQuery");
+    if (filter !== "all") params.set("historyFilter", filter);
+    else params.delete("historyFilter");
+    const next = params.toString();
+    window.history.replaceState({}, "", `${window.location.pathname}${next ? `?${next}` : ""}${window.location.hash}`);
+  }, [filter, query]);
 
   const filteredHistory = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -192,4 +203,17 @@ export default function Sidebar({ history, message, activeId, onSelect, onNew, o
       </div>
     </aside>
   );
+}
+
+function getInitialHistoryQuery() {
+  if (typeof window === "undefined") return "";
+  return new URLSearchParams(window.location.search).get("historyQuery") || "";
+}
+
+function getInitialHistoryFilter() {
+  if (typeof window === "undefined") return "all";
+  const value = new URLSearchParams(window.location.search).get("historyFilter");
+  return value === "vlm" || value === "mock" || value === "forensics" || value === "provenance" || value === "watermark"
+    ? value
+    : "all";
 }
