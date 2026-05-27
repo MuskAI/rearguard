@@ -267,6 +267,12 @@ def history(request: Request) -> dict:
         raise HTTPException(status_code=400, detail="limit 必须是整数")
     if limit <= 0 or limit > 500:
         raise HTTPException(status_code=400, detail="limit 仅支持 1 到 500")
+    try:
+        offset = int(request.query_params.get("offset", "0"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="offset 必须是整数")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset 不能小于 0")
 
     def _parse_bool(name: str) -> bool | None:
         raw = request.query_params.get(name)
@@ -288,6 +294,7 @@ def history(request: Request) -> dict:
 
     items, total, filter_counts = storage.list_history(
         limit=limit,
+        offset=offset,
         query=request.query_params.get("query"),
         source=source or None,
         verdict=verdict or None,

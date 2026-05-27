@@ -227,9 +227,11 @@ export async function fetchHistory(params?: {
   query?: string;
   filter?: HistorySidebarFilter;
   limit?: number;
+  offset?: number;
 }): Promise<{ items: HistoryItem[]; total: number; filterCounts: HistoryFilterCounts }> {
   const search = new URLSearchParams();
   if (params?.limit) search.set("limit", String(params.limit));
+  if (params?.offset) search.set("offset", String(params.offset));
   if (params?.query?.trim()) search.set("query", params.query.trim());
   if (params?.filter === "vlm" || params?.filter === "mock") {
     search.set("source", params.filter);

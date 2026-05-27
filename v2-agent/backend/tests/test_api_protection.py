@@ -353,11 +353,74 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
 
 def test_history_listing_rejects_invalid_filter_params(client):
     bad_limit = client.get("/api/history?limit=0", headers={"X-Jianzhen-Token": "test-token"})
+    bad_offset = client.get("/api/history?offset=-1", headers={"X-Jianzhen-Token": "test-token"})
     bad_source = client.get("/api/history?source=bad-source", headers={"X-Jianzhen-Token": "test-token"})
     bad_verdict = client.get("/api/history?verdict=maybe", headers={"X-Jianzhen-Token": "test-token"})
     bad_bool = client.get("/api/history?hasForensics=maybe", headers={"X-Jianzhen-Token": "test-token"})
 
     assert bad_limit.status_code == 400
+    assert bad_offset.status_code == 400
     assert bad_source.status_code == 400
     assert bad_verdict.status_code == 400
     assert bad_bool.status_code == 400
+
+
+def test_history_listing_supports_offset_pagination(client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    analyses = [
+        {
+            "verdict": "real",
+            "confidence": 0.71,
+            "dimensions": [],
+            "regions": [],
+            "explanation": "one",
+            "modelVersion": "qwen3-vl-flash",
+            "source": "vlm",
+            "synthid": {"detected": False},
+            "visibleWatermark": {"detected": False, "provider": None},
+        },
+        {
+            "verdict": "suspected_fake",
+            "confidence": 0.81,
+            "dimensions": [],
+            "regions": [],
+            "explanation": "two",
+            "modelVersion": "qwen3-vl-flash",
+            "source": "vlm",
+            "synthid": {"detected": False},
+            "visibleWatermark": {"detected": False, "provider": None},
+        },
+        {
+            "verdict": "highly_suspected_fake",
+            "confidence": 0.91,
+            "dimensions": [],
+            "regions": [],
+            "explanation": "three",
+            "modelVersion": "qwen3-vl-flash",
+            "source": "vlm",
+            "synthid": {"detected": False},
+            "visibleWatermark": {"detected": False, "provider": None},
+        },
+    ]
+
+    monkeypatch.setattr(main.detector, "analyze", lambda *args, **kwargs: analyses.pop(0))
+
+    first = client.post("/api/detect", files={"file": ("one.txt", b"one", "text/plain")})
+    second = client.post("/api/detect", files={"file": ("two.txt", b"two", "text/plain")})
+    third = client.post("/api/detect", files={"file": ("three.txt", b"three", "text/plain")})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert third.status_code == 200
+
+    page_one = client.get("/api/history?limit=2&offset=0", headers={"X-Jianzhen-Token": "test-token"})
+    page_two = client.get("/api/history?limit=2&offset=2", headers={"X-Jianzhen-Token": "test-token"})
+
+    assert page_one.status_code == 200
+    assert page_two.status_code == 200
+    assert page_one.json()["total"] >= 3
+    assert len(page_one.json()["items"]) == 2
+    assert len(page_two.json()["items"]) >= 1
+    assert page_one.json()["items"][0]["reportId"] == third.json()["reportId"]
+    assert page_two.json()["items"][0]["reportId"] == first.json()["reportId"]

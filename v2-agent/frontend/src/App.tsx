@@ -91,14 +91,29 @@ export default function App() {
       .then(setHealth)
       .catch(() => setHealth(null));
 
-  const loadHistory = async (preserveOnError = history.length > 0) => {
+  const loadHistory = async ({
+    preserveOnError = history.length > 0,
+    append = false,
+  }: {
+    preserveOnError?: boolean;
+    append?: boolean;
+  } = {}) => {
     const requestId = historyRequestIdRef.current + 1;
     historyRequestIdRef.current = requestId;
     setHistoryBusy(true);
     try {
-      const data = await fetchHistory({ query: historyQuery, filter: historyFilter, limit: historyLimit });
+      const offset = append ? history.length : 0;
+      const limit = append ? HISTORY_PAGE_SIZE : historyLimit;
+      const data = await fetchHistory({ query: historyQuery, filter: historyFilter, limit, offset });
       if (historyRequestIdRef.current !== requestId) return;
-      setHistory(data.items);
+      if (append) {
+        setHistory((current) => {
+          const seen = new Set(current.map((item) => item.taskId));
+          return current.concat(data.items.filter((item) => !seen.has(item.taskId)));
+        });
+      } else {
+        setHistory(data.items);
+      }
       setHistoryTotal(data.total);
       setHistoryFilterCounts(data.filterCounts);
       setHistoryMessage("");
@@ -119,7 +134,7 @@ export default function App() {
 
   useEffect(() => {
     loadHealth();
-    void loadHistory(false);
+    void loadHistory({ preserveOnError: false });
   }, []);
 
   useEffect(() => {
@@ -134,8 +149,8 @@ export default function App() {
   }, [historyFilter, historyQuery]);
 
   useEffect(() => {
-    void loadHistory(false);
-  }, [historyFilter, historyLimit, historyQuery]);
+    void loadHistory({ preserveOnError: false });
+  }, [historyFilter, historyQuery]);
 
   useEffect(() => {
     setHistoryLimit(HISTORY_PAGE_SIZE);
@@ -179,7 +194,7 @@ export default function App() {
     if (next === null) return;
     setAccessToken(next);
     setMonitorReloadKey((value) => value + 1);
-    await Promise.allSettled([loadHealth(), loadHistory()]);
+    await Promise.allSettled([loadHealth(), loadHistory({ preserveOnError: true })]);
   };
 
   const runDetect = async (file: File) => {
@@ -205,7 +220,7 @@ export default function App() {
         { kind: "result", result, previewUrl, file: type === "image" ? file : undefined },
       ]);
       setActiveId(result.taskId);
-      void loadHistory();
+      void loadHistory({ preserveOnError: true });
     } catch (e) {
       setMessages((m) => [
         ...m.filter((msg) => msg.kind !== "progress"),
@@ -332,7 +347,7 @@ export default function App() {
         setActiveId(undefined);
       }
       setHistory((items) => items.filter((item) => item.taskId !== taskId));
-      void loadHistory(true);
+      void loadHistory({ preserveOnError: true });
     } catch (error) {
       setHistoryMessage(error instanceof Error ? error.message : "删除历史失败");
     }
@@ -379,9 +394,12 @@ export default function App() {
         onDelete={onDelete}
         onClearSelection={newChat}
         onConfigureAccess={configureAccessToken}
-        onRetryHistory={loadHistory}
-        onRefreshHistory={() => loadHistory(true)}
-        onLoadMore={history.length < historyTotal ? () => setHistoryLimit((value) => value + HISTORY_PAGE_SIZE) : undefined}
+        onRetryHistory={() => loadHistory({ preserveOnError: false })}
+        onRefreshHistory={() => loadHistory({ preserveOnError: true })}
+        onLoadMore={history.length < historyTotal ? () => {
+          setHistoryLimit((value) => value + HISTORY_PAGE_SIZE);
+          void loadHistory({ preserveOnError: true, append: true });
+        } : undefined}
         className="hidden md:flex"
       />
 
@@ -410,9 +428,12 @@ export default function App() {
             onDelete={onDelete}
             onClearSelection={newChat}
             onConfigureAccess={configureAccessToken}
-            onRetryHistory={loadHistory}
-            onRefreshHistory={() => loadHistory(true)}
-            onLoadMore={history.length < historyTotal ? () => setHistoryLimit((value) => value + HISTORY_PAGE_SIZE) : undefined}
+            onRetryHistory={() => loadHistory({ preserveOnError: false })}
+            onRefreshHistory={() => loadHistory({ preserveOnError: true })}
+            onLoadMore={history.length < historyTotal ? () => {
+              setHistoryLimit((value) => value + HISTORY_PAGE_SIZE);
+              void loadHistory({ preserveOnError: true, append: true });
+            } : undefined}
             onClose={() => setHistoryOpen(false)}
             className="relative h-full w-[86vw] max-w-80"
           />

@@ -259,6 +259,7 @@ def _matches_history_filters(
 def list_history(
     *,
     limit: int = 100,
+    offset: int = 0,
     query: str | None = None,
     source: str | None = None,
     verdict: str | None = None,
@@ -312,7 +313,7 @@ def list_history(
         )
     ]
     total = len(filtered)
-    return filtered[:limit], total, filter_counts
+    return filtered[offset: offset + limit], total, filter_counts
 
 
 def get_history(item_id: str) -> dict[str, Any] | None:
