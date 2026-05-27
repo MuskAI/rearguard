@@ -146,6 +146,7 @@ def health() -> dict:
         "status": "ok",
         "model": detector.VLM_MODEL,
         "vlmEnabled": bool(detector.API_KEY),
+        "calibration": detector.calibration_status(),
         "synthid": synthid_detector.status(),
         "visibleWatermark": visible_watermark_detector.status(),
         "storage": str(storage.DB_PATH),

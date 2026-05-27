@@ -23,6 +23,10 @@ API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
 BASE_URL = os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
 VLM_MODEL = os.getenv("VLM_MODEL", "qwen3-vl-flash")
 MOCK_MODEL_VERSION = "ruijian-turing-mock-v0.1"
+IMAGE_SUSPECT_THRESHOLD = float(os.getenv("JIANZHEN_IMAGE_SUSPECT_THRESHOLD", "0.62"))
+IMAGE_HIGH_THRESHOLD = float(os.getenv("JIANZHEN_IMAGE_HIGH_THRESHOLD", "0.82"))
+IMAGE_REGION_THRESHOLD = float(os.getenv("JIANZHEN_IMAGE_REGION_THRESHOLD", "0.72"))
+IMAGE_AUXILIARY_KEYS = {"ela"}
 
 _client: OpenAI | None = None
 
@@ -34,6 +38,15 @@ def _get_client() -> OpenAI | None:
     if _client is None:
         _client = OpenAI(api_key=API_KEY, base_url=BASE_URL, timeout=60)
     return _client
+
+
+def calibration_status() -> dict:
+    return {
+        "imageSuspectThreshold": IMAGE_SUSPECT_THRESHOLD,
+        "imageHighThreshold": IMAGE_HIGH_THRESHOLD,
+        "imageRegionThreshold": IMAGE_REGION_THRESHOLD,
+        "auxiliaryEvidenceKeys": sorted(IMAGE_AUXILIARY_KEYS),
+    }
 
 
 DIMENSIONS_BY_TYPE: dict[str, list[dict[str, str]]] = {
@@ -77,6 +90,14 @@ def _verdict_from_score(score: float) -> str:
     if score >= 0.75:
         return "highly_suspected_fake"
     if score >= 0.5:
+        return "suspected_fake"
+    return "real"
+
+
+def _image_verdict_from_score(score: float) -> str:
+    if score >= IMAGE_HIGH_THRESHOLD:
+        return "highly_suspected_fake"
+    if score >= IMAGE_SUSPECT_THRESHOLD:
         return "suspected_fake"
     return "real"
 
@@ -243,9 +264,13 @@ IMAGE_PROMPT = """请对这张图片做四个维度的鉴定，综合「原图�
 }
 
 约束：
-- score 越高=越可疑；confidence 取最可疑维度分数并与 verdict 自洽
-  （<0.4→real，0.4~0.75→suspected_fake，≥0.75→highly_suspected_fake）。
-- regions 坐标为归一化（0~1），优先框出 ELA 上的异常区；判定真实或无明显局部异常时给空数组。"""
+- score 越高=越可疑；confidence 取最可疑维度分数并与 verdict 自洽。
+- 为降低误判，只有明确、可复核的异常才给高分：
+  <0.62→real，0.62~0.82→suspected_fake，≥0.82→highly_suspected_fake。
+- ELA/噪声取证属于辅助证据：只有 ELA/噪声异常、但原图语义和其他维度没有互相印证时，
+  不要直接判 suspected_fake 或 highly_suspected_fake，最多在 ela.result 中写“需复核”。
+- regions 坐标为归一化（0~1）。只有局部异常边界清晰、与周围 ELA/噪声模式明显不同，
+  且区域置信度 ≥0.72 时才输出；普通高亮边缘、纹理、压缩块、整图均匀变化不要框。"""
 
 
 def analyze_image_vlm(data: bytes) -> dict | None:
@@ -461,27 +486,55 @@ def _normalize(parsed: dict, file_type: str, source: str, model: str) -> dict:
         })
 
     top = max(dimensions, key=lambda x: x["score"]) if dimensions else {"score": 0.0}
-    confidence = float(parsed.get("confidence", top["score"]))
-    confidence = round(min(max(confidence, 0.0), 1.0), 2)
-    verdict = parsed.get("verdict")
-    if verdict not in ("real", "suspected_fake", "highly_suspected_fake"):
-        verdict = _verdict_from_score(confidence)
-
     regions = []
     for r in parsed.get("regions", []) or []:
         if not isinstance(r, dict):
             continue
         try:
+            region_score = round(min(max(float(r.get("score", top["score"])), 0.0), 1.0), 2)
+            w = round(min(max(float(r["w"]), 0.0), 1.0), 3)
+            h = round(min(max(float(r["h"]), 0.0), 1.0), 3)
+            if file_type == "image":
+                area = w * h
+                if region_score < IMAGE_REGION_THRESHOLD or area < 0.002 or area > 0.55:
+                    continue
             regions.append({
                 "x": round(min(max(float(r["x"]), 0.0), 1.0), 3),
                 "y": round(min(max(float(r["y"]), 0.0), 1.0), 3),
-                "w": round(min(max(float(r["w"]), 0.0), 1.0), 3),
-                "h": round(min(max(float(r["h"]), 0.0), 1.0), 3),
+                "w": w,
+                "h": h,
                 "label": str(r.get("label", "可疑区域")),
-                "score": round(min(max(float(r.get("score", confidence)), 0.0), 1.0), 2),
+                "score": region_score,
             })
         except (KeyError, ValueError, TypeError):
             continue
+
+    confidence = float(parsed.get("confidence", top["score"]))
+    confidence = round(min(max(confidence, 0.0), 1.0), 2)
+    verdict = parsed.get("verdict")
+
+    if file_type == "image":
+        non_aux_scores = [d["score"] for d in dimensions if d["key"] not in IMAGE_AUXILIARY_KEYS]
+        aux_scores = [d["score"] for d in dimensions if d["key"] in IMAGE_AUXILIARY_KEYS]
+        strongest_non_aux = max(non_aux_scores) if non_aux_scores else 0.0
+        strongest_aux = max(aux_scores) if aux_scores else 0.0
+        strongest_region = max((r["score"] for r in regions), default=0.0)
+
+        calibrated = max(strongest_non_aux, strongest_region)
+        # ELA/noise maps are useful explainability layers, but compression,
+        # resizing and texture can make them look abnormal. Let them lift a
+        # borderline result slightly, never dominate the final verdict alone.
+        if strongest_aux >= IMAGE_SUSPECT_THRESHOLD and strongest_non_aux >= IMAGE_SUSPECT_THRESHOLD - 0.08:
+            calibrated = max(calibrated, min(strongest_aux, 0.68))
+
+        if calibrated < IMAGE_SUSPECT_THRESHOLD:
+            confidence = min(confidence, max(calibrated, 0.49))
+            verdict = "real"
+        else:
+            confidence = round(min(max(confidence, calibrated), calibrated + 0.08, 1.0), 2)
+            verdict = _image_verdict_from_score(confidence)
+    elif verdict not in ("real", "suspected_fake", "highly_suspected_fake"):
+        verdict = _verdict_from_score(confidence)
 
     return {
         "verdict": verdict,
