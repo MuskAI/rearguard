@@ -304,12 +304,15 @@ export default function App() {
       <Sidebar
         history={history}
         message={historyMessage}
+        accessProtectionEnabled={Boolean(health?.accessProtectionEnabled)}
         activeId={activeId}
         activeItem={history.find((item) => item.taskId === activeId)}
         onSelect={onSelectHistory}
         onNew={newChat}
         onDelete={onDelete}
         onClearSelection={newChat}
+        onConfigureAccess={configureAccessToken}
+        onRetryHistory={loadHistory}
         className="hidden md:flex"
       />
 
@@ -323,12 +326,15 @@ export default function App() {
           <Sidebar
             history={history}
             message={historyMessage}
+            accessProtectionEnabled={Boolean(health?.accessProtectionEnabled)}
             activeId={activeId}
             activeItem={history.find((item) => item.taskId === activeId)}
             onSelect={onSelectHistory}
             onNew={newChat}
             onDelete={onDelete}
             onClearSelection={newChat}
+            onConfigureAccess={configureAccessToken}
+            onRetryHistory={loadHistory}
             onClose={() => setHistoryOpen(false)}
             className="relative h-full w-[86vw] max-w-80"
           />

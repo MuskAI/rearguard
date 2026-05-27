@@ -15,12 +15,15 @@ type SidebarFilterKey = (typeof FILTER_OPTIONS)[number]["key"];
 interface Props {
   history: HistoryItem[];
   message?: string;
+  accessProtectionEnabled?: boolean;
   activeId?: string;
   activeItem?: HistoryItem;
   onSelect: (item: HistoryItem) => void;
   onNew: () => void;
   onDelete: (taskId: string) => void;
   onClearSelection?: () => void;
+  onConfigureAccess?: () => void;
+  onRetryHistory?: () => void;
   className?: string;
   onClose?: () => void;
 }
@@ -28,12 +31,15 @@ interface Props {
 export default function Sidebar({
   history,
   message,
+  accessProtectionEnabled = false,
   activeId,
   activeItem,
   onSelect,
   onNew,
   onDelete,
   onClearSelection,
+  onConfigureAccess,
+  onRetryHistory,
   className = "",
   onClose,
 }: Props) {
@@ -223,7 +229,27 @@ export default function Sidebar({
         </div>
         {message && (
           <div className="mx-2 mb-2 rounded-lg border border-ink-600 bg-ink-800 px-2.5 py-2 text-[11px] text-ink-500">
-            {message}
+            <div>{message}</div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {onRetryHistory && (
+                <button
+                  type="button"
+                  onClick={onRetryHistory}
+                  className="rounded-md border border-ink-600 bg-ink-900 px-2 py-1 text-[10px]"
+                >
+                  重试加载
+                </button>
+              )}
+              {accessProtectionEnabled && onConfigureAccess && (
+                <button
+                  type="button"
+                  onClick={onConfigureAccess}
+                  className="rounded-md border border-ink-600 bg-ink-900 px-2 py-1 text-[10px]"
+                >
+                  配置令牌
+                </button>
+              )}
+            </div>
           </div>
         )}
         {history.length === 0 && (
