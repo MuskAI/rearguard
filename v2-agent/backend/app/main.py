@@ -261,8 +261,42 @@ async def provenance_check(file: UploadFile = File(...)) -> dict:
 @app.get("/api/history")
 def history(request: Request) -> dict:
     _require_protected_access(request)
-    summary = storage.list_history()
-    return {"items": summary, "total": len(summary)}
+    try:
+        limit = int(request.query_params.get("limit", "100"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="limit 必须是整数")
+    if limit <= 0 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit 仅支持 1 到 500")
+
+    def _parse_bool(name: str) -> bool | None:
+        raw = request.query_params.get(name)
+        if raw is None or raw == "":
+            return None
+        normalized = raw.strip().lower()
+        if normalized in {"1", "true", "yes"}:
+            return True
+        if normalized in {"0", "false", "no"}:
+            return False
+        raise HTTPException(status_code=400, detail=f"{name} 必须是布尔值")
+
+    source = request.query_params.get("source")
+    if source not in {None, "", "vlm", "mock", "maps-only", "unknown"}:
+        raise HTTPException(status_code=400, detail="source 不受支持")
+    verdict = request.query_params.get("verdict")
+    if verdict not in {None, "", "real", "suspected_fake", "highly_suspected_fake", "unknown"}:
+        raise HTTPException(status_code=400, detail="verdict 不受支持")
+
+    items, total = storage.list_history(
+        limit=limit,
+        query=request.query_params.get("query"),
+        source=source or None,
+        verdict=verdict or None,
+        has_forensics=_parse_bool("hasForensics"),
+        has_provenance=_parse_bool("hasProvenance"),
+        has_watermark=_parse_bool("hasWatermark"),
+        has_synthid=_parse_bool("hasSynthid"),
+    )
+    return {"items": items, "total": total}
 
 
 @app.get("/api/history/{task_id}")

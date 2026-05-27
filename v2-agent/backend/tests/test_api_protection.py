@@ -243,3 +243,121 @@ def test_metrics_supports_window_sizes(client):
     assert len(metrics_7.json()["byDay"]) == 7
     assert len(metrics_30.json()["byDay"]) == 30
     assert metrics_bad.status_code == 400
+
+
+def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    baseline = client.get("/api/history", headers={"X-Jianzhen-Token": "test-token"})
+    assert baseline.status_code == 200
+    baseline_total = baseline.json()["total"]
+
+    analyses = [
+        {
+            "verdict": "real",
+            "confidence": 0.81,
+            "dimensions": [],
+            "regions": [],
+            "explanation": "真实模型命中。",
+            "modelVersion": "qwen3-vl-flash",
+            "source": "vlm",
+            "synthid": {"detected": False},
+            "visibleWatermark": {"detected": False, "provider": None},
+        },
+        {
+            "verdict": "highly_suspected_fake",
+            "confidence": 0.97,
+            "dimensions": [],
+            "regions": [],
+            "explanation": "命中 Gemini 水印。",
+            "modelVersion": "mock-model",
+            "source": "mock",
+            "synthid": {"detected": True},
+            "visibleWatermark": {"detected": True, "provider": "gemini"},
+        },
+        {
+            "verdict": "suspected_fake",
+            "confidence": 0.66,
+            "dimensions": [],
+            "regions": [],
+            "explanation": "仅证据图模式。",
+            "modelVersion": "maps-only-model",
+            "source": "maps-only",
+            "synthid": {"detected": False},
+            "visibleWatermark": {"detected": False, "provider": None},
+        },
+    ]
+
+    monkeypatch.setattr(main.detector, "analyze", lambda *args, **kwargs: analyses.pop(0))
+
+    detect_a = client.post("/api/detect", files={"file": ("alpha.txt", b"alpha", "text/plain")})
+    detect_b = client.post("/api/detect", files={"file": ("beta.txt", b"beta", "text/plain")})
+    detect_c = client.post("/api/detect", files={"file": ("gamma.txt", b"gamma", "text/plain")})
+
+    assert detect_a.status_code == 200
+    assert detect_b.status_code == 200
+    assert detect_c.status_code == 200
+
+    task_a = detect_a.json()["taskId"]
+    task_b = detect_b.json()["taskId"]
+
+    client.post(
+        f"/api/history/{task_a}/artifacts",
+        headers={"X-Jianzhen-Token": "test-token"},
+        json={"forensics": {"summary": "done"}},
+    )
+    client.post(
+        f"/api/history/{task_b}/artifacts",
+        headers={"X-Jianzhen-Token": "test-token"},
+        json={"provenance": {"validationState": "valid"}},
+    )
+
+    limited = client.get("/api/history?limit=1", headers={"X-Jianzhen-Token": "test-token"})
+    by_source = client.get(
+        f"/api/history?source=mock&query={detect_b.json()['reportId']}",
+        headers={"X-Jianzhen-Token": "test-token"},
+    )
+    by_query = client.get("/api/history?query=%E7%9C%9F%E5%AE%9E%E6%A8%A1%E5%9E%8B", headers={"X-Jianzhen-Token": "test-token"})
+    by_evidence = client.get(
+        "/api/history?hasWatermark=true&hasSynthid=true&query=gemini%20%E6%B0%B4%E5%8D%B0",
+        headers={"X-Jianzhen-Token": "test-token"},
+    )
+    by_forensics = client.get(
+        f"/api/history?hasForensics=true&query={detect_a.json()['reportId']}",
+        headers={"X-Jianzhen-Token": "test-token"},
+    )
+
+    assert limited.status_code == 200
+    assert limited.json()["total"] == baseline_total + 3
+    assert len(limited.json()["items"]) == 1
+
+    assert by_source.status_code == 200
+    assert by_source.json()["total"] == 1
+    assert by_source.json()["items"][0]["source"] == "mock"
+    assert by_source.json()["items"][0]["reportId"] == detect_b.json()["reportId"]
+
+    assert by_query.status_code == 200
+    assert by_query.json()["total"] >= 1
+    assert any(item["reportId"] == detect_a.json()["reportId"] for item in by_query.json()["items"])
+
+    assert by_evidence.status_code == 200
+    assert by_evidence.json()["total"] >= 1
+    evidence_item = next(item for item in by_evidence.json()["items"] if item["reportId"] == detect_b.json()["reportId"])
+    assert evidence_item["visibleWatermarkProvider"] == "gemini"
+    assert evidence_item["hasSynthid"] is True
+
+    assert by_forensics.status_code == 200
+    assert by_forensics.json()["total"] == 1
+    assert by_forensics.json()["items"][0]["taskId"] == task_a
+
+
+def test_history_listing_rejects_invalid_filter_params(client):
+    bad_limit = client.get("/api/history?limit=0", headers={"X-Jianzhen-Token": "test-token"})
+    bad_source = client.get("/api/history?source=bad-source", headers={"X-Jianzhen-Token": "test-token"})
+    bad_verdict = client.get("/api/history?verdict=maybe", headers={"X-Jianzhen-Token": "test-token"})
+    bad_bool = client.get("/api/history?hasForensics=maybe", headers={"X-Jianzhen-Token": "test-token"})
+
+    assert bad_limit.status_code == 400
+    assert bad_source.status_code == 400
+    assert bad_verdict.status_code == 400
+    assert bad_bool.status_code == 400

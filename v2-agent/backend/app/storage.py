@@ -164,7 +164,84 @@ def put_history(result: dict[str, Any], sha256: str, file_size: int, thumbnail: 
         conn.commit()
 
 
-def list_history(limit: int = 100) -> list[dict[str, Any]]:
+def _history_summary_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    result = json.loads(row["result_json"])
+    visible = result.get("visibleWatermark") or {}
+    synthid = result.get("synthid") or {}
+    return {
+        "taskId": row["task_id"],
+        "reportId": row["report_id"],
+        "name": row["file_name"],
+        "type": row["file_type"],
+        "verdict": result.get("verdict"),
+        "confidence": result.get("confidence"),
+        "createdAt": row["created_at"],
+        "thumbnail": row["thumbnail"],
+        "source": result.get("source"),
+        "cacheHit": bool(result.get("cacheHit")),
+        "hasForensics": bool(row["forensics_json"]),
+        "hasProvenance": bool(row["provenance_json"]),
+        "hasVisibleWatermark": bool(visible.get("detected")),
+        "visibleWatermarkProvider": visible.get("provider"),
+        "hasSynthid": bool(synthid.get("detected")),
+    }
+
+
+def _searchable_history_fields(item: dict[str, Any]) -> list[str]:
+    source_labels = {
+        "vlm": ["vlm", "VLM", "真实模型"],
+        "mock": ["mock", "Mock", "mock 回退"],
+        "maps-only": ["maps-only", "仅证据图"],
+        "unknown": ["unknown", "未知来源"],
+    }
+    verdict_labels = {
+        "real": ["real", "真实"],
+        "suspected_fake": ["suspected_fake", "疑似"],
+        "highly_suspected_fake": ["highly_suspected_fake", "高度疑似"],
+        "unknown": ["unknown", "未知"],
+    }
+    type_labels = {
+        "image": ["image", "图像"],
+        "video": ["video", "视频"],
+        "audio": ["audio", "音频"],
+        "document": ["document", "文档"],
+    }
+    source = str(item.get("source") or "")
+    verdict = str(item.get("verdict") or "")
+    ftype = str(item.get("type") or "")
+    provider = str(item.get("visibleWatermarkProvider") or "")
+    fields = [
+        item.get("name") or "",
+        item.get("reportId") or "",
+        item.get("createdAt") or "",
+        verdict,
+        *(verdict_labels.get(verdict) or []),
+        ftype,
+        *(type_labels.get(ftype) or []),
+        source,
+        *(source_labels.get(source) or []),
+        provider,
+        f"{provider} 水印" if provider else "",
+        "取证" if item.get("hasForensics") else "",
+        "凭证" if item.get("hasProvenance") else "",
+        "水印" if item.get("hasVisibleWatermark") else "",
+        "SynthID" if item.get("hasSynthid") else "",
+        "缓存" if item.get("cacheHit") else "",
+    ]
+    return [str(field) for field in fields]
+
+
+def list_history(
+    *,
+    limit: int = 100,
+    query: str | None = None,
+    source: str | None = None,
+    verdict: str | None = None,
+    has_forensics: bool | None = None,
+    has_provenance: bool | None = None,
+    has_watermark: bool | None = None,
+    has_synthid: bool | None = None,
+) -> tuple[list[dict[str, Any]], int]:
     with _connect() as conn:
         rows = conn.execute(
             """
@@ -173,35 +250,29 @@ def list_history(limit: int = 100) -> list[dict[str, Any]]:
             FROM history h
             LEFT JOIN history_artifacts a ON a.task_id = h.task_id
             ORDER BY created_at DESC
-            LIMIT ?
             """,
-            (limit,),
         ).fetchall()
-    items = []
-    for row in rows:
-        result = json.loads(row["result_json"])
-        visible = result.get("visibleWatermark") or {}
-        synthid = result.get("synthid") or {}
-        items.append(
-            {
-                "taskId": row["task_id"],
-                "reportId": row["report_id"],
-                "name": row["file_name"],
-                "type": row["file_type"],
-                "verdict": result.get("verdict"),
-                "confidence": result.get("confidence"),
-                "createdAt": row["created_at"],
-                "thumbnail": row["thumbnail"],
-                "source": result.get("source"),
-                "cacheHit": bool(result.get("cacheHit")),
-                "hasForensics": bool(row["forensics_json"]),
-                "hasProvenance": bool(row["provenance_json"]),
-                "hasVisibleWatermark": bool(visible.get("detected")),
-                "visibleWatermarkProvider": visible.get("provider"),
-                "hasSynthid": bool(synthid.get("detected")),
-            }
-        )
-    return items
+    items = [_history_summary_from_row(row) for row in rows]
+    normalized_query = (query or "").strip().lower()
+    filtered = []
+    for item in items:
+        if source is not None and str(item.get("source") or "") != source:
+            continue
+        if verdict is not None and str(item.get("verdict") or "") != verdict:
+            continue
+        if has_forensics is not None and bool(item.get("hasForensics")) is not has_forensics:
+            continue
+        if has_provenance is not None and bool(item.get("hasProvenance")) is not has_provenance:
+            continue
+        if has_watermark is not None and bool(item.get("hasVisibleWatermark")) is not has_watermark:
+            continue
+        if has_synthid is not None and bool(item.get("hasSynthid")) is not has_synthid:
+            continue
+        if normalized_query and not any(field.lower().find(normalized_query) >= 0 for field in _searchable_history_fields(item)):
+            continue
+        filtered.append(item)
+    total = len(filtered)
+    return filtered[:limit], total
 
 
 def get_history(item_id: str) -> dict[str, Any] | None:
