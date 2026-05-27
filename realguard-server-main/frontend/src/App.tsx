@@ -802,7 +802,7 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
   }, [queriedRecords, tab, filter]);
 
   const summaryCards = useMemo<HistorySummaryCard[]>(() => {
-    const baseRecords = filteredRecords;
+    const baseRecords = tab === "image" || tab === "video" ? queriedRecords : filteredRecords;
     if (tab === "image") {
       return [
         { label: "当前记录", value: baseRecords.length, filterKey: "all" as HistoryFilterKey },
@@ -829,7 +829,7 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
       { label: "平均Top-K", value: topKAvg },
       { label: "查询类型", value: tab === "imageRetrieve" ? "图像" : "视频" },
     ];
-  }, [filteredRecords, tab]);
+  }, [filteredRecords, queriedRecords, tab]);
 
   const filterOptions = getHistoryFilterOptions(tab);
   const activeSummary = getHistoryActiveSummary(tab, filter, query);
