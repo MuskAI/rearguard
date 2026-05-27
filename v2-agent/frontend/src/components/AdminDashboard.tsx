@@ -89,7 +89,37 @@ export default function AdminDashboard({
   if (!metrics) {
     return (
       <main className="flex-1 min-w-0 bg-grid p-4 sm:p-6 overflow-y-auto">
-        <div className="text-sm text-ink-500">{error || "正在加载监控数据…"}</div>
+        <div className="mx-auto max-w-xl rounded-2xl border border-ink-600 bg-ink-900 p-5 sm:p-6 space-y-4">
+          <div>
+            <h1 className="font-serif text-lg sm:text-xl font-semibold text-rice tracking-wide">监控大屏</h1>
+            <p className="mt-1 text-xs sm:text-sm text-ink-500">
+              {error || "正在加载监控数据…"}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={load}
+              disabled={refreshing}
+              className="h-9 px-3 rounded-lg border border-ink-600 bg-ink-800 text-xs text-ink-950 hover:border-jade/50"
+            >
+              {refreshing ? "加载中" : "重试"}
+            </button>
+            {accessProtectionEnabled && (
+              <button
+                onClick={onConfigureAccess}
+                className="h-9 px-3 rounded-lg border border-ink-600 bg-ink-800 text-xs text-ink-950 hover:border-brand-cyan/50"
+              >
+                配置访问令牌
+              </button>
+            )}
+            <button
+              onClick={onBack}
+              className="h-9 px-3 rounded-lg bg-cinnabar text-xs text-white"
+            >
+              返回检测
+            </button>
+          </div>
+        </div>
       </main>
     );
   }
