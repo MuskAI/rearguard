@@ -157,7 +157,7 @@ function App() {
         />
       )}
       {page === "retrieve" && <RetrievePage onDone={refreshMe} />}
-      {page === "history" && <HistoryPage />}
+      {page === "history" && <HistoryPage setPage={setPage} />}
 
       <Footer />
 
@@ -717,7 +717,7 @@ function RetrievePage({ onDone }: { onDone: () => Promise<void> }) {
   );
 }
 
-function HistoryPage() {
+function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
   const [tab, setTab] = useState<HistoryTabKey>(() => getInitialHistoryTab());
   const [records, setRecords] = useState<HistoryRecord[]>([]);
   const [status, setStatus] = useState<Status>(null);
@@ -901,10 +901,27 @@ function HistoryPage() {
               {filteredRecords.length ? (
                 <HistoryRecords records={filteredRecords} tab={tab} query={query} />
               ) : (
-                <EmptyState icon="fa-filter" text="当前筛选条件下暂无记录" />
+                <EmptyState
+                  icon="fa-filter"
+                  text="当前筛选条件下暂无记录"
+                  actions={[
+                    { label: "清除条件", onClick: () => { setFilter("all"); setQuery(""); } },
+                    { label: tab === "video" ? "去视频鉴伪" : tab === "image" ? "去图像鉴伪" : "去侵权检索", onClick: () => setPage(tab === "video" ? "video" : tab === "image" ? "image" : "retrieve") },
+                  ]}
+                />
               )}
             </>
-          ) : !status && <EmptyState icon="fa-clock-o" text="暂无记录" />}
+          ) : !status && (
+            <EmptyState
+              icon="fa-clock-o"
+              text="暂无记录"
+              actions={[
+                { label: "去图像鉴伪", onClick: () => setPage("image") },
+                { label: "去视频鉴伪", onClick: () => setPage("video") },
+                { label: "去侵权检索", onClick: () => setPage("retrieve") },
+              ]}
+            />
+          )}
         </div>
       </div>
     </main>
@@ -1253,8 +1270,30 @@ function historyPreviewUrl(record: HistoryRecord) {
   return String(record.thumbnail_url || "");
 }
 
-function EmptyState({ icon, text }: { icon: string; text: string }) {
-  return <div className="empty-state"><i className={`fa ${icon}`} /><span>{text}</span></div>;
+function EmptyState({
+  icon,
+  text,
+  actions = [],
+}: {
+  icon: string;
+  text: string;
+  actions?: Array<{ label: string; onClick: () => void }>;
+}) {
+  return (
+    <div className="empty-state">
+      <i className={`fa ${icon}`} />
+      <span>{text}</span>
+      {actions.length > 0 && (
+        <div className="empty-state-actions">
+          {actions.map((action) => (
+            <button key={action.label} type="button" className="btn-code empty-state-btn" onClick={action.onClick}>
+              {action.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function AuthModal({ onAuthed, onClose }: { onAuthed: () => Promise<void>; onClose: () => void }) {
