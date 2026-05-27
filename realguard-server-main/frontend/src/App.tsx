@@ -823,6 +823,7 @@ function HistoryPage() {
   }, [filteredRecords, tab]);
 
   const filterOptions = getHistoryFilterOptions(tab);
+  const activeSummary = getHistoryActiveSummary(tab, filter, query);
 
   return (
     <main className="main">
@@ -858,6 +859,28 @@ function HistoryPage() {
                 {query && (
                   <button type="button" className="btn-code history-search-clear" onClick={() => setQuery("")}>
                     清空
+                  </button>
+                )}
+              </div>
+              <div className="history-active-bar">
+                <div className="history-active-tags">
+                  {activeSummary.map((item) => (
+                    <span key={item.label} className="history-active-tag">
+                      <strong>{item.label}</strong>
+                      <span>{item.value}</span>
+                    </span>
+                  ))}
+                </div>
+                {(filter !== "all" || query.trim()) && (
+                  <button
+                    type="button"
+                    className="btn-code history-reset-btn"
+                    onClick={() => {
+                      setFilter("all");
+                      setQuery("");
+                    }}
+                  >
+                    重置条件
                   </button>
                 )}
               </div>
@@ -1491,6 +1514,22 @@ function getHistoryFilterOptions(tab: HistoryTabKey): Array<{ key: HistoryFilter
 
 function isHistoryFilterSupported(tab: HistoryTabKey, filter: HistoryFilterKey) {
   return getHistoryFilterOptions(tab).some((option) => option.key === filter) || filter === "all";
+}
+
+function getHistoryActiveSummary(tab: HistoryTabKey, filter: HistoryFilterKey, query: string) {
+  const tabLabels: Record<HistoryTabKey, string> = {
+    image: "图像鉴伪",
+    video: "视频鉴伪",
+    imageRetrieve: "图像检索",
+    videoRetrieve: "视频检索",
+  };
+  const filterLabel =
+    getHistoryFilterOptions(tab).find((option) => option.key === filter)?.label || "全部";
+  return [
+    { label: "模块", value: tabLabels[tab] },
+    { label: "筛选", value: filterLabel },
+    { label: "搜索", value: query.trim() || "未设置" },
+  ];
 }
 
 function getStorage() {
