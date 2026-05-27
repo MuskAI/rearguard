@@ -55,6 +55,7 @@ export default function App() {
   const [historyMessage, setHistoryMessage] = useState("");
   const [historyBusy, setHistoryBusy] = useState(false);
   const [health, setHealth] = useState<HealthStatus | null>(null);
+  const [monitorReloadKey, setMonitorReloadKey] = useState(0);
   const [forensicsByTask, setForensicsByTask] = useState<Record<string, ForensicReport>>({});
   const [provenanceByTask, setProvenanceByTask] = useState<Record<string, ProvenanceReport>>({});
   const [messages, setMessages] = useState<Message[]>([]);
@@ -138,6 +139,7 @@ export default function App() {
     const next = window.prompt("输入访问令牌。留空可清除本地保存的令牌。", getAccessToken());
     if (next === null) return;
     setAccessToken(next);
+    setMonitorReloadKey((value) => value + 1);
     await Promise.allSettled([loadHealth(), loadHistory()]);
   };
 
@@ -308,6 +310,7 @@ export default function App() {
             setView("detect");
           }}
           onConfigureAccess={configureAccessToken}
+          reloadKey={monitorReloadKey}
         />
       </div>
     );

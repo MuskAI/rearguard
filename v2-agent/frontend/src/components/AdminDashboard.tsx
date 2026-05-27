@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Metrics, TYPE_LABEL, VERDICT_META, fetchMetrics } from "../api";
 
 function pct(value: number) {
@@ -22,10 +22,12 @@ export default function AdminDashboard({
   onBack,
   onConfigureAccess,
   accessProtectionEnabled,
+  reloadKey = 0,
 }: {
   onBack: () => void;
   onConfigureAccess: () => void | Promise<void>;
   accessProtectionEnabled: boolean;
+  reloadKey?: number;
 }) {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [error, setError] = useState<string>("");
@@ -33,26 +35,33 @@ export default function AdminDashboard({
   const [copied, setCopied] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string>("");
+  const requestIdRef = useRef(0);
 
   const load = async () => {
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
     setRefreshing(true);
     try {
       const data = await fetchMetrics(days);
+      if (requestIdRef.current !== requestId) return;
       setMetrics(data);
       setError("");
       setLastUpdatedAt(formatClockTime(new Date()));
     } catch (e) {
+      if (requestIdRef.current !== requestId) return;
       setError(e instanceof Error ? e.message : "加载失败");
     } finally {
-      setRefreshing(false);
+      if (requestIdRef.current === requestId) {
+        setRefreshing(false);
+      }
     }
   };
 
   useEffect(() => {
-    load();
+    void load();
     const timer = window.setInterval(load, 30000);
     return () => window.clearInterval(timer);
-  }, [days]);
+  }, [days, reloadKey]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
