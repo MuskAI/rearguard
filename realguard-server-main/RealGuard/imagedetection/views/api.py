@@ -43,6 +43,24 @@ def _auth_required():
     return user, None
 
 
+def _history_identity():
+    user = _current_user()
+    if user:
+        return {
+            "mode": "user",
+            "phone": str(user.get("phone") or "").strip(),
+            "openid": str(user.get("openid") or "").strip(),
+        }, None
+    guest_openid = str(session.get("guest_openid") or "").strip()
+    if guest_openid:
+        return {"mode": "guest", "phone": "", "openid": guest_openid}, None
+    return None, (jsonify({"status": "error", "message": "用户未登录"}), 401)
+
+
+def _is_guest_detection_record(item):
+    return (not str((item or {}).get("phone") or "").strip()) and str((item or {}).get("openid") or "").startswith("guest-")
+
+
 def _thumbnail_url(item):
     itemid = item.get("itemid")
     return f"/api/media/thumbnail/image/{itemid}" if itemid else ""
@@ -199,12 +217,17 @@ def logout():
 
 @api_blueprint.route("/history/image-detections")
 def image_detection_history():
-    user, error = _auth_required()
+    actor, error = _history_identity()
     if error:
         return error
 
-    phone = user.get("phone", "")
-    rows = excute_detection_sql("SELECT * FROM data WHERE phone = %s ORDER BY createtime DESC", (phone,))
+    if actor["mode"] == "guest":
+        rows = excute_detection_sql("SELECT * FROM data WHERE openid = %s ORDER BY createtime DESC", (actor["openid"],))
+    else:
+        rows = excute_detection_sql(
+            "SELECT * FROM data WHERE phone = %s OR openid = %s ORDER BY createtime DESC",
+            (actor["phone"], actor["openid"]),
+        )
     records = []
     for item in rows or []:
         fake_pct = round(float(item.get("fake", 0) or 0), 1)
@@ -220,6 +243,7 @@ def image_detection_history():
                 "confidence": item.get("clarity", ""),
                 "createtime": format_createtime(item.get("createtime", "")),
                 "report_url": f"/image_upload/report?itemid={item.get('itemid')}",
+                "is_guest_record": _is_guest_detection_record(item),
             }
         )
     return jsonify({"status": "success", "records": records})
@@ -227,15 +251,20 @@ def image_detection_history():
 
 @api_blueprint.route("/media/thumbnail/image/<int:itemid>")
 def image_detection_thumbnail(itemid):
-    user, error = _auth_required()
+    actor, error = _history_identity()
     if error:
         return error
 
-    phone = user.get("phone", "")
-    rows = excute_detection_sql(
-        "SELECT * FROM data WHERE itemid = %s AND phone = %s LIMIT 1",
-        (itemid, phone),
-    )
+    if actor["mode"] == "guest":
+        rows = excute_detection_sql(
+            "SELECT * FROM data WHERE itemid = %s AND openid = %s LIMIT 1",
+            (itemid, actor["openid"]),
+        )
+    else:
+        rows = excute_detection_sql(
+            "SELECT * FROM data WHERE itemid = %s AND (phone = %s OR openid = %s) LIMIT 1",
+            (itemid, actor["phone"], actor["openid"]),
+        )
     if not rows:
         return jsonify({"status": "error", "message": "未找到图片记录"}), 404
 
@@ -268,12 +297,17 @@ def image_detection_thumbnail(itemid):
 
 @api_blueprint.route("/history/video-detections")
 def video_detection_history():
-    user, error = _auth_required()
+    actor, error = _history_identity()
     if error:
         return error
 
-    phone = user.get("phone", "")
-    rows = excute_detection_sql("SELECT * FROM video_data WHERE phone = %s ORDER BY createtime DESC", (phone,))
+    if actor["mode"] == "guest":
+        rows = excute_detection_sql("SELECT * FROM video_data WHERE openid = %s ORDER BY createtime DESC", (actor["openid"],))
+    else:
+        rows = excute_detection_sql(
+            "SELECT * FROM video_data WHERE phone = %s OR openid = %s ORDER BY createtime DESC",
+            (actor["phone"], actor["openid"]),
+        )
     records = []
     for item in rows or []:
         fake_pct = round(float(item.get("fake") or item.get("fake_percentage") or 0), 1)
@@ -288,6 +322,7 @@ def video_detection_history():
                 "confidence": item.get("confidence") or item.get("confidence_level", ""),
                 "createtime": format_createtime(item.get("createtime", "")),
                 "report_url": f"/video_upload/report?itemid={item.get('itemid')}",
+                "is_guest_record": _is_guest_detection_record(item),
             }
         )
     return jsonify({"status": "success", "records": records})

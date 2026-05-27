@@ -190,6 +190,63 @@ def test_guest_image_report_downloads_attachment(client, monkeypatch):
     assert "guest.png" in response.get_data(as_text=True)
 
 
+def test_guest_history_returns_guest_image_records(client, monkeypatch):
+    with client.session_transaction() as sess:
+        sess["guest_openid"] = "guest-abc"
+
+    def fake_detection_sql(sql, params=None, fetch=True):
+        if sql == "SELECT * FROM data WHERE openid = %s ORDER BY createtime DESC":
+            assert params == ("guest-abc",)
+            return [{
+                "itemid": 35,
+                "filename": "guest-history.png",
+                "fake": 58.0,
+                "clarity": "中",
+                "openid": "guest-abc",
+                "phone": "",
+                "createtime": "2026-05-27 16:00:00",
+            }]
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+    monkeypatch.setattr(api, "excute_detection_sql", fake_detection_sql)
+
+    response = client.get("/api/history/image-detections")
+
+    assert response.status_code == 200
+    record = response.get_json()["records"][0]
+    assert record["itemid"] == 35
+    assert record["is_guest_record"] is True
+    assert record["report_url"] == "/image_upload/report?itemid=35"
+
+
+def test_guest_thumbnail_uses_guest_openid_lookup(client, monkeypatch, tmp_path):
+    with client.session_transaction() as sess:
+        sess["guest_openid"] = "guest-thumb"
+
+    thumb_path = tmp_path / "thumb.webp"
+    thumb_path.write_bytes(b"fake-webp")
+
+    def fake_detection_sql(sql, params=None, fetch=True):
+        if sql == "SELECT * FROM data WHERE itemid = %s AND openid = %s LIMIT 1":
+            assert params == (91, "guest-thumb")
+            return [{
+                "itemid": 91,
+                "filename": "guest-thumb.png",
+                "openid": "guest-thumb",
+                "phone": "",
+                "createtime": "2026-05-27 16:05:00",
+            }]
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+    monkeypatch.setattr(api, "excute_detection_sql", fake_detection_sql)
+    monkeypatch.setattr(api, "_thumbnail_cache_path", lambda item: thumb_path)
+
+    response = client.get("/api/media/thumbnail/image/91")
+
+    assert response.status_code == 200
+    assert response.data == b"fake-webp"
+
+
 def test_video_report_downloads_attachment_for_logged_user(client, monkeypatch):
     _login_session(client)
 
@@ -277,7 +334,8 @@ def test_history_detection_records_include_report_urls(client, monkeypatch):
     _login_session(client)
 
     def fake_detection_sql(sql, params=None, fetch=True):
-        if sql == "SELECT * FROM data WHERE phone = %s ORDER BY createtime DESC":
+        if sql == "SELECT * FROM data WHERE phone = %s OR openid = %s ORDER BY createtime DESC":
+            assert params == ("13800000000", "openid-1")
             return [{
                 "itemid": 51,
                 "filename": "img.png",
@@ -287,7 +345,8 @@ def test_history_detection_records_include_report_urls(client, monkeypatch):
                 "phone": "13800000000",
                 "createtime": "2026-05-27 15:00:00",
             }]
-        if sql == "SELECT * FROM video_data WHERE phone = %s ORDER BY createtime DESC":
+        if sql == "SELECT * FROM video_data WHERE phone = %s OR openid = %s ORDER BY createtime DESC":
+            assert params == ("13800000000", "openid-1")
             return [{
                 "itemid": 61,
                 "filename": "vid.mp4",

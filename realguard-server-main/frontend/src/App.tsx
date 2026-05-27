@@ -1011,6 +1011,7 @@ function HistoryRecords({
         const verdict = String(record.final_label || (record.result_count ? `${record.result_count} 条结果` : "-"));
         const meta = String(record.confidence || record.top_k || "-");
         const reportUrl = String(record.report_url || "");
+        const guestRecord = Boolean(record.is_guest_record);
         return (
           <article className="history-record" key={`${record.itemid || index}`}>
             <a className="history-media" href={mediaUrl || undefined} target={mediaUrl ? "_blank" : undefined} rel="noreferrer" aria-label={mediaUrl ? `查看 ${title}` : title}>
@@ -1027,6 +1028,11 @@ function HistoryRecords({
             </a>
             <div className="history-body">
               <div className="history-title" title={title}>{title}</div>
+              {guestRecord && (
+                <div className="history-tags">
+                  <span className="history-tag guest"><i className="fa fa-user-secret" /> 访客</span>
+                </div>
+              )}
               <div className="history-row"><span>时间</span><strong>{String(record.createtime || "-")}</strong></div>
               <div className="history-row"><span>{record.result_count ? "数量" : "结论"}</span><strong>{verdict}</strong></div>
               <div className="history-row"><span>{record.top_k ? "Top-K" : "置信度"}</span><strong>{meta}</strong></div>
