@@ -15,7 +15,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import Response
 
-from . import detector, provenance, storage, synthid_detector
+from . import detector, provenance, storage, synthid_detector, visible_watermark_detector
 
 app = FastAPI(title="鉴真 AI 鉴伪智能体", version="0.2.0")
 
@@ -127,6 +127,7 @@ def _build_result(
         "regions": analysis["regions"],
         "explanation": analysis["explanation"],
         "synthid": analysis.get("synthid"),
+        "visibleWatermark": analysis.get("visibleWatermark"),
         "disclaimer": (
             "本结果由演示用 Mock 算法生成，不构成权威鉴定结论。"
             if analysis["source"] == "mock"
@@ -144,6 +145,7 @@ def health() -> dict:
         "model": detector.VLM_MODEL,
         "vlmEnabled": bool(detector.API_KEY),
         "synthid": synthid_detector.status(),
+        "visibleWatermark": visible_watermark_detector.status(),
         "storage": str(storage.DB_PATH),
     }
 

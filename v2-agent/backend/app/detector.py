@@ -15,7 +15,7 @@ import re
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from . import forensics, synthid_detector
+from . import forensics, synthid_detector, visible_watermark_detector
 
 load_dotenv()
 
@@ -126,6 +126,54 @@ def _merge_synthid(result: dict, data: bytes) -> dict:
             "score": 0.0,
             "result": str(synthid.get("note") or "未启用"),
         })
+
+    return result
+
+
+def _merge_visible_watermark(result: dict, file_type: str, filename: str, data: bytes) -> dict:
+    """Attach visible watermark evidence without modifying the uploaded media."""
+    visible = visible_watermark_detector.detect(data, file_type, filename)
+    result["visibleWatermark"] = visible
+    score = float(visible.get("confidence") or 0.0)
+    detected = bool(visible.get("detected"))
+
+    result.setdefault("dimensions", []).append({
+        "key": "visible_watermark",
+        "label": "可见AI水印检测",
+        "score": round(score if detected else min(score, 0.25), 2),
+        "result": visible.get("note") or ("检测到可见水印" if detected else "未检测到可见水印"),
+    })
+
+    if detected and file_type == "image":
+        for hit in visible.get("hits", [])[:3]:
+            bbox = hit.get("bbox") or {}
+            try:
+                result.setdefault("regions", []).append({
+                    "x": round(float(bbox["x"]), 3),
+                    "y": round(float(bbox["y"]), 3),
+                    "w": round(float(bbox["w"]), 3),
+                    "h": round(float(bbox["h"]), 3),
+                    "label": "可见AI水印",
+                    "score": round(float(hit.get("confidence") or score), 2),
+                })
+            except (KeyError, TypeError, ValueError):
+                continue
+
+    if detected and score >= 0.82:
+        result["confidence"] = round(max(float(result.get("confidence", 0.0)), score), 2)
+        result["verdict"] = "highly_suspected_fake"
+        result["explanation"] = (
+            f"{result.get('explanation', '')}\n"
+            "可见水印检测发现高置信度 AI 平台导出水印，这是直接的平台生成/导出痕迹，"
+            "已作为强证据纳入最终判定。"
+        ).strip()
+    elif detected and score >= 0.6 and result.get("verdict") == "real":
+        result["confidence"] = round(max(float(result.get("confidence", 0.0)), score), 2)
+        result["verdict"] = "suspected_fake"
+        result["explanation"] = (
+            f"{result.get('explanation', '')}\n"
+            "可见水印检测发现中等置信度角标水印信号，当前结论上调为疑似伪造。"
+        ).strip()
 
     return result
 
@@ -494,7 +542,8 @@ def analyze(file_type: str, filename: str, data: bytes) -> dict:
     if file_type == "image":
         result = analyze_image_vlm(data)
         if result:
-            return _merge_synthid(result, data)
+            result = _merge_synthid(result, data)
+            return _merge_visible_watermark(result, file_type, filename, data)
     elif file_type == "document":
         try:
             text = data.decode("utf-8", errors="ignore")
@@ -507,5 +556,8 @@ def analyze(file_type: str, filename: str, data: bytes) -> dict:
     # video / audio / 失败回退
     result = mock_analysis(file_type, data)
     if file_type == "image":
-        return _merge_synthid(result, data)
+        result = _merge_synthid(result, data)
+        return _merge_visible_watermark(result, file_type, filename, data)
+    if file_type == "video":
+        return _merge_visible_watermark(result, file_type, filename, data)
     return result

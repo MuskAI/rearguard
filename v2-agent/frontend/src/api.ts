@@ -32,6 +32,7 @@ export interface DetectResult {
   regions: Region[];
   explanation: string;
   synthid?: SynthIDResult;
+  visibleWatermark?: VisibleWatermarkResult;
   disclaimer: string;
 }
 
@@ -47,6 +48,28 @@ export interface SynthIDResult {
   evidenceLevel: "strong" | "medium" | "weak" | "none" | "unavailable";
   note: string;
   error: string | null;
+  elapsedMs?: number;
+}
+
+export interface VisibleWatermarkHit {
+  provider: string;
+  confidence: number;
+  bbox: { x: number; y: number; w: number; h: number };
+  method: string;
+  frame: number | null;
+  scores: Record<string, number>;
+}
+
+export interface VisibleWatermarkResult {
+  enabled: boolean;
+  supported: boolean;
+  detected: boolean;
+  provider: string | null;
+  confidence: number;
+  evidenceLevel: "strong" | "medium" | "weak" | "none" | "unavailable";
+  hits: VisibleWatermarkHit[];
+  temporal: { sampledFrames: number; positiveFrames: number; moving: boolean };
+  note: string;
   elapsedMs?: number;
 }
 

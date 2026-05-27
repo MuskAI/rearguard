@@ -24,9 +24,14 @@ export default function ResultCard({
   const effectivePreview = previewUrl || result.fileMeta.thumbnail || undefined;
   const isImage = result.fileMeta.type === "image" && effectivePreview;
   const synthid = result.synthid;
+  const visibleWatermark = result.visibleWatermark;
   const synthidTone =
     synthid?.evidenceLevel === "strong" ? "#d8412f" :
     synthid?.evidenceLevel === "medium" || synthid?.evidenceLevel === "weak" ? "#d99a2b" :
+    "#3fb6a8";
+  const visibleTone =
+    visibleWatermark?.evidenceLevel === "strong" ? "#d8412f" :
+    visibleWatermark?.evidenceLevel === "medium" || visibleWatermark?.evidenceLevel === "weak" ? "#d99a2b" :
     "#3fb6a8";
 
   return (
@@ -145,6 +150,36 @@ export default function ResultCard({
                   <span>相位匹配：{Math.round(synthid.phaseMatch * 100)}%</span>
                   <span>模型配置：{synthid.modelProfile}</span>
                   <span>Profile：{synthid.profile || "自动匹配"}</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {visibleWatermark && (
+            <div
+              className="rounded-lg border p-3 text-sm leading-relaxed"
+              style={{ borderColor: `${visibleTone}55`, background: `${visibleTone}0f` }}
+            >
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 sm:gap-2 mb-2">
+                <span className="font-medium" style={{ color: visibleTone }}>
+                  可见 AI 水印检测
+                </span>
+                <span className="text-xs text-ink-500">
+                  {visibleWatermark.supported
+                    ? visibleWatermark.detected
+                      ? `置信度 ${Math.round(visibleWatermark.confidence * 100)}%`
+                      : "未检出"
+                    : "不支持"}
+                </span>
+              </div>
+              <p className="text-ink-950">{visibleWatermark.note}</p>
+              {visibleWatermark.detected && (
+                <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] text-ink-500 break-words">
+                  <span>来源：{visibleWatermark.provider || "未知角标"}</span>
+                  <span>
+                    命中：{visibleWatermark.temporal.positiveFrames}/{visibleWatermark.temporal.sampledFrames || 1}
+                  </span>
+                  <span>跳动：{visibleWatermark.temporal.moving ? "是" : "否"}</span>
                 </div>
               )}
             </div>

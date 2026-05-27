@@ -13,6 +13,7 @@ from typing import Any
 
 DATA_DIR = Path(os.getenv("JIANZHEN_DATA_DIR", Path(__file__).resolve().parents[1] / "data"))
 DB_PATH = DATA_DIR / "jianzhen-v2.sqlite3"
+ANALYSIS_CACHE_VERSION = os.getenv("JIANZHEN_ANALYSIS_CACHE_VERSION", "v2-visible-watermark")
 
 _INIT_LOCK = threading.Lock()
 _INITIALIZED = False
@@ -94,7 +95,7 @@ def now_iso() -> str:
 
 
 def cache_key(file_type: str, sha256: str) -> str:
-    return f"{file_type}:{sha256}"
+    return f"{ANALYSIS_CACHE_VERSION}:{file_type}:{sha256}"
 
 
 def get_cached_analysis(file_type: str, sha256: str) -> dict[str, Any] | None:

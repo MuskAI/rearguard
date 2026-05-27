@@ -115,9 +115,10 @@ npm run build          # 产物在 dist/
 2. **DASHSCOPE_API_KEY 决定能力**：无 key → 图像/文本检测返回 Mock（响应里 `source: "mock"`）；有 key → `source: "vlm"`。前端不会报错，但结果含义不同。
 3. **上传体积**：nginx 已设 `client_max_body_size 25m`，裸机反代请同样放宽；取证分析（`/api/forensics`）响应较大（7 张内联 base64 图，约 3MB），已设 120s 超时。
 4. **CORS**：后端 `allow_origins=["*"]`，便于演示。生产建议收紧为你的域名。
-5. **持久化与缓存**：后端使用 SQLite 保存历史、检测缓存与轻量监控指标，默认路径为 `JIANZHEN_DATA_DIR/jianzhen-v2.sqlite3`。同一文件按 `fileType + sha256` 复用核心分析结果，避免重复调用模型导致结论漂移。
-6. **能力边界**：视频/音频检测为 Mock；C2PA 仅验证签名有效性，不内置 OpenAI/Adobe 官方信任根（无法断言"出自某官方"）；SynthID 仅作为 Gemini 水印辅助证据，未检出不能证明图片真实。
-7. **出网**：后端需能访问 `dashscope.aliyuncs.com`（VLM 调用）。内网/受限环境请放行或仅用 Mock + C2PA。
+5. **持久化与缓存**：后端使用 SQLite 保存历史、检测缓存与轻量监控指标，默认路径为 `JIANZHEN_DATA_DIR/jianzhen-v2.sqlite3`。同一文件按 `cacheVersion + fileType + sha256` 复用核心分析结果，避免重复调用模型导致结论漂移。
+6. **可见水印检测**：`VISIBLE_WATERMARK_ENABLED=true` 时启用检测-only 模块。该模块只定位可见 AI 水印/角标，复用了 GeminiWatermarkTool/remove-ai-watermarks 的 NCC 检测思路和 MIT 资产，不包含 reverse alpha blending、inpainting 或任何去水印输出。
+7. **能力边界**：视频/音频检测为 Mock；C2PA 仅验证签名有效性，不内置 OpenAI/Adobe 官方信任根（无法断言"出自某官方"）；SynthID 与可见水印仅作为辅助证据，未检出不能证明图片真实。
+8. **出网**：后端需能访问 `dashscope.aliyuncs.com`（VLM 调用）。内网/受限环境请放行或仅用 Mock + C2PA。
 
 ## 7. API 速览
 
