@@ -305,9 +305,11 @@ export default function App() {
         history={history}
         message={historyMessage}
         activeId={activeId}
+        activeItem={history.find((item) => item.taskId === activeId)}
         onSelect={onSelectHistory}
         onNew={newChat}
         onDelete={onDelete}
+        onClearSelection={newChat}
         className="hidden md:flex"
       />
 
@@ -322,9 +324,11 @@ export default function App() {
             history={history}
             message={historyMessage}
             activeId={activeId}
+            activeItem={history.find((item) => item.taskId === activeId)}
             onSelect={onSelectHistory}
             onNew={newChat}
             onDelete={onDelete}
+            onClearSelection={newChat}
             onClose={() => setHistoryOpen(false)}
             className="relative h-full w-[86vw] max-w-80"
           />

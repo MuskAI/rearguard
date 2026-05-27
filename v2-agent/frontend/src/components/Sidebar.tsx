@@ -6,14 +6,27 @@ interface Props {
   history: HistoryItem[];
   message?: string;
   activeId?: string;
+  activeItem?: HistoryItem;
   onSelect: (item: HistoryItem) => void;
   onNew: () => void;
   onDelete: (taskId: string) => void;
+  onClearSelection?: () => void;
   className?: string;
   onClose?: () => void;
 }
 
-export default function Sidebar({ history, message, activeId, onSelect, onNew, onDelete, className = "", onClose }: Props) {
+export default function Sidebar({
+  history,
+  message,
+  activeId,
+  activeItem,
+  onSelect,
+  onNew,
+  onDelete,
+  onClearSelection,
+  className = "",
+  onClose,
+}: Props) {
   const [query, setQuery] = useState(() => getInitialHistoryQuery());
   const [filter, setFilter] = useState<"all" | "vlm" | "mock" | "forensics" | "provenance" | "watermark">(() => getInitialHistoryFilter());
   const [copied, setCopied] = useState(false);
@@ -165,6 +178,23 @@ export default function Sidebar({ history, message, activeId, onSelect, onNew, o
           <div className="text-[10px] text-ink-500">
             当前显示 {filteredHistory.length} / {history.length}
           </div>
+          {activeItem && (
+            <div className="rounded-lg border border-ink-600 bg-ink-800 px-2.5 py-2 text-[10px] text-ink-500">
+              <div className="font-medium text-ink-950 truncate">{activeItem.name}</div>
+              <div className="mt-1 flex items-center justify-between gap-2">
+                <span className="truncate">{activeItem.reportId}</span>
+                {onClearSelection && (
+                  <button
+                    type="button"
+                    onClick={onClearSelection}
+                    className="px-2 py-1 rounded-md border border-ink-600 bg-ink-900 text-[10px]"
+                  >
+                    清除选中
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
         {message && (
           <div className="mx-2 mb-2 rounded-lg border border-ink-600 bg-ink-800 px-2.5 py-2 text-[11px] text-ink-500">
