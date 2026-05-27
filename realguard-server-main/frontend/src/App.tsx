@@ -37,6 +37,7 @@ const emptyCounters: Counters = {
   image_retrieve: 0,
   video_retrieve: 0
 };
+const HISTORY_PAGE_SIZE = 100;
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -727,6 +728,7 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
   const [query, setQuery] = useState(() => getInitialHistoryQuery());
   const [copied, setCopied] = useState(false);
   const [historyBusy, setHistoryBusy] = useState(false);
+  const [historyLimit, setHistoryLimit] = useState(HISTORY_PAGE_SIZE);
   const [historyTotal, setHistoryTotal] = useState(0);
   const [historyFilterCounts, setHistoryFilterCounts] = useState<Partial<Record<HistoryFilterKey, number>>>({});
   const historyRequestIdRef = useRef(0);
@@ -736,12 +738,13 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
     historyRequestIdRef.current = requestId;
     setStatus({ tone: "info", text: "正在加载历史记录" });
     setHistoryBusy(true);
+    const activeFilter = isHistoryFilterSupported(targetTab, filter) ? filter : "all";
     const request =
       targetTab === "image"
-        ? getHistory("image-detections", { query, filter, limit: 1000 })
+        ? getHistory("image-detections", { query, filter: activeFilter, limit: historyLimit })
         : targetTab === "video"
-          ? getHistory("video-detections", { query, filter, limit: 1000 })
-          : getRetrievalHistory(targetTab === "imageRetrieve" ? "image" : "video", { query, limit: 1000 });
+          ? getHistory("video-detections", { query, filter: activeFilter, limit: historyLimit })
+          : getRetrievalHistory(targetTab === "imageRetrieve" ? "image" : "video", { query, limit: historyLimit });
     try {
       const data: HistoryListResponse = await request;
       if (historyRequestIdRef.current !== requestId) return;
@@ -780,7 +783,8 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
     const params = new URLSearchParams(window.location.search);
     params.set("page", "history");
     params.set("historyTab", tab);
-    if (filter !== "all" && isHistoryFilterSupported(tab, filter)) params.set("historyFilter", filter);
+    const activeFilter = isHistoryFilterSupported(tab, filter) ? filter : "all";
+    if (activeFilter !== "all") params.set("historyFilter", activeFilter);
     else params.delete("historyFilter");
     if (query.trim()) params.set("historyQuery", query.trim());
     else params.delete("historyQuery");
@@ -793,6 +797,21 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
     const timer = window.setTimeout(() => setCopied(false), 1800);
     return () => window.clearTimeout(timer);
   }, [copied]);
+
+  function updateHistoryTab(nextTab: HistoryTabKey) {
+    setHistoryLimit(HISTORY_PAGE_SIZE);
+    setTab(nextTab);
+  }
+
+  function updateHistoryFilter(nextFilter: HistoryFilterKey) {
+    setHistoryLimit(HISTORY_PAGE_SIZE);
+    setFilter(nextFilter);
+  }
+
+  function updateHistoryQuery(nextQuery: string) {
+    setHistoryLimit(HISTORY_PAGE_SIZE);
+    setQuery(nextQuery);
+  }
 
   const summaryCards = useMemo<HistorySummaryCard[]>(() => {
     if (tab === "image") {
@@ -846,10 +865,10 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
         <PageHeader icon="fa-history" title="历史记录" desc="查看您的检测与检索历史记录" />
         <div className="card">
           <div className="model-tabs history-tabs">
-            <button className={`model-tab ${tab === "image" ? "active" : ""}`} onClick={() => setTab("image")}>图像鉴伪</button>
-            <button className={`model-tab ${tab === "video" ? "active" : ""}`} onClick={() => setTab("video")}>视频鉴伪</button>
-            <button className={`model-tab ${tab === "imageRetrieve" ? "active" : ""}`} onClick={() => setTab("imageRetrieve")}>图像检索</button>
-            <button className={`model-tab ${tab === "videoRetrieve" ? "active" : ""}`} onClick={() => setTab("videoRetrieve")}>视频检索</button>
+            <button className={`model-tab ${tab === "image" ? "active" : ""}`} onClick={() => updateHistoryTab("image")}>图像鉴伪</button>
+            <button className={`model-tab ${tab === "video" ? "active" : ""}`} onClick={() => updateHistoryTab("video")}>视频鉴伪</button>
+            <button className={`model-tab ${tab === "imageRetrieve" ? "active" : ""}`} onClick={() => updateHistoryTab("imageRetrieve")}>图像检索</button>
+            <button className={`model-tab ${tab === "videoRetrieve" ? "active" : ""}`} onClick={() => updateHistoryTab("videoRetrieve")}>视频检索</button>
           </div>
           {status && <div className={`notice ${status.tone}`}>{status.text}</div>}
           {records.length ? (
@@ -862,7 +881,7 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
                     className={`history-summary-card ${card.filterKey === filter ? "active" : ""}`}
                     onClick={() => {
                       if (!card.filterKey) return;
-                      setFilter(card.filterKey === filter ? "all" : card.filterKey);
+                      updateHistoryFilter(card.filterKey === filter ? "all" : card.filterKey);
                     }}
                   >
                     <span>{card.label}</span>
@@ -875,12 +894,12 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
                   <i className="fa fa-search" />
                   <input
                     value={query}
-                    onChange={(event) => setQuery(event.target.value)}
+                    onChange={(event) => updateHistoryQuery(event.target.value)}
                     placeholder="按文件名、结论、时间搜索历史记录"
                   />
                 </div>
                 {query && (
-                  <button type="button" className="btn-code history-search-clear" onClick={() => setQuery("")}>
+                  <button type="button" className="btn-code history-search-clear" onClick={() => updateHistoryQuery("")}>
                     清空
                   </button>
                 )}
@@ -916,14 +935,14 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
                 </button>
                 {(filter !== "all" || query.trim()) && (
                   <button
-                    type="button"
-                    className="btn-code history-reset-btn"
-                    onClick={() => {
-                      setFilter("all");
-                      setQuery("");
-                    }}
-                  >
-                    重置条件
+                  type="button"
+                  className="btn-code history-reset-btn"
+                  onClick={() => {
+                    updateHistoryFilter("all");
+                    updateHistoryQuery("");
+                  }}
+                >
+                  重置条件
                   </button>
                 )}
               </div>
@@ -934,7 +953,7 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
                       key={option.key}
                       type="button"
                       className={`history-filter-btn ${filter === option.key ? "active" : ""}`}
-                      onClick={() => setFilter(option.key)}
+                      onClick={() => updateHistoryFilter(option.key)}
                     >
                       <span>{option.label}</span>
                       <span className="history-filter-count">{historyFilterCounts[option.key] ?? 0}</span>
@@ -943,13 +962,27 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
                 </div>
               )}
               {records.length ? (
-                <HistoryRecords records={records} tab={tab} query={query} />
+                <>
+                  <HistoryRecords records={records} tab={tab} query={query} />
+                  {records.length < historyTotal && (
+                    <div className="history-load-more">
+                      <button
+                        type="button"
+                        className="btn-code history-load-more-btn"
+                        disabled={historyBusy}
+                        onClick={() => setHistoryLimit((value) => value + HISTORY_PAGE_SIZE)}
+                      >
+                        {historyBusy ? "加载中" : "加载更多"}
+                      </button>
+                    </div>
+                  )}
+                </>
               ) : (
                 <EmptyState
                   icon="fa-filter"
                   text="当前筛选条件下暂无记录"
                   actions={[
-                    { label: "清除条件", onClick: () => { setFilter("all"); setQuery(""); } },
+                    { label: "清除条件", onClick: () => { updateHistoryFilter("all"); updateHistoryQuery(""); } },
                     { label: tab === "video" ? "去视频鉴伪" : tab === "image" ? "去图像鉴伪" : "去侵权检索", onClick: () => setPage(tab === "video" ? "video" : tab === "image" ? "image" : "retrieve") },
                   ]}
                 />
@@ -969,7 +1002,7 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
               icon="fa-filter"
               text="当前筛选条件下暂无记录"
               actions={[
-                { label: "清除条件", onClick: () => { setFilter("all"); setQuery(""); } },
+                { label: "清除条件", onClick: () => { updateHistoryFilter("all"); updateHistoryQuery(""); } },
                 { label: tab === "video" ? "去视频鉴伪" : tab === "image" ? "去图像鉴伪" : "去侵权检索", onClick: () => setPage(tab === "video" ? "video" : tab === "image" ? "image" : "retrieve") },
               ]}
             />
