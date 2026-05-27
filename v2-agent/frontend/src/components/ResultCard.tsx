@@ -21,7 +21,7 @@ export default function ResultCard({
 }: Props) {
   const meta = VERDICT_META[result.verdict];
   const [showOverlay, setShowOverlay] = useState(true);
-  const effectivePreview = previewUrl || result.fileMeta.thumbnail || undefined;
+  const effectivePreview = previewUrl || result.fileMeta.preview || result.fileMeta.thumbnail || undefined;
   const isImage = result.fileMeta.type === "image" && effectivePreview;
   const synthid = result.synthid;
   const visibleWatermark = result.visibleWatermark;

@@ -21,7 +21,15 @@ export interface DetectResult {
   taskId: string;
   reportId: string;
   createdAt: string;
-  fileMeta: { name: string; type: FileType; size: string; resolution?: string | null; sha256?: string; thumbnail?: string | null };
+  fileMeta: {
+    name: string;
+    type: FileType;
+    size: string;
+    resolution?: string | null;
+    sha256?: string;
+    thumbnail?: string | null;
+    preview?: string | null;
+  };
   verdict: Verdict;
   confidence: number;
   modelVersion: string;

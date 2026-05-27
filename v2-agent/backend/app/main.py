@@ -70,7 +70,7 @@ async def collect_request_metrics(request: Request, call_next) -> Response:
         )
 
 
-def _thumbnail_data_uri(data: bytes, file_type: str) -> str | None:
+def _image_data_uri(data: bytes, file_type: str, *, max_side: int, quality: int) -> str | None:
     if file_type != "image":
         return None
     try:
@@ -78,9 +78,9 @@ def _thumbnail_data_uri(data: bytes, file_type: str) -> str | None:
 
         with Image.open(io.BytesIO(data)) as im:
             im = im.convert("RGB")
-            im.thumbnail((220, 220))
+            im.thumbnail((max_side, max_side))
             out = io.BytesIO()
-            im.save(out, format="WEBP", quality=46, method=4)
+            im.save(out, format="WEBP", quality=quality, method=4)
         import base64
 
         return "data:image/webp;base64," + base64.b64encode(out.getvalue()).decode()
@@ -98,6 +98,7 @@ def _build_result(
     cache_hit: bool,
     sha256: str,
     thumbnail: str | None,
+    preview: str | None,
 ) -> dict:
     now = datetime.now(timezone.utc)
     day = now.strftime("%Y%m%d")
@@ -116,6 +117,7 @@ def _build_result(
             "resolution": detector.image_size(data) if ftype == "image" else None,
             "sha256": sha256,
             "thumbnail": thumbnail,
+            "preview": preview,
         },
         "verdict": analysis["verdict"],
         "confidence": analysis["confidence"],
@@ -158,7 +160,8 @@ async def detect(request: Request, file: UploadFile = File(...), fileType: str |
     filename = file.filename or "unknown"
     ftype = _detect_type(filename, fileType)
     sha256 = hashlib.sha256(data).hexdigest()
-    thumbnail = _thumbnail_data_uri(data, ftype)
+    thumbnail = _image_data_uri(data, ftype, max_side=180, quality=44)
+    preview = _image_data_uri(data, ftype, max_side=960, quality=72)
 
     started = time.perf_counter()
     cached = storage.get_cached_analysis(ftype, sha256)
@@ -179,6 +182,7 @@ async def detect(request: Request, file: UploadFile = File(...), fileType: str |
         cache_hit=cache_hit,
         sha256=sha256,
         thumbnail=thumbnail,
+        preview=preview,
     )
     storage.record_event(
         "detect",
