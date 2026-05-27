@@ -4,9 +4,10 @@ import uuid
 import requests
 from urllib.parse import urlparse
 
-from flask import Blueprint, render_template, request, session, jsonify
+from flask import Blueprint, render_template, request, session, jsonify, Response
 from werkzeug.utils import secure_filename
 
+from imagedetection.views import reporting
 from imagedetection.views.utils import (
     excute_detection_sql
 )
@@ -104,6 +105,29 @@ def _backend_identity(user_info):
     phone = str((user_info or {}).get('phone') or '').strip()
     openid = str((user_info or {}).get('openid') or '').strip()
     return openid or phone or 'guest', phone
+
+
+def _detection_owner():
+    user_info = session.get('user_info')
+    if isinstance(user_info, dict) and user_info:
+        phone = str(user_info.get('phone') or '').strip()
+        openid = str(user_info.get('openid') or '').strip()
+        return phone, openid, False
+    guest_openid = str(session.get('guest_openid') or '').strip()
+    return '', guest_openid, True
+
+
+def _load_detection_record(table, itemid):
+    phone, openid, is_guest = _detection_owner()
+    if is_guest:
+        if not openid:
+            return None
+        sql = f"SELECT * FROM {table} WHERE itemid = %s AND openid = %s LIMIT 1"
+        rows = excute_detection_sql(sql, (itemid, openid))
+    else:
+        sql = f"SELECT * FROM {table} WHERE itemid = %s AND (phone = %s OR openid = %s) LIMIT 1"
+        rows = excute_detection_sql(sql, (itemid, phone, openid))
+    return rows[0] if rows else None
 
 
 def _detection_actor():
@@ -399,20 +423,13 @@ def image_detection_feedback():
 @image_upload_blueprint.route('/image_upload/result')
 def image_result_api():
     """根据 itemid 获取历史检测结果"""
-    if 'user_info' not in session or session['user_info'] is None:
-        return jsonify({'status': 'error', 'message': '用户未登录'}), 401
-
     itemid = request.args.get('itemid')
-    phone = session['user_info'].get('phone', '')
     if not itemid:
         return jsonify({'status': 'error', 'message': '缺少参数'}), 400
 
-    data_sql = "SELECT * FROM data WHERE itemid = %s AND phone = %s"
-    data_result = excute_detection_sql(data_sql, (itemid, phone))
-    if not data_result or len(data_result) == 0:
+    item = _load_detection_record('data', itemid)
+    if not item:
         return jsonify({'status': 'error', 'message': '未找到该检测记录'}), 404
-
-    item = data_result[0]
     filename = item.get('filename', '')
     fake_pct = _to_float(item.get('fake', 0), 0.0)
     fake = _prob01_from_percent(fake_pct)
@@ -451,6 +468,43 @@ def image_result_api():
             '_model': 'aigc',
         }
     })
+
+
+@image_upload_blueprint.route('/image_upload/report')
+def image_report_api():
+    itemid = request.args.get('itemid')
+    if not itemid:
+        return jsonify({'status': 'error', 'message': '缺少参数'}), 400
+
+    item = _load_detection_record('data', itemid)
+    if not item:
+        return jsonify({'status': 'error', 'message': '未找到该检测记录'}), 404
+
+    fake_pct = _to_float(item.get('fake', 0), 0.0)
+    result = {
+        'itemid': item.get('itemid'),
+        'final_label': 'AI生成图像' if fake_pct >= 50 else '真实图像',
+        'probability': _prob01_from_percent(fake_pct),
+        'confidence': item.get('clarity', ''),
+        'explanation': item.get('explantation') or _to_user_explanation(
+            'AI生成图像' if fake_pct >= 50 else '真实图像',
+            item.get('clarity', ''),
+            has_metadata=bool(_metadata_for_item(itemid)),
+        ),
+        'image_url': _backend_static_url('image', item),
+        'filename': item.get('filename', ''),
+        'file_size': item.get('file_size', ''),
+        'img_format': item.get('img_format', ''),
+        'resolution': item.get('resolution', ''),
+        'visual_issues': _normalize_visual_issues([], final_label='AI生成图像' if fake_pct >= 50 else '真实图像'),
+        'all_metadata': _metadata_for_item(itemid),
+    }
+    html = reporting.image_report_content(item, result)
+    return Response(
+        html,
+        mimetype='text/html',
+        headers={'Content-Disposition': reporting.attachment_header(reporting.image_report_filename(itemid))},
+    )
 
 
 @image_upload_blueprint.route('/video_upload/detect', methods=['POST'])
@@ -557,20 +611,13 @@ def video_detect():
 
 @image_upload_blueprint.route('/video_upload/result')
 def video_result_api():
-    if 'user_info' not in session or session['user_info'] is None:
-        return jsonify({'status': 'error', 'message': '用户未登录'}), 401
-
     itemid = request.args.get('itemid')
-    phone = session['user_info'].get('phone', '')
     if not itemid:
         return jsonify({'status': 'error', 'message': '缺少参数'}), 400
 
-    sql = "SELECT * FROM video_data WHERE itemid = %s AND phone = %s"
-    rows = excute_detection_sql(sql, (itemid, phone))
-    if not rows:
+    item = _load_detection_record('video_data', itemid)
+    if not item:
         return jsonify({'status': 'error', 'message': '未找到该视频检测记录'}), 404
-
-    item = rows[0]
     fake_pct = float(item.get('fake', 0) or 0)
     return jsonify({
         'status': 'success',
@@ -595,3 +642,40 @@ def video_result_api():
             }
         }
     })
+
+
+@image_upload_blueprint.route('/video_upload/report')
+def video_report_api():
+    itemid = request.args.get('itemid')
+    if not itemid:
+        return jsonify({'status': 'error', 'message': '缺少参数'}), 400
+
+    item = _load_detection_record('video_data', itemid)
+    if not item:
+        return jsonify({'status': 'error', 'message': '未找到该视频检测记录'}), 404
+
+    fake_pct = float(item.get('fake', 0) or 0)
+    result = {
+        'itemid': item.get('itemid'),
+        'filename': item.get('filename', ''),
+        'video_url': _backend_static_url('video', item),
+        'fake_percentage': fake_pct,
+        'real_percentage': max(0.0, 100.0 - fake_pct),
+        'final_label': item.get('final_label', ''),
+        'confidence': item.get('confidence', ''),
+        'explanation': item.get('explanation', ''),
+        'frame_count': item.get('frame_count', 0),
+        'encoder': item.get('encoder', ''),
+        'meta': {
+            'file_size': item.get('file_size', ''),
+            'duration': item.get('duration', ''),
+            'resolution': item.get('resolution', ''),
+            'video_format': item.get('video_format', ''),
+        },
+    }
+    html = reporting.video_report_content(item, result)
+    return Response(
+        html,
+        mimetype='text/html',
+        headers={'Content-Disposition': reporting.attachment_header(reporting.video_report_filename(itemid))},
+    )

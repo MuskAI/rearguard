@@ -158,6 +158,72 @@ def test_video_detect_logged_in_builds_public_media_url(client, monkeypatch):
     assert payload["video_url"] == "/detection-static/uploads/openid-1/video/video.mp4"
 
 
+def test_guest_image_report_downloads_attachment(client, monkeypatch):
+    with client.session_transaction() as sess:
+        sess["guest_openid"] = "guest-123"
+
+    def fake_detection_sql(sql, params=None, fetch=True):
+        if sql == "SELECT * FROM data WHERE itemid = %s AND openid = %s LIMIT 1":
+            assert params == ("31", "guest-123")
+            return [{
+                "itemid": 31,
+                "filename": "guest.png",
+                "fake": 61.0,
+                "clarity": "中",
+                "file_size": "8KB",
+                "img_format": "png",
+                "resolution": "320x320",
+                "openid": "guest-123",
+                "createtime": "2026-05-27 14:00:00",
+            }]
+        if sql == "SELECT all_metadata FROM exif WHERE data_itemid = %s LIMIT 1":
+            return []
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+    monkeypatch.setattr(detection, "excute_detection_sql", fake_detection_sql)
+
+    response = client.get("/image_upload/report?itemid=31")
+
+    assert response.status_code == 200
+    assert "attachment;" in response.headers["Content-Disposition"]
+    assert "图像鉴伪报告" in response.get_data(as_text=True)
+    assert "guest.png" in response.get_data(as_text=True)
+
+
+def test_video_report_downloads_attachment_for_logged_user(client, monkeypatch):
+    _login_session(client)
+
+    def fake_detection_sql(sql, params=None, fetch=True):
+        if sql == "SELECT * FROM video_data WHERE itemid = %s AND (phone = %s OR openid = %s) LIMIT 1":
+            assert params == ("41", "13800000000", "openid-1")
+            return [{
+                "itemid": 41,
+                "filename": "clip.mp4",
+                "fake": 78.5,
+                "final_label": "AI生成视频",
+                "confidence": "高",
+                "explanation": "检测到明显生成痕迹。",
+                "duration": "10s",
+                "resolution": "1280x720",
+                "file_size": "4MB",
+                "encoder": "h264",
+                "frame_count": 55,
+                "openid": "openid-1",
+                "phone": "13800000000",
+                "createtime": "2026-05-27 14:05:00",
+            }]
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+    monkeypatch.setattr(detection, "excute_detection_sql", fake_detection_sql)
+
+    response = client.get("/video_upload/report?itemid=41")
+
+    assert response.status_code == 200
+    assert "attachment;" in response.headers["Content-Disposition"]
+    assert "视频鉴伪报告" in response.get_data(as_text=True)
+    assert "clip.mp4" in response.get_data(as_text=True)
+
+
 def test_retrieve_search_uses_selected_library_and_persists_history(client, monkeypatch, tmp_path):
     _login_session(client)
     insert_calls = []

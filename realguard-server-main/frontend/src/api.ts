@@ -73,12 +73,29 @@ export function detectImage(file: File) {
   return jsonRequest<{ result: ImageDetectionResult }>("/image_upload/detect", { method: "POST", body });
 }
 
+function triggerDownload(path: string) {
+  const link = document.createElement("a");
+  link.href = `${API_BASE}${path}`;
+  link.rel = "noreferrer";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+export function downloadImageReport(itemid: number) {
+  triggerDownload(`/image_upload/report?itemid=${encodeURIComponent(String(itemid))}`);
+}
+
 export function detectVideo(payload: { file?: File; videoUrl?: string; fastMode: boolean }) {
   const body = new FormData();
   if (payload.file) body.append("video_file", payload.file);
   if (payload.videoUrl) body.append("video_url", payload.videoUrl);
   body.append("fast_mode", payload.fastMode ? "1" : "0");
   return jsonRequest<{ result: VideoDetectionResult }>("/video_upload/detect", { method: "POST", body });
+}
+
+export function downloadVideoReport(itemid: number) {
+  triggerDownload(`/video_upload/report?itemid=${encodeURIComponent(String(itemid))}`);
 }
 
 export function getLibraries(searchType: "image" | "video") {

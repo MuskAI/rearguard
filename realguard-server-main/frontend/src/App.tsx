@@ -8,6 +8,8 @@ import {
   VideoDetectionResult,
   detectImage,
   detectVideo,
+  downloadImageReport,
+  downloadVideoReport,
   getHistory,
   getLibraries,
   getMe,
@@ -910,6 +912,11 @@ function ImageResult({ result }: { result: ImageDetectionResult }) {
         <Info label="格式" value={result.img_format || "-"} />
         <Info label="分辨率" value={result.resolution || "-"} />
       </div>
+      <div className="result-actions">
+        <button className="btn-code" type="button" onClick={() => downloadImageReport(result.itemid)}>
+          <i className="fa fa-download" /> 下载报告
+        </button>
+      </div>
       <div className="case-block"><p>{result.explanation}</p></div>
     </div>
   );
@@ -926,6 +933,11 @@ function VideoResult({ result }: { result: VideoDetectionResult }) {
       </div>
       <Progress label="真实概率" value={result.real_percentage} tone="green" />
       <Progress label="AI概率" value={result.fake_percentage} tone="red" />
+      <div className="result-actions">
+        <button className="btn-code" type="button" onClick={() => downloadVideoReport(result.itemid)}>
+          <i className="fa fa-download" /> 下载报告
+        </button>
+      </div>
       <div className="case-block"><p>{result.explanation || "暂无详细说明"}</p></div>
     </div>
   );

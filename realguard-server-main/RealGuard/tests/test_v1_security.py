@@ -64,8 +64,8 @@ def test_image_result_api_queries_with_user_phone(client, monkeypatch):
 
     def fake_detection_sql(sql, params=None, fetch=True):
         calls.append((sql, params))
-        if sql == "SELECT * FROM data WHERE itemid = %s AND phone = %s":
-            assert params == ("7", "13800000000")
+        if sql == "SELECT * FROM data WHERE itemid = %s AND (phone = %s OR openid = %s) LIMIT 1":
+            assert params == ("7", "13800000000", "openid-1")
             return [{
                 "itemid": 7,
                 "filename": "sample.png",
@@ -89,7 +89,7 @@ def test_image_result_api_queries_with_user_phone(client, monkeypatch):
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["result"]["itemid"] == 7
-    assert any(params == ("7", "13800000000") for _, params in calls)
+    assert any(params == ("7", "13800000000", "openid-1") for _, params in calls)
 
 
 def test_retrieve_history_result_uses_user_phone_and_local_proxy(client, monkeypatch):

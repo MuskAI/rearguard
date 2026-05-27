@@ -474,6 +474,7 @@ a { text-decoration: none; color: inherit; }
 .case-kv-item { background: var(--bg-input); border-radius: 10px; padding: 0.6rem; text-align: center; min-width: 0; }
 .case-kv-item .k { font-size: 0.72rem; color: var(--text-muted); }
 .case-kv-item .v { font-size: 0.82rem; font-weight: 600; color: var(--text-primary); overflow-wrap: anywhere; }
+.result-actions { display: flex; justify-content: flex-end; margin: 0.2rem 0 0.7rem; }
 .case-block { background: var(--bg-input); border-radius: 12px; padding: 0.9rem; margin-top: 0.7rem; }
 .case-block p { font-size: 0.78rem; color: var(--text-secondary); line-height: 1.65; white-space: pre-line; }
 .results-section { margin-top: 1.5rem; }
