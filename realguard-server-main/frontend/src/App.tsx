@@ -722,6 +722,7 @@ function HistoryPage() {
   const [records, setRecords] = useState<HistoryRecord[]>([]);
   const [status, setStatus] = useState<Status>(null);
   const [filter, setFilter] = useState<HistoryFilterKey>(() => getInitialHistoryFilter(getInitialHistoryTab()));
+  const [query, setQuery] = useState(() => getInitialHistoryQuery());
 
   useEffect(() => {
     setStatus({ tone: "info", text: "正在加载历史记录" });
@@ -755,53 +756,71 @@ function HistoryPage() {
     params.set("historyTab", tab);
     if (filter !== "all" && isHistoryFilterSupported(tab, filter)) params.set("historyFilter", filter);
     else params.delete("historyFilter");
+    if (query.trim()) params.set("historyQuery", query.trim());
+    else params.delete("historyQuery");
     const next = params.toString();
     window.history.replaceState({}, "", `${window.location.pathname}${next ? `?${next}` : ""}`);
-  }, [tab, filter]);
+  }, [tab, filter, query]);
+
+  const queriedRecords = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return records;
+    return records.filter((record) => {
+      const fields = [
+        String(record.filename || ""),
+        String(record.final_label || ""),
+        String(record.confidence || ""),
+        String(record.createtime || ""),
+        String(record.top_k || ""),
+      ];
+      return fields.some((field) => field.toLowerCase().includes(q));
+    });
+  }, [records, query]);
 
   const filteredRecords = useMemo(() => {
     if (tab === "image") {
-      if (filter === "guest") return records.filter((record) => Boolean(record.is_guest_record));
-      if (filter === "metadata") return records.filter((record) => Boolean(record.has_metadata));
-      if (filter === "issues") return records.filter((record) => Boolean(record.has_visual_issues));
-      return records;
+      if (filter === "guest") return queriedRecords.filter((record) => Boolean(record.is_guest_record));
+      if (filter === "metadata") return queriedRecords.filter((record) => Boolean(record.has_metadata));
+      if (filter === "issues") return queriedRecords.filter((record) => Boolean(record.has_visual_issues));
+      return queriedRecords;
     }
     if (tab === "video") {
-      if (filter === "guest") return records.filter((record) => Boolean(record.is_guest_record));
-      if (filter === "ai") return records.filter((record) => String(record.final_label || "").includes("AI"));
-      return records;
+      if (filter === "guest") return queriedRecords.filter((record) => Boolean(record.is_guest_record));
+      if (filter === "ai") return queriedRecords.filter((record) => String(record.final_label || "").includes("AI"));
+      return queriedRecords;
     }
-    return records;
-  }, [records, tab, filter]);
+    return queriedRecords;
+  }, [queriedRecords, tab, filter]);
 
   const summaryCards = useMemo(() => {
+    const baseRecords = filteredRecords;
     if (tab === "image") {
       return [
-        { label: "总记录", value: records.length },
-        { label: "访客记录", value: records.filter((record) => Boolean(record.is_guest_record)).length },
-        { label: "带元数据", value: records.filter((record) => Boolean(record.has_metadata)).length },
-        { label: "有可疑点", value: records.filter((record) => Boolean(record.has_visual_issues)).length },
+        { label: "当前记录", value: baseRecords.length },
+        { label: "访客记录", value: baseRecords.filter((record) => Boolean(record.is_guest_record)).length },
+        { label: "带元数据", value: baseRecords.filter((record) => Boolean(record.has_metadata)).length },
+        { label: "有可疑点", value: baseRecords.filter((record) => Boolean(record.has_visual_issues)).length },
       ];
     }
     if (tab === "video") {
       return [
-        { label: "总记录", value: records.length },
-        { label: "访客记录", value: records.filter((record) => Boolean(record.is_guest_record)).length },
-        { label: "AI结论", value: records.filter((record) => String(record.final_label || "").includes("AI")).length },
-        { label: "真实结论", value: records.filter((record) => String(record.final_label || "").includes("真实")).length },
+        { label: "当前记录", value: baseRecords.length },
+        { label: "访客记录", value: baseRecords.filter((record) => Boolean(record.is_guest_record)).length },
+        { label: "AI结论", value: baseRecords.filter((record) => String(record.final_label || "").includes("AI")).length },
+        { label: "真实结论", value: baseRecords.filter((record) => String(record.final_label || "").includes("真实")).length },
       ];
     }
-    const resultCount = records.reduce((sum, record) => sum + Number(record.result_count || 0), 0);
-    const topKAvg = records.length
-      ? Math.round((records.reduce((sum, record) => sum + Number(record.top_k || 0), 0) / records.length) * 10) / 10
+    const resultCount = baseRecords.reduce((sum, record) => sum + Number(record.result_count || 0), 0);
+    const topKAvg = baseRecords.length
+      ? Math.round((baseRecords.reduce((sum, record) => sum + Number(record.top_k || 0), 0) / baseRecords.length) * 10) / 10
       : 0;
     return [
-      { label: "总查询", value: records.length },
+      { label: "当前查询", value: baseRecords.length },
       { label: "命中总数", value: resultCount },
       { label: "平均Top-K", value: topKAvg },
       { label: "查询类型", value: tab === "imageRetrieve" ? "图像" : "视频" },
     ];
-  }, [records, tab]);
+  }, [filteredRecords, tab]);
 
   const filterOptions = getHistoryFilterOptions(tab);
 
@@ -826,6 +845,21 @@ function HistoryPage() {
                     <strong>{card.value}</strong>
                   </div>
                 ))}
+              </div>
+              <div className="history-search-bar">
+                <div className="input-wrap">
+                  <i className="fa fa-search" />
+                  <input
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="按文件名、结论、时间搜索历史记录"
+                  />
+                </div>
+                {query && (
+                  <button type="button" className="btn-code history-search-clear" onClick={() => setQuery("")}>
+                    清空
+                  </button>
+                )}
               </div>
               {filterOptions.length > 0 && (
                 <div className="history-filter-bar">
@@ -1410,6 +1444,11 @@ function getInitialHistoryFilter(tab: HistoryTabKey): HistoryFilterKey {
   if (typeof window === "undefined") return "all";
   const value = new URLSearchParams(window.location.search).get("historyFilter") as HistoryFilterKey | null;
   return value && isHistoryFilterSupported(tab, value) ? value : "all";
+}
+
+function getInitialHistoryQuery() {
+  if (typeof window === "undefined") return "";
+  return new URLSearchParams(window.location.search).get("historyQuery") || "";
 }
 
 function getHistoryFilterOptions(tab: HistoryTabKey): Array<{ key: HistoryFilterKey; label: string }> {
