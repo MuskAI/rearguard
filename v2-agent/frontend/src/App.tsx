@@ -67,6 +67,7 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const restoredHistoryItemRef = useRef(false);
+  const historyRequestIdRef = useRef(0);
 
   const loadHealth = () =>
     fetchHealth()
@@ -74,18 +75,24 @@ export default function App() {
       .catch(() => setHealth(null));
 
   const loadHistory = async (preserveOnError = history.length > 0) => {
+    const requestId = historyRequestIdRef.current + 1;
+    historyRequestIdRef.current = requestId;
     setHistoryBusy(true);
     try {
       const items = await fetchHistory();
+      if (historyRequestIdRef.current !== requestId) return;
       setHistory(items);
       setHistoryMessage("");
     } catch (error) {
+      if (historyRequestIdRef.current !== requestId) return;
       if (!preserveOnError) {
         setHistory([]);
       }
       setHistoryMessage(error instanceof Error ? error.message : "历史记录暂不可用");
     } finally {
-      setHistoryBusy(false);
+      if (historyRequestIdRef.current === requestId) {
+        setHistoryBusy(false);
+      }
     }
   };
 
