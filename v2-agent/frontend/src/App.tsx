@@ -127,11 +127,11 @@ export default function App() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages]);
 
-  const configureAccessToken = () => {
+  const configureAccessToken = async () => {
     const next = window.prompt("输入访问令牌。留空可清除本地保存的令牌。", getAccessToken());
     if (next === null) return;
     setAccessToken(next);
-    void loadHistory();
+    await Promise.allSettled([loadHealth(), loadHistory()]);
   };
 
   const runDetect = async (file: File) => {

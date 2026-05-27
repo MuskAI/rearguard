@@ -24,7 +24,7 @@ export default function AdminDashboard({
   accessProtectionEnabled,
 }: {
   onBack: () => void;
-  onConfigureAccess: () => void;
+  onConfigureAccess: () => void | Promise<void>;
   accessProtectionEnabled: boolean;
 }) {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
