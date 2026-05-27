@@ -301,6 +301,42 @@ export default function AdminDashboard({
             </table>
           </div>
         </section>
+
+        <section className="rounded-xl border border-ink-600 bg-ink-800 p-4">
+          <h2 className="font-serif text-base font-semibold text-rice mb-4">来源 × 证据矩阵</h2>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[560px] text-sm">
+              <thead>
+                <tr className="border-b border-ink-600 text-ink-500">
+                  <th className="text-left py-2 pr-3 font-medium">来源</th>
+                  <th className="text-right py-2 px-3 font-medium">可见水印</th>
+                  <th className="text-right py-2 px-3 font-medium">SynthID</th>
+                  <th className="text-right py-2 px-3 font-medium">已做取证</th>
+                  <th className="text-right py-2 pl-3 font-medium">已验凭证</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  { key: "vlm", label: "真实模型" },
+                  { key: "mock", label: "Mock 回退" },
+                  { key: "maps-only", label: "仅证据图" },
+                  { key: "unknown", label: "未知来源" },
+                ].map((item) => {
+                  const row = metrics.sourceEvidence[item.key as keyof typeof metrics.sourceEvidence] ?? {};
+                  return (
+                    <tr key={`${item.key}-evidence`} className="border-b border-ink-700/60 last:border-0">
+                      <td className="py-2 pr-3 text-ink-950">{item.label}</td>
+                      <td className="py-2 px-3 text-right text-rice">{row.visibleWatermarkHits ?? 0}</td>
+                      <td className="py-2 px-3 text-right text-rice">{row.synthidHits ?? 0}</td>
+                      <td className="py-2 px-3 text-right text-rice">{row.forensicsCompleted ?? 0}</td>
+                      <td className="py-2 pl-3 text-right text-rice">{row.provenanceCompleted ?? 0}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
       </div>
     </main>
   );
