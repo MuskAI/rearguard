@@ -2,6 +2,16 @@ import { useEffect, useMemo, useState } from "react";
 import { HistoryItem, VERDICT_META, TYPE_LABEL } from "../api";
 import Logo from "./Logo";
 
+const FILTER_OPTIONS = [
+  { key: "all", label: "全部" },
+  { key: "vlm", label: "VLM" },
+  { key: "mock", label: "Mock" },
+  { key: "forensics", label: "取证" },
+  { key: "provenance", label: "凭证" },
+  { key: "watermark", label: "水印" },
+] as const;
+type SidebarFilterKey = (typeof FILTER_OPTIONS)[number]["key"];
+
 interface Props {
   history: HistoryItem[];
   message?: string;
@@ -28,7 +38,7 @@ export default function Sidebar({
   onClose,
 }: Props) {
   const [query, setQuery] = useState(() => getInitialHistoryQuery());
-  const [filter, setFilter] = useState<"all" | "vlm" | "mock" | "forensics" | "provenance" | "watermark">(() => getInitialHistoryFilter());
+  const [filter, setFilter] = useState<SidebarFilterKey>(() => getInitialHistoryFilter());
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -51,11 +61,7 @@ export default function Sidebar({
   const filteredHistory = useMemo(() => {
     const q = query.trim().toLowerCase();
     return history.filter((item) => {
-      if (filter === "vlm" && item.source !== "vlm") return false;
-      if (filter === "mock" && item.source !== "mock") return false;
-      if (filter === "forensics" && !item.hasForensics) return false;
-      if (filter === "provenance" && !item.hasProvenance) return false;
-      if (filter === "watermark" && !item.hasVisibleWatermark && !item.hasSynthid) return false;
+      if (!matchesFilter(item, filter)) return false;
       if (!q) return true;
       const fields = [
         item.name,
@@ -66,8 +72,28 @@ export default function Sidebar({
       return fields.some((field) => String(field).toLowerCase().includes(q));
     });
   }, [filter, history, query]);
+  const filterCounts = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return Object.fromEntries(
+      FILTER_OPTIONS.map((item) => [
+        item.key,
+        history.filter((entry) => {
+          if (!matchesFilter(entry, item.key)) return false;
+          if (!q) return true;
+          const fields = [
+            entry.name,
+            entry.reportId,
+            entry.source || "",
+            entry.visibleWatermarkProvider || "",
+          ];
+          return fields.some((field) => String(field).toLowerCase().includes(q));
+        }).length,
+      ]),
+    ) as Record<SidebarFilterKey, number>;
+  }, [history, query]);
+  const activeFilterLabel = FILTER_OPTIONS.find((item) => item.key === filter)?.label || "全部";
   const activeSummary = [
-    { label: "筛选", value: filter === "all" ? "全部" : filter },
+    { label: "筛选", value: activeFilterLabel },
     { label: "搜索", value: query.trim() || "未设置" },
   ];
 
@@ -122,25 +148,27 @@ export default function Sidebar({
             />
           </div>
           <div className="flex flex-wrap gap-1">
-            {[
-              { key: "all", label: "全部" },
-              { key: "vlm", label: "VLM" },
-              { key: "mock", label: "Mock" },
-              { key: "forensics", label: "取证" },
-              { key: "provenance", label: "凭证" },
-              { key: "watermark", label: "水印" },
-            ].map((item) => (
+            {FILTER_OPTIONS.map((item) => (
               <button
                 key={item.key}
                 type="button"
                 onClick={() => setFilter(item.key as typeof filter)}
-                className={`px-2 py-1 rounded-md text-[10px] border ${
+                className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] border ${
                   filter === item.key
                     ? "border-cinnabar/40 bg-cinnabar/10 text-cinnabar"
                     : "border-ink-600 bg-ink-800 text-ink-500"
                 }`}
               >
-                {item.label}
+                <span>{item.label}</span>
+                <span
+                  className={`rounded-full px-1.5 py-0.5 text-[9px] ${
+                    filter === item.key
+                      ? "bg-cinnabar/15 text-cinnabar"
+                      : "bg-ink-900 text-ink-500"
+                  }`}
+                >
+                  {filterCounts[item.key]}
+                </span>
               </button>
             ))}
           </div>
@@ -293,12 +321,21 @@ function getInitialHistoryQuery() {
   return new URLSearchParams(window.location.search).get("historyQuery") || "";
 }
 
-function getInitialHistoryFilter() {
+function getInitialHistoryFilter(): SidebarFilterKey {
   if (typeof window === "undefined") return "all";
   const value = new URLSearchParams(window.location.search).get("historyFilter");
   return value === "vlm" || value === "mock" || value === "forensics" || value === "provenance" || value === "watermark"
     ? value
     : "all";
+}
+
+function matchesFilter(item: HistoryItem, filter: SidebarFilterKey) {
+  if (filter === "vlm") return item.source === "vlm";
+  if (filter === "mock") return item.source === "mock";
+  if (filter === "forensics") return Boolean(item.hasForensics);
+  if (filter === "provenance") return Boolean(item.hasProvenance);
+  if (filter === "watermark") return Boolean(item.hasVisibleWatermark || item.hasSynthid);
+  return true;
 }
 
 function renderHighlightedText(text: string, query: string) {
