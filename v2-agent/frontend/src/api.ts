@@ -76,6 +76,8 @@ export interface DetectResult {
   explanation: string;
   synthid?: SynthIDResult;
   visibleWatermark?: VisibleWatermarkResult;
+  forensics?: ForensicReport | null;
+  provenance?: ProvenanceReport | null;
   disclaimer: string;
 }
 
@@ -218,6 +220,21 @@ export async function fetchHistoryItem(taskId: string): Promise<DetectResult> {
 export async function deleteHistory(taskId: string): Promise<void> {
   const res = await fetch(`/v2-api/history/${taskId}`, { method: "DELETE", headers: withAuthHeaders() });
   await parseJson<Record<string, string>>(res, "删除历史失败");
+}
+
+export async function persistArtifacts(
+  taskId: string,
+  extras: { forensics?: ForensicReport | null; provenance?: ProvenanceReport | null },
+): Promise<void> {
+  const res = await fetch(`/v2-api/history/${encodeURIComponent(taskId)}/artifacts`, {
+    method: "POST",
+    headers: withAuthHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({
+      forensics: extras.forensics ?? null,
+      provenance: extras.provenance ?? null,
+    }),
+  });
+  await parseJson<Record<string, boolean>>(res, "保存附加分析结果失败");
 }
 
 export interface Metrics {

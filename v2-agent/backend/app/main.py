@@ -168,6 +168,7 @@ def health() -> dict:
         "accessProtectionEnabled": bool(ACCESS_TOKEN),
         "protectedEndpoints": [
             "/api/history",
+            "/api/history/{task_id}/artifacts",
             "/api/report/{report_id}",
             "/api/report/{report_id}/download",
             "/api/report/{report_id}/export",
@@ -273,6 +274,21 @@ def history_item(task_id: str, request: Request) -> dict:
     return item
 
 
+@app.post("/api/history/{task_id}/artifacts")
+def history_artifacts(task_id: str, request: Request, payload: dict | None = Body(default=None)) -> dict:
+    _require_protected_access(request)
+    item = storage.get_history(task_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    body = payload or {}
+    storage.put_history_artifacts(
+        item["taskId"],
+        forensics=body.get("forensics"),
+        provenance=body.get("provenance"),
+    )
+    return {"ok": True, "taskId": item["taskId"]}
+
+
 @app.delete("/api/history/{task_id}")
 def delete_item(task_id: str, request: Request) -> dict:
     _require_protected_access(request)
@@ -298,7 +314,11 @@ def report_download(report_id: str, request: Request) -> Response:
     if not item:
         raise HTTPException(status_code=404, detail="报告不存在")
     filename = reporting.download_filename(item)
-    html = reporting.build_report_html(item)
+    html = reporting.build_report_html(
+        item,
+        forensics=item.get("forensics"),
+        provenance=item.get("provenance"),
+    )
     return Response(
         content=html,
         media_type="text/html; charset=utf-8",
@@ -318,8 +338,8 @@ def report_export(report_id: str, request: Request, payload: dict | None = Body(
     body = payload or {}
     html = reporting.build_report_html(
         item,
-        forensics=body.get("forensics"),
-        provenance=body.get("provenance"),
+        forensics=body.get("forensics") or item.get("forensics"),
+        provenance=body.get("provenance") or item.get("provenance"),
     )
     return Response(
         content=html,

@@ -100,3 +100,49 @@ def test_report_export_includes_forensics_and_provenance_sections(client):
     assert "频域与光照存在可疑矛盾" in response.text
     assert "内容凭证验证（C2PA）" in response.text
     assert "OpenAI Images" in response.text
+
+
+def test_history_artifacts_persist_into_history_and_download(client):
+    detect = client.post(
+        "/api/detect",
+        files={"file": ("sample.txt", b"persist artifact flow", "text/plain")},
+    )
+    task_id = detect.json()["taskId"]
+    report_id = detect.json()["reportId"]
+
+    save = client.post(
+        f"/api/history/{task_id}/artifacts",
+        headers={"X-Jianzhen-Token": "test-token"},
+        json={
+            "forensics": {
+                "verdict": "real",
+                "confidence": 0.33,
+                "summary": "未见明显异常。",
+                "items": [{"key": "ela", "title": "压缩对齐分析", "status": "ok", "finding": "未见明显异常"}],
+                "modelVersion": "mock",
+                "source": "maps-only",
+            },
+            "provenance": {
+                "hasCredentials": False,
+                "validationState": "none",
+                "generator": None,
+                "issuer": None,
+                "signatureAlg": None,
+                "isAiGenerated": None,
+                "actions": [],
+                "ingredients": [],
+                "synthid": {"note": "未检测到 SynthID"},
+            },
+        },
+    )
+    history = client.get(f"/api/history/{task_id}", headers={"X-Jianzhen-Token": "test-token"})
+    download = client.get(f"/api/report/{report_id}/download", headers={"X-Jianzhen-Token": "test-token"})
+
+    assert save.status_code == 200
+    assert history.status_code == 200
+    payload = history.json()
+    assert payload["forensics"]["summary"] == "未见明显异常。"
+    assert payload["provenance"]["validationState"] == "none"
+    assert download.status_code == 200
+    assert "可解释性取证分析" in download.text
+    assert "内容凭证验证（C2PA）" in download.text

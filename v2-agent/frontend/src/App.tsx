@@ -14,6 +14,7 @@ import {
   fetchHistoryItem,
   deleteHistory,
   getAccessToken,
+  persistArtifacts,
   setAccessToken,
   TYPE_LABEL,
 } from "./api";
@@ -152,6 +153,11 @@ export default function App() {
     try {
       const report = await runForensics(file);
       setForensicsByTask((prev) => ({ ...prev, [taskId]: report }));
+      try {
+        await persistArtifacts(taskId, { forensics: report });
+      } catch {
+        // Keep the current analysis result visible even if persistence fails.
+      }
       setMessages((m) => [
         ...m.filter((msg) => msg.kind !== "loading"),
         { kind: "forensics", report },
@@ -177,6 +183,11 @@ export default function App() {
     try {
       const report = await runProvenance(file);
       setProvenanceByTask((prev) => ({ ...prev, [taskId]: report }));
+      try {
+        await persistArtifacts(taskId, { provenance: report });
+      } catch {
+        // Keep the current analysis result visible even if persistence fails.
+      }
       setMessages((m) => [
         ...m.filter((msg) => msg.kind !== "loading"),
         { kind: "provenance", report },
@@ -201,9 +212,24 @@ export default function App() {
     setActiveId(item.taskId);
     try {
       const result: DetectResult = await fetchHistoryItem(item.taskId);
-      setMessages([
+      if (result.forensics) {
+        setForensicsByTask((prev) => ({ ...prev, [result.taskId]: result.forensics! }));
+      }
+      if (result.provenance) {
+        setProvenanceByTask((prev) => ({ ...prev, [result.taskId]: result.provenance! }));
+      }
+      const nextMessages: Message[] = [
         { kind: "user", text: `历史记录：${item.name}`, fileName: item.name },
         { kind: "result", result },
+      ];
+      if (result.forensics) {
+        nextMessages.push({ kind: "forensics", report: result.forensics });
+      }
+      if (result.provenance) {
+        nextMessages.push({ kind: "provenance", report: result.provenance });
+      }
+      setMessages([
+        ...nextMessages,
       ]);
     } catch (error) {
       setMessages([

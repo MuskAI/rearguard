@@ -63,6 +63,14 @@ def _init(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_history_created_at ON history(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_history_sha256 ON history(sha256);
 
+        CREATE TABLE IF NOT EXISTS history_artifacts (
+            task_id TEXT PRIMARY KEY,
+            forensics_json TEXT,
+            provenance_json TEXT,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(task_id) REFERENCES history(task_id) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS request_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             created_at TEXT NOT NULL,
@@ -189,7 +197,12 @@ def list_history(limit: int = 100) -> list[dict[str, Any]]:
 def get_history(item_id: str) -> dict[str, Any] | None:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT result_json, thumbnail FROM history WHERE task_id = ? OR report_id = ?",
+            """
+            SELECT h.result_json, h.thumbnail, a.forensics_json, a.provenance_json
+            FROM history h
+            LEFT JOIN history_artifacts a ON a.task_id = h.task_id
+            WHERE h.task_id = ? OR h.report_id = ?
+            """,
             (item_id, item_id),
         ).fetchone()
     if not row:
@@ -197,6 +210,10 @@ def get_history(item_id: str) -> dict[str, Any] | None:
     result = json.loads(row["result_json"])
     if row["thumbnail"]:
         result.setdefault("fileMeta", {})["thumbnail"] = row["thumbnail"]
+    if row["forensics_json"]:
+        result["forensics"] = json.loads(row["forensics_json"])
+    if row["provenance_json"]:
+        result["provenance"] = json.loads(row["provenance_json"])
     return result
 
 
@@ -206,11 +223,46 @@ def delete_history(item_id: str) -> dict[str, Any] | None:
         return None
     with _connect() as conn:
         conn.execute(
+            "DELETE FROM history_artifacts WHERE task_id = ?",
+            (item["taskId"],),
+        )
+        conn.execute(
             "DELETE FROM history WHERE task_id = ? OR report_id = ?",
             (item["taskId"], item["reportId"]),
         )
         conn.commit()
     return item
+
+
+def put_history_artifacts(
+    task_id: str,
+    *,
+    forensics: dict[str, Any] | None = None,
+    provenance: dict[str, Any] | None = None,
+) -> None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT forensics_json, provenance_json FROM history_artifacts WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+        current_forensics = json.loads(row["forensics_json"]) if row and row["forensics_json"] else None
+        current_provenance = json.loads(row["provenance_json"]) if row and row["provenance_json"] else None
+        merged_forensics = forensics if forensics is not None else current_forensics
+        merged_provenance = provenance if provenance is not None else current_provenance
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO history_artifacts
+                (task_id, forensics_json, provenance_json, updated_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                task_id,
+                None if merged_forensics is None else json.dumps(merged_forensics, ensure_ascii=False),
+                None if merged_provenance is None else json.dumps(merged_provenance, ensure_ascii=False),
+                now_iso(),
+            ),
+        )
+        conn.commit()
 
 
 def next_sequence(prefix_date: str) -> int:
