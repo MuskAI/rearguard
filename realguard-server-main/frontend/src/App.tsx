@@ -783,14 +783,7 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
     const q = query.trim().toLowerCase();
     if (!q) return records;
     return records.filter((record) => {
-      const fields = [
-        String(record.filename || ""),
-        String(record.final_label || ""),
-        String(record.confidence || ""),
-        String(record.createtime || ""),
-        String(record.top_k || ""),
-      ];
-      return fields.some((field) => field.toLowerCase().includes(q));
+      return getSearchableHistoryFields(record).some((field) => field.toLowerCase().includes(q));
     });
   }, [records, query]);
 
@@ -1281,15 +1274,15 @@ function HistoryRecords({
               <div className="history-title" title={title}>{renderHighlightedText(title, query)}</div>
               {guestRecord && (
                 <div className="history-tags">
-                  <span className="history-tag guest"><i className="fa fa-user-secret" /> 访客</span>
-                  {hasMetadata && <span className="history-tag meta"><i className="fa fa-info-circle" /> 元数据</span>}
-                  {hasIssues && <span className="history-tag issue"><i className="fa fa-exclamation-triangle" /> 可疑点{issueCount > 0 ? ` ${issueCount}` : ""}</span>}
+                  <span className="history-tag guest"><i className="fa fa-user-secret" /> {renderHighlightedText("访客", query)}</span>
+                  {hasMetadata && <span className="history-tag meta"><i className="fa fa-info-circle" /> {renderHighlightedText("元数据", query)}</span>}
+                  {hasIssues && <span className="history-tag issue"><i className="fa fa-exclamation-triangle" /> {renderHighlightedText(`可疑点${issueCount > 0 ? ` ${issueCount}` : ""}`, query)}</span>}
                 </div>
               )}
               {!guestRecord && (hasMetadata || hasIssues) && (
                 <div className="history-tags">
-                  {hasMetadata && <span className="history-tag meta"><i className="fa fa-info-circle" /> 元数据</span>}
-                  {hasIssues && <span className="history-tag issue"><i className="fa fa-exclamation-triangle" /> 可疑点{issueCount > 0 ? ` ${issueCount}` : ""}</span>}
+                  {hasMetadata && <span className="history-tag meta"><i className="fa fa-info-circle" /> {renderHighlightedText("元数据", query)}</span>}
+                  {hasIssues && <span className="history-tag issue"><i className="fa fa-exclamation-triangle" /> {renderHighlightedText(`可疑点${issueCount > 0 ? ` ${issueCount}` : ""}`, query)}</span>}
                 </div>
               )}
               <div className="history-row"><span>时间</span><strong>{renderHighlightedText(timeText, query)}</strong></div>
@@ -1596,6 +1589,23 @@ function renderHighlightedText(text: string, query: string) {
       <span key={`${part}-${index}`}>{part}</span>
     ),
   );
+}
+
+function getSearchableHistoryFields(record: HistoryRecord) {
+  const issueCount = Number(record.visual_issue_count || 0);
+  return [
+    String(record.filename || ""),
+    String(record.final_label || ""),
+    String(record.confidence || ""),
+    String(record.createtime || ""),
+    String(record.top_k || ""),
+    String(record.result_count || ""),
+    Boolean(record.is_guest_record) ? "访客" : "",
+    Boolean(record.has_metadata) ? "元数据" : "",
+    Boolean(record.has_visual_issues) ? `可疑点${issueCount > 0 ? ` ${issueCount}` : ""}` : "",
+    record.result_count ? "数量" : "结论",
+    record.top_k ? "Top-K" : "置信度",
+  ].map((field) => String(field));
 }
 
 function getHistoryFilterOptions(tab: HistoryTabKey): Array<{ key: HistoryFilterKey; label: string }> {
