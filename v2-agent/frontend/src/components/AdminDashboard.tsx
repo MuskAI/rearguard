@@ -92,6 +92,18 @@ export default function AdminDashboard({
           <p className="text-[11px] sm:text-xs text-ink-500">检测流量、缓存效率与接口健康状态</p>
         </div>
         <div className="flex items-center gap-2">
+          <label className="sm:hidden">
+            <span className="sr-only">选择监控时间窗口</span>
+            <select
+              value={days}
+              onChange={(event) => setDays(Number(event.target.value) as 7 | 14 | 30)}
+              className="h-9 rounded-lg border border-ink-600 bg-ink-900 px-2 text-xs text-ink-950"
+            >
+              <option value={7}>7天</option>
+              <option value={14}>14天</option>
+              <option value={30}>30天</option>
+            </select>
+          </label>
           <div className="hidden sm:flex items-center gap-1 rounded-lg border border-ink-600 bg-ink-900 p-1">
             {[7, 14, 30].map((value) => (
               <button
