@@ -53,6 +53,7 @@ function inferType(name: string): FileType {
 export default function App() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyMessage, setHistoryMessage] = useState("");
+  const [historyBusy, setHistoryBusy] = useState(false);
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [forensicsByTask, setForensicsByTask] = useState<Record<string, ForensicReport>>({});
   const [provenanceByTask, setProvenanceByTask] = useState<Record<string, ProvenanceReport>>({});
@@ -72,20 +73,25 @@ export default function App() {
       .then(setHealth)
       .catch(() => setHealth(null));
 
-  const loadHistory = () =>
-    fetchHistory()
-      .then((items) => {
-        setHistory(items);
-        setHistoryMessage("");
-      })
-      .catch((error) => {
+  const loadHistory = async (preserveOnError = history.length > 0) => {
+    setHistoryBusy(true);
+    try {
+      const items = await fetchHistory();
+      setHistory(items);
+      setHistoryMessage("");
+    } catch (error) {
+      if (!preserveOnError) {
         setHistory([]);
-        setHistoryMessage(error instanceof Error ? error.message : "历史记录暂不可用");
-      });
+      }
+      setHistoryMessage(error instanceof Error ? error.message : "历史记录暂不可用");
+    } finally {
+      setHistoryBusy(false);
+    }
+  };
 
   useEffect(() => {
     loadHealth();
-    loadHistory();
+    void loadHistory(false);
   }, []);
 
   useEffect(() => {
@@ -125,7 +131,7 @@ export default function App() {
     const next = window.prompt("输入访问令牌。留空可清除本地保存的令牌。", getAccessToken());
     if (next === null) return;
     setAccessToken(next);
-    loadHistory();
+    void loadHistory();
   };
 
   const runDetect = async (file: File) => {
@@ -151,7 +157,7 @@ export default function App() {
         { kind: "result", result, previewUrl, file: type === "image" ? file : undefined },
       ]);
       setActiveId(result.taskId);
-      loadHistory();
+      void loadHistory();
     } catch (e) {
       setMessages((m) => [
         ...m.filter((msg) => msg.kind !== "progress"),
@@ -273,7 +279,8 @@ export default function App() {
         setMessages([]);
         setActiveId(undefined);
       }
-      loadHistory();
+      setHistory((items) => items.filter((item) => item.taskId !== taskId));
+      void loadHistory(true);
     } catch (error) {
       setHistoryMessage(error instanceof Error ? error.message : "删除历史失败");
     }
@@ -303,6 +310,7 @@ export default function App() {
     <div className="h-full flex flex-col md:flex-row">
       <Sidebar
         history={history}
+        historyBusy={historyBusy}
         message={historyMessage}
         accessProtectionEnabled={Boolean(health?.accessProtectionEnabled)}
         activeId={activeId}
@@ -313,6 +321,7 @@ export default function App() {
         onClearSelection={newChat}
         onConfigureAccess={configureAccessToken}
         onRetryHistory={loadHistory}
+        onRefreshHistory={() => loadHistory(true)}
         className="hidden md:flex"
       />
 
@@ -325,6 +334,7 @@ export default function App() {
           />
           <Sidebar
             history={history}
+            historyBusy={historyBusy}
             message={historyMessage}
             accessProtectionEnabled={Boolean(health?.accessProtectionEnabled)}
             activeId={activeId}
@@ -335,6 +345,7 @@ export default function App() {
             onClearSelection={newChat}
             onConfigureAccess={configureAccessToken}
             onRetryHistory={loadHistory}
+            onRefreshHistory={() => loadHistory(true)}
             onClose={() => setHistoryOpen(false)}
             className="relative h-full w-[86vw] max-w-80"
           />

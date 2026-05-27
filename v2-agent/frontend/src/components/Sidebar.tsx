@@ -14,6 +14,7 @@ type SidebarFilterKey = (typeof FILTER_OPTIONS)[number]["key"];
 
 interface Props {
   history: HistoryItem[];
+  historyBusy?: boolean;
   message?: string;
   accessProtectionEnabled?: boolean;
   activeId?: string;
@@ -24,12 +25,14 @@ interface Props {
   onClearSelection?: () => void;
   onConfigureAccess?: () => void;
   onRetryHistory?: () => void;
+  onRefreshHistory?: () => void;
   className?: string;
   onClose?: () => void;
 }
 
 export default function Sidebar({
   history,
+  historyBusy = false,
   message,
   accessProtectionEnabled = false,
   activeId,
@@ -40,6 +43,7 @@ export default function Sidebar({
   onClearSelection,
   onConfigureAccess,
   onRetryHistory,
+  onRefreshHistory,
   className = "",
   onClose,
 }: Props) {
@@ -186,6 +190,16 @@ export default function Sidebar({
           >
             {copied ? "已复制当前视图链接" : "复制当前视图链接"}
           </button>
+          {onRefreshHistory && (
+            <button
+              type="button"
+              onClick={onRefreshHistory}
+              disabled={historyBusy}
+              className="w-full px-2 py-1.5 rounded-md text-[10px] border border-ink-600 bg-ink-800 text-ink-500"
+            >
+              {historyBusy ? "刷新中" : "刷新历史"}
+            </button>
+          )}
           <div className="flex flex-wrap gap-1">
             {activeSummary.map((item) => (
               <span key={item.label} className="px-2 py-1 rounded-md text-[10px] border border-ink-600 bg-ink-800 text-ink-500">
@@ -237,7 +251,7 @@ export default function Sidebar({
                   onClick={onRetryHistory}
                   className="rounded-md border border-ink-600 bg-ink-900 px-2 py-1 text-[10px]"
                 >
-                  重试加载
+                  {historyBusy ? "加载中" : "重试加载"}
                 </button>
               )}
               {accessProtectionEnabled && onConfigureAccess && (
