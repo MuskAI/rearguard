@@ -257,6 +257,13 @@ export interface Metrics {
   byDay: { date: string; detections: number }[];
   byType: Partial<Record<FileType, number>>;
   byVerdict: Partial<Record<Verdict | "unknown", number>>;
+  bySource: Partial<Record<"vlm" | "mock" | "maps-only" | "unknown", number>>;
+  evidence: {
+    visibleWatermarkHits: number;
+    synthidHits: number;
+    forensicsCompleted: number;
+    provenanceCompleted: number;
+  };
   recentErrors: { createdAt: string; status: number; path: string }[];
 }
 

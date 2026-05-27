@@ -168,6 +168,49 @@ export default function AdminDashboard({
             )}
           </div>
         </section>
+
+        <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="rounded-xl border border-ink-600 bg-ink-800 p-4">
+            <h2 className="font-serif text-base font-semibold text-rice mb-4">分析来源</h2>
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { key: "vlm", label: "真实模型" },
+                { key: "mock", label: "Mock 回退" },
+                { key: "maps-only", label: "仅证据图" },
+                { key: "unknown", label: "未知来源" },
+              ].map((item) => (
+                <div key={item.key} className="rounded-lg bg-ink-900 border border-ink-600 p-3">
+                  <div className="text-xs text-ink-500">{item.label}</div>
+                  <div className="mt-1 text-lg font-semibold text-rice">
+                    {metrics.bySource[item.key as keyof typeof metrics.bySource] ?? 0}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-ink-600 bg-ink-800 p-4">
+            <h2 className="font-serif text-base font-semibold text-rice mb-4">证据与附加分析</h2>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="rounded-lg bg-ink-900 border border-ink-600 p-3">
+                <div className="text-xs text-ink-500">可见水印命中</div>
+                <div className="mt-1 text-lg font-semibold text-rice">{metrics.evidence.visibleWatermarkHits}</div>
+              </div>
+              <div className="rounded-lg bg-ink-900 border border-ink-600 p-3">
+                <div className="text-xs text-ink-500">SynthID 命中</div>
+                <div className="mt-1 text-lg font-semibold text-rice">{metrics.evidence.synthidHits}</div>
+              </div>
+              <div className="rounded-lg bg-ink-900 border border-ink-600 p-3">
+                <div className="text-xs text-ink-500">已做取证分析</div>
+                <div className="mt-1 text-lg font-semibold text-rice">{metrics.evidence.forensicsCompleted}</div>
+              </div>
+              <div className="rounded-lg bg-ink-900 border border-ink-600 p-3">
+                <div className="text-xs text-ink-500">已验内容凭证</div>
+                <div className="mt-1 text-lg font-semibold text-rice">{metrics.evidence.provenanceCompleted}</div>
+              </div>
+            </div>
+          </div>
+        </section>
       </div>
     </main>
   );

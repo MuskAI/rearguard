@@ -343,7 +343,13 @@ def metrics(days: int = 14) -> dict[str, Any]:
     today = datetime.now(timezone.utc).date().isoformat()
     with _connect() as conn:
         history_rows = conn.execute(
-            "SELECT created_at, file_type, result_json FROM history WHERE created_at >= ? ORDER BY created_at",
+            """
+            SELECT h.created_at, h.file_type, h.result_json, a.forensics_json, a.provenance_json
+            FROM history h
+            LEFT JOIN history_artifacts a ON a.task_id = h.task_id
+            WHERE h.created_at >= ?
+            ORDER BY h.created_at
+            """,
             (since.isoformat(),),
         ).fetchall()
         event_rows = conn.execute(
@@ -356,12 +362,17 @@ def metrics(days: int = 14) -> dict[str, Any]:
     by_day: dict[str, int] = defaultdict(int)
     by_type: Counter[str] = Counter()
     by_verdict: Counter[str] = Counter()
+    by_source: Counter[str] = Counter()
     today_ips: set[str] = set()
     cache_hits = 0
     cache_known = 0
     latencies: list[int] = []
     errors: list[dict[str, Any]] = []
     requests_today = 0
+    visible_watermark_hits = 0
+    synthid_hits = 0
+    forensics_completed = 0
+    provenance_completed = 0
 
     for row in history_rows:
         day = row["created_at"][:10]
@@ -369,6 +380,15 @@ def metrics(days: int = 14) -> dict[str, Any]:
         by_type[row["file_type"]] += 1
         result = json.loads(row["result_json"])
         by_verdict[str(result.get("verdict", "unknown"))] += 1
+        by_source[str(result.get("source", "unknown"))] += 1
+        if (result.get("visibleWatermark") or {}).get("detected"):
+            visible_watermark_hits += 1
+        if (result.get("synthid") or {}).get("detected"):
+            synthid_hits += 1
+        if row["forensics_json"]:
+            forensics_completed += 1
+        if row["provenance_json"]:
+            provenance_completed += 1
 
     for row in event_rows:
         day = row["created_at"][:10]
@@ -413,5 +433,12 @@ def metrics(days: int = 14) -> dict[str, Any]:
         "byDay": days_list,
         "byType": dict(by_type),
         "byVerdict": dict(by_verdict),
+        "bySource": dict(by_source),
+        "evidence": {
+            "visibleWatermarkHits": visible_watermark_hits,
+            "synthidHits": synthid_hits,
+            "forensicsCompleted": forensics_completed,
+            "provenanceCompleted": provenance_completed,
+        },
         "recentErrors": errors[-8:],
     }

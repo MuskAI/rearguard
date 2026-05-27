@@ -199,3 +199,28 @@ def test_history_listing_exposes_source_and_watermark_summary(client, monkeypatc
     assert item["hasVisibleWatermark"] is True
     assert item["visibleWatermarkProvider"] == "gemini"
     assert item["hasSynthid"] is True
+
+
+def test_metrics_include_source_and_evidence_breakdown(client):
+    detect = client.post(
+        "/api/detect",
+        files={"file": ("sample.txt", b"metrics evidence flow", "text/plain")},
+    )
+    task_id = detect.json()["taskId"]
+    client.post(
+        f"/api/history/{task_id}/artifacts",
+        headers={"X-Jianzhen-Token": "test-token"},
+        json={
+            "forensics": {"summary": "done"},
+            "provenance": {"validationState": "valid"},
+        },
+    )
+
+    metrics = client.get("/api/metrics", headers={"X-Jianzhen-Token": "test-token"})
+
+    assert metrics.status_code == 200
+    payload = metrics.json()
+    assert "bySource" in payload
+    assert "evidence" in payload
+    assert payload["evidence"]["forensicsCompleted"] >= 1
+    assert payload["evidence"]["provenanceCompleted"] >= 1
