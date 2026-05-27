@@ -5,7 +5,15 @@
     <link rel="icon" type="image/svg+xml" href="/jianzhen.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>鉴真 · AI 鉴伪智能体</title>
-    <script defer src="/umami/script.js" data-website-id="a6014085-7571-41e9-96bd-30604bc15153" data-host-url="/umami" data-domains="realguard.cn,www.realguard.cn,124.222.3.205"></script>
+    <script type="module">
+      const umami = document.createElement("script");
+      umami.defer = true;
+      umami.src = "/umami/script.js";
+      umami.dataset.websiteId = "a6014085-7571-41e9-96bd-30604bc15153";
+      umami.dataset.hostUrl = "/umami";
+      umami.dataset.domains = "realguard.cn,www.realguard.cn,124.222.3.205";
+      document.head.appendChild(umami);
+    </script>
   </head>
   <body>
     <div id="root"></div>
