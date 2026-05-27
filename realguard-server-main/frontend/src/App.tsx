@@ -723,6 +723,7 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
   const [status, setStatus] = useState<Status>(null);
   const [filter, setFilter] = useState<HistoryFilterKey>(() => getInitialHistoryFilter(getInitialHistoryTab()));
   const [query, setQuery] = useState(() => getInitialHistoryQuery());
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     setStatus({ tone: "info", text: "正在加载历史记录" });
@@ -761,6 +762,12 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
     const next = params.toString();
     window.history.replaceState({}, "", `${window.location.pathname}${next ? `?${next}` : ""}`);
   }, [tab, filter, query]);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1800);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
 
   const queriedRecords = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -829,6 +836,16 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
       ? `当前展示 ${filteredRecords.length} 条记录`
       : `当前匹配 ${filteredRecords.length} / ${records.length} 条记录`;
 
+  async function copyCurrentView() {
+    const url = window.location.href;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+    } catch {
+      window.prompt("复制当前历史视图链接", url);
+    }
+  }
+
   return (
     <main className="main">
       <div className="container">
@@ -876,6 +893,15 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
                   ))}
                 </div>
                 <div className="history-active-meta">{matchSummary}</div>
+                <button
+                  type="button"
+                  className={`btn-code history-copy-btn ${
+                    copied ? "history-copy-btn-copied" : ""
+                  }`}
+                  onClick={copyCurrentView}
+                >
+                  {copied ? "已复制视图链接" : "复制当前视图"}
+                </button>
                 {(filter !== "all" || query.trim()) && (
                   <button
                     type="button"
