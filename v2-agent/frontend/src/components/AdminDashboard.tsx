@@ -21,6 +21,7 @@ export default function AdminDashboard({
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [error, setError] = useState<string>("");
   const [days, setDays] = useState<7 | 14 | 30>(() => getInitialMonitorDays());
+  const [copied, setCopied] = useState(false);
 
   const load = () =>
     fetchMetrics(days)
@@ -44,6 +45,12 @@ export default function AdminDashboard({
     const next = params.toString();
     window.history.replaceState({}, "", `${window.location.pathname}${next ? `?${next}` : ""}${window.location.hash}`);
   }, [days]);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1800);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
 
   const maxDay = useMemo(
     () => Math.max(1, ...(metrics?.byDay.map((d) => d.detections) ?? [1])),
@@ -84,6 +91,16 @@ export default function AdminDashboard({
   const forensicsRate = metrics.evidence.forensicsCompleted / recentBase;
   const provenanceRate = metrics.evidence.provenanceCompleted / recentBase;
 
+  async function copyCurrentView() {
+    const url = window.location.href;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+    } catch {
+      window.prompt("复制当前监控视图链接", url);
+    }
+  }
+
   return (
     <main className="flex-1 min-w-0 bg-grid overflow-y-auto">
       <header className="sticky top-0 z-10 px-4 sm:px-6 py-3 border-b border-ink-700 bg-ink-800/95 flex items-center justify-between gap-3">
@@ -92,6 +109,9 @@ export default function AdminDashboard({
           <p className="text-[11px] sm:text-xs text-ink-500">检测流量、缓存效率与接口健康状态</p>
         </div>
         <div className="flex items-center gap-2">
+          <span className="hidden md:inline text-[11px] px-2.5 py-1 rounded-full border border-ink-600 text-ink-500">
+            当前窗口 {days} 天
+          </span>
           <label className="sm:hidden">
             <span className="sr-only">选择监控时间窗口</span>
             <select
@@ -125,6 +145,16 @@ export default function AdminDashboard({
               访问令牌
             </button>
           )}
+          <button
+            onClick={copyCurrentView}
+            className={`h-9 px-3 rounded-lg border text-xs ${
+              copied
+                ? "border-jade/40 bg-jade/10 text-jade"
+                : "border-ink-600 bg-ink-900 text-ink-950 hover:border-brand-cyan/50"
+            }`}
+          >
+            {copied ? "已复制" : "复制视图"}
+          </button>
           <button
             onClick={load}
             className="h-9 px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950 hover:border-jade/50"
