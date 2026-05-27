@@ -180,6 +180,8 @@ def list_history(limit: int = 100) -> list[dict[str, Any]]:
     items = []
     for row in rows:
         result = json.loads(row["result_json"])
+        visible = result.get("visibleWatermark") or {}
+        synthid = result.get("synthid") or {}
         items.append(
             {
                 "taskId": row["task_id"],
@@ -190,9 +192,13 @@ def list_history(limit: int = 100) -> list[dict[str, Any]]:
                 "confidence": result.get("confidence"),
                 "createdAt": row["created_at"],
                 "thumbnail": row["thumbnail"],
+                "source": result.get("source"),
                 "cacheHit": bool(result.get("cacheHit")),
                 "hasForensics": bool(row["forensics_json"]),
                 "hasProvenance": bool(row["provenance_json"]),
+                "hasVisibleWatermark": bool(visible.get("detected")),
+                "visibleWatermarkProvider": visible.get("provider"),
+                "hasSynthid": bool(synthid.get("detected")),
             }
         )
     return items

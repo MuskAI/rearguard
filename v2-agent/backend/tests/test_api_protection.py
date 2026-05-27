@@ -150,3 +150,52 @@ def test_history_artifacts_persist_into_history_and_download(client):
     assert download.status_code == 200
     assert "可解释性取证分析" in download.text
     assert "内容凭证验证（C2PA）" in download.text
+
+
+def test_history_listing_exposes_source_and_watermark_summary(client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    monkeypatch.setattr(
+        main.detector,
+        "analyze",
+        lambda *args, **kwargs: {
+            "verdict": "highly_suspected_fake",
+            "confidence": 0.92,
+            "dimensions": [],
+            "regions": [],
+            "explanation": "命中多项水印证据。",
+            "modelVersion": "qwen3-vl-flash",
+            "source": "vlm",
+            "synthid": {
+                "detected": True,
+                "supported": True,
+                "confidence": 0.88,
+                "phaseMatch": 0.91,
+                "evidenceLevel": "strong",
+                "note": "检测到高置信度 SynthID",
+            },
+            "visibleWatermark": {
+                "detected": True,
+                "provider": "gemini",
+                "confidence": 0.95,
+                "evidenceLevel": "strong",
+                "hits": [],
+                "temporal": {"sampledFrames": 1, "positiveFrames": 1, "moving": False},
+                "note": "检测到 Gemini 可见水印",
+            },
+        },
+    )
+
+    detect = client.post(
+        "/api/detect",
+        files={"file": ("sample.png", b"fake-image", "image/png")},
+    )
+    listing = client.get("/api/history", headers={"X-Jianzhen-Token": "test-token"})
+
+    assert detect.status_code == 200
+    assert listing.status_code == 200
+    item = listing.json()["items"][0]
+    assert item["source"] == "vlm"
+    assert item["hasVisibleWatermark"] is True
+    assert item["visibleWatermarkProvider"] == "gemini"
+    assert item["hasSynthid"] is True

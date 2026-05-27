@@ -128,9 +128,13 @@ export interface HistoryItem {
   confidence: number;
   createdAt: string;
   thumbnail?: string | null;
+  source?: string;
   cacheHit?: boolean;
   hasForensics?: boolean;
   hasProvenance?: boolean;
+  hasVisibleWatermark?: boolean;
+  visibleWatermarkProvider?: string | null;
+  hasSynthid?: boolean;
 }
 
 export interface HealthStatus {

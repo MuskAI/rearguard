@@ -82,9 +82,11 @@ export default function Sidebar({ history, message, activeId, onSelect, onNew, o
                 <div className="text-[10px] flex items-center gap-1.5">
                   <span style={{ color: meta.color }}>{meta.label}</span>
                   <span className="text-ink-500">· {TYPE_LABEL[h.type]}</span>
+                  {h.source === "vlm" && <span className="text-brand-cyan">VLM</span>}
+                  {h.source === "mock" && <span className="text-cinnabar">Mock</span>}
                   {h.cacheHit && <span className="text-jade">缓存</span>}
                 </div>
-                {(h.hasForensics || h.hasProvenance) && (
+                {(h.hasForensics || h.hasProvenance || h.hasVisibleWatermark || h.hasSynthid) && (
                   <div className="mt-1 flex items-center gap-1.5 text-[10px]">
                     {h.hasForensics && (
                       <span className="px-1.5 py-0.5 rounded-full bg-brand-magenta/10 text-brand-magenta border border-brand-magenta/30">
@@ -94,6 +96,16 @@ export default function Sidebar({ history, message, activeId, onSelect, onNew, o
                     {h.hasProvenance && (
                       <span className="px-1.5 py-0.5 rounded-full bg-jade/10 text-jade border border-jade/30">
                         凭证
+                      </span>
+                    )}
+                    {h.hasVisibleWatermark && (
+                      <span className="px-1.5 py-0.5 rounded-full bg-cinnabar/10 text-cinnabar border border-cinnabar/30">
+                        {h.visibleWatermarkProvider ? `${h.visibleWatermarkProvider} 水印` : "水印"}
+                      </span>
+                    )}
+                    {h.hasSynthid && (
+                      <span className="px-1.5 py-0.5 rounded-full bg-sky-500/10 text-sky-300 border border-sky-400/30">
+                        SynthID
                       </span>
                     )}
                   </div>
