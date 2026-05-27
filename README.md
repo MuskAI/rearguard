@@ -188,6 +188,35 @@ docker compose -f docker-compose.example.yml up -d
 
 生产环境建议把 `analytics.realguard.cn` 配成 A 记录指向服务器公网 IP，并尽快补 HTTPS。
 
+## 发布脚本
+
+仓库根目录 `scripts/` 提供了 `V1` 和 `V2` 的发布脚本，用于把“本地 verify 成功的版本”一致地同步到服务器，避免只复制部分后端文件导致线上缺模块或版本不明：
+
+```bash
+DEPLOY_SSH_KEY=/path/to/key ./scripts/deploy_v1.sh
+DEPLOY_SSH_KEY=/path/to/key ./scripts/deploy_v2.sh
+```
+
+默认会发布到 `ubuntu@124.222.3.205`，也可以覆盖：
+
+```bash
+DEPLOY_HOST=example.com DEPLOY_USER=deploy DEPLOY_SSH_KEY=/path/to/key ./scripts/deploy_v2.sh
+```
+
+脚本会执行：
+
+- 本地 compile / pytest / frontend build
+- 后端完整目录打包上传，避免漏传模块
+- 前端 `dist/` 静态资源同步
+- 重启对应 systemd 服务并执行健康检查
+- 在服务器写入 `DEPLOYED_COMMIT`，便于核对当前线上对应的 Git 提交
+
+仅查看将要执行的命令时可使用：
+
+```bash
+DRY_RUN=1 DEPLOY_SSH_KEY=/path/to/key ./scripts/deploy_v1.sh
+```
+
 ## 安全说明
 
 - 仓库不包含真实 API Key、短信密钥、数据库密码、SSH 私钥。
