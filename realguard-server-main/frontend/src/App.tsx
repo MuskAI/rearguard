@@ -27,7 +27,8 @@ type PageKey = "home" | "image" | "video" | "retrieve" | "history";
 type Status = { tone: "ok" | "error" | "info"; text: string } | null;
 type AuthMode = "password" | "sms" | "register";
 type HistoryTabKey = "image" | "video" | "imageRetrieve" | "videoRetrieve";
-type HistoryFilterKey = "all" | "guest" | "metadata" | "issues" | "ai";
+type HistoryFilterKey = "all" | "guest" | "metadata" | "issues" | "ai" | "real";
+type HistorySummaryCard = { label: string; value: number | string; filterKey?: HistoryFilterKey };
 
 const emptyCounters: Counters = {
   image_detect: 0,
@@ -794,27 +795,28 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
     if (tab === "video") {
       if (filter === "guest") return queriedRecords.filter((record) => Boolean(record.is_guest_record));
       if (filter === "ai") return queriedRecords.filter((record) => String(record.final_label || "").includes("AI"));
+      if (filter === "real") return queriedRecords.filter((record) => String(record.final_label || "").includes("真实"));
       return queriedRecords;
     }
     return queriedRecords;
   }, [queriedRecords, tab, filter]);
 
-  const summaryCards = useMemo(() => {
+  const summaryCards = useMemo<HistorySummaryCard[]>(() => {
     const baseRecords = filteredRecords;
     if (tab === "image") {
       return [
-        { label: "当前记录", value: baseRecords.length },
-        { label: "访客记录", value: baseRecords.filter((record) => Boolean(record.is_guest_record)).length },
-        { label: "带元数据", value: baseRecords.filter((record) => Boolean(record.has_metadata)).length },
-        { label: "有可疑点", value: baseRecords.filter((record) => Boolean(record.has_visual_issues)).length },
+        { label: "当前记录", value: baseRecords.length, filterKey: "all" as HistoryFilterKey },
+        { label: "访客记录", value: baseRecords.filter((record) => Boolean(record.is_guest_record)).length, filterKey: "guest" as HistoryFilterKey },
+        { label: "带元数据", value: baseRecords.filter((record) => Boolean(record.has_metadata)).length, filterKey: "metadata" as HistoryFilterKey },
+        { label: "有可疑点", value: baseRecords.filter((record) => Boolean(record.has_visual_issues)).length, filterKey: "issues" as HistoryFilterKey },
       ];
     }
     if (tab === "video") {
       return [
-        { label: "当前记录", value: baseRecords.length },
-        { label: "访客记录", value: baseRecords.filter((record) => Boolean(record.is_guest_record)).length },
-        { label: "AI结论", value: baseRecords.filter((record) => String(record.final_label || "").includes("AI")).length },
-        { label: "真实结论", value: baseRecords.filter((record) => String(record.final_label || "").includes("真实")).length },
+        { label: "当前记录", value: baseRecords.length, filterKey: "all" as HistoryFilterKey },
+        { label: "访客记录", value: baseRecords.filter((record) => Boolean(record.is_guest_record)).length, filterKey: "guest" as HistoryFilterKey },
+        { label: "AI结论", value: baseRecords.filter((record) => String(record.final_label || "").includes("AI")).length, filterKey: "ai" as HistoryFilterKey },
+        { label: "真实结论", value: baseRecords.filter((record) => String(record.final_label || "").includes("真实")).length, filterKey: "real" as HistoryFilterKey },
       ];
     }
     const resultCount = baseRecords.reduce((sum, record) => sum + Number(record.result_count || 0), 0);
@@ -862,10 +864,18 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
             <>
               <div className="history-summary-grid">
                 {summaryCards.map((card) => (
-                  <div key={card.label} className="history-summary-card">
+                  <button
+                    key={card.label}
+                    type="button"
+                    className={`history-summary-card ${card.filterKey === filter ? "active" : ""}`}
+                    onClick={() => {
+                      if (!card.filterKey) return;
+                      setFilter(card.filterKey === filter ? "all" : card.filterKey);
+                    }}
+                  >
                     <span>{card.label}</span>
                     <strong>{card.value}</strong>
-                  </div>
+                  </button>
                 ))}
               </div>
               <div className="history-search-bar">
@@ -1577,6 +1587,7 @@ function getHistoryFilterOptions(tab: HistoryTabKey): Array<{ key: HistoryFilter
       { key: "all", label: "全部" },
       { key: "guest", label: "访客" },
       { key: "ai", label: "AI结论" },
+      { key: "real", label: "真实结论" },
     ];
   }
   return [];

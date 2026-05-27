@@ -506,7 +506,8 @@ th { background: var(--bg-input); color: var(--text-secondary); }
 td { color: var(--text-primary); }
 .history-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
 .history-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.75rem; margin: 0.85rem 0 1rem; }
-.history-summary-card { min-width: 0; padding: 0.85rem 0.95rem; border-radius: 12px; background: var(--bg-input); border: 1px solid var(--border); }
+.history-summary-card { min-width: 0; padding: 0.85rem 0.95rem; border-radius: 12px; background: var(--bg-input); border: 1px solid var(--border); text-align: left; }
+.history-summary-card.active { border-color: rgba(37,99,235,0.22); background: rgba(37,99,235,0.08); }
 .history-summary-card span { display: block; font-size: 0.74rem; color: var(--text-muted); margin-bottom: 0.3rem; }
 .history-summary-card strong { display: block; font-size: 1.1rem; color: var(--text-primary); overflow-wrap: anywhere; }
 .history-search-bar { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; }
