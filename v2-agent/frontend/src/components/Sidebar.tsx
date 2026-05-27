@@ -63,13 +63,7 @@ export default function Sidebar({
     return history.filter((item) => {
       if (!matchesFilter(item, filter)) return false;
       if (!q) return true;
-      const fields = [
-        item.name,
-        item.reportId,
-        item.source || "",
-        item.visibleWatermarkProvider || "",
-      ];
-      return fields.some((field) => String(field).toLowerCase().includes(q));
+      return getSearchableHistoryFields(item).some((field) => field.toLowerCase().includes(q));
     });
   }, [filter, history, query]);
   const filterCounts = useMemo(() => {
@@ -80,13 +74,7 @@ export default function Sidebar({
         history.filter((entry) => {
           if (!matchesFilter(entry, item.key)) return false;
           if (!q) return true;
-          const fields = [
-            entry.name,
-            entry.reportId,
-            entry.source || "",
-            entry.visibleWatermarkProvider || "",
-          ];
-          return fields.some((field) => String(field).toLowerCase().includes(q));
+          return getSearchableHistoryFields(entry).some((field) => field.toLowerCase().includes(q));
         }).length,
       ]),
     ) as Record<SidebarFilterKey, number>;
@@ -143,7 +131,7 @@ export default function Sidebar({
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索名称 / 报告号 / 来源 / 水印"
+              placeholder="搜索名称 / 报告号 / 判定 / 来源 / 证据"
               className="min-w-0 flex-1 bg-transparent text-xs text-ink-950 placeholder:text-ink-500 outline-none"
             />
             {query.trim() && (
@@ -302,18 +290,18 @@ export default function Sidebar({
                   <span className="text-ink-500">· {TYPE_LABEL[h.type]}</span>
                   {h.source === "vlm" && <span className="text-brand-cyan">{renderHighlightedText("VLM", query)}</span>}
                   {h.source === "mock" && <span className="text-cinnabar">{renderHighlightedText("Mock", query)}</span>}
-                  {h.cacheHit && <span className="text-jade">缓存</span>}
+                  {h.cacheHit && <span className="text-jade">{renderHighlightedText("缓存", query)}</span>}
                 </div>
                 {(h.hasForensics || h.hasProvenance || h.hasVisibleWatermark || h.hasSynthid) && (
                   <div className="mt-1 flex items-center gap-1.5 text-[10px]">
                     {h.hasForensics && (
                       <span className="px-1.5 py-0.5 rounded-full bg-brand-magenta/10 text-brand-magenta border border-brand-magenta/30">
-                        取证
+                        {renderHighlightedText("取证", query)}
                       </span>
                     )}
                     {h.hasProvenance && (
                       <span className="px-1.5 py-0.5 rounded-full bg-jade/10 text-jade border border-jade/30">
-                        凭证
+                        {renderHighlightedText("凭证", query)}
                       </span>
                     )}
                     {h.hasVisibleWatermark && (
@@ -323,7 +311,7 @@ export default function Sidebar({
                     )}
                     {h.hasSynthid && (
                       <span className="px-1.5 py-0.5 rounded-full bg-sky-500/10 text-sky-300 border border-sky-400/30">
-                        SynthID
+                        {renderHighlightedText("SynthID", query)}
                       </span>
                     )}
                   </div>
@@ -370,6 +358,31 @@ function matchesFilter(item: HistoryItem, filter: SidebarFilterKey) {
   if (filter === "provenance") return Boolean(item.hasProvenance);
   if (filter === "watermark") return Boolean(item.hasVisibleWatermark || item.hasSynthid);
   return true;
+}
+
+function getSearchableHistoryFields(item: HistoryItem) {
+  const sourceLabels = {
+    vlm: ["vlm", "VLM", "真实模型"],
+    mock: ["mock", "Mock", "mock 回退"],
+    "maps-only": ["maps-only", "仅证据图"],
+    unknown: ["unknown", "未知来源"],
+  } as const;
+  const meta = VERDICT_META[item.verdict];
+  return [
+    item.name,
+    item.reportId,
+    meta.label,
+    TYPE_LABEL[item.type],
+    item.source || "",
+    ...(item.source ? sourceLabels[item.source as keyof typeof sourceLabels] || [] : []),
+    item.visibleWatermarkProvider || "",
+    item.visibleWatermarkProvider ? `${item.visibleWatermarkProvider} 水印` : "",
+    item.hasForensics ? "取证" : "",
+    item.hasProvenance ? "凭证" : "",
+    item.hasVisibleWatermark ? "水印" : "",
+    item.hasSynthid ? "SynthID" : "",
+    item.cacheHit ? "缓存" : "",
+  ].map((field) => String(field));
 }
 
 function renderHighlightedText(text: string, query: string) {
