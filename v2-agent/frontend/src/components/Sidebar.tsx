@@ -324,7 +324,11 @@ export default function Sidebar({
               )}
               <div className="flex-1 min-w-0">
                 <div className="text-sm text-ink-950 truncate">{renderHighlightedText(h.name, query)}</div>
-                <div className="text-[10px] text-ink-500 truncate">#{renderHighlightedText(h.reportId, query)}</div>
+                <div className="text-[10px] text-ink-500 flex items-center gap-1 truncate">
+                  <span className="truncate">#{renderHighlightedText(h.reportId, query)}</span>
+                  <span className="shrink-0">·</span>
+                  <span className="truncate">{renderHighlightedText(formatHistoryTime(h.createdAt), query)}</span>
+                </div>
                 <div className="text-[10px] flex items-center gap-1.5">
                   <span style={{ color: meta.color }}>{renderHighlightedText(meta.label, query)}</span>
                   <span className="text-ink-500">· {TYPE_LABEL[h.type]}</span>
@@ -411,6 +415,8 @@ function getSearchableHistoryFields(item: HistoryItem) {
   return [
     item.name,
     item.reportId,
+    item.createdAt,
+    formatHistoryTime(item.createdAt),
     meta.label,
     TYPE_LABEL[item.type],
     item.source || "",
@@ -423,6 +429,19 @@ function getSearchableHistoryFields(item: HistoryItem) {
     item.hasSynthid ? "SynthID" : "",
     item.cacheHit ? "缓存" : "",
   ].map((field) => String(field));
+}
+
+function formatHistoryTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 }
 
 function renderHighlightedText(text: string, query: string) {
