@@ -173,6 +173,12 @@ export default function AdminDashboard({
       <div className="p-4 sm:p-6 space-y-4 sm:space-y-5">
         {error && <div className="rounded-lg border border-cinnabar/30 bg-cinnabar/10 p-3 text-sm text-cinnabar">{error}</div>}
 
+        <section className="rounded-xl border border-ink-600 bg-ink-900 px-4 py-3 text-xs sm:text-sm text-ink-500">
+          <span className="text-ink-950 font-medium">当前视图：</span>
+          {days} 天窗口
+          {copied ? " · 视图链接已复制" : " · 可复制当前监控视图链接"}
+        </section>
+
         <section className="grid grid-cols-2 lg:grid-cols-6 gap-3">
           {cards.map((card) => (
             <div key={card.label} className="rounded-xl border border-ink-600 bg-ink-800 p-3 sm:p-4">
