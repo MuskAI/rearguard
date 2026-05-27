@@ -69,6 +69,7 @@ export default function App() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const restoredHistoryItemRef = useRef(false);
   const historyRequestIdRef = useRef(0);
+  const historyDetailRequestIdRef = useRef(0);
 
   const loadHealth = () =>
     fetchHealth()
@@ -249,8 +250,11 @@ export default function App() {
 
   const onSelectHistory = async (item: HistoryItem) => {
     setActiveId(item.taskId);
+    const requestId = historyDetailRequestIdRef.current + 1;
+    historyDetailRequestIdRef.current = requestId;
     try {
       const result: DetectResult = await fetchHistoryItem(item.taskId);
+      if (historyDetailRequestIdRef.current !== requestId) return;
       if (result.forensics) {
         setForensicsByTask((prev) => ({ ...prev, [result.taskId]: result.forensics! }));
       }
@@ -271,6 +275,7 @@ export default function App() {
         ...nextMessages,
       ]);
     } catch (error) {
+      if (historyDetailRequestIdRef.current !== requestId) return;
       setMessages([
         {
           kind: "user",
