@@ -221,6 +221,8 @@ def test_metrics_include_source_and_evidence_breakdown(client):
     assert metrics.status_code == 200
     payload = metrics.json()
     assert "bySource" in payload
+    assert "sourceVerdict" in payload
     assert "evidence" in payload
     assert payload["evidence"]["forensicsCompleted"] >= 1
     assert payload["evidence"]["provenanceCompleted"] >= 1
+    assert payload["sourceVerdict"]

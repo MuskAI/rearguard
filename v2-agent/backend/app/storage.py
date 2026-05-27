@@ -363,6 +363,7 @@ def metrics(days: int = 14) -> dict[str, Any]:
     by_type: Counter[str] = Counter()
     by_verdict: Counter[str] = Counter()
     by_source: Counter[str] = Counter()
+    source_verdict: dict[str, Counter[str]] = defaultdict(Counter)
     today_ips: set[str] = set()
     cache_hits = 0
     cache_known = 0
@@ -379,8 +380,11 @@ def metrics(days: int = 14) -> dict[str, Any]:
         by_day[day] += 1
         by_type[row["file_type"]] += 1
         result = json.loads(row["result_json"])
-        by_verdict[str(result.get("verdict", "unknown"))] += 1
-        by_source[str(result.get("source", "unknown"))] += 1
+        verdict = str(result.get("verdict", "unknown"))
+        source = str(result.get("source", "unknown"))
+        by_verdict[verdict] += 1
+        by_source[source] += 1
+        source_verdict[source][verdict] += 1
         if (result.get("visibleWatermark") or {}).get("detected"):
             visible_watermark_hits += 1
         if (result.get("synthid") or {}).get("detected"):
@@ -434,6 +438,7 @@ def metrics(days: int = 14) -> dict[str, Any]:
         "byType": dict(by_type),
         "byVerdict": dict(by_verdict),
         "bySource": dict(by_source),
+        "sourceVerdict": {source: dict(counter) for source, counter in source_verdict.items()},
         "evidence": {
             "visibleWatermarkHits": visible_watermark_hits,
             "synthidHits": synthid_hits,

@@ -258,6 +258,7 @@ export interface Metrics {
   byType: Partial<Record<FileType, number>>;
   byVerdict: Partial<Record<Verdict | "unknown", number>>;
   bySource: Partial<Record<"vlm" | "mock" | "maps-only" | "unknown", number>>;
+  sourceVerdict: Partial<Record<"vlm" | "mock" | "maps-only" | "unknown", Partial<Record<Verdict | "unknown", number>>>>;
   evidence: {
     visibleWatermarkHits: number;
     synthidHits: number;
