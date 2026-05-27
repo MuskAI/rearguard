@@ -32,6 +32,7 @@ interface Props {
   onConfigureAccess?: () => void;
   onRetryHistory?: () => void;
   onRefreshHistory?: () => void;
+  onLoadMore?: () => void;
   className?: string;
   onClose?: () => void;
 }
@@ -56,6 +57,7 @@ export default function Sidebar({
   onConfigureAccess,
   onRetryHistory,
   onRefreshHistory,
+  onLoadMore,
   className = "",
   onClose,
 }: Props) {
@@ -199,6 +201,16 @@ export default function Sidebar({
           <div className="text-[10px] text-ink-500">
             当前显示 {history.length} / {totalCount ?? history.length}
           </div>
+          {onLoadMore && (
+            <button
+              type="button"
+              onClick={onLoadMore}
+              disabled={historyBusy}
+              className="w-full px-2 py-1.5 rounded-md text-[10px] border border-ink-600 bg-ink-800 text-ink-500"
+            >
+              {historyBusy ? "加载中" : "加载更多"}
+            </button>
+          )}
           {activeItem && (
             <div className="rounded-lg border border-ink-600 bg-ink-800 px-2.5 py-2 text-[10px] text-ink-500">
               <div className="font-medium text-ink-950 truncate">{activeItem.name}</div>

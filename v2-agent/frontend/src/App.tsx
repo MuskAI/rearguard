@@ -43,6 +43,7 @@ const QUICK_COMMANDS = [
   { label: "检测PS篡改", hint: "检测拼接/局部重绘痕迹" },
   { label: "出具鉴定报告", hint: "生成可下载报告" },
 ];
+const HISTORY_PAGE_SIZE = 100;
 
 function inferType(name: string): FileType {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
@@ -76,6 +77,7 @@ export default function App() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyQuery, setHistoryQuery] = useState(() => getInitialHistoryQuery());
   const [historyFilter, setHistoryFilter] = useState<HistorySidebarFilter>(() => getInitialHistoryFilter());
+  const [historyLimit, setHistoryLimit] = useState(HISTORY_PAGE_SIZE);
   const [view, setView] = useState<"detect" | "monitor">(() => (window.location.hash === "#monitor" ? "monitor" : "detect"));
   const [activeId, setActiveId] = useState<string>();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -94,7 +96,7 @@ export default function App() {
     historyRequestIdRef.current = requestId;
     setHistoryBusy(true);
     try {
-      const data = await fetchHistory({ query: historyQuery, filter: historyFilter, limit: 100 });
+      const data = await fetchHistory({ query: historyQuery, filter: historyFilter, limit: historyLimit });
       if (historyRequestIdRef.current !== requestId) return;
       setHistory(data.items);
       setHistoryTotal(data.total);
@@ -133,6 +135,10 @@ export default function App() {
 
   useEffect(() => {
     void loadHistory(false);
+  }, [historyFilter, historyLimit, historyQuery]);
+
+  useEffect(() => {
+    setHistoryLimit(HISTORY_PAGE_SIZE);
   }, [historyFilter, historyQuery]);
 
   useEffect(() => {
@@ -375,6 +381,7 @@ export default function App() {
         onConfigureAccess={configureAccessToken}
         onRetryHistory={loadHistory}
         onRefreshHistory={() => loadHistory(true)}
+        onLoadMore={history.length < historyTotal ? () => setHistoryLimit((value) => value + HISTORY_PAGE_SIZE) : undefined}
         className="hidden md:flex"
       />
 
@@ -405,6 +412,7 @@ export default function App() {
             onConfigureAccess={configureAccessToken}
             onRetryHistory={loadHistory}
             onRefreshHistory={() => loadHistory(true)}
+            onLoadMore={history.length < historyTotal ? () => setHistoryLimit((value) => value + HISTORY_PAGE_SIZE) : undefined}
             onClose={() => setHistoryOpen(false)}
             className="relative h-full w-[86vw] max-w-80"
           />
