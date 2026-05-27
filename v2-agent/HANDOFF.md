@@ -12,6 +12,7 @@
   视频/音频及模型不可用时回退到确定性 Mock。
 - **凭证验真**：读取并验证图片内嵌的 **C2PA 内容凭证**（对标 OpenAI Verify 的 C2PA 部分），
   报告生成器、签发者、签名校验、编辑历史、是否声明 AI 生成。SynthID 为 Google 专有水印，未实现（如实标注）。
+- **报告导出**：可按报告号导出自包含 HTML 鉴定报告，保留结论、维度评分、局部区域和水印辅助证据。
 
 ## 2. 架构 & 技术栈
 
@@ -134,6 +135,7 @@ npm run build          # 产物在 dist/
 | GET  | `/api/history` / `/api/history/{id}` | 历史列表 / 单条 |
 | DELETE | `/api/history/{id}` | 删除历史 |
 | GET  | `/api/report/{reportId}` | 按报告号取结果 |
+| GET  | `/api/report/{reportId}/download` | 下载自包含 HTML 鉴定报告 |
 | GET  | `/api/metrics` | 监控大屏数据，前端入口为 `/#monitor` |
 
 健康检查示例：`curl http://localhost:8848/api/health`

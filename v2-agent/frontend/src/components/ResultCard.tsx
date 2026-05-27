@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { DetectResult, VERDICT_META, TYPE_LABEL } from "../api";
+import { DetectResult, VERDICT_META, TYPE_LABEL, downloadReport } from "../api";
 import ConfidenceRing from "./ConfidenceRing";
 
 interface Props {
@@ -21,6 +21,7 @@ export default function ResultCard({
 }: Props) {
   const meta = VERDICT_META[result.verdict];
   const [showOverlay, setShowOverlay] = useState(true);
+  const [reportBusy, setReportBusy] = useState(false);
   const effectivePreview = previewUrl || result.fileMeta.preview || result.fileMeta.thumbnail || undefined;
   const isImage = result.fileMeta.type === "image" && effectivePreview;
   const synthid = result.synthid;
@@ -33,6 +34,18 @@ export default function ResultCard({
     visibleWatermark?.evidenceLevel === "strong" ? "#d8412f" :
     visibleWatermark?.evidenceLevel === "medium" || visibleWatermark?.evidenceLevel === "weak" ? "#d99a2b" :
     "#3fb6a8";
+
+  async function handleDownloadReport() {
+    if (reportBusy) return;
+    setReportBusy(true);
+    try {
+      await downloadReport(result.reportId);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "下载报告失败");
+    } finally {
+      setReportBusy(false);
+    }
+  }
 
   return (
     <div className="rounded-2xl border border-ink-600 bg-ink-800 overflow-hidden shadow-sm">
@@ -232,10 +245,11 @@ export default function ResultCard({
 
           <div className="grid grid-cols-1 sm:flex sm:flex-wrap gap-2">
             <button
-              onClick={() => window.print()}
-              className="px-3 py-2 sm:py-1.5 text-xs rounded-lg bg-cinnabar/10 text-cinnabar border border-cinnabar/30 hover:bg-cinnabar/15"
+              onClick={handleDownloadReport}
+              disabled={reportBusy}
+              className="px-3 py-2 sm:py-1.5 text-xs rounded-lg bg-cinnabar/10 text-cinnabar border border-cinnabar/30 hover:bg-cinnabar/15 disabled:opacity-50"
             >
-              生成鉴定报告
+              {reportBusy ? "导出中…" : "下载鉴定报告"}
             </button>
             {onForensics && (
               <button

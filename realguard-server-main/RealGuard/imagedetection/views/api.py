@@ -2,6 +2,7 @@ import hashlib
 import io
 import json
 import os
+import secrets
 from pathlib import Path
 from urllib.parse import quote
 
@@ -140,7 +141,7 @@ def login_sms():
     if not user:
         affected = excute_sql(
             "INSERT INTO user (phone, secret, username, openid) VALUES (%s, %s, %s, %s)",
-            (phone, "", phone, ""),
+            (phone, _hash_password(secrets.token_urlsafe(24)), phone, ""),
             fetch=False,
         )
         if not affected:

@@ -27,6 +27,15 @@ async function parseJson<T>(res: Response, fallback: string): Promise<T> {
   return res.json();
 }
 
+function filenameFromDisposition(disposition: string | null, fallback: string): string {
+  const value = disposition || "";
+  const utf8Match = value.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) return decodeURIComponent(utf8Match[1]);
+  const plainMatch = value.match(/filename="?([^";]+)"?/i);
+  if (plainMatch?.[1]) return plainMatch[1];
+  return fallback;
+}
+
 export interface Dimension {
   key: string;
   label: string;
@@ -231,6 +240,27 @@ export interface Metrics {
 export async function fetchMetrics(): Promise<Metrics> {
   const res = await fetch("/v2-api/metrics", { headers: withAuthHeaders() });
   return parseJson(res, "加载监控指标失败");
+}
+
+export async function downloadReport(reportId: string): Promise<string> {
+  const fallbackName = `jianzhen-report-${reportId}.html`;
+  const res = await fetch(`/v2-api/report/${encodeURIComponent(reportId)}/download`, {
+    headers: withAuthHeaders(),
+  });
+  if (!res.ok) {
+    await parseJson<Record<string, never>>(res, "下载报告失败");
+  }
+  const blob = await res.blob();
+  const filename = filenameFromDisposition(res.headers.get("content-disposition"), fallbackName);
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => window.URL.revokeObjectURL(url), 0);
+  return filename;
 }
 
 export async function fetchHealth(): Promise<HealthStatus> {

@@ -11,13 +11,14 @@ import time
 import hashlib
 import io
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import Response
 
-from . import detector, provenance, storage, synthid_detector, visible_watermark_detector
+from . import detector, provenance, reporting, storage, synthid_detector, visible_watermark_detector
 
 app = FastAPI(title="鉴真 AI 鉴伪智能体", version="0.2.0")
 ACCESS_TOKEN = os.getenv("JIANZHEN_ACCESS_TOKEN", "").strip()
@@ -165,7 +166,12 @@ def health() -> dict:
         "model": detector.VLM_MODEL,
         "vlmEnabled": bool(detector.API_KEY),
         "accessProtectionEnabled": bool(ACCESS_TOKEN),
-        "protectedEndpoints": ["/api/history", "/api/report/{report_id}", "/api/metrics"] if ACCESS_TOKEN else [],
+        "protectedEndpoints": [
+            "/api/history",
+            "/api/report/{report_id}",
+            "/api/report/{report_id}/download",
+            "/api/metrics",
+        ] if ACCESS_TOKEN else [],
         "calibration": detector.calibration_status(),
         "synthid": synthid_detector.status(),
         "visibleWatermark": visible_watermark_detector.status(),
@@ -282,6 +288,23 @@ def report(report_id: str, request: Request) -> dict:
     if not item:
         raise HTTPException(status_code=404, detail="报告不存在")
     return item
+
+
+@app.get("/api/report/{report_id}/download")
+def report_download(report_id: str, request: Request) -> Response:
+    _require_protected_access(request)
+    item = storage.get_history(report_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="报告不存在")
+    filename = reporting.download_filename(item)
+    html = reporting.build_report_html(item)
+    return Response(
+        content=html,
+        media_type="text/html; charset=utf-8",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+        },
+    )
 
 
 @app.get("/api/metrics")
