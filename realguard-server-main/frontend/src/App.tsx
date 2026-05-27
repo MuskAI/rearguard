@@ -876,7 +876,7 @@ function HistoryPage() {
                 </div>
               )}
               {filteredRecords.length ? (
-                <HistoryRecords records={filteredRecords} tab={tab} />
+                <HistoryRecords records={filteredRecords} tab={tab} query={query} />
               ) : (
                 <EmptyState icon="fa-filter" text="当前筛选条件下暂无记录" />
               )}
@@ -1135,10 +1135,12 @@ function RetrieveResults({ results, baseUrl, searchType }: { results: RetrieveIt
 
 function HistoryRecords({
   records,
-  tab
+  tab,
+  query,
 }: {
   records: HistoryRecord[];
   tab: "image" | "video" | "imageRetrieve" | "videoRetrieve";
+  query: string;
 }) {
   const isVideo = tab === "video" || tab === "videoRetrieve";
   return (
@@ -1154,6 +1156,7 @@ function HistoryRecords({
         const hasMetadata = Boolean(record.has_metadata);
         const hasIssues = Boolean(record.has_visual_issues);
         const issueCount = Number(record.visual_issue_count || 0);
+        const timeText = String(record.createtime || "-");
         return (
           <article className="history-record" key={`${record.itemid || index}`}>
             <a className="history-media" href={mediaUrl || undefined} target={mediaUrl ? "_blank" : undefined} rel="noreferrer" aria-label={mediaUrl ? `查看 ${title}` : title}>
@@ -1169,7 +1172,7 @@ function HistoryRecords({
               {mediaUrl && <span className="history-view"><i className="fa fa-eye" /> 查看</span>}
             </a>
             <div className="history-body">
-              <div className="history-title" title={title}>{title}</div>
+              <div className="history-title" title={title}>{renderHighlightedText(title, query)}</div>
               {guestRecord && (
                 <div className="history-tags">
                   <span className="history-tag guest"><i className="fa fa-user-secret" /> 访客</span>
@@ -1183,9 +1186,9 @@ function HistoryRecords({
                   {hasIssues && <span className="history-tag issue"><i className="fa fa-exclamation-triangle" /> 可疑点{issueCount > 0 ? ` ${issueCount}` : ""}</span>}
                 </div>
               )}
-              <div className="history-row"><span>时间</span><strong>{String(record.createtime || "-")}</strong></div>
-              <div className="history-row"><span>{record.result_count ? "数量" : "结论"}</span><strong>{verdict}</strong></div>
-              <div className="history-row"><span>{record.top_k ? "Top-K" : "置信度"}</span><strong>{meta}</strong></div>
+              <div className="history-row"><span>时间</span><strong>{renderHighlightedText(timeText, query)}</strong></div>
+              <div className="history-row"><span>{record.result_count ? "数量" : "结论"}</span><strong>{renderHighlightedText(verdict, query)}</strong></div>
+              <div className="history-row"><span>{record.top_k ? "Top-K" : "置信度"}</span><strong>{renderHighlightedText(meta, query)}</strong></div>
               {!record.result_count && reportUrl && (
                 <div className="history-actions">
                   <button
@@ -1449,6 +1452,22 @@ function getInitialHistoryFilter(tab: HistoryTabKey): HistoryFilterKey {
 function getInitialHistoryQuery() {
   if (typeof window === "undefined") return "";
   return new URLSearchParams(window.location.search).get("historyQuery") || "";
+}
+
+function renderHighlightedText(text: string, query: string) {
+  const trimmed = query.trim();
+  if (!trimmed) return text;
+  const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`(${escaped})`, "ig");
+  const lower = trimmed.toLowerCase();
+  const parts = text.split(pattern);
+  return parts.map((part, index) =>
+    part.toLowerCase() === lower ? (
+      <mark key={`${part}-${index}`} className="history-highlight">{part}</mark>
+    ) : (
+      <span key={`${part}-${index}`}>{part}</span>
+    ),
+  );
 }
 
 function getHistoryFilterOptions(tab: HistoryTabKey): Array<{ key: HistoryFilterKey; label: string }> {
