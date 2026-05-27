@@ -522,8 +522,10 @@ td { color: var(--text-primary); }
 .history-copy-btn-copied { border-color: rgba(16,185,129,0.28); background: rgba(16,185,129,0.12); color: var(--success); }
 .history-reset-btn { flex: 0 0 auto; min-height: 38px; padding: 0 14px; }
 .history-filter-bar { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; }
-.history-filter-btn { min-height: 34px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-input); color: var(--text-secondary); font-size: 0.78rem; font-weight: 700; }
+.history-filter-btn { display: inline-flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-input); color: var(--text-secondary); font-size: 0.78rem; font-weight: 700; }
 .history-filter-btn.active { background: rgba(37,99,235,0.08); color: var(--primary); border-color: rgba(37,99,235,0.18); }
+.history-filter-count { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; padding: 0 7px; min-height: 20px; border-radius: 999px; background: rgba(148,163,184,0.14); color: var(--text-muted); font-size: 0.7rem; font-weight: 800; }
+.history-filter-btn.active .history-filter-count { background: rgba(37,99,235,0.12); color: var(--primary); }
 .history-record { min-width: 0; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--bg-card-alt); }
 .history-media {
   position: relative;

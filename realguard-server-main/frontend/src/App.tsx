@@ -786,19 +786,7 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
   }, [records, query]);
 
   const filteredRecords = useMemo(() => {
-    if (tab === "image") {
-      if (filter === "guest") return queriedRecords.filter((record) => Boolean(record.is_guest_record));
-      if (filter === "metadata") return queriedRecords.filter((record) => Boolean(record.has_metadata));
-      if (filter === "issues") return queriedRecords.filter((record) => Boolean(record.has_visual_issues));
-      return queriedRecords;
-    }
-    if (tab === "video") {
-      if (filter === "guest") return queriedRecords.filter((record) => Boolean(record.is_guest_record));
-      if (filter === "ai") return queriedRecords.filter((record) => String(record.final_label || "").includes("AI"));
-      if (filter === "real") return queriedRecords.filter((record) => String(record.final_label || "").includes("真实"));
-      return queriedRecords;
-    }
-    return queriedRecords;
+    return queriedRecords.filter((record) => matchesHistoryFilter(record, tab, filter));
   }, [queriedRecords, tab, filter]);
 
   const summaryCards = useMemo<HistorySummaryCard[]>(() => {
@@ -832,6 +820,14 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
   }, [filteredRecords, queriedRecords, tab]);
 
   const filterOptions = getHistoryFilterOptions(tab);
+  const filterCounts = useMemo(() => {
+    return Object.fromEntries(
+      filterOptions.map((option) => [
+        option.key,
+        queriedRecords.filter((record) => matchesHistoryFilter(record, tab, option.key)).length,
+      ]),
+    ) as Partial<Record<HistoryFilterKey, number>>;
+  }, [filterOptions, queriedRecords, tab]);
   const activeSummary = getHistoryActiveSummary(tab, filter, query);
   const matchSummary =
     filteredRecords.length === records.length
@@ -934,7 +930,8 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
                       className={`history-filter-btn ${filter === option.key ? "active" : ""}`}
                       onClick={() => setFilter(option.key)}
                     >
-                      {option.label}
+                      <span>{option.label}</span>
+                      <span className="history-filter-count">{filterCounts[option.key] ?? 0}</span>
                     </button>
                   ))}
                 </div>
@@ -1591,6 +1588,23 @@ function getHistoryFilterOptions(tab: HistoryTabKey): Array<{ key: HistoryFilter
     ];
   }
   return [];
+}
+
+function matchesHistoryFilter(record: HistoryRecord, tab: HistoryTabKey, filter: HistoryFilterKey) {
+  if (filter === "all") return true;
+  if (tab === "image") {
+    if (filter === "guest") return Boolean(record.is_guest_record);
+    if (filter === "metadata") return Boolean(record.has_metadata);
+    if (filter === "issues") return Boolean(record.has_visual_issues);
+    return true;
+  }
+  if (tab === "video") {
+    if (filter === "guest") return Boolean(record.is_guest_record);
+    if (filter === "ai") return String(record.final_label || "").includes("AI");
+    if (filter === "real") return String(record.final_label || "").includes("真实");
+    return true;
+  }
+  return true;
 }
 
 function isHistoryFilterSupported(tab: HistoryTabKey, filter: HistoryFilterKey) {
