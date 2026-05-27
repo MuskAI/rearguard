@@ -132,12 +132,12 @@ npm run dev
 
 ## 验证
 
-V1 安全回归测试：
+V1 回归与 smoke 测试：
 
 ```bash
 uv venv realguard-server-main/RealGuard/.venv-test --python 3.13
 uv pip install --python realguard-server-main/RealGuard/.venv-test/bin/python flask pymysql pillow requests werkzeug pytest
-realguard-server-main/RealGuard/.venv-test/bin/pytest realguard-server-main/RealGuard/tests/test_v1_security.py
+realguard-server-main/RealGuard/.venv-test/bin/pytest realguard-server-main/RealGuard/tests
 ```
 
 V2 接口保护与报告导出测试：
