@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { HistoryItem, VERDICT_META, TYPE_LABEL } from "../api";
+import { useEffect, useState } from "react";
+import { HistoryFilterCounts, HistoryItem, HistorySidebarFilter, VERDICT_META, TYPE_LABEL } from "../api";
 import Logo from "./Logo";
 
 const FILTER_OPTIONS = [
@@ -10,16 +10,22 @@ const FILTER_OPTIONS = [
   { key: "provenance", label: "凭证" },
   { key: "watermark", label: "水印" },
 ] as const;
-type SidebarFilterKey = (typeof FILTER_OPTIONS)[number]["key"];
+type SidebarFilterKey = HistorySidebarFilter;
 
 interface Props {
   history: HistoryItem[];
   historyBusy?: boolean;
+  totalCount?: number;
+  filterCounts?: Partial<HistoryFilterCounts>;
   message?: string;
   accessProtectionEnabled?: boolean;
+  query: string;
+  filter: SidebarFilterKey;
   activeId?: string;
   activeItem?: HistoryItem;
   onSelect: (item: HistoryItem) => void;
+  onQueryChange: (value: string) => void;
+  onFilterChange: (value: SidebarFilterKey) => void;
   onNew: () => void;
   onDelete: (taskId: string) => void;
   onClearSelection?: () => void;
@@ -33,11 +39,17 @@ interface Props {
 export default function Sidebar({
   history,
   historyBusy = false,
+  totalCount,
+  filterCounts,
   message,
   accessProtectionEnabled = false,
+  query,
+  filter,
   activeId,
   activeItem,
   onSelect,
+  onQueryChange,
+  onFilterChange,
   onNew,
   onDelete,
   onClearSelection,
@@ -47,48 +59,12 @@ export default function Sidebar({
   className = "",
   onClose,
 }: Props) {
-  const [query, setQuery] = useState(() => getInitialHistoryQuery());
-  const [filter, setFilter] = useState<SidebarFilterKey>(() => getInitialHistoryFilter());
   const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const params = new URLSearchParams(window.location.search);
-    if (query.trim()) params.set("historyQuery", query.trim());
-    else params.delete("historyQuery");
-    if (filter !== "all") params.set("historyFilter", filter);
-    else params.delete("historyFilter");
-    const next = params.toString();
-    window.history.replaceState({}, "", `${window.location.pathname}${next ? `?${next}` : ""}${window.location.hash}`);
-  }, [filter, query]);
-
   useEffect(() => {
     if (!copied) return;
     const timer = window.setTimeout(() => setCopied(false), 1800);
     return () => window.clearTimeout(timer);
   }, [copied]);
-
-  const filteredHistory = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return history.filter((item) => {
-      if (!matchesFilter(item, filter)) return false;
-      if (!q) return true;
-      return getSearchableHistoryFields(item).some((field) => field.toLowerCase().includes(q));
-    });
-  }, [filter, history, query]);
-  const filterCounts = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return Object.fromEntries(
-      FILTER_OPTIONS.map((item) => [
-        item.key,
-        history.filter((entry) => {
-          if (!matchesFilter(entry, item.key)) return false;
-          if (!q) return true;
-          return getSearchableHistoryFields(entry).some((field) => field.toLowerCase().includes(q));
-        }).length,
-      ]),
-    ) as Record<SidebarFilterKey, number>;
-  }, [history, query]);
   const activeFilterLabel = FILTER_OPTIONS.find((item) => item.key === filter)?.label || "全部";
   const activeSummary = [
     { label: "筛选", value: activeFilterLabel },
@@ -140,14 +116,14 @@ export default function Sidebar({
           <div className="rounded-lg border border-ink-600 bg-ink-800 px-2.5 py-2 flex items-center gap-2">
             <input
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => onQueryChange(event.target.value)}
               placeholder="搜索名称 / 报告号 / 判定 / 来源 / 证据"
               className="min-w-0 flex-1 bg-transparent text-xs text-ink-950 placeholder:text-ink-500 outline-none"
             />
             {query.trim() && (
               <button
                 type="button"
-                onClick={() => setQuery("")}
+                onClick={() => onQueryChange("")}
                 className="shrink-0 rounded-md border border-ink-600 bg-ink-900 px-2 py-1 text-[10px] text-ink-500"
               >
                 清空
@@ -159,7 +135,7 @@ export default function Sidebar({
               <button
                 key={item.key}
                 type="button"
-                onClick={() => setFilter(item.key as typeof filter)}
+                onClick={() => onFilterChange(item.key as SidebarFilterKey)}
                 className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] border ${
                   filter === item.key
                     ? "border-cinnabar/40 bg-cinnabar/10 text-cinnabar"
@@ -174,7 +150,7 @@ export default function Sidebar({
                       : "bg-ink-900 text-ink-500"
                   }`}
                 >
-                  {filterCounts[item.key]}
+                  {filterCounts?.[item.key] ?? 0}
                 </span>
               </button>
             ))}
@@ -212,8 +188,8 @@ export default function Sidebar({
             <button
               type="button"
               onClick={() => {
-                setFilter("all");
-                setQuery("");
+                onFilterChange("all");
+                onQueryChange("");
               }}
               className="w-full px-2 py-1.5 rounded-md text-[10px] border border-ink-600 bg-ink-800 text-ink-500"
             >
@@ -221,7 +197,7 @@ export default function Sidebar({
             </button>
           )}
           <div className="text-[10px] text-ink-500">
-            当前显示 {filteredHistory.length} / {history.length}
+            当前显示 {history.length} / {totalCount ?? history.length}
           </div>
           {activeItem && (
             <div className="rounded-lg border border-ink-600 bg-ink-800 px-2.5 py-2 text-[10px] text-ink-500">
@@ -269,14 +245,14 @@ export default function Sidebar({
         {history.length === 0 && (
           <div className="px-2 py-4 text-xs text-ink-500">{message ? "配置完成后会显示历史记录" : "暂无记录"}</div>
         )}
-        {history.length > 0 && filteredHistory.length === 0 && (
+        {totalCount !== 0 && history.length === 0 && (
           <div className="px-2 py-4 space-y-2">
             <div className="text-xs text-ink-500">当前搜索/筛选条件下暂无记录</div>
             <div className="flex flex-wrap gap-2">
               {query.trim() && (
                 <button
                   type="button"
-                  onClick={() => setQuery("")}
+                  onClick={() => onQueryChange("")}
                   className="rounded-md border border-ink-600 bg-ink-800 px-2 py-1 text-[10px] text-ink-500"
                 >
                   清空搜索
@@ -286,8 +262,8 @@ export default function Sidebar({
                 <button
                   type="button"
                   onClick={() => {
-                    setFilter("all");
-                    setQuery("");
+                    onFilterChange("all");
+                    onQueryChange("");
                   }}
                   className="rounded-md border border-ink-600 bg-ink-800 px-2 py-1 text-[10px] text-ink-500"
                 >
@@ -297,7 +273,7 @@ export default function Sidebar({
             </div>
           </div>
         )}
-        {filteredHistory.map((h) => {
+        {history.map((h) => {
           const meta = VERDICT_META[h.verdict];
           return (
             <div
@@ -382,53 +358,17 @@ export default function Sidebar({
   );
 }
 
-function getInitialHistoryQuery() {
+export function getInitialHistoryQuery() {
   if (typeof window === "undefined") return "";
   return new URLSearchParams(window.location.search).get("historyQuery") || "";
 }
 
-function getInitialHistoryFilter(): SidebarFilterKey {
+export function getInitialHistoryFilter(): SidebarFilterKey {
   if (typeof window === "undefined") return "all";
   const value = new URLSearchParams(window.location.search).get("historyFilter");
   return value === "vlm" || value === "mock" || value === "forensics" || value === "provenance" || value === "watermark"
     ? value
     : "all";
-}
-
-function matchesFilter(item: HistoryItem, filter: SidebarFilterKey) {
-  if (filter === "vlm") return item.source === "vlm";
-  if (filter === "mock") return item.source === "mock";
-  if (filter === "forensics") return Boolean(item.hasForensics);
-  if (filter === "provenance") return Boolean(item.hasProvenance);
-  if (filter === "watermark") return Boolean(item.hasVisibleWatermark || item.hasSynthid);
-  return true;
-}
-
-function getSearchableHistoryFields(item: HistoryItem) {
-  const sourceLabels = {
-    vlm: ["vlm", "VLM", "真实模型"],
-    mock: ["mock", "Mock", "mock 回退"],
-    "maps-only": ["maps-only", "仅证据图"],
-    unknown: ["unknown", "未知来源"],
-  } as const;
-  const meta = VERDICT_META[item.verdict];
-  return [
-    item.name,
-    item.reportId,
-    item.createdAt,
-    formatHistoryTime(item.createdAt),
-    meta.label,
-    TYPE_LABEL[item.type],
-    item.source || "",
-    ...(item.source ? sourceLabels[item.source as keyof typeof sourceLabels] || [] : []),
-    item.visibleWatermarkProvider || "",
-    item.visibleWatermarkProvider ? `${item.visibleWatermarkProvider} 水印` : "",
-    item.hasForensics ? "取证" : "",
-    item.hasProvenance ? "凭证" : "",
-    item.hasVisibleWatermark ? "水印" : "",
-    item.hasSynthid ? "SynthID" : "",
-    item.cacheHit ? "缓存" : "",
-  ].map((field) => String(field));
 }
 
 function formatHistoryTime(value: string) {

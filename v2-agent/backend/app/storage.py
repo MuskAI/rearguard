@@ -231,6 +231,31 @@ def _searchable_history_fields(item: dict[str, Any]) -> list[str]:
     return [str(field) for field in fields]
 
 
+def _matches_history_filters(
+    item: dict[str, Any],
+    *,
+    source: str | None = None,
+    verdict: str | None = None,
+    has_forensics: bool | None = None,
+    has_provenance: bool | None = None,
+    has_watermark: bool | None = None,
+    has_synthid: bool | None = None,
+) -> bool:
+    if source is not None and str(item.get("source") or "") != source:
+        return False
+    if verdict is not None and str(item.get("verdict") or "") != verdict:
+        return False
+    if has_forensics is not None and bool(item.get("hasForensics")) is not has_forensics:
+        return False
+    if has_provenance is not None and bool(item.get("hasProvenance")) is not has_provenance:
+        return False
+    if has_watermark is not None and bool(item.get("hasVisibleWatermark")) is not has_watermark:
+        return False
+    if has_synthid is not None and bool(item.get("hasSynthid")) is not has_synthid:
+        return False
+    return True
+
+
 def list_history(
     *,
     limit: int = 100,
@@ -241,7 +266,7 @@ def list_history(
     has_provenance: bool | None = None,
     has_watermark: bool | None = None,
     has_synthid: bool | None = None,
-) -> tuple[list[dict[str, Any]], int]:
+) -> tuple[list[dict[str, Any]], int, dict[str, int]]:
     with _connect() as conn:
         rows = conn.execute(
             """
@@ -254,25 +279,40 @@ def list_history(
         ).fetchall()
     items = [_history_summary_from_row(row) for row in rows]
     normalized_query = (query or "").strip().lower()
-    filtered = []
+    query_filtered = []
     for item in items:
-        if source is not None and str(item.get("source") or "") != source:
-            continue
-        if verdict is not None and str(item.get("verdict") or "") != verdict:
-            continue
-        if has_forensics is not None and bool(item.get("hasForensics")) is not has_forensics:
-            continue
-        if has_provenance is not None and bool(item.get("hasProvenance")) is not has_provenance:
-            continue
-        if has_watermark is not None and bool(item.get("hasVisibleWatermark")) is not has_watermark:
-            continue
-        if has_synthid is not None and bool(item.get("hasSynthid")) is not has_synthid:
-            continue
         if normalized_query and not any(field.lower().find(normalized_query) >= 0 for field in _searchable_history_fields(item)):
             continue
-        filtered.append(item)
+        query_filtered.append(item)
+
+    filter_counts = {
+        "all": len(query_filtered),
+        "vlm": sum(1 for item in query_filtered if str(item.get("source") or "") == "vlm"),
+        "mock": sum(1 for item in query_filtered if str(item.get("source") or "") == "mock"),
+        "forensics": sum(1 for item in query_filtered if bool(item.get("hasForensics"))),
+        "provenance": sum(1 for item in query_filtered if bool(item.get("hasProvenance"))),
+        "watermark": sum(
+            1
+            for item in query_filtered
+            if bool(item.get("hasVisibleWatermark")) or bool(item.get("hasSynthid"))
+        ),
+    }
+
+    filtered = [
+        item
+        for item in query_filtered
+        if _matches_history_filters(
+            item,
+            source=source,
+            verdict=verdict,
+            has_forensics=has_forensics,
+            has_provenance=has_provenance,
+            has_watermark=has_watermark,
+            has_synthid=has_synthid,
+        )
+    ]
     total = len(filtered)
-    return filtered[:limit], total
+    return filtered[:limit], total, filter_counts
 
 
 def get_history(item_id: str) -> dict[str, Any] | None:

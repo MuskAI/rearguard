@@ -137,6 +137,17 @@ export interface HistoryItem {
   hasSynthid?: boolean;
 }
 
+export type HistorySidebarFilter = "all" | "vlm" | "mock" | "forensics" | "provenance" | "watermark";
+
+export interface HistoryFilterCounts {
+  all: number;
+  vlm: number;
+  mock: number;
+  forensics: number;
+  provenance: number;
+  watermark: number;
+}
+
 export interface HealthStatus {
   status: string;
   model: string;
@@ -212,10 +223,26 @@ export async function runProvenance(file: File): Promise<ProvenanceReport> {
   return parseJson(res, `内容凭证验证失败 (${res.status})`);
 }
 
-export async function fetchHistory(): Promise<HistoryItem[]> {
-  const res = await fetch("/v2-api/history", { headers: withAuthHeaders() });
-  const data = await parseJson<{ items: HistoryItem[] }>(res, "加载历史失败");
-  return data.items;
+export async function fetchHistory(params?: {
+  query?: string;
+  filter?: HistorySidebarFilter;
+  limit?: number;
+}): Promise<{ items: HistoryItem[]; total: number; filterCounts: HistoryFilterCounts }> {
+  const search = new URLSearchParams();
+  if (params?.limit) search.set("limit", String(params.limit));
+  if (params?.query?.trim()) search.set("query", params.query.trim());
+  if (params?.filter === "vlm" || params?.filter === "mock") {
+    search.set("source", params.filter);
+  } else if (params?.filter === "forensics") {
+    search.set("hasForensics", "true");
+  } else if (params?.filter === "provenance") {
+    search.set("hasProvenance", "true");
+  } else if (params?.filter === "watermark") {
+    search.set("hasWatermark", "true");
+  }
+  const qs = search.toString();
+  const res = await fetch(`/v2-api/history${qs ? `?${qs}` : ""}`, { headers: withAuthHeaders() });
+  return parseJson(res, "加载历史失败");
 }
 
 export async function fetchHistoryItem(taskId: string): Promise<DetectResult> {

@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import {
   DetectResult,
+  HistoryFilterCounts,
   HealthStatus,
   HistoryItem,
+  HistorySidebarFilter,
   FileType,
   ForensicReport,
   ProvenanceReport,
@@ -18,7 +20,7 @@ import {
   setAccessToken,
   TYPE_LABEL,
 } from "./api";
-import Sidebar from "./components/Sidebar";
+import Sidebar, { getInitialHistoryFilter, getInitialHistoryQuery } from "./components/Sidebar";
 import ResultCard from "./components/ResultCard";
 import ForensicGallery from "./components/ForensicGallery";
 import ProvenanceCard from "./components/ProvenanceCard";
@@ -52,6 +54,15 @@ function inferType(name: string): FileType {
 
 export default function App() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyFilterCounts, setHistoryFilterCounts] = useState<HistoryFilterCounts>({
+    all: 0,
+    vlm: 0,
+    mock: 0,
+    forensics: 0,
+    provenance: 0,
+    watermark: 0,
+  });
   const [historyMessage, setHistoryMessage] = useState("");
   const [historyBusy, setHistoryBusy] = useState(false);
   const [health, setHealth] = useState<HealthStatus | null>(null);
@@ -63,6 +74,8 @@ export default function App() {
   const [forensicsBusy, setForensicsBusy] = useState(false);
   const [provenanceBusy, setProvenanceBusy] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyQuery, setHistoryQuery] = useState(() => getInitialHistoryQuery());
+  const [historyFilter, setHistoryFilter] = useState<HistorySidebarFilter>(() => getInitialHistoryFilter());
   const [view, setView] = useState<"detect" | "monitor">(() => (window.location.hash === "#monitor" ? "monitor" : "detect"));
   const [activeId, setActiveId] = useState<string>();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -81,14 +94,18 @@ export default function App() {
     historyRequestIdRef.current = requestId;
     setHistoryBusy(true);
     try {
-      const items = await fetchHistory();
+      const data = await fetchHistory({ query: historyQuery, filter: historyFilter, limit: 100 });
       if (historyRequestIdRef.current !== requestId) return;
-      setHistory(items);
+      setHistory(data.items);
+      setHistoryTotal(data.total);
+      setHistoryFilterCounts(data.filterCounts);
       setHistoryMessage("");
     } catch (error) {
       if (historyRequestIdRef.current !== requestId) return;
       if (!preserveOnError) {
         setHistory([]);
+        setHistoryTotal(0);
+        setHistoryFilterCounts({ all: 0, vlm: 0, mock: 0, forensics: 0, provenance: 0, watermark: 0 });
       }
       setHistoryMessage(error instanceof Error ? error.message : "历史记录暂不可用");
     } finally {
@@ -102,6 +119,21 @@ export default function App() {
     loadHealth();
     void loadHistory(false);
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (historyQuery.trim()) params.set("historyQuery", historyQuery.trim());
+    else params.delete("historyQuery");
+    if (historyFilter !== "all") params.set("historyFilter", historyFilter);
+    else params.delete("historyFilter");
+    const next = params.toString();
+    window.history.replaceState({}, "", `${window.location.pathname}${next ? `?${next}` : ""}${window.location.hash}`);
+  }, [historyFilter, historyQuery]);
+
+  useEffect(() => {
+    void loadHistory(false);
+  }, [historyFilter, historyQuery]);
 
   useEffect(() => {
     if (restoredHistoryItemRef.current || history.length === 0) return;
@@ -326,11 +358,17 @@ export default function App() {
       <Sidebar
         history={history}
         historyBusy={historyBusy}
+        totalCount={historyTotal}
+        filterCounts={historyFilterCounts}
         message={historyMessage}
         accessProtectionEnabled={Boolean(health?.accessProtectionEnabled)}
+        query={historyQuery}
+        filter={historyFilter}
         activeId={activeId}
         activeItem={history.find((item) => item.taskId === activeId)}
         onSelect={onSelectHistory}
+        onQueryChange={setHistoryQuery}
+        onFilterChange={setHistoryFilter}
         onNew={newChat}
         onDelete={onDelete}
         onClearSelection={newChat}
@@ -350,11 +388,17 @@ export default function App() {
           <Sidebar
             history={history}
             historyBusy={historyBusy}
+            totalCount={historyTotal}
+            filterCounts={historyFilterCounts}
             message={historyMessage}
             accessProtectionEnabled={Boolean(health?.accessProtectionEnabled)}
+            query={historyQuery}
+            filter={historyFilter}
             activeId={activeId}
             activeItem={history.find((item) => item.taskId === activeId)}
             onSelect={onSelectHistory}
+            onQueryChange={setHistoryQuery}
+            onFilterChange={setHistoryFilter}
             onNew={newChat}
             onDelete={onDelete}
             onClearSelection={newChat}

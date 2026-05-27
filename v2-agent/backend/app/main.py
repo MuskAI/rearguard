@@ -286,7 +286,7 @@ def history(request: Request) -> dict:
     if verdict not in {None, "", "real", "suspected_fake", "highly_suspected_fake", "unknown"}:
         raise HTTPException(status_code=400, detail="verdict 不受支持")
 
-    items, total = storage.list_history(
+    items, total, filter_counts = storage.list_history(
         limit=limit,
         query=request.query_params.get("query"),
         source=source or None,
@@ -296,7 +296,7 @@ def history(request: Request) -> dict:
         has_watermark=_parse_bool("hasWatermark"),
         has_synthid=_parse_bool("hasSynthid"),
     )
-    return {"items": items, "total": total}
+    return {"items": items, "total": total, "filterCounts": filter_counts}
 
 
 @app.get("/api/history/{task_id}")
