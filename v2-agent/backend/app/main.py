@@ -353,4 +353,10 @@ def report_export(report_id: str, request: Request, payload: dict | None = Body(
 @app.get("/api/metrics")
 def metrics(request: Request) -> dict:
     _require_protected_access(request)
-    return storage.metrics()
+    try:
+        days = int(request.query_params.get("days", "14"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="days 必须是整数")
+    if days not in (7, 14, 30):
+        raise HTTPException(status_code=400, detail="days 仅支持 7、14、30")
+    return storage.metrics(days=days)

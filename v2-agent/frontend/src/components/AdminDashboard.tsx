@@ -20,9 +20,10 @@ export default function AdminDashboard({
 }) {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [error, setError] = useState<string>("");
+  const [days, setDays] = useState<7 | 14 | 30>(14);
 
   const load = () =>
-    fetchMetrics()
+    fetchMetrics(days)
       .then((data) => {
         setMetrics(data);
         setError("");
@@ -33,7 +34,7 @@ export default function AdminDashboard({
     load();
     const timer = window.setInterval(load, 30000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [days]);
 
   const maxDay = useMemo(
     () => Math.max(1, ...(metrics?.byDay.map((d) => d.detections) ?? [1])),
@@ -82,6 +83,19 @@ export default function AdminDashboard({
           <p className="text-[11px] sm:text-xs text-ink-500">检测流量、缓存效率与接口健康状态</p>
         </div>
         <div className="flex items-center gap-2">
+          <div className="hidden sm:flex items-center gap-1 rounded-lg border border-ink-600 bg-ink-900 p-1">
+            {[7, 14, 30].map((value) => (
+              <button
+                key={value}
+                onClick={() => setDays(value as 7 | 14 | 30)}
+                className={`h-7 px-2 rounded-md text-[11px] ${
+                  days === value ? "bg-cinnabar text-white" : "text-ink-500"
+                }`}
+              >
+                {value}天
+              </button>
+            ))}
+          </div>
           {accessProtectionEnabled && (
             <button
               onClick={onConfigureAccess}
@@ -134,7 +148,7 @@ export default function AdminDashboard({
         <section className="grid grid-cols-1 xl:grid-cols-[1.5fr_1fr] gap-4">
           <div className="rounded-xl border border-ink-600 bg-ink-800 p-4">
             <div className="flex items-center justify-between gap-3 mb-4">
-              <h2 className="font-serif text-base font-semibold text-rice">近 14 日检测趋势</h2>
+              <h2 className="font-serif text-base font-semibold text-rice">近 {days} 日检测趋势</h2>
               <span className="text-xs text-ink-500">最近 {metrics.summary.recentDetections} 次</span>
             </div>
             <div className="h-56 flex items-end gap-1.5 sm:gap-2">

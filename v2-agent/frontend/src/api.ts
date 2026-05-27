@@ -279,8 +279,8 @@ export interface Metrics {
   recentErrors: { createdAt: string; status: number; path: string }[];
 }
 
-export async function fetchMetrics(): Promise<Metrics> {
-  const res = await fetch("/v2-api/metrics", { headers: withAuthHeaders() });
+export async function fetchMetrics(days = 14): Promise<Metrics> {
+  const res = await fetch(`/v2-api/metrics?days=${encodeURIComponent(String(days))}`, { headers: withAuthHeaders() });
   return parseJson(res, "加载监控指标失败");
 }
 

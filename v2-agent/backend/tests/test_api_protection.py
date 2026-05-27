@@ -231,3 +231,15 @@ def test_metrics_include_source_and_evidence_breakdown(client):
     assert payload["sourceEvidence"]
     assert "sources" in payload["byDay"][0]
     assert "evidence" in payload["byDay"][0]
+
+
+def test_metrics_supports_window_sizes(client):
+    metrics_7 = client.get("/api/metrics?days=7", headers={"X-Jianzhen-Token": "test-token"})
+    metrics_30 = client.get("/api/metrics?days=30", headers={"X-Jianzhen-Token": "test-token"})
+    metrics_bad = client.get("/api/metrics?days=9", headers={"X-Jianzhen-Token": "test-token"})
+
+    assert metrics_7.status_code == 200
+    assert metrics_30.status_code == 200
+    assert len(metrics_7.json()["byDay"]) == 7
+    assert len(metrics_30.json()["byDay"]) == 30
+    assert metrics_bad.status_code == 400
