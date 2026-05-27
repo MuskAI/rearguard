@@ -24,6 +24,11 @@ import numpy as np
 
 ENABLED = os.getenv("VISIBLE_WATERMARK_ENABLED", "true").lower() not in {"0", "false", "no"}
 ASSET_DIR = Path(__file__).parent / "assets"
+GEMINI_CONFIDENCE_THRESHOLD = float(os.getenv("VISIBLE_WATERMARK_GEMINI_CONFIDENCE_THRESHOLD", "0.72"))
+GEMINI_SPATIAL_THRESHOLD = float(os.getenv("VISIBLE_WATERMARK_GEMINI_SPATIAL_THRESHOLD", "0.62"))
+GEMINI_GRADIENT_THRESHOLD = float(os.getenv("VISIBLE_WATERMARK_GEMINI_GRADIENT_THRESHOLD", "0.35"))
+GENERIC_CORNER_THRESHOLD = float(os.getenv("VISIBLE_WATERMARK_GENERIC_CORNER_THRESHOLD", "0.84"))
+GENERIC_IMAGE_ENABLED = os.getenv("VISIBLE_WATERMARK_GENERIC_IMAGE_ENABLED", "false").lower() not in {"0", "false", "no"}
 
 
 @dataclass
@@ -43,6 +48,13 @@ def status() -> dict[str, Any]:
         "available": (ASSET_DIR / "gemini_bg_48.png").exists() and (ASSET_DIR / "gemini_bg_96.png").exists(),
         "mode": "detect-only",
         "providers": ["gemini-visible-sparkle", "generic-corner-overlay"],
+        "thresholds": {
+            "geminiConfidence": GEMINI_CONFIDENCE_THRESHOLD,
+            "geminiSpatial": GEMINI_SPATIAL_THRESHOLD,
+            "geminiGradient": GEMINI_GRADIENT_THRESHOLD,
+            "genericCorner": GENERIC_CORNER_THRESHOLD,
+            "genericImageEnabled": GENERIC_IMAGE_ENABLED,
+        },
     }
 
 
@@ -141,9 +153,14 @@ class GeminiVisibleDetector:
                     var_score = max(0.0, min(1.0, 1.0 - (s_wm[0][0] / s_ref[0][0])))
 
             confidence = max(0.0, min(1.0, best_raw * 0.50 + grad_score * 0.30 + var_score * 0.20))
-            # A stricter threshold than removal tools is intentional here:
-            # for forensic evidence, false positives are worse than skips.
-            detected = confidence >= 0.55
+            # For forensic evidence, false positives are worse than skips.
+            # Require both template shape and gradient structure, so bright
+            # corner objects cannot pass just because their variance is low.
+            detected = (
+                confidence >= GEMINI_CONFIDENCE_THRESHOLD
+                and best_raw >= GEMINI_SPATIAL_THRESHOLD
+                and grad_score >= GEMINI_GRADIENT_THRESHOLD
+            )
 
         if not detected:
             return None
@@ -240,12 +257,14 @@ def _generic_corner_overlay(image: np.ndarray) -> WatermarkHit | None:
             if best is None or score > best[0]:
                 best = (score, (x + bx, y + by, bw, bh), name)
 
-    if best is None or best[0] < 0.62:
+    if best is None or best[0] < GENERIC_CORNER_THRESHOLD:
         return None
     score, (x, y, bw, bh), _ = best
     return WatermarkHit(
         provider="unknown_visible",
-        confidence=round(float(min(score, 0.86)), 3),
+        # Unknown corner overlays are intentionally capped below strong
+        # evidence. They should support review, not decide authenticity.
+        confidence=round(float(min(score, 0.58)), 3),
         bbox=(x / w, y / h, bw / w, bh / h),
         method="corner_overlay_heuristic",
         scores={"cornerOverlay": round(float(score), 3)},
@@ -269,12 +288,14 @@ def _hit_to_dict(hit: WatermarkHit) -> dict[str, Any]:
     }
 
 
-def _detect_frame(image: np.ndarray) -> WatermarkHit | None:
+def _detect_frame(image: np.ndarray, *, allow_generic: bool) -> WatermarkHit | None:
     detector = _gemini_detector()
     hit = detector.detect(image) if detector else None
     if hit:
         return hit
-    return _generic_corner_overlay(image)
+    if allow_generic:
+        return _generic_corner_overlay(image)
+    return None
 
 
 def _attach_crop(image: np.ndarray, hit: WatermarkHit, *, padding: float = 0.45) -> WatermarkHit:
@@ -321,7 +342,7 @@ def detect_image(data: bytes) -> dict[str, Any]:
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if img is None:
         return _empty("无法解码图像", started)
-    hit = _detect_frame(img)
+    hit = _detect_frame(img, allow_generic=GENERIC_IMAGE_ENABLED)
     if not hit:
         return _empty("未检测到已知可见 AI 水印或稳定角标水印", started, supported=True)
     _attach_crop(img, hit)
@@ -350,7 +371,7 @@ def detect_video(data: bytes, suffix: str = ".mp4", max_frames: int = 18) -> dic
             ok, frame = cap.read()
             if not ok:
                 continue
-            hit = _detect_frame(frame)
+            hit = _detect_frame(frame, allow_generic=True)
             if hit:
                 hit.frame = frame_id
                 _attach_crop(frame, hit)

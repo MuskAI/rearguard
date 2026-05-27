@@ -13,7 +13,7 @@ from typing import Any
 
 DATA_DIR = Path(os.getenv("JIANZHEN_DATA_DIR", Path(__file__).resolve().parents[1] / "data"))
 DB_PATH = DATA_DIR / "jianzhen-v2.sqlite3"
-ANALYSIS_CACHE_VERSION = os.getenv("JIANZHEN_ANALYSIS_CACHE_VERSION", "v3-visible-watermark-evidence")
+ANALYSIS_CACHE_VERSION = os.getenv("JIANZHEN_ANALYSIS_CACHE_VERSION", "v4-visible-watermark-thresholds")
 
 _INIT_LOCK = threading.Lock()
 _INITIALIZED = False
