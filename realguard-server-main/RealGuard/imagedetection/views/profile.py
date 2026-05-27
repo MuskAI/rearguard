@@ -1,6 +1,7 @@
 import os
 from flask import Blueprint, render_template, request, session, jsonify
 
+from imagedetection.views.login import _hash_password, _password_matches
 from imagedetection.views.utils import excute_sql, excute_detection_sql
 
 profile_blueprint = Blueprint('profile_blueprint', __name__)
@@ -70,11 +71,15 @@ def change_password():
 
     phone = session['user_info'].get('phone', '')
 
-    check = excute_sql("SELECT Userid FROM user WHERE phone = %s AND secret = %s", (phone, old_password))
-    if not check or len(check) == 0:
+    rows = excute_sql("SELECT secret FROM user WHERE phone = %s LIMIT 1", (phone,))
+    if not rows or not _password_matches(rows[0].get('secret', ''), old_password):
         return jsonify({'status': 'error', 'message': '当前密码错误'}), 400
 
-    affected = excute_sql("UPDATE user SET secret = %s WHERE phone = %s", (new_password, phone), fetch=False)
+    affected = excute_sql(
+        "UPDATE user SET secret = %s WHERE phone = %s",
+        (_hash_password(new_password), phone),
+        fetch=False,
+    )
     if affected and affected > 0:
         return jsonify({'status': 'success', 'message': '密码修改成功'})
     return jsonify({'status': 'error', 'message': '修改失败'}), 500

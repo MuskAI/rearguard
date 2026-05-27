@@ -43,7 +43,8 @@ V1 RealGuard：
 V2 鉴伪 Agent：
 
 - 图像、视频、音频、文档入口统一上传。
-- 图像检测调用 DashScope OpenAI 兼容接口，默认模型为 `qwen3-vl-flash`。
+- 图像检测与纯文本检测调用 DashScope OpenAI 兼容接口，默认模型为 `qwen3-vl-flash`。
+- 视频、音频和复杂文档当前保留演示判定链路，前端会明确显示回退状态。
 - ELA、噪声残差、频域、光照梯度等可解释性取证可视化。
 - C2PA 内容凭证读取与验证。
 - 浅色工作台风格，独立路径 `/v2/`。
@@ -85,6 +86,7 @@ cp .env.example .env
 - `DASHSCOPE_API_KEY`
 - `DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1`
 - `VLM_MODEL=qwen3-vl-flash`
+- `JIANZHEN_ACCESS_TOKEN`：可选。配置后，V2 历史、报告和监控接口需携带访问令牌。
 
 ## 本地开发
 
@@ -173,7 +175,8 @@ docker compose -f docker-compose.example.yml up -d
 - 后端服务建议只监听 `127.0.0.1`，公网只开放 Nginx 的 `80/443`。
 - Nginx 模板包含基础限流、隐藏版本、敏感文件拦截和安全响应头。
 - 上传接口限流较普通接口更宽松，避免影响正常检测。
-- V2 的历史记录默认是内存存储，重启会丢失；生产持久化需要接数据库或对象存储。
+- V2 使用本地 SQLite 持久化历史、缓存与轻量监控指标；生产建议把数据库文件放在稳定磁盘路径。
+- 如需对外开放 V2 后台能力，建议配置 `JIANZHEN_ACCESS_TOKEN` 保护历史、报告和监控接口。
 
 ## GitHub
 

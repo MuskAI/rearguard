@@ -1,5 +1,31 @@
 export type Verdict = "real" | "suspected_fake" | "highly_suspected_fake";
 export type FileType = "image" | "video" | "audio" | "document";
+const ACCESS_TOKEN_KEY = "jianzhen_access_token";
+
+function getStoredToken(): string {
+  if (typeof window === "undefined") return "";
+  return window.localStorage.getItem(ACCESS_TOKEN_KEY)?.trim() || "";
+}
+
+function withAuthHeaders(init?: HeadersInit): Headers {
+  const headers = new Headers(init);
+  const token = getStoredToken();
+  if (token) headers.set("X-Jianzhen-Token", token);
+  return headers;
+}
+
+async function parseJson<T>(res: Response, fallback: string): Promise<T> {
+  if (!res.ok) {
+    try {
+      const data = await res.json();
+      throw new Error(data.detail || data.message || fallback);
+    } catch (error) {
+      if (error instanceof Error) throw error;
+      throw new Error(fallback);
+    }
+  }
+  return res.json();
+}
 
 export interface Dimension {
   key: string;
@@ -94,13 +120,20 @@ export interface HistoryItem {
   cacheHit?: boolean;
 }
 
+export interface HealthStatus {
+  status: string;
+  model: string;
+  vlmEnabled: boolean;
+  accessProtectionEnabled: boolean;
+  protectedEndpoints: string[];
+}
+
 export async function detect(file: File, fileType?: FileType): Promise<DetectResult> {
   const fd = new FormData();
   fd.append("file", file);
   if (fileType) fd.append("fileType", fileType);
-  const res = await fetch("/v2-api/detect", { method: "POST", body: fd });
-  if (!res.ok) throw new Error(`检测失败 (${res.status})`);
-  return res.json();
+  const res = await fetch("/v2-api/detect", { method: "POST", body: fd, headers: withAuthHeaders() });
+  return parseJson(res, `检测失败 (${res.status})`);
 }
 
 export type ForensicStatus = "ok" | "warn" | "danger";
@@ -129,9 +162,8 @@ export interface ForensicReport {
 export async function runForensics(file: File): Promise<ForensicReport> {
   const fd = new FormData();
   fd.append("file", file);
-  const res = await fetch("/v2-api/forensics", { method: "POST", body: fd });
-  if (!res.ok) throw new Error(`取证分析失败 (${res.status})`);
-  return res.json();
+  const res = await fetch("/v2-api/forensics", { method: "POST", body: fd, headers: withAuthHeaders() });
+  return parseJson(res, `取证分析失败 (${res.status})`);
 }
 
 export const STATUS_META: Record<ForensicStatus, { dot: string; color: string; label: string }> = {
@@ -159,20 +191,24 @@ export interface ProvenanceReport {
 export async function runProvenance(file: File): Promise<ProvenanceReport> {
   const fd = new FormData();
   fd.append("file", file);
-  const res = await fetch("/v2-api/provenance", { method: "POST", body: fd });
-  if (!res.ok) throw new Error(`内容凭证验证失败 (${res.status})`);
-  return res.json();
+  const res = await fetch("/v2-api/provenance", { method: "POST", body: fd, headers: withAuthHeaders() });
+  return parseJson(res, `内容凭证验证失败 (${res.status})`);
 }
 
 export async function fetchHistory(): Promise<HistoryItem[]> {
-  const res = await fetch("/v2-api/history");
-  if (!res.ok) throw new Error("加载历史失败");
-  const data = await res.json();
+  const res = await fetch("/v2-api/history", { headers: withAuthHeaders() });
+  const data = await parseJson<{ items: HistoryItem[] }>(res, "加载历史失败");
   return data.items;
 }
 
+export async function fetchHistoryItem(taskId: string): Promise<DetectResult> {
+  const res = await fetch(`/v2-api/history/${taskId}`, { headers: withAuthHeaders() });
+  return parseJson(res, "加载历史详情失败");
+}
+
 export async function deleteHistory(taskId: string): Promise<void> {
-  await fetch(`/v2-api/history/${taskId}`, { method: "DELETE" });
+  const res = await fetch(`/v2-api/history/${taskId}`, { method: "DELETE", headers: withAuthHeaders() });
+  await parseJson<Record<string, string>>(res, "删除历史失败");
 }
 
 export interface Metrics {
@@ -193,9 +229,24 @@ export interface Metrics {
 }
 
 export async function fetchMetrics(): Promise<Metrics> {
-  const res = await fetch("/v2-api/metrics");
-  if (!res.ok) throw new Error("加载监控指标失败");
-  return res.json();
+  const res = await fetch("/v2-api/metrics", { headers: withAuthHeaders() });
+  return parseJson(res, "加载监控指标失败");
+}
+
+export async function fetchHealth(): Promise<HealthStatus> {
+  const res = await fetch("/v2-api/health", { headers: withAuthHeaders() });
+  return parseJson(res, "加载系统状态失败");
+}
+
+export function getAccessToken(): string {
+  return getStoredToken();
+}
+
+export function setAccessToken(token: string): void {
+  if (typeof window === "undefined") return;
+  const normalized = token.trim();
+  if (normalized) window.localStorage.setItem(ACCESS_TOKEN_KEY, normalized);
+  else window.localStorage.removeItem(ACCESS_TOKEN_KEY);
 }
 
 export const VERDICT_META: Record<Verdict, { label: string; color: string; ring: string }> = {

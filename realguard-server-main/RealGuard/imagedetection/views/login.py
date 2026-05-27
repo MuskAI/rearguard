@@ -12,6 +12,7 @@ from urllib.parse import quote
 
 import requests
 from flask import Blueprint, jsonify, render_template, request, session, redirect, url_for
+from werkzeug.security import check_password_hash, generate_password_hash
 
 from imagedetection.views.utils import excute_sql, excute_detection_sql, create_folder
 
@@ -33,6 +34,54 @@ def _is_valid_phone(phone):
 def _hash_code(code):
     secret = os.environ.get('SECRET_KEY') or 'realguard-sms-code'
     return hashlib.sha256((secret + ':' + code).encode('utf-8')).hexdigest()
+
+
+def _is_password_hash(value):
+    stored = str(value or '')
+    return stored.startswith('pbkdf2:') or stored.startswith('scrypt:')
+
+
+def _hash_password(password):
+    return generate_password_hash(password)
+
+
+def _password_matches(stored_secret, candidate):
+    stored = str(stored_secret or '')
+    plain = str(candidate or '')
+    if not stored:
+        return False
+    if _is_password_hash(stored):
+        try:
+            return check_password_hash(stored, plain)
+        except ValueError:
+            return False
+    return hmac.compare_digest(stored, plain)
+
+
+def _find_user_by_phone(phone):
+    rows = excute_sql("SELECT * FROM user WHERE phone = %s LIMIT 1", (phone,))
+    return rows[0] if rows else None
+
+
+def _upgrade_password_hash(phone, stored_secret, candidate):
+    if not phone or not stored_secret or _is_password_hash(stored_secret):
+        return
+    if _password_matches(stored_secret, candidate):
+        excute_sql(
+            "UPDATE user SET secret = %s WHERE phone = %s",
+            (_hash_password(candidate), phone),
+            fetch=False,
+        )
+
+
+def _authenticate_password_user(phone, candidate):
+    user = _find_user_by_phone(phone)
+    if not user:
+        return None
+    if not _password_matches(user.get('secret', ''), candidate):
+        return None
+    _upgrade_password_hash(phone, user.get('secret', ''), candidate)
+    return user
 
 
 def _get_sms_bucket():
@@ -251,11 +300,8 @@ def login_verify():
         if not phone or not secret:
             return render_template('login.html', error='请输入手机号和密码')
 
-        sql = "SELECT * FROM user WHERE phone = %s AND secret = %s"
-        result = excute_sql(sql, (phone, secret))
-
-        if result and len(result) > 0:
-            user = result[0]
+        user = _authenticate_password_user(phone, secret)
+        if user:
             _sync_detection_user(phone, user.get('username') or phone, user.get('openid', '') or phone)
             session.permanent = True
             session['user_info'] = {
@@ -282,9 +328,8 @@ def login_sms_verify():
         if not ok:
             return render_template('login.html', error=message, login_mode='sms')
 
-        result = excute_sql("SELECT * FROM user WHERE phone = %s LIMIT 1", (phone,))
-        if result and len(result) > 0:
-            user = result[0]
+        user = _find_user_by_phone(phone)
+        if user:
             _sync_detection_user(phone, user.get('username') or phone, user.get('openid', '') or phone)
             session.permanent = True
             session['user_info'] = {
@@ -321,7 +366,7 @@ def register_verify():
             return render_template('register.html', error='该手机号已注册，请直接登录')
 
         sql = "INSERT INTO user (phone, secret, username, openid) VALUES (%s, %s, %s, %s)"
-        result = excute_sql(sql, (phone, secret, username, ''), fetch=False)
+        result = excute_sql(sql, (phone, _hash_password(secret), username, ''), fetch=False)
 
         if result and result > 0:
             _sync_detection_user(phone, username, phone)

@@ -1,15 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import {
   DetectResult,
+  HealthStatus,
   HistoryItem,
   FileType,
   ForensicReport,
   ProvenanceReport,
   detect,
+  fetchHealth,
   runForensics,
   runProvenance,
   fetchHistory,
+  fetchHistoryItem,
   deleteHistory,
+  getAccessToken,
+  setAccessToken,
   TYPE_LABEL,
 } from "./api";
 import Sidebar from "./components/Sidebar";
@@ -46,6 +51,8 @@ function inferType(name: string): FileType {
 
 export default function App() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [historyMessage, setHistoryMessage] = useState("");
+  const [health, setHealth] = useState<HealthStatus | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
   const [forensicsBusy, setForensicsBusy] = useState(false);
@@ -56,9 +63,24 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const loadHistory = () => fetchHistory().then(setHistory).catch(() => {});
+  const loadHealth = () =>
+    fetchHealth()
+      .then(setHealth)
+      .catch(() => setHealth(null));
+
+  const loadHistory = () =>
+    fetchHistory()
+      .then((items) => {
+        setHistory(items);
+        setHistoryMessage("");
+      })
+      .catch((error) => {
+        setHistory([]);
+        setHistoryMessage(error instanceof Error ? error.message : "历史记录暂不可用");
+      });
 
   useEffect(() => {
+    loadHealth();
     loadHistory();
   }, []);
 
@@ -71,6 +93,13 @@ export default function App() {
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages]);
+
+  const configureAccessToken = () => {
+    const next = window.prompt("输入访问令牌。留空可清除本地保存的令牌。", getAccessToken());
+    if (next === null) return;
+    setAccessToken(next);
+    loadHistory();
+  };
 
   const runDetect = async (file: File) => {
     const type = inferType(file.name);
@@ -166,23 +195,34 @@ export default function App() {
 
   const onSelectHistory = async (item: HistoryItem) => {
     setActiveId(item.taskId);
-    const res = await fetch(`/v2-api/history/${item.taskId}`);
-    if (res.ok) {
-      const result: DetectResult = await res.json();
+    try {
+      const result: DetectResult = await fetchHistoryItem(item.taskId);
       setMessages([
         { kind: "user", text: `历史记录：${item.name}`, fileName: item.name },
         { kind: "result", result },
+      ]);
+    } catch (error) {
+      setMessages([
+        {
+          kind: "user",
+          text: error instanceof Error ? error.message : "加载历史详情失败",
+          fileName: "",
+        },
       ]);
     }
   };
 
   const onDelete = async (taskId: string) => {
-    await deleteHistory(taskId);
-    if (activeId === taskId) {
-      setMessages([]);
-      setActiveId(undefined);
+    try {
+      await deleteHistory(taskId);
+      if (activeId === taskId) {
+        setMessages([]);
+        setActiveId(undefined);
+      }
+      loadHistory();
+    } catch (error) {
+      setHistoryMessage(error instanceof Error ? error.message : "删除历史失败");
     }
-    loadHistory();
   };
 
   const newChat = () => {
@@ -194,10 +234,12 @@ export default function App() {
     return (
       <div className="h-full flex">
         <AdminDashboard
+          accessProtectionEnabled={Boolean(health?.accessProtectionEnabled)}
           onBack={() => {
             window.location.hash = "";
             setView("detect");
           }}
+          onConfigureAccess={configureAccessToken}
         />
       </div>
     );
@@ -207,6 +249,7 @@ export default function App() {
     <div className="h-full flex flex-col md:flex-row">
       <Sidebar
         history={history}
+        message={historyMessage}
         activeId={activeId}
         onSelect={onSelectHistory}
         onNew={newChat}
@@ -223,6 +266,7 @@ export default function App() {
           />
           <Sidebar
             history={history}
+            message={historyMessage}
             activeId={activeId}
             onSelect={onSelectHistory}
             onNew={newChat}
@@ -246,9 +290,25 @@ export default function App() {
             >
               历史
             </button>
-            <span className="hidden sm:inline text-xs px-2.5 py-1 rounded-full bg-jade/10 text-jade border border-jade/30">
-              ● 模型在线
+            <span
+              className={`hidden sm:inline text-xs px-2.5 py-1 rounded-full border ${
+                health == null
+                  ? "bg-ink-900 text-ink-500 border-ink-600"
+                  : health.vlmEnabled
+                  ? "bg-jade/10 text-jade border-jade/30"
+                  : "bg-cinnabar/10 text-cinnabar border-cinnabar/30"
+              }`}
+            >
+              ● {health == null ? "状态未知" : health.vlmEnabled ? "VLM 在线" : "Mock 回退"}
             </span>
+            {health?.accessProtectionEnabled && (
+              <button
+                onClick={configureAccessToken}
+                className="h-9 px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950 hover:border-brand-cyan/50"
+              >
+                令牌
+              </button>
+            )}
             <button
               onClick={() => {
                 window.location.hash = "monitor";
@@ -262,6 +322,7 @@ export default function App() {
         </header>
 
         <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto bg-grid px-3 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-5">
+          <CapabilityBanner health={health} />
           {messages.length === 0 && <EmptyState onUpload={() => fileInputRef.current?.click()} />}
 
           {messages.map((m, i) => {
@@ -384,7 +445,7 @@ export default function App() {
               {busy ? "检测中…" : "上传文件检测"}
             </button>
             <span className="text-xs sm:text-sm text-ink-500 leading-relaxed">
-              支持 拖拽 / 点击上传 图像·视频·音频·文档，或粘贴链接
+              支持点击上传。图像与纯文本默认走模型；视频、音频和复杂文档当前可能回退为演示判定。
             </span>
             <input
               ref={fileInputRef}
@@ -404,6 +465,23 @@ function AgentAvatar() {
   return (
     <div className="h-8 w-8 shrink-0 rounded-lg bg-ink-800 border border-ink-600 flex items-center justify-center shadow-sm">
       <Logo size={26} idSuffix="avatar" />
+    </div>
+  );
+}
+
+function CapabilityBanner({ health }: { health: HealthStatus | null }) {
+  const tokenProtected = Boolean(health?.accessProtectionEnabled);
+  const capabilityText =
+    health == null
+      ? "尚未获取到后端状态，检测能力与访问控制信息可能不完整。"
+      : health.vlmEnabled
+      ? "图像与纯文本检测使用真实模型；视频、音频仍为演示判定。"
+      : "当前处于 Mock 回退模式，检测结果仅用于演示流程。";
+  return (
+    <div className="rounded-xl border border-ink-600 bg-ink-800 px-4 py-3 text-xs sm:text-sm text-ink-500 leading-relaxed">
+      <span className="text-ink-950 font-medium">当前能力：</span>
+      {capabilityText}
+      {tokenProtected && " 历史记录、报告与监控指标需要访问令牌。"}
     </div>
   );
 }

@@ -147,15 +147,15 @@ def retrieve_result_api():
         return jsonify({'status': 'error', 'message': '用户未登录'}), 401
 
     itemid = request.args.get('itemid')
+    phone = session['user_info'].get('phone', '')
     if not itemid:
         return jsonify({'status': 'error', 'message': '缺少参数'}), 400
 
-    result = excute_sql("SELECT * FROM retrieve_data WHERE itemid = %s", (itemid,))
+    result = excute_sql("SELECT * FROM retrieve_data WHERE itemid = %s AND phone = %s", (itemid, phone))
     if not result or len(result) == 0:
         return jsonify({'status': 'error', 'message': '未找到记录'}), 404
 
     item = result[0]
-    phone = item.get('phone', '')
     filename = item.get('filename', '')
     search_type = item.get('search_type', 'image')
 
@@ -167,8 +167,7 @@ def retrieve_result_api():
         except Exception:
             pass
 
-    from imagedetection.views.retrieve import IMAGE_BASE_URL, VIDEO_BASE_URL
-    base_url = IMAGE_BASE_URL if search_type == 'image' else VIDEO_BASE_URL
+    base_url = '/retrieve/library-file/image/' if search_type == 'image' else '/retrieve/library-file/video/'
 
     return jsonify({
         'status': 'success',

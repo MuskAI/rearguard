@@ -1,3 +1,4 @@
+import os
 from datetime import timedelta
 
 from flask import Flask, render_template, session, redirect
@@ -11,11 +12,12 @@ from .views import api
 
 def creat_app():
     app = Flask(__name__)
-    app.secret_key = 'gdq821821'
+    app.secret_key = os.environ.get('SECRET_KEY') or os.environ.get('REALGUARD_SECRET_KEY') or 'gdq821821'
     app.config.update(
         PERMANENT_SESSION_LIFETIME=timedelta(days=30),
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE='Lax',
+        SESSION_COOKIE_SECURE=str(os.environ.get('REALGUARD_SESSION_COOKIE_SECURE', '0')).lower() in ('1', 'true', 'yes'),
         SESSION_REFRESH_EACH_REQUEST=True,
     )
 

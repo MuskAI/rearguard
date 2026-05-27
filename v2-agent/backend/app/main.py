@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import os
+import secrets
 import time
 import hashlib
 import io
@@ -18,6 +20,7 @@ from starlette.responses import Response
 from . import detector, provenance, storage, synthid_detector, visible_watermark_detector
 
 app = FastAPI(title="鉴真 AI 鉴伪智能体", version="0.2.0")
+ACCESS_TOKEN = os.getenv("JIANZHEN_ACCESS_TOKEN", "").strip()
 
 app.add_middleware(
     CORSMiddleware,
@@ -48,6 +51,21 @@ def _client_ip(request: Request) -> str | None:
     if real_ip:
         return real_ip.strip()
     return request.client.host if request.client else None
+
+
+def _request_token(request: Request) -> str:
+    bearer = request.headers.get("authorization", "").strip()
+    if bearer.lower().startswith("bearer "):
+        return bearer[7:].strip()
+    return request.headers.get("x-jianzhen-token", "").strip()
+
+
+def _require_protected_access(request: Request) -> None:
+    if not ACCESS_TOKEN:
+        return
+    if secrets.compare_digest(_request_token(request), ACCESS_TOKEN):
+        return
+    raise HTTPException(status_code=401, detail="访问令牌缺失或无效")
 
 
 @app.middleware("http")
@@ -146,6 +164,8 @@ def health() -> dict:
         "status": "ok",
         "model": detector.VLM_MODEL,
         "vlmEnabled": bool(detector.API_KEY),
+        "accessProtectionEnabled": bool(ACCESS_TOKEN),
+        "protectedEndpoints": ["/api/history", "/api/report/{report_id}", "/api/metrics"] if ACCESS_TOKEN else [],
         "calibration": detector.calibration_status(),
         "synthid": synthid_detector.status(),
         "visibleWatermark": visible_watermark_detector.status(),
@@ -231,13 +251,15 @@ async def provenance_check(file: UploadFile = File(...)) -> dict:
 
 
 @app.get("/api/history")
-def history() -> dict:
+def history(request: Request) -> dict:
+    _require_protected_access(request)
     summary = storage.list_history()
     return {"items": summary, "total": len(summary)}
 
 
 @app.get("/api/history/{task_id}")
-def history_item(task_id: str) -> dict:
+def history_item(task_id: str, request: Request) -> dict:
+    _require_protected_access(request)
     item = storage.get_history(task_id)
     if not item:
         raise HTTPException(status_code=404, detail="记录不存在")
@@ -245,7 +267,8 @@ def history_item(task_id: str) -> dict:
 
 
 @app.delete("/api/history/{task_id}")
-def delete_item(task_id: str) -> dict:
+def delete_item(task_id: str, request: Request) -> dict:
+    _require_protected_access(request)
     item = storage.delete_history(task_id)
     if not item:
         raise HTTPException(status_code=404, detail="记录不存在")
@@ -253,7 +276,8 @@ def delete_item(task_id: str) -> dict:
 
 
 @app.get("/api/report/{report_id}")
-def report(report_id: str) -> dict:
+def report(report_id: str, request: Request) -> dict:
+    _require_protected_access(request)
     item = storage.get_history(report_id)
     if not item:
         raise HTTPException(status_code=404, detail="报告不存在")
@@ -261,5 +285,6 @@ def report(report_id: str) -> dict:
 
 
 @app.get("/api/metrics")
-def metrics() -> dict:
+def metrics(request: Request) -> dict:
+    _require_protected_access(request)
     return storage.metrics()

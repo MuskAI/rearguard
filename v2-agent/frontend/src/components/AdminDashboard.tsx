@@ -9,7 +9,15 @@ function compactDate(value: string) {
   return value.slice(5).replace("-", "/");
 }
 
-export default function AdminDashboard({ onBack }: { onBack: () => void }) {
+export default function AdminDashboard({
+  onBack,
+  onConfigureAccess,
+  accessProtectionEnabled,
+}: {
+  onBack: () => void;
+  onConfigureAccess: () => void;
+  accessProtectionEnabled: boolean;
+}) {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [error, setError] = useState<string>("");
 
@@ -57,6 +65,14 @@ export default function AdminDashboard({ onBack }: { onBack: () => void }) {
           <p className="text-[11px] sm:text-xs text-ink-500">检测流量、缓存效率与接口健康状态</p>
         </div>
         <div className="flex items-center gap-2">
+          {accessProtectionEnabled && (
+            <button
+              onClick={onConfigureAccess}
+              className="h-9 px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950 hover:border-brand-cyan/50"
+            >
+              访问令牌
+            </button>
+          )}
           <button
             onClick={load}
             className="h-9 px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950 hover:border-jade/50"

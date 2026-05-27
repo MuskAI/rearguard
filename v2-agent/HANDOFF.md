@@ -55,6 +55,7 @@ lingjian/
 | `DASHSCOPE_API_KEY` | 强烈建议 | 阿里云 DashScope API Key。**缺失或无效时，图像/文本检测自动回退 Mock**（C2PA 验证不依赖它，照常工作）。 | `sk-xxxxxxxx` |
 | `DASHSCOPE_BASE_URL` | 否 | OpenAI 兼容端点 | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
 | `VLM_MODEL` | 否 | 视觉语言模型名 | `qwen3-vl-flash` |
+| `JIANZHEN_ACCESS_TOKEN` | 否 | 配置后，历史、报告与监控接口需要访问令牌。 | `change-me` |
 | `SYNTHID_ENABLED` | 否 | 是否启用 Gemini SynthID 水印取证增强。只调用检测逻辑，不调用去水印/绕过逻辑。 | `false` |
 | `SYNTHID_REPO_PATH` | 否 | `reverse-SynthID` 仓库部署路径。 | `/opt/reverse-SynthID` |
 | `SYNTHID_CODEBOOK_PATH` | 否 | V4 codebook 路径。 | `/opt/reverse-SynthID/artifacts/spectral_codebook_v4.npz` |
@@ -66,6 +67,7 @@ lingjian/
 DASHSCOPE_API_KEY=在此填入你的_DashScope_Key
 DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 VLM_MODEL=qwen3-vl-flash
+JIANZHEN_ACCESS_TOKEN=
 SYNTHID_ENABLED=false
 SYNTHID_REPO_PATH=/opt/reverse-SynthID
 SYNTHID_CODEBOOK_PATH=/opt/reverse-SynthID/artifacts/spectral_codebook_v4.npz
@@ -111,14 +113,15 @@ npm run build          # 产物在 dist/
 
 ## 6. 生产注意事项（重要）
 
-1. **历史存内存、非持久、不支持多实例**：`HISTORY` 在后端进程内。后端务必 **单进程/单副本**（`--workers 1`，compose 不要 scale backend），否则历史会在副本间不一致、重启丢失。要持久化/横向扩展需接 Redis 或数据库（当前未实现）。
+1. **单机 SQLite、谨慎多实例**：后端使用 `JIANZHEN_DATA_DIR/jianzhen-v2.sqlite3` 保存历史、缓存与轻量监控。当前仍建议 **单进程/单副本**（`--workers 1`，compose 不要 scale backend），否则虽然数据可持久化，但并发写入、清理和缓存一致性都不适合横向扩展。
 2. **DASHSCOPE_API_KEY 决定能力**：无 key → 图像/文本检测返回 Mock（响应里 `source: "mock"`）；有 key → `source: "vlm"`。前端不会报错，但结果含义不同。
 3. **上传体积**：nginx 已设 `client_max_body_size 25m`，裸机反代请同样放宽；取证分析（`/api/forensics`）响应较大（7 张内联 base64 图，约 3MB），已设 120s 超时。
 4. **CORS**：后端 `allow_origins=["*"]`，便于演示。生产建议收紧为你的域名。
-5. **持久化与缓存**：后端使用 SQLite 保存历史、检测缓存与轻量监控指标，默认路径为 `JIANZHEN_DATA_DIR/jianzhen-v2.sqlite3`。同一文件按 `cacheVersion + fileType + sha256` 复用核心分析结果，避免重复调用模型导致结论漂移。
-6. **可见水印检测**：`VISIBLE_WATERMARK_ENABLED=true` 时启用检测-only 模块。该模块只定位可见 AI 水印/角标，复用了 GeminiWatermarkTool/remove-ai-watermarks 的 NCC 检测思路和 MIT 资产，不包含 reverse alpha blending、inpainting 或任何去水印输出。命中结果会返回小尺寸 WebP 证据抠图、bbox 与阶段分数，供前端增强可信展示。
-7. **能力边界**：视频/音频检测为 Mock；C2PA 仅验证签名有效性，不内置 OpenAI/Adobe 官方信任根（无法断言"出自某官方"）；SynthID 与可见水印仅作为辅助证据，未检出不能证明图片真实。
-8. **出网**：后端需能访问 `dashscope.aliyuncs.com`（VLM 调用）。内网/受限环境请放行或仅用 Mock + C2PA。
+5. **访问控制**：配置 `JIANZHEN_ACCESS_TOKEN` 后，`/api/history`、`/api/report/*`、`/api/metrics` 与删除历史接口都需要在请求头里带 `X-Jianzhen-Token` 或 `Authorization: Bearer <token>`。
+6. **持久化与缓存**：同一文件按 `cacheVersion + fileType + sha256` 复用核心分析结果，避免重复调用模型导致结论漂移。
+7. **可见水印检测**：`VISIBLE_WATERMARK_ENABLED=true` 时启用检测-only 模块。该模块只定位可见 AI 水印/角标，复用了 GeminiWatermarkTool/remove-ai-watermarks 的 NCC 检测思路和 MIT 资产，不包含 reverse alpha blending、inpainting 或任何去水印输出。命中结果会返回小尺寸 WebP 证据抠图、bbox 与阶段分数，供前端增强可信展示。
+8. **能力边界**：视频/音频检测为 Mock；C2PA 仅验证签名有效性，不内置 OpenAI/Adobe 官方信任根（无法断言"出自某官方"）；SynthID 与可见水印仅作为辅助证据，未检出不能证明图片真实。
+9. **出网**：后端需能访问 `dashscope.aliyuncs.com`（VLM 调用）。内网/受限环境请放行或仅用 Mock + C2PA。
 
 ## 7. API 速览
 

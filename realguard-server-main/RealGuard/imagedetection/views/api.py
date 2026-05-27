@@ -10,7 +10,14 @@ from PIL import Image
 from flask import Blueprint, jsonify, redirect, request, send_file, session
 
 from imagedetection.views.historical_record import DETECTION_BACKEND_BASE_URL, _detection_static_url
-from imagedetection.views.login import _is_valid_phone, _sync_detection_user, _verify_sms_code
+from imagedetection.views.login import (
+    _authenticate_password_user,
+    _find_user_by_phone,
+    _hash_password,
+    _is_valid_phone,
+    _sync_detection_user,
+    _verify_sms_code,
+)
 from imagedetection.views.utils import excute_detection_sql, excute_sql, format_createtime
 
 
@@ -102,11 +109,10 @@ def login_password():
     if not phone or not secret:
         return jsonify({"status": "error", "message": "请输入手机号和密码"}), 400
 
-    rows = excute_sql("SELECT * FROM user WHERE phone = %s AND secret = %s", (phone, secret))
-    if not rows:
+    user = _authenticate_password_user(phone, secret)
+    if not user:
         return jsonify({"status": "error", "message": "手机号或密码错误"}), 401
 
-    user = rows[0]
     _sync_detection_user(phone, user.get("username") or phone, user.get("openid", "") or phone)
     session.permanent = True
     session["user_info"] = {
@@ -130,8 +136,8 @@ def login_sms():
     if not ok:
         return jsonify({"status": "error", "message": message}), 400
 
-    rows = excute_sql("SELECT * FROM user WHERE phone = %s LIMIT 1", (phone,))
-    if not rows:
+    user = _find_user_by_phone(phone)
+    if not user:
         affected = excute_sql(
             "INSERT INTO user (phone, secret, username, openid) VALUES (%s, %s, %s, %s)",
             (phone, "", phone, ""),
@@ -139,11 +145,10 @@ def login_sms():
         )
         if not affected:
             return jsonify({"status": "error", "message": "自动创建账号失败，请稍后重试"}), 500
-        rows = excute_sql("SELECT * FROM user WHERE phone = %s LIMIT 1", (phone,))
-        if not rows:
+        user = _find_user_by_phone(phone)
+        if not user:
             return jsonify({"status": "error", "message": "自动创建账号失败，请稍后重试"}), 500
 
-    user = rows[0]
     _sync_detection_user(phone, user.get("username") or phone, user.get("openid", "") or phone)
     session.permanent = True
     session["user_info"] = {
@@ -175,7 +180,7 @@ def register():
 
     affected = excute_sql(
         "INSERT INTO user (phone, secret, username, openid) VALUES (%s, %s, %s, %s)",
-        (phone, secret, username, ""),
+        (phone, _hash_password(secret), username, ""),
         fetch=False,
     )
     if not affected:

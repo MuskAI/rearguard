@@ -403,11 +403,12 @@ def image_result_api():
         return jsonify({'status': 'error', 'message': '用户未登录'}), 401
 
     itemid = request.args.get('itemid')
+    phone = session['user_info'].get('phone', '')
     if not itemid:
         return jsonify({'status': 'error', 'message': '缺少参数'}), 400
 
-    data_sql = "SELECT * FROM data WHERE itemid = %s"
-    data_result = excute_detection_sql(data_sql, (itemid,))
+    data_sql = "SELECT * FROM data WHERE itemid = %s AND phone = %s"
+    data_result = excute_detection_sql(data_sql, (itemid, phone))
     if not data_result or len(data_result) == 0:
         return jsonify({'status': 'error', 'message': '未找到该检测记录'}), 404
 
@@ -560,11 +561,12 @@ def video_result_api():
         return jsonify({'status': 'error', 'message': '用户未登录'}), 401
 
     itemid = request.args.get('itemid')
+    phone = session['user_info'].get('phone', '')
     if not itemid:
         return jsonify({'status': 'error', 'message': '缺少参数'}), 400
 
-    sql = "SELECT * FROM video_data WHERE itemid = %s"
-    rows = excute_detection_sql(sql, (itemid,))
+    sql = "SELECT * FROM video_data WHERE itemid = %s AND phone = %s"
+    rows = excute_detection_sql(sql, (itemid, phone))
     if not rows:
         return jsonify({'status': 'error', 'message': '未找到该视频检测记录'}), 404
 
