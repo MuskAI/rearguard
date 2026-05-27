@@ -53,6 +53,10 @@ export default function Sidebar({ history, message, activeId, onSelect, onNew, o
       return fields.some((field) => String(field).toLowerCase().includes(q));
     });
   }, [filter, history, query]);
+  const activeSummary = [
+    { label: "筛选", value: filter === "all" ? "全部" : filter },
+    { label: "搜索", value: query.trim() || "未设置" },
+  ];
 
   async function copyCurrentView() {
     const url = window.location.href;
@@ -138,6 +142,26 @@ export default function Sidebar({ history, message, activeId, onSelect, onNew, o
           >
             {copied ? "已复制当前视图链接" : "复制当前视图链接"}
           </button>
+          <div className="flex flex-wrap gap-1">
+            {activeSummary.map((item) => (
+              <span key={item.label} className="px-2 py-1 rounded-md text-[10px] border border-ink-600 bg-ink-800 text-ink-500">
+                <strong className="text-ink-950">{item.label}</strong>
+                <span className="ml-1">{item.value}</span>
+              </span>
+            ))}
+          </div>
+          {(filter !== "all" || query.trim()) && (
+            <button
+              type="button"
+              onClick={() => {
+                setFilter("all");
+                setQuery("");
+              }}
+              className="w-full px-2 py-1.5 rounded-md text-[10px] border border-ink-600 bg-ink-800 text-ink-500"
+            >
+              重置条件
+            </button>
+          )}
           <div className="text-[10px] text-ink-500">
             当前显示 {filteredHistory.length} / {history.length}
           </div>
