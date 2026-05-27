@@ -224,6 +224,19 @@ def test_guest_history_returns_guest_image_records(client, monkeypatch):
     assert record["visual_issue_count"] == 1
 
 
+def test_history_endpoints_return_empty_for_fresh_guest(client):
+    image_response = client.get("/api/history/image-detections")
+    video_response = client.get("/api/history/video-detections")
+    retrieve_response = client.get("/api/history/retrievals?search_type=image")
+
+    assert image_response.status_code == 200
+    assert image_response.get_json()["records"] == []
+    assert video_response.status_code == 200
+    assert video_response.get_json()["records"] == []
+    assert retrieve_response.status_code == 200
+    assert retrieve_response.get_json()["records"] == []
+
+
 def test_guest_thumbnail_uses_guest_openid_lookup(client, monkeypatch, tmp_path):
     with client.session_transaction() as sess:
         sess["guest_openid"] = "guest-thumb"

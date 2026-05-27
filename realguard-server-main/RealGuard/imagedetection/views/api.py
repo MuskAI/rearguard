@@ -43,7 +43,7 @@ def _auth_required():
     return user, None
 
 
-def _history_identity():
+def _history_identity(allow_empty=False):
     user = _current_user()
     if user:
         return {
@@ -54,6 +54,8 @@ def _history_identity():
     guest_openid = str(session.get("guest_openid") or "").strip()
     if guest_openid:
         return {"mode": "guest", "phone": "", "openid": guest_openid}, None
+    if allow_empty:
+        return {"mode": "anonymous", "phone": "", "openid": ""}, None
     return None, (jsonify({"status": "error", "message": "用户未登录"}), 401)
 
 
@@ -242,12 +244,14 @@ def logout():
 
 @api_blueprint.route("/history/image-detections")
 def image_detection_history():
-    actor, error = _history_identity()
+    actor, error = _history_identity(allow_empty=True)
     if error:
         return error
 
     if actor["mode"] == "guest":
         rows = excute_detection_sql("SELECT * FROM data WHERE openid = %s ORDER BY createtime DESC", (actor["openid"],))
+    elif actor["mode"] == "anonymous":
+        rows = []
     else:
         rows = excute_detection_sql(
             "SELECT * FROM data WHERE phone = %s OR openid = %s ORDER BY createtime DESC",
@@ -326,12 +330,14 @@ def image_detection_thumbnail(itemid):
 
 @api_blueprint.route("/history/video-detections")
 def video_detection_history():
-    actor, error = _history_identity()
+    actor, error = _history_identity(allow_empty=True)
     if error:
         return error
 
     if actor["mode"] == "guest":
         rows = excute_detection_sql("SELECT * FROM video_data WHERE openid = %s ORDER BY createtime DESC", (actor["openid"],))
+    elif actor["mode"] == "anonymous":
+        rows = []
     else:
         rows = excute_detection_sql(
             "SELECT * FROM video_data WHERE phone = %s OR openid = %s ORDER BY createtime DESC",
@@ -359,7 +365,7 @@ def video_detection_history():
 
 @api_blueprint.route("/history/retrievals")
 def retrieval_history():
-    user, error = _auth_required()
+    actor, error = _history_identity(allow_empty=True)
     if error:
         return error
 
@@ -367,11 +373,15 @@ def retrieval_history():
     if search_type not in ("image", "video"):
         return jsonify({"status": "error", "message": "search_type 必须为 image 或 video"}), 400
 
-    phone = user.get("phone", "")
-    rows = excute_sql(
-        "SELECT * FROM retrieve_data WHERE phone = %s AND search_type = %s ORDER BY createtime DESC",
-        (phone, search_type),
-    )
+    if actor["mode"] != "user":
+        rows = []
+        phone = ""
+    else:
+        phone = actor["phone"]
+        rows = excute_sql(
+            "SELECT * FROM retrieve_data WHERE phone = %s AND search_type = %s ORDER BY createtime DESC",
+            (phone, search_type),
+        )
     records = []
     for item in rows or []:
         records.append(
