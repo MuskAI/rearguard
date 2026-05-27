@@ -45,6 +45,12 @@ export default function AdminDashboard({
     "maps-only": "#d99a2b",
     unknown: "#7c8aa5",
   } as const;
+  const evidenceColors = {
+    visibleWatermarkHits: "#d8412f",
+    synthidHits: "#3b82f6",
+    forensicsCompleted: "#d99a2b",
+    provenanceCompleted: "#3fb6a8",
+  } as const;
 
   if (!metrics) {
     return (
@@ -192,6 +198,56 @@ export default function AdminDashboard({
                 <div className="text-[10px] text-ink-500 whitespace-nowrap">{compactDate(day.date)}</div>
               </div>
             ))}
+          </div>
+        </section>
+
+        <section className="rounded-xl border border-ink-600 bg-ink-800 p-4">
+          <div className="flex items-center justify-between gap-3 mb-4">
+            <h2 className="font-serif text-base font-semibold text-rice">按证据日趋势</h2>
+            <div className="flex flex-wrap gap-3 text-[11px] text-ink-500">
+              <span><span style={{ color: evidenceColors.visibleWatermarkHits }}>■</span> 可见水印</span>
+              <span><span style={{ color: evidenceColors.synthidHits }}>■</span> SynthID</span>
+              <span><span style={{ color: evidenceColors.forensicsCompleted }}>■</span> 取证</span>
+              <span><span style={{ color: evidenceColors.provenanceCompleted }}>■</span> 凭证</span>
+            </div>
+          </div>
+          <div className="space-y-3">
+            {[
+              { key: "visibleWatermarkHits", label: "可见水印" },
+              { key: "synthidHits", label: "SynthID" },
+              { key: "forensicsCompleted", label: "取证完成" },
+              { key: "provenanceCompleted", label: "凭证完成" },
+            ].map((item) => {
+              const maxValue = Math.max(1, ...metrics.byDay.map((day) => day.evidence[item.key as keyof typeof day.evidence]));
+              return (
+                <div key={item.key}>
+                  <div className="flex justify-between text-xs mb-1.5">
+                    <span className="text-ink-950">{item.label}</span>
+                    <span className="text-ink-500">
+                      {metrics.evidence[item.key as keyof typeof metrics.evidence]}
+                    </span>
+                  </div>
+                  <div className="h-16 flex items-end gap-1">
+                    {metrics.byDay.map((day) => {
+                      const value = day.evidence[item.key as keyof typeof day.evidence];
+                      return (
+                        <div key={`${day.date}-${item.key}`} className="flex-1 min-w-0 flex flex-col items-center justify-end gap-1">
+                          <div
+                            className="w-full rounded-t"
+                            style={{
+                              height: `${(value / maxValue) * 100}%`,
+                              minHeight: value ? 3 : 0,
+                              background: evidenceColors[item.key as keyof typeof evidenceColors],
+                            }}
+                            title={`${compactDate(day.date)} ${item.label}: ${value}`}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </section>
 

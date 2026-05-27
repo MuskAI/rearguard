@@ -258,6 +258,12 @@ export interface Metrics {
     date: string;
     detections: number;
     sources: { vlm: number; mock: number; "maps-only": number; unknown: number };
+    evidence: {
+      visibleWatermarkHits: number;
+      synthidHits: number;
+      forensicsCompleted: number;
+      provenanceCompleted: number;
+    };
   }[];
   byType: Partial<Record<FileType, number>>;
   byVerdict: Partial<Record<Verdict | "unknown", number>>;

@@ -230,3 +230,4 @@ def test_metrics_include_source_and_evidence_breakdown(client):
     assert payload["sourceVerdict"]
     assert payload["sourceEvidence"]
     assert "sources" in payload["byDay"][0]
+    assert "evidence" in payload["byDay"][0]

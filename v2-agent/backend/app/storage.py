@@ -365,6 +365,7 @@ def metrics(days: int = 14) -> dict[str, Any]:
     by_source: Counter[str] = Counter()
     source_verdict: dict[str, Counter[str]] = defaultdict(Counter)
     source_evidence: dict[str, Counter[str]] = defaultdict(Counter)
+    by_day_evidence: dict[str, Counter[str]] = defaultdict(Counter)
     today_ips: set[str] = set()
     cache_hits = 0
     cache_known = 0
@@ -389,15 +390,19 @@ def metrics(days: int = 14) -> dict[str, Any]:
         if (result.get("visibleWatermark") or {}).get("detected"):
             visible_watermark_hits += 1
             source_evidence[source]["visibleWatermarkHits"] += 1
+            by_day_evidence[day]["visibleWatermarkHits"] += 1
         if (result.get("synthid") or {}).get("detected"):
             synthid_hits += 1
             source_evidence[source]["synthidHits"] += 1
+            by_day_evidence[day]["synthidHits"] += 1
         if row["forensics_json"]:
             forensics_completed += 1
             source_evidence[source]["forensicsCompleted"] += 1
+            by_day_evidence[day]["forensicsCompleted"] += 1
         if row["provenance_json"]:
             provenance_completed += 1
             source_evidence[source]["provenanceCompleted"] += 1
+            by_day_evidence[day]["provenanceCompleted"] += 1
 
     for row in event_rows:
         day = row["created_at"][:10]
@@ -432,6 +437,12 @@ def metrics(days: int = 14) -> dict[str, Any]:
             "date": day,
             "detections": by_day.get(day, 0),
             "sources": day_sources,
+            "evidence": {
+                "visibleWatermarkHits": by_day_evidence[day]["visibleWatermarkHits"],
+                "synthidHits": by_day_evidence[day]["synthidHits"],
+                "forensicsCompleted": by_day_evidence[day]["forensicsCompleted"],
+                "provenanceCompleted": by_day_evidence[day]["provenanceCompleted"],
+            },
         })
 
     total_recent = sum(by_day.values())
