@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, useEffect, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import {
   Counters,
   HistoryRecord,
@@ -710,6 +710,7 @@ function HistoryPage() {
   const [tab, setTab] = useState<"image" | "video" | "imageRetrieve" | "videoRetrieve">("image");
   const [records, setRecords] = useState<HistoryRecord[]>([]);
   const [status, setStatus] = useState<Status>(null);
+  const [filter, setFilter] = useState<"all" | "guest" | "metadata" | "issues" | "ai">("all");
 
   useEffect(() => {
     setStatus({ tone: "info", text: "正在加载历史记录" });
@@ -730,6 +731,70 @@ function HistoryPage() {
       });
   }, [tab]);
 
+  useEffect(() => {
+    setFilter("all");
+  }, [tab]);
+
+  const filteredRecords = useMemo(() => {
+    if (tab === "image") {
+      if (filter === "guest") return records.filter((record) => Boolean(record.is_guest_record));
+      if (filter === "metadata") return records.filter((record) => Boolean(record.has_metadata));
+      if (filter === "issues") return records.filter((record) => Boolean(record.has_visual_issues));
+      return records;
+    }
+    if (tab === "video") {
+      if (filter === "guest") return records.filter((record) => Boolean(record.is_guest_record));
+      if (filter === "ai") return records.filter((record) => String(record.final_label || "").includes("AI"));
+      return records;
+    }
+    return records;
+  }, [records, tab, filter]);
+
+  const summaryCards = useMemo(() => {
+    if (tab === "image") {
+      return [
+        { label: "总记录", value: records.length },
+        { label: "访客记录", value: records.filter((record) => Boolean(record.is_guest_record)).length },
+        { label: "带元数据", value: records.filter((record) => Boolean(record.has_metadata)).length },
+        { label: "有可疑点", value: records.filter((record) => Boolean(record.has_visual_issues)).length },
+      ];
+    }
+    if (tab === "video") {
+      return [
+        { label: "总记录", value: records.length },
+        { label: "访客记录", value: records.filter((record) => Boolean(record.is_guest_record)).length },
+        { label: "AI结论", value: records.filter((record) => String(record.final_label || "").includes("AI")).length },
+        { label: "真实结论", value: records.filter((record) => String(record.final_label || "").includes("真实")).length },
+      ];
+    }
+    const resultCount = records.reduce((sum, record) => sum + Number(record.result_count || 0), 0);
+    const topKAvg = records.length
+      ? Math.round((records.reduce((sum, record) => sum + Number(record.top_k || 0), 0) / records.length) * 10) / 10
+      : 0;
+    return [
+      { label: "总查询", value: records.length },
+      { label: "命中总数", value: resultCount },
+      { label: "平均Top-K", value: topKAvg },
+      { label: "查询类型", value: tab === "imageRetrieve" ? "图像" : "视频" },
+    ];
+  }, [records, tab]);
+
+  const filterOptions =
+    tab === "image"
+      ? [
+          { key: "all", label: "全部" },
+          { key: "guest", label: "访客" },
+          { key: "metadata", label: "元数据" },
+          { key: "issues", label: "可疑点" },
+        ]
+      : tab === "video"
+        ? [
+            { key: "all", label: "全部" },
+            { key: "guest", label: "访客" },
+            { key: "ai", label: "AI结论" },
+          ]
+        : [];
+
   return (
     <main className="main">
       <div className="container">
@@ -742,7 +807,37 @@ function HistoryPage() {
             <button className={`model-tab ${tab === "videoRetrieve" ? "active" : ""}`} onClick={() => setTab("videoRetrieve")}>视频检索</button>
           </div>
           {status && <div className={`notice ${status.tone}`}>{status.text}</div>}
-          {records.length ? <HistoryRecords records={records} tab={tab} /> : !status && <EmptyState icon="fa-clock-o" text="暂无记录" />}
+          {records.length ? (
+            <>
+              <div className="history-summary-grid">
+                {summaryCards.map((card) => (
+                  <div key={card.label} className="history-summary-card">
+                    <span>{card.label}</span>
+                    <strong>{card.value}</strong>
+                  </div>
+                ))}
+              </div>
+              {filterOptions.length > 0 && (
+                <div className="history-filter-bar">
+                  {filterOptions.map((option) => (
+                    <button
+                      key={option.key}
+                      type="button"
+                      className={`history-filter-btn ${filter === option.key ? "active" : ""}`}
+                      onClick={() => setFilter(option.key as typeof filter)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {filteredRecords.length ? (
+                <HistoryRecords records={filteredRecords} tab={tab} />
+              ) : (
+                <EmptyState icon="fa-filter" text="当前筛选条件下暂无记录" />
+              )}
+            </>
+          ) : !status && <EmptyState icon="fa-clock-o" text="暂无记录" />}
         </div>
       </div>
     </main>

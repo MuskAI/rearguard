@@ -505,6 +505,13 @@ th, td { padding: 14px 16px; border-bottom: 1px solid var(--border); text-align:
 th { background: var(--bg-input); color: var(--text-secondary); }
 td { color: var(--text-primary); }
 .history-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+.history-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.75rem; margin: 0.85rem 0 1rem; }
+.history-summary-card { min-width: 0; padding: 0.85rem 0.95rem; border-radius: 12px; background: var(--bg-input); border: 1px solid var(--border); }
+.history-summary-card span { display: block; font-size: 0.74rem; color: var(--text-muted); margin-bottom: 0.3rem; }
+.history-summary-card strong { display: block; font-size: 1.1rem; color: var(--text-primary); overflow-wrap: anywhere; }
+.history-filter-bar { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; }
+.history-filter-btn { min-height: 34px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-input); color: var(--text-secondary); font-size: 0.78rem; font-weight: 700; }
+.history-filter-btn.active { background: rgba(37,99,235,0.08); color: var(--primary); border-color: rgba(37,99,235,0.18); }
 .history-record { min-width: 0; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--bg-card-alt); }
 .history-media {
   position: relative;
@@ -582,6 +589,7 @@ td { color: var(--text-primary); }
 @media (max-width: 1024px) {
   .features-grid { grid-template-columns: repeat(2, 1fr); }
   .results-grid { grid-template-columns: repeat(3, 1fr); }
+  .history-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .history-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 960px) {
@@ -746,6 +754,7 @@ td { color: var(--text-primary); }
   .example-img { min-height: 180px; }
   .features-grid, .results-grid { grid-template-columns: 1fr; }
   .history-grid { grid-template-columns: 1fr; }
+  .history-summary-grid { grid-template-columns: 1fr; }
   .trial-strip .container { flex-wrap: nowrap; gap: 8px; }
   .trial-strip button { margin-left: 0; flex: 0 0 auto; }
   .page-header h1 { font-size: 1.25rem; }

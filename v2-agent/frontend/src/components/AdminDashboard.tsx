@@ -56,6 +56,11 @@ export default function AdminDashboard({
     { label: "缓存命中率", value: pct(metrics.summary.cacheHitRate) },
     { label: "缓存样本", value: metrics.summary.cacheEntries },
   ];
+  const recentBase = Math.max(1, metrics.summary.recentDetections || metrics.summary.totalDetections || 1);
+  const vlmRate = (metrics.bySource.vlm ?? 0) / recentBase;
+  const watermarkRate = metrics.evidence.visibleWatermarkHits / recentBase;
+  const forensicsRate = metrics.evidence.forensicsCompleted / recentBase;
+  const provenanceRate = metrics.evidence.provenanceCompleted / recentBase;
 
   return (
     <main className="flex-1 min-w-0 bg-grid overflow-y-auto">
@@ -96,6 +101,20 @@ export default function AdminDashboard({
             <div key={card.label} className="rounded-xl border border-ink-600 bg-ink-800 p-3 sm:p-4">
               <div className="text-[11px] text-ink-500">{card.label}</div>
               <div className="mt-1 text-xl sm:text-2xl font-semibold text-rice">{card.value}</div>
+            </div>
+          ))}
+        </section>
+
+        <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {[
+            { label: "VLM覆盖率", value: pct(vlmRate) },
+            { label: "水印命中率", value: pct(watermarkRate) },
+            { label: "取证完成率", value: pct(forensicsRate) },
+            { label: "凭证完成率", value: pct(provenanceRate) },
+          ].map((card) => (
+            <div key={card.label} className="rounded-xl border border-ink-600 bg-ink-900 p-3 sm:p-4">
+              <div className="text-[11px] text-ink-500">{card.label}</div>
+              <div className="mt-1 text-lg sm:text-xl font-semibold text-rice">{card.value}</div>
             </div>
           ))}
         </section>
