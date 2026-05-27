@@ -124,6 +124,17 @@ def _history_limit(default=500):
     return value, None
 
 
+def _history_offset(default=0):
+    raw = str(request.args.get("offset", default) or default).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return None, (jsonify({"status": "error", "message": "offset 必须为整数"}), 400)
+    if value < 0:
+        return None, (jsonify({"status": "error", "message": "offset 不能小于 0"}), 400)
+    return value, None
+
+
 def _history_query():
     return str(request.args.get("query") or "").strip().lower()
 
@@ -384,6 +395,9 @@ def image_detection_history():
     limit, limit_error = _history_limit()
     if limit_error:
         return limit_error
+    offset, offset_error = _history_offset()
+    if offset_error:
+        return offset_error
     query = _history_query()
     filter_key = str(request.args.get("filter") or "all").strip()
     if filter_key not in {"all", "guest", "metadata", "issues"}:
@@ -411,7 +425,7 @@ def image_detection_history():
         "issues": sum(1 for record in query_records if record["has_visual_issues"]),
     }
     records = [record for record in query_records if _image_history_matches_filter(record, filter_key)]
-    return jsonify({"status": "success", "records": records[:limit], "total": len(records), "filter_counts": filter_counts})
+    return jsonify({"status": "success", "records": records[offset: offset + limit], "total": len(records), "filter_counts": filter_counts})
 
 
 @api_blueprint.route("/media/thumbnail/image/<int:itemid>")
@@ -468,6 +482,9 @@ def video_detection_history():
     limit, limit_error = _history_limit()
     if limit_error:
         return limit_error
+    offset, offset_error = _history_offset()
+    if offset_error:
+        return offset_error
     query = _history_query()
     filter_key = str(request.args.get("filter") or "all").strip()
     if filter_key not in {"all", "guest", "ai", "real"}:
@@ -495,7 +512,7 @@ def video_detection_history():
         "real": sum(1 for record in query_records if "真实" in str(record["final_label"] or "")),
     }
     records = [record for record in query_records if _video_history_matches_filter(record, filter_key)]
-    return jsonify({"status": "success", "records": records[:limit], "total": len(records), "filter_counts": filter_counts})
+    return jsonify({"status": "success", "records": records[offset: offset + limit], "total": len(records), "filter_counts": filter_counts})
 
 
 @api_blueprint.route("/history/retrievals")
@@ -506,6 +523,9 @@ def retrieval_history():
     limit, limit_error = _history_limit()
     if limit_error:
         return limit_error
+    offset, offset_error = _history_offset()
+    if offset_error:
+        return offset_error
     query = _history_query()
 
     search_type = request.args.get("search_type", "image")
@@ -527,4 +547,4 @@ def retrieval_history():
         if not _contains_history_query(_retrieval_history_search_fields(record), query):
             continue
         records.append(record)
-    return jsonify({"status": "success", "records": records[:limit], "total": len(records)})
+    return jsonify({"status": "success", "records": records[offset: offset + limit], "total": len(records)})

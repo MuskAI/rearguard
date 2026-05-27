@@ -733,22 +733,34 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
   const [historyFilterCounts, setHistoryFilterCounts] = useState<Partial<Record<HistoryFilterKey, number>>>({});
   const historyRequestIdRef = useRef(0);
 
-  async function loadHistoryRecords(targetTab: HistoryTabKey, preserveOnError = false) {
+  async function loadHistoryRecords(
+    targetTab: HistoryTabKey,
+    { preserveOnError = false, append = false }: { preserveOnError?: boolean; append?: boolean } = {},
+  ) {
     const requestId = historyRequestIdRef.current + 1;
     historyRequestIdRef.current = requestId;
     setStatus({ tone: "info", text: "正在加载历史记录" });
     setHistoryBusy(true);
     const activeFilter = isHistoryFilterSupported(targetTab, filter) ? filter : "all";
+    const offset = append ? records.length : 0;
+    const limit = append ? HISTORY_PAGE_SIZE : historyLimit;
     const request =
       targetTab === "image"
-        ? getHistory("image-detections", { query, filter: activeFilter, limit: historyLimit })
+        ? getHistory("image-detections", { query, filter: activeFilter, limit, offset })
         : targetTab === "video"
-          ? getHistory("video-detections", { query, filter: activeFilter, limit: historyLimit })
-          : getRetrievalHistory(targetTab === "imageRetrieve" ? "image" : "video", { query, limit: historyLimit });
+          ? getHistory("video-detections", { query, filter: activeFilter, limit, offset })
+          : getRetrievalHistory(targetTab === "imageRetrieve" ? "image" : "video", { query, limit, offset });
     try {
       const data: HistoryListResponse = await request;
       if (historyRequestIdRef.current !== requestId) return;
-      setRecords(data.records || []);
+      if (append) {
+        setRecords((current) => {
+          const seen = new Set(current.map((record) => String(record.itemid || "")));
+          return current.concat((data.records || []).filter((record) => !seen.has(String(record.itemid || ""))));
+        });
+      } else {
+        setRecords(data.records || []);
+      }
       setHistoryTotal(Number(data.total || 0));
       setHistoryFilterCounts(data.filter_counts || {});
       setStatus(null);
@@ -918,7 +930,7 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
                   type="button"
                   className="btn-code history-refresh-btn"
                   onClick={() => {
-                    void loadHistoryRecords(tab, true);
+                    void loadHistoryRecords(tab, { preserveOnError: true });
                   }}
                   disabled={historyBusy}
                 >
@@ -970,7 +982,10 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
                         type="button"
                         className="btn-code history-load-more-btn"
                         disabled={historyBusy}
-                        onClick={() => setHistoryLimit((value) => value + HISTORY_PAGE_SIZE)}
+                        onClick={() => {
+                          setHistoryLimit((value) => value + HISTORY_PAGE_SIZE);
+                          void loadHistoryRecords(tab, { preserveOnError: true, append: true });
+                        }}
                       >
                         {historyBusy ? "加载中" : "加载更多"}
                       </button>

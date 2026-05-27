@@ -135,23 +135,25 @@ export function retrieveSearch(payload: {
 
 export function getHistory(
   kind: "image-detections" | "video-detections",
-  params?: { query?: string; filter?: HistoryFilterKey; limit?: number },
+  params?: { query?: string; filter?: HistoryFilterKey; limit?: number; offset?: number },
 ) {
   const search = new URLSearchParams();
   if (params?.query?.trim()) search.set("query", params.query.trim());
   if (params?.filter && params.filter !== "all") search.set("filter", params.filter);
   if (params?.limit) search.set("limit", String(params.limit));
+  if (params?.offset) search.set("offset", String(params.offset));
   const qs = search.toString();
   return jsonRequest<HistoryListResponse>(`/api/history/${kind}${qs ? `?${qs}` : ""}`);
 }
 
 export function getRetrievalHistory(
   searchType: "image" | "video",
-  params?: { query?: string; limit?: number },
+  params?: { query?: string; limit?: number; offset?: number },
 ) {
   const search = new URLSearchParams({ search_type: searchType });
   if (params?.query?.trim()) search.set("query", params.query.trim());
   if (params?.limit) search.set("limit", String(params.limit));
+  if (params?.offset) search.set("offset", String(params.offset));
   return jsonRequest<HistoryListResponse>(`/api/history/retrievals?${search.toString()}`);
 }
 

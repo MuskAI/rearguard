@@ -497,6 +497,80 @@ def test_history_endpoints_support_query_filter_and_limit(client, monkeypatch):
     assert retrieve_payload["records"][0]["itemid"] == 301
 
 
+def test_history_endpoints_support_offset_pagination(client, monkeypatch):
+    _login_session(client)
+
+    def fake_detection_sql(sql, params=None, fetch=True):
+        if sql == "SELECT * FROM data WHERE phone = %s OR openid = %s ORDER BY createtime DESC":
+            return [
+                {
+                    "itemid": 401,
+                    "filename": "first.png",
+                    "fake": 62.0,
+                    "clarity": "高",
+                    "openid": "openid-1",
+                    "phone": "13800000000",
+                    "createtime": "2026-05-27 19:00:00",
+                    "explantation": "",
+                },
+                {
+                    "itemid": 402,
+                    "filename": "second.png",
+                    "fake": 22.0,
+                    "clarity": "中",
+                    "openid": "openid-1",
+                    "phone": "13800000000",
+                    "createtime": "2026-05-27 19:01:00",
+                    "explantation": "",
+                },
+            ]
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+    def fake_execute(sql, params=None, fetch=True):
+        assert sql == "SELECT * FROM retrieve_data WHERE phone = %s AND search_type = %s ORDER BY createtime DESC"
+        return [
+            {
+                "itemid": 501,
+                "filename": "retrieve-a.png",
+                "search_type": params[1],
+                "result_count": 4,
+                "top_k": 10,
+                "file_size": "2KB",
+                "createtime": "2026-05-27 19:10:00",
+                "results_json": "[]",
+            },
+            {
+                "itemid": 502,
+                "filename": "retrieve-b.png",
+                "search_type": params[1],
+                "result_count": 2,
+                "top_k": 5,
+                "file_size": "2KB",
+                "createtime": "2026-05-27 19:11:00",
+                "results_json": "[]",
+            },
+        ]
+
+    monkeypatch.setattr(api, "excute_detection_sql", fake_detection_sql)
+    monkeypatch.setattr(api, "excute_sql", fake_execute)
+    monkeypatch.setattr(api, "_has_detection_metadata", lambda itemid: False)
+
+    image_response = client.get("/api/history/image-detections?limit=1&offset=1")
+    retrieve_response = client.get("/api/history/retrievals?search_type=image&limit=1&offset=1")
+
+    assert image_response.status_code == 200
+    image_payload = image_response.get_json()
+    assert image_payload["total"] == 2
+    assert len(image_payload["records"]) == 1
+    assert image_payload["records"][0]["itemid"] == 402
+
+    assert retrieve_response.status_code == 200
+    retrieve_payload = retrieve_response.get_json()
+    assert retrieve_payload["total"] == 2
+    assert len(retrieve_payload["records"]) == 1
+    assert retrieve_payload["records"][0]["itemid"] == 502
+
+
 def test_retrieval_history_records_include_report_urls(client, monkeypatch):
     _login_session(client)
 
@@ -525,14 +599,18 @@ def test_retrieval_history_records_include_report_urls(client, monkeypatch):
 
 def test_history_endpoints_reject_invalid_filter_or_limit(client):
     bad_image_limit = client.get("/api/history/image-detections?limit=0")
+    bad_image_offset = client.get("/api/history/image-detections?offset=-1")
     bad_image_filter = client.get("/api/history/image-detections?filter=bad")
     bad_video_filter = client.get("/api/history/video-detections?filter=oops")
     bad_retrieval_limit = client.get("/api/history/retrievals?search_type=image&limit=abc")
+    bad_retrieval_offset = client.get("/api/history/retrievals?search_type=image&offset=oops")
 
     assert bad_image_limit.status_code == 400
+    assert bad_image_offset.status_code == 400
     assert bad_image_filter.status_code == 400
     assert bad_video_filter.status_code == 400
     assert bad_retrieval_limit.status_code == 400
+    assert bad_retrieval_offset.status_code == 400
 
 
 def test_retrieval_report_downloads_attachment(client, monkeypatch):
