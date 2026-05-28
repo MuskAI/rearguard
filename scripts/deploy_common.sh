@@ -53,6 +53,16 @@ run_remote() {
   run_cmd ssh -i "$DEPLOY_SSH_KEY" -o StrictHostKeyChecking=no "$remote" "$1"
 }
 
+run_remote_capture() {
+  local remote
+  remote="$(remote_target)"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '+ %q %q %q %q %q %q\n' ssh -i "$DEPLOY_SSH_KEY" -o StrictHostKeyChecking=no "$remote" "$1"
+    return 0
+  fi
+  ssh -i "$DEPLOY_SSH_KEY" -o StrictHostKeyChecking=no "$remote" "$1"
+}
+
 write_commit_marker() {
   local output_path="$1"
   local commit_sha="$2"

@@ -217,6 +217,18 @@ DEPLOY_HOST=example.com DEPLOY_USER=deploy DEPLOY_SSH_KEY=/path/to/key ./scripts
 DRY_RUN=1 DEPLOY_SSH_KEY=/path/to/key ./scripts/deploy_v1.sh
 ```
 
+查看当前服务器上 `V1 / V2` 的已部署提交、服务状态和健康检查时可使用：
+
+```bash
+DEPLOY_SSH_KEY=/path/to/key ./scripts/check_deploy_status.sh
+```
+
+如果想把某个提交作为强校验目标，可以加上 `EXPECT_COMMIT`；若希望健康检查失败时直接返回非零退出码，可以加 `STRICT=1`：
+
+```bash
+EXPECT_COMMIT=$(git rev-parse --short HEAD) STRICT=1 DEPLOY_SSH_KEY=/path/to/key ./scripts/check_deploy_status.sh v2
+```
+
 ## 安全说明
 
 - 仓库不包含真实 API Key、短信密钥、数据库密码、SSH 私钥。
