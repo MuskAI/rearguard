@@ -474,14 +474,17 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
     monkeypatch.setattr(main.detector, "analyze", lambda *args, **kwargs: analyses.pop(0))
 
     detect_a = client.post("/api/detect", files={"file": ("alpha.txt", b"alpha", "text/plain")})
+    detect_a_cached = client.post("/api/detect", files={"file": ("alpha.txt", b"alpha", "text/plain")})
     detect_b = client.post("/api/detect", files={"file": ("beta.txt", b"beta", "text/plain")})
     detect_c = client.post("/api/detect", files={"file": ("gamma.txt", b"gamma", "text/plain")})
     detect_d = client.post("/api/detect", files={"file": ("delta.txt", b"delta", "text/plain")})
 
     assert detect_a.status_code == 200
+    assert detect_a_cached.status_code == 200
     assert detect_b.status_code == 200
     assert detect_c.status_code == 200
     assert detect_d.status_code == 200
+    assert detect_a_cached.json()["cacheHit"] is True
 
     task_a = detect_a.json()["taskId"]
     task_b = detect_b.json()["taskId"]
@@ -515,13 +518,17 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
         "/api/history?hasWatermark=true&hasSynthid=true&query=gemini%20%E6%B0%B4%E5%8D%B0",
         headers={"X-Jianzhen-Token": "test-token"},
     )
+    by_cache = client.get(
+        f"/api/history?hasCache=true&query={detect_a_cached.json()['reportId']}",
+        headers={"X-Jianzhen-Token": "test-token"},
+    )
     by_forensics = client.get(
         f"/api/history?hasForensics=true&query={detect_a.json()['reportId']}",
         headers={"X-Jianzhen-Token": "test-token"},
     )
 
     assert limited.status_code == 200
-    assert limited.json()["total"] == baseline_total + 4
+    assert limited.json()["total"] == baseline_total + 5
     assert len(limited.json()["items"]) == 1
 
     assert by_source.status_code == 200
@@ -553,6 +560,12 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
     assert evidence_item["visibleWatermarkProvider"] == "gemini"
     assert evidence_item["hasSynthid"] is True
 
+    assert by_cache.status_code == 200
+    assert by_cache.json()["total"] == 1
+    assert by_cache.json()["filterCounts"]["cache"] >= 1
+    assert by_cache.json()["items"][0]["reportId"] == detect_a_cached.json()["reportId"]
+    assert by_cache.json()["items"][0]["cacheHit"] is True
+
     assert by_forensics.status_code == 200
     assert by_forensics.json()["total"] == 1
     assert by_forensics.json()["items"][0]["taskId"] == task_a
@@ -564,12 +577,14 @@ def test_history_listing_rejects_invalid_filter_params(client):
     bad_source = client.get("/api/history?source=bad-source", headers={"X-Jianzhen-Token": "test-token"})
     bad_verdict = client.get("/api/history?verdict=maybe", headers={"X-Jianzhen-Token": "test-token"})
     bad_bool = client.get("/api/history?hasForensics=maybe", headers={"X-Jianzhen-Token": "test-token"})
+    bad_cache = client.get("/api/history?hasCache=maybe", headers={"X-Jianzhen-Token": "test-token"})
 
     assert bad_limit.status_code == 400
     assert bad_offset.status_code == 400
     assert bad_source.status_code == 400
     assert bad_verdict.status_code == 400
     assert bad_bool.status_code == 400
+    assert bad_cache.status_code == 400
 
 
 def test_history_listing_supports_offset_pagination(client, monkeypatch):

@@ -236,6 +236,7 @@ def _matches_history_filters(
     *,
     source: str | None = None,
     verdict: str | None = None,
+    has_cache: bool | None = None,
     has_forensics: bool | None = None,
     has_provenance: bool | None = None,
     has_watermark: bool | None = None,
@@ -244,6 +245,8 @@ def _matches_history_filters(
     if source is not None and str(item.get("source") or "") != source:
         return False
     if verdict is not None and str(item.get("verdict") or "") != verdict:
+        return False
+    if has_cache is not None and bool(item.get("cacheHit")) is not has_cache:
         return False
     if has_forensics is not None and bool(item.get("hasForensics")) is not has_forensics:
         return False
@@ -263,6 +266,7 @@ def list_history(
     query: str | None = None,
     source: str | None = None,
     verdict: str | None = None,
+    has_cache: bool | None = None,
     has_forensics: bool | None = None,
     has_provenance: bool | None = None,
     has_watermark: bool | None = None,
@@ -296,6 +300,7 @@ def list_history(
         "suspected": sum(1 for item in query_filtered if str(item.get("verdict") or "") == "suspected_fake"),
         "highly": sum(1 for item in query_filtered if str(item.get("verdict") or "") == "highly_suspected_fake"),
         "unknownVerdict": sum(1 for item in query_filtered if str(item.get("verdict") or "") == "unknown"),
+        "cache": sum(1 for item in query_filtered if bool(item.get("cacheHit"))),
         "forensics": sum(1 for item in query_filtered if bool(item.get("hasForensics"))),
         "provenance": sum(1 for item in query_filtered if bool(item.get("hasProvenance"))),
         "synthid": sum(1 for item in query_filtered if bool(item.get("hasSynthid"))),
@@ -309,6 +314,7 @@ def list_history(
             item,
             source=source,
             verdict=verdict,
+            has_cache=has_cache,
             has_forensics=has_forensics,
             has_provenance=has_provenance,
             has_watermark=has_watermark,

@@ -137,7 +137,7 @@ export interface HistoryItem {
   hasSynthid?: boolean;
 }
 
-export type HistorySidebarFilter = "all" | "vlm" | "mock" | "maps-only" | "unknown" | "real" | "suspected" | "highly" | "unknownVerdict" | "forensics" | "provenance" | "synthid" | "watermark";
+export type HistorySidebarFilter = "all" | "vlm" | "mock" | "maps-only" | "unknown" | "real" | "suspected" | "highly" | "unknownVerdict" | "cache" | "forensics" | "provenance" | "synthid" | "watermark";
 
 export interface HistoryFilterCounts {
   all: number;
@@ -149,6 +149,7 @@ export interface HistoryFilterCounts {
   suspected: number;
   highly: number;
   unknownVerdict: number;
+  cache: number;
   forensics: number;
   provenance: number;
   synthid: number;
@@ -250,6 +251,8 @@ export async function fetchHistory(params?: {
     search.set("verdict", "highly_suspected_fake");
   } else if (params?.filter === "unknownVerdict") {
     search.set("verdict", "unknown");
+  } else if (params?.filter === "cache") {
+    search.set("hasCache", "true");
   } else if (params?.filter === "forensics") {
     search.set("hasForensics", "true");
   } else if (params?.filter === "provenance") {

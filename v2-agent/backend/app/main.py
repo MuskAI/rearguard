@@ -298,6 +298,7 @@ def history(request: Request) -> dict:
         query=request.query_params.get("query"),
         source=source or None,
         verdict=verdict or None,
+        has_cache=_parse_bool("hasCache"),
         has_forensics=_parse_bool("hasForensics"),
         has_provenance=_parse_bool("hasProvenance"),
         has_watermark=_parse_bool("hasWatermark"),
