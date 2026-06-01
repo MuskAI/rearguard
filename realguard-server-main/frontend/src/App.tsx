@@ -1317,6 +1317,8 @@ function HistoryRecords({
         const timeText = String(record.createtime || "-");
         const retrievalTag = tab === "imageRetrieve" ? "图像检索" : tab === "videoRetrieve" ? "视频检索" : "";
         const hasHits = resultCount > 0;
+        const topResultId = String(record.top_result_id || "");
+        const topResultScore = Number(record.top_result_score || 0);
         return (
           <article className="history-record" key={`${record.itemid || index}`}>
             <a className="history-media" href={mediaUrl || undefined} target={mediaUrl ? "_blank" : undefined} rel="noreferrer" aria-label={mediaUrl ? `查看 ${title}` : title}>
@@ -1358,6 +1360,12 @@ function HistoryRecords({
               <div className="history-row"><span>时间</span><strong>{renderHighlightedText(timeText, query)}</strong></div>
               <div className="history-row"><span>{isRetrieval ? "数量" : "结论"}</span><strong>{renderHighlightedText(verdict, query)}</strong></div>
               <div className="history-row"><span>{isRetrieval ? "Top-K" : "置信度"}</span><strong>{renderHighlightedText(meta, query)}</strong></div>
+              {isRetrieval && topResultId && (
+                <>
+                  <div className="history-row"><span>首个命中</span><strong>{renderHighlightedText(topResultId, query)}</strong></div>
+                  <div className="history-row"><span>最高分</span><strong>{renderHighlightedText(topResultScore.toFixed(4), query)}</strong></div>
+                </>
+              )}
               {!isRetrieval && reportUrl && (
                 <div className="history-actions">
                   <button
@@ -1666,6 +1674,8 @@ function getSearchableHistoryFields(record: HistoryRecord) {
   const resultCount = Number(record.result_count || 0);
   const searchType = String(record.search_type || "");
   const isRetrievalRecord = searchType === "image" || searchType === "video";
+  const topResultId = String(record.top_result_id || "");
+  const topResultScore = Number(record.top_result_score || 0);
   return [
     String(record.filename || ""),
     String(record.final_label || ""),
@@ -1676,11 +1686,15 @@ function getSearchableHistoryFields(record: HistoryRecord) {
     searchType,
     searchType === "image" ? "图像检索" : searchType === "video" ? "视频检索" : "",
     resultCount > 0 ? "有命中" : "无命中",
+    topResultId,
+    topResultId ? topResultScore.toFixed(4) : "",
     Boolean(record.is_guest_record) ? "访客" : "",
     Boolean(record.has_metadata) ? "元数据" : "",
     Boolean(record.has_visual_issues) ? `可疑点${issueCount > 0 ? ` ${issueCount}` : ""}` : "",
     isRetrievalRecord ? "数量" : "结论",
     isRetrievalRecord ? "Top-K" : "置信度",
+    topResultId ? "首个命中" : "",
+    topResultId ? "最高分" : "",
   ].map((field) => String(field));
 }
 

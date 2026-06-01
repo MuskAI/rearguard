@@ -233,6 +233,8 @@ def _video_history_matches_filter(record, filter_key):
 
 def _retrieval_history_record(item, phone, search_type):
     result_count = int(item.get("result_count") or 0)
+    results = json.loads(item.get("results_json") or "[]")
+    top_result = results[0] if results else {}
     return {
         "itemid": item.get("itemid"),
         "filename": item.get("filename", ""),
@@ -242,9 +244,11 @@ def _retrieval_history_record(item, phone, search_type):
         "top_k": item.get("top_k", 10),
         "file_size": item.get("file_size", ""),
         "createtime": format_createtime(item.get("createtime", "")),
-        "results": json.loads(item.get("results_json") or "[]"),
+        "results": results,
         "report_url": f"/history_retrieve/report?itemid={item.get('itemid')}",
         "has_hits": result_count > 0,
+        "top_result_id": top_result.get("id", ""),
+        "top_result_score": round(float(top_result.get("score", 0) or 0), 4) if top_result else 0,
     }
 
 
@@ -255,8 +259,12 @@ def _retrieval_history_search_fields(record):
         record.get("result_count", ""),
         record.get("top_k", ""),
         record.get("search_type", ""),
+        record.get("top_result_id", ""),
+        record.get("top_result_score", ""),
         "有命中" if record.get("has_hits") else "无命中",
         "图像检索" if record.get("search_type") == "image" else "视频检索",
+        "首个命中" if record.get("top_result_id") else "",
+        "最高分" if record.get("top_result_id") else "",
         "数量",
         "Top-K",
     ]

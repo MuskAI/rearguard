@@ -251,7 +251,7 @@ def test_retrieval_history_supports_hit_filters(client, monkeypatch):
                     "top_k": 5,
                     "file_size": "12KB",
                     "createtime": "2026-06-01 10:00:00",
-                    "results_json": "[]",
+                    "results_json": '[{"id":"target-001","score":0.9876}]',
                 },
                 {
                     "itemid": 2,
@@ -277,6 +277,8 @@ def test_retrieval_history_supports_hit_filters(client, monkeypatch):
     assert payload["filter_counts"]["hits"] == 1
     assert payload["filter_counts"]["empty"] == 1
     assert payload["records"][0]["has_hits"] is True
+    assert payload["records"][0]["top_result_id"] == "target-001"
+    assert payload["records"][0]["top_result_score"] == 0.9876
     assert hits_only.status_code == 200
     assert len(hits_only.get_json()["records"]) == 1
     assert hits_only.get_json()["records"][0]["filename"] == "hit.png"
