@@ -513,6 +513,7 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
         "/api/history?source=unknown&query=%E6%9C%AA%E7%9F%A5%E6%9D%A5%E6%BA%90",
         headers={"X-Jianzhen-Token": "test-token"},
     )
+    by_model = client.get("/api/history?query=mock-model", headers={"X-Jianzhen-Token": "test-token"})
     by_query = client.get("/api/history?query=%E7%9C%9F%E5%AE%9E%E6%A8%A1%E5%9E%8B", headers={"X-Jianzhen-Token": "test-token"})
     by_evidence = client.get(
         "/api/history?hasWatermark=true&hasSynthid=true&query=gemini%20%E6%B0%B4%E5%8D%B0",
@@ -534,6 +535,7 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
     assert by_source.status_code == 200
     assert by_source.json()["total"] == 1
     assert by_source.json()["items"][0]["source"] == "mock"
+    assert by_source.json()["items"][0]["modelVersion"] == "mock-model"
     assert by_source.json()["items"][0]["reportId"] == detect_b.json()["reportId"]
     assert by_source.json()["filterCounts"]["maps-only"] == 0
 
@@ -549,6 +551,11 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
     assert by_unknown.json()["filterCounts"]["unknown"] == 1
     assert by_unknown.json()["items"][0]["source"] == "unknown"
     assert by_unknown.json()["items"][0]["reportId"] == detect_d.json()["reportId"]
+
+    assert by_model.status_code == 200
+    assert by_model.json()["total"] == 1
+    assert by_model.json()["items"][0]["modelVersion"] == "mock-model"
+    assert by_model.json()["items"][0]["reportId"] == detect_b.json()["reportId"]
 
     assert by_query.status_code == 200
     assert by_query.json()["total"] >= 1

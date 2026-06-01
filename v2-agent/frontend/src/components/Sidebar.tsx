@@ -127,7 +127,7 @@ export default function Sidebar({
             <input
               value={query}
               onChange={(event) => onQueryChange(event.target.value)}
-              placeholder="搜索名称 / 报告号 / 判定 / 来源 / 证据"
+              placeholder="搜索名称 / 报告号 / 判定 / 来源 / 模型 / 证据"
               className="min-w-0 flex-1 bg-transparent text-xs text-ink-950 placeholder:text-ink-500 outline-none"
             />
             {query.trim() && (
@@ -295,6 +295,7 @@ export default function Sidebar({
         )}
         {history.map((h) => {
           const meta = VERDICT_META[h.verdict];
+          const modelVersion = String(h.modelVersion || "").trim();
           return (
             <div
               key={h.taskId}
@@ -332,6 +333,7 @@ export default function Sidebar({
                   {h.source === "mock" && <span className="text-cinnabar">{renderHighlightedText("Mock", query)}</span>}
                   {h.source === "maps-only" && <span className="text-amber-300">{renderHighlightedText("仅证据图", query)}</span>}
                   {h.source === "unknown" && <span className="text-ink-500">{renderHighlightedText("未知来源", query)}</span>}
+                  {modelVersion && <span className="text-ink-500 truncate">{renderHighlightedText(modelVersion, query)}</span>}
                   {h.cacheHit && <span className="text-jade">{renderHighlightedText("缓存", query)}</span>}
                 </div>
                 {(h.hasForensics || h.hasProvenance || h.hasVisibleWatermark || h.hasSynthid) && (

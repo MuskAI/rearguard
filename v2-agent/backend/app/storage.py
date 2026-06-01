@@ -178,6 +178,7 @@ def _history_summary_from_row(row: sqlite3.Row) -> dict[str, Any]:
         "createdAt": row["created_at"],
         "thumbnail": row["thumbnail"],
         "source": result.get("source"),
+        "modelVersion": result.get("modelVersion"),
         "cacheHit": bool(result.get("cacheHit")),
         "hasForensics": bool(row["forensics_json"]),
         "hasProvenance": bool(row["provenance_json"]),
@@ -209,6 +210,7 @@ def _searchable_history_fields(item: dict[str, Any]) -> list[str]:
     source = str(item.get("source") or "")
     verdict = str(item.get("verdict") or "")
     ftype = str(item.get("type") or "")
+    model_version = str(item.get("modelVersion") or "")
     provider = str(item.get("visibleWatermarkProvider") or "")
     fields = [
         item.get("name") or "",
@@ -220,6 +222,9 @@ def _searchable_history_fields(item: dict[str, Any]) -> list[str]:
         *(type_labels.get(ftype) or []),
         source,
         *(source_labels.get(source) or []),
+        model_version,
+        f"模型 {model_version}" if model_version else "",
+        f"模型版本 {model_version}" if model_version else "",
         provider,
         f"{provider} 水印" if provider else "",
         "取证" if item.get("hasForensics") else "",

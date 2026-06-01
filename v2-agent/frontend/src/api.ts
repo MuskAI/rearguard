@@ -129,6 +129,7 @@ export interface HistoryItem {
   createdAt: string;
   thumbnail?: string | null;
   source?: string;
+  modelVersion?: string;
   cacheHit?: boolean;
   hasForensics?: boolean;
   hasProvenance?: boolean;
