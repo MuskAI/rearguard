@@ -333,6 +333,41 @@ export default function AdminDashboard({
 
         <section className="rounded-xl border border-ink-600 bg-ink-800 p-4">
           <div className="flex items-center justify-between gap-3 mb-4">
+            <h2 className="font-serif text-base font-semibold text-rice">按判定日趋势</h2>
+            <div className="flex flex-wrap gap-3 text-[11px] text-ink-500">
+              <span><span style={{ color: VERDICT_META.real.color }}>■</span> 真实</span>
+              <span><span style={{ color: VERDICT_META.suspected_fake.color }}>■</span> 疑似</span>
+              <span><span style={{ color: VERDICT_META.highly_suspected_fake.color }}>■</span> 高度疑似</span>
+            </div>
+          </div>
+          <div className="h-56 flex items-end gap-1.5 sm:gap-2">
+            {metrics.byDay.map((day) => (
+              <div key={`${day.date}-verdict`} className="flex-1 min-w-0 flex flex-col items-center justify-end gap-2">
+                <div className="w-full h-full flex flex-col justify-end rounded-t overflow-hidden bg-ink-900/40">
+                  {([
+                    "real",
+                    "suspected_fake",
+                    "highly_suspected_fake",
+                  ] as const).map((key) => {
+                    const total = Math.max(1, day.detections);
+                    const height = `${(day.verdicts[key] / total) * ((day.detections / maxDay) * 100)}%`;
+                    return (
+                      <div
+                        key={key}
+                        style={{ height, background: VERDICT_META[key].color }}
+                        title={`${compactDate(day.date)} ${VERDICT_META[key].label}: ${day.verdicts[key]}`}
+                      />
+                    );
+                  })}
+                </div>
+                <div className="text-[10px] text-ink-500 whitespace-nowrap">{compactDate(day.date)}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="rounded-xl border border-ink-600 bg-ink-800 p-4">
+          <div className="flex items-center justify-between gap-3 mb-4">
             <h2 className="font-serif text-base font-semibold text-rice">按证据日趋势</h2>
             <div className="flex flex-wrap gap-3 text-[11px] text-ink-500">
               <span><span style={{ color: evidenceColors.visibleWatermarkHits }}>■</span> 可见水印</span>

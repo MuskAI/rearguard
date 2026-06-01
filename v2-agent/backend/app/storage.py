@@ -540,15 +540,20 @@ def metrics(days: int = 14) -> dict[str, Any]:
     for i in range(days):
         day = (since + timedelta(days=i)).date().isoformat()
         day_sources = {"vlm": 0, "mock": 0, "maps-only": 0, "unknown": 0}
+        day_verdicts = {"real": 0, "suspected_fake": 0, "highly_suspected_fake": 0, "unknown": 0}
         for row in history_rows:
             if row["created_at"][:10] != day:
                 continue
-            source = str(json.loads(row["result_json"]).get("source", "unknown"))
+            result = json.loads(row["result_json"])
+            source = str(result.get("source", "unknown"))
+            verdict = str(result.get("verdict", "unknown"))
             day_sources[source if source in day_sources else "unknown"] += 1
+            day_verdicts[verdict if verdict in day_verdicts else "unknown"] += 1
         days_list.append({
             "date": day,
             "detections": by_day.get(day, 0),
             "sources": day_sources,
+            "verdicts": day_verdicts,
             "evidence": {
                 "visibleWatermarkHits": by_day_evidence[day]["visibleWatermarkHits"],
                 "synthidHits": by_day_evidence[day]["synthidHits"],

@@ -299,6 +299,7 @@ export interface Metrics {
     date: string;
     detections: number;
     sources: { vlm: number; mock: number; "maps-only": number; unknown: number };
+    verdicts: { real: number; suspected_fake: number; highly_suspected_fake: number; unknown: number };
     evidence: {
       visibleWatermarkHits: number;
       synthidHits: number;
