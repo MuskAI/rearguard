@@ -328,6 +328,8 @@ export default function Sidebar({
                   <span className="text-ink-500">· {TYPE_LABEL[h.type]}</span>
                   {h.source === "vlm" && <span className="text-brand-cyan">{renderHighlightedText("VLM", query)}</span>}
                   {h.source === "mock" && <span className="text-cinnabar">{renderHighlightedText("Mock", query)}</span>}
+                  {h.source === "maps-only" && <span className="text-amber-300">{renderHighlightedText("仅证据图", query)}</span>}
+                  {h.source === "unknown" && <span className="text-ink-500">{renderHighlightedText("未知来源", query)}</span>}
                   {h.cacheHit && <span className="text-jade">{renderHighlightedText("缓存", query)}</span>}
                 </div>
                 {(h.hasForensics || h.hasProvenance || h.hasVisibleWatermark || h.hasSynthid) && (
