@@ -12,6 +12,10 @@ repo_root() {
   printf '%s\n' "$REPO_ROOT"
 }
 
+latest_commit_for_paths() {
+  git -C "$REPO_ROOT" log -1 --format=%h -- "$@"
+}
+
 remote_target() {
   printf '%s@%s\n' "$DEPLOY_USER" "$DEPLOY_HOST"
 }

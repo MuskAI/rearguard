@@ -12,7 +12,7 @@ Usage: DEPLOY_SSH_KEY=/path/to/key ./scripts/check_deploy_status.sh [all|v1|v2]
 Optional environment variables:
   DEPLOY_HOST     Default: 124.222.3.205
   DEPLOY_USER     Default: ubuntu
-  EXPECT_COMMIT   Compare deployed commit against this commit SHA
+  EXPECT_COMMIT   Override the auto-derived expected commit SHA
   STRICT=1        Exit non-zero when service or health checks are unhealthy
   DRY_RUN=1       Print commands without executing them
 EOF
@@ -50,11 +50,18 @@ check_target() {
   shift 5
   local relevant_paths=("$@")
   local expected="$EXPECTED_COMMIT"
+  local expected_source="override"
   local output deployed service_state internal_code external_code repo_state code_state
   local remote_script
 
   if [[ -z "$expected" ]]; then
-    expected="$LOCAL_HEAD"
+    expected="$(git -C "$ROOT_DIR" log -1 --format=%h -- "${relevant_paths[@]}")"
+    if [[ -n "$expected" ]]; then
+      expected_source="target_paths"
+    else
+      expected="$LOCAL_HEAD"
+      expected_source="repo_head_fallback"
+    fi
   fi
 
   remote_script=$(cat <<EOF
@@ -101,6 +108,7 @@ EOF
   printf '\n[%s]\n' "$label"
   printf 'local_head:    %s\n' "$LOCAL_HEAD"
   printf 'expected:      %s\n' "$expected"
+  printf 'expected_from: %s\n' "$expected_source"
   printf 'deployed:      %s\n' "$deployed"
   printf 'repo_state:    %s\n' "$repo_state"
   printf 'code_state:    %s\n' "$code_state"

@@ -29,7 +29,7 @@ require_ssh_key
 ROOT_DIR="$(repo_root)"
 BACKEND_DIR="$ROOT_DIR/realguard-server-main/RealGuard"
 FRONTEND_DIR="$ROOT_DIR/realguard-server-main/frontend"
-COMMIT_SHA="$(git -C "$ROOT_DIR" rev-parse --short HEAD)"
+COMMIT_SHA="$(latest_commit_for_paths realguard-server-main/RealGuard realguard-server-main/frontend)"
 TMP_DIR="$(mktemp -d)"
 ARCHIVE_PATH="$TMP_DIR/realguard-v1-backend.tgz"
 MARKER_PATH="$TMP_DIR/realguard-v1.DEPLOYED_COMMIT"

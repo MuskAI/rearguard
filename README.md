@@ -223,6 +223,13 @@ DRY_RUN=1 DEPLOY_SSH_KEY=/path/to/key ./scripts/deploy_v1.sh
 DEPLOY_SSH_KEY=/path/to/key ./scripts/check_deploy_status.sh
 ```
 
+默认情况下，状态脚本会按目标路径自动推导 `expected`：
+
+- `V1` 使用 `realguard-server-main/RealGuard` 和 `realguard-server-main/frontend` 最近一次变更提交
+- `V2` 使用 `v2-agent/backend` 和 `v2-agent/frontend` 最近一次变更提交
+
+这样即使仓库后续只新增了发布脚本或文档提交，状态检查仍会默认对齐各自应用的最新业务版本。
+
 如果想把某个提交作为强校验目标，可以加上 `EXPECT_COMMIT`；若希望健康检查失败时直接返回非零退出码，可以加 `STRICT=1`：
 
 ```bash
