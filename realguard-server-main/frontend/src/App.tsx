@@ -1309,6 +1309,8 @@ function HistoryRecords({
         const hasIssues = Boolean(record.has_visual_issues);
         const issueCount = Number(record.visual_issue_count || 0);
         const timeText = String(record.createtime || "-");
+        const retrievalTag = tab === "imageRetrieve" ? "图像检索" : tab === "videoRetrieve" ? "视频检索" : "";
+        const hasHits = Number(record.result_count || 0) > 0;
         return (
           <article className="history-record" key={`${record.itemid || index}`}>
             <a className="history-media" href={mediaUrl || undefined} target={mediaUrl ? "_blank" : undefined} rel="noreferrer" aria-label={mediaUrl ? `查看 ${title}` : title}>
@@ -1338,6 +1340,15 @@ function HistoryRecords({
                   {hasIssues && <span className="history-tag issue"><i className="fa fa-exclamation-triangle" /> {renderHighlightedText(`可疑点${issueCount > 0 ? ` ${issueCount}` : ""}`, query)}</span>}
                 </div>
               )}
+              {!!record.result_count || tab === "imageRetrieve" || tab === "videoRetrieve" ? (
+                <div className="history-tags">
+                  {retrievalTag && <span className="history-tag meta"><i className="fa fa-search" /> {renderHighlightedText(retrievalTag, query)}</span>}
+                  <span className={`history-tag ${hasHits ? "meta" : "issue"}`}>
+                    <i className={`fa ${hasHits ? "fa-check-circle" : "fa-minus-circle"}`} />
+                    {renderHighlightedText(hasHits ? "有命中" : "无命中", query)}
+                  </span>
+                </div>
+              ) : null}
               <div className="history-row"><span>时间</span><strong>{renderHighlightedText(timeText, query)}</strong></div>
               <div className="history-row"><span>{record.result_count ? "数量" : "结论"}</span><strong>{renderHighlightedText(verdict, query)}</strong></div>
               <div className="history-row"><span>{record.top_k ? "Top-K" : "置信度"}</span><strong>{renderHighlightedText(meta, query)}</strong></div>

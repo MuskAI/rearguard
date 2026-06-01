@@ -276,12 +276,14 @@ def test_retrieval_history_supports_hit_filters(client, monkeypatch):
     assert payload["filter_counts"]["all"] == 2
     assert payload["filter_counts"]["hits"] == 1
     assert payload["filter_counts"]["empty"] == 1
+    assert payload["records"][0]["has_hits"] is True
     assert hits_only.status_code == 200
     assert len(hits_only.get_json()["records"]) == 1
     assert hits_only.get_json()["records"][0]["filename"] == "hit.png"
     assert empty_only.status_code == 200
     assert len(empty_only.get_json()["records"]) == 1
     assert empty_only.get_json()["records"][0]["filename"] == "empty.png"
+    assert empty_only.get_json()["records"][0]["has_hits"] is False
 
 
 def test_guest_thumbnail_uses_guest_openid_lookup(client, monkeypatch, tmp_path):

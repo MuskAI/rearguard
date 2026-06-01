@@ -232,17 +232,19 @@ def _video_history_matches_filter(record, filter_key):
 
 
 def _retrieval_history_record(item, phone, search_type):
+    result_count = int(item.get("result_count") or 0)
     return {
         "itemid": item.get("itemid"),
         "filename": item.get("filename", ""),
         "file_url": f"/static/uploads/{phone}/retrieve/{item.get('filename', '')}",
         "search_type": search_type,
-        "result_count": item.get("result_count", 0),
+        "result_count": result_count,
         "top_k": item.get("top_k", 10),
         "file_size": item.get("file_size", ""),
         "createtime": format_createtime(item.get("createtime", "")),
         "results": json.loads(item.get("results_json") or "[]"),
         "report_url": f"/history_retrieve/report?itemid={item.get('itemid')}",
+        "has_hits": result_count > 0,
     }
 
 
@@ -253,6 +255,8 @@ def _retrieval_history_search_fields(record):
         record.get("result_count", ""),
         record.get("top_k", ""),
         record.get("search_type", ""),
+        "有命中" if record.get("has_hits") else "无命中",
+        "图像检索" if record.get("search_type") == "image" else "视频检索",
         "数量",
         "Top-K",
     ]
