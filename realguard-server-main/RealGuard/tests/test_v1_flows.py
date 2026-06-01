@@ -251,7 +251,7 @@ def test_retrieval_history_supports_hit_filters(client, monkeypatch):
                     "top_k": 5,
                     "file_size": "12KB",
                     "createtime": "2026-06-01 10:00:00",
-                    "results_json": '[{"id":"target-001","score":0.9876}]',
+                    "results_json": '[{"id":"libA/gallery/target-001","score":0.9876}]',
                 },
                 {
                     "itemid": 2,
@@ -277,7 +277,8 @@ def test_retrieval_history_supports_hit_filters(client, monkeypatch):
     assert payload["filter_counts"]["hits"] == 1
     assert payload["filter_counts"]["empty"] == 1
     assert payload["records"][0]["has_hits"] is True
-    assert payload["records"][0]["top_result_id"] == "target-001"
+    assert payload["records"][0]["top_result_id"] == "libA/gallery/target-001"
+    assert payload["records"][0]["top_result_library"] == "libA"
     assert payload["records"][0]["top_result_score"] == 0.9876
     assert hits_only.status_code == 200
     assert len(hits_only.get_json()["records"]) == 1
@@ -507,7 +508,7 @@ def test_history_endpoints_support_query_filter_and_limit(client, monkeypatch):
                 "top_k": 10,
                 "file_size": "3KB",
                 "createtime": "2026-05-27 18:20:00",
-                "results_json": "[]",
+                "results_json": '[{"id":"libA/gallery/hit-a.png","score":0.9123}]',
             },
             {
                 "itemid": 302,
@@ -517,7 +518,7 @@ def test_history_endpoints_support_query_filter_and_limit(client, monkeypatch):
                 "top_k": 5,
                 "file_size": "2KB",
                 "createtime": "2026-05-27 18:21:00",
-                "results_json": "[]",
+                "results_json": '[{"id":"libB/gallery/hit-b.png","score":0.8345}]',
             },
         ]
 
@@ -528,6 +529,7 @@ def test_history_endpoints_support_query_filter_and_limit(client, monkeypatch):
     image_response = client.get("/api/history/image-detections?filter=metadata&query=元数据&limit=1")
     video_response = client.get("/api/history/video-detections?filter=ai&query=AI结论&limit=1")
     retrieve_response = client.get("/api/history/retrievals?search_type=image&query=query-a&limit=1")
+    retrieve_library_response = client.get("/api/history/retrievals?search_type=image&query=检索库%20libA&limit=1")
 
     assert image_response.status_code == 200
     image_payload = image_response.get_json()
@@ -546,6 +548,13 @@ def test_history_endpoints_support_query_filter_and_limit(client, monkeypatch):
     assert retrieve_payload["total"] == 1
     assert len(retrieve_payload["records"]) == 1
     assert retrieve_payload["records"][0]["itemid"] == 301
+    assert retrieve_payload["records"][0]["top_result_library"] == "libA"
+
+    assert retrieve_library_response.status_code == 200
+    retrieve_library_payload = retrieve_library_response.get_json()
+    assert retrieve_library_payload["total"] == 1
+    assert len(retrieve_library_payload["records"]) == 1
+    assert retrieve_library_payload["records"][0]["itemid"] == 301
 
 
 def test_history_endpoints_support_offset_pagination(client, monkeypatch):

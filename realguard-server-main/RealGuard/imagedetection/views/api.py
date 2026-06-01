@@ -235,6 +235,8 @@ def _retrieval_history_record(item, phone, search_type):
     result_count = int(item.get("result_count") or 0)
     results = json.loads(item.get("results_json") or "[]")
     top_result = results[0] if results else {}
+    top_result_id = str(top_result.get("id") or "")
+    top_result_library = top_result_id.split("/", 1)[0] if "/" in top_result_id else ""
     return {
         "itemid": item.get("itemid"),
         "filename": item.get("filename", ""),
@@ -247,7 +249,8 @@ def _retrieval_history_record(item, phone, search_type):
         "results": results,
         "report_url": f"/history_retrieve/report?itemid={item.get('itemid')}",
         "has_hits": result_count > 0,
-        "top_result_id": top_result.get("id", ""),
+        "top_result_id": top_result_id,
+        "top_result_library": top_result_library,
         "top_result_score": round(float(top_result.get("score", 0) or 0), 4) if top_result else 0,
     }
 
@@ -260,10 +263,14 @@ def _retrieval_history_search_fields(record):
         record.get("top_k", ""),
         record.get("search_type", ""),
         record.get("top_result_id", ""),
+        record.get("top_result_library", ""),
         record.get("top_result_score", ""),
         "有命中" if record.get("has_hits") else "无命中",
         "图像检索" if record.get("search_type") == "image" else "视频检索",
+        f"命中库 {record.get('top_result_library', '')}" if record.get("top_result_library") else "",
+        f"检索库 {record.get('top_result_library', '')}" if record.get("top_result_library") else "",
         "首个命中" if record.get("top_result_id") else "",
+        "命中库" if record.get("top_result_library") else "",
         "最高分" if record.get("top_result_id") else "",
         "数量",
         "Top-K",
