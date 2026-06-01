@@ -1665,6 +1665,7 @@ function getSearchableHistoryFields(record: HistoryRecord) {
   const issueCount = Number(record.visual_issue_count || 0);
   const resultCount = Number(record.result_count || 0);
   const searchType = String(record.search_type || "");
+  const isRetrievalRecord = searchType === "image" || searchType === "video";
   return [
     String(record.filename || ""),
     String(record.final_label || ""),
@@ -1678,8 +1679,8 @@ function getSearchableHistoryFields(record: HistoryRecord) {
     Boolean(record.is_guest_record) ? "访客" : "",
     Boolean(record.has_metadata) ? "元数据" : "",
     Boolean(record.has_visual_issues) ? `可疑点${issueCount > 0 ? ` ${issueCount}` : ""}` : "",
-    resultCount ? "数量" : "结论",
-    record.top_k ? "Top-K" : "置信度",
+    isRetrievalRecord ? "数量" : "结论",
+    isRetrievalRecord ? "Top-K" : "置信度",
   ].map((field) => String(field));
 }
 
