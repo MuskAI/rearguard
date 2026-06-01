@@ -60,6 +60,9 @@ export default function App() {
     all: 0,
     vlm: 0,
     mock: 0,
+    real: 0,
+    suspected: 0,
+    highly: 0,
     forensics: 0,
     provenance: 0,
     synthid: 0,
@@ -125,7 +128,7 @@ export default function App() {
       if (!preserveOnError) {
         setHistory([]);
         setHistoryTotal(0);
-        setHistoryFilterCounts({ all: 0, vlm: 0, mock: 0, forensics: 0, provenance: 0, synthid: 0, watermark: 0 });
+        setHistoryFilterCounts({ all: 0, vlm: 0, mock: 0, real: 0, suspected: 0, highly: 0, forensics: 0, provenance: 0, synthid: 0, watermark: 0 });
       }
       setHistoryMessage(error instanceof Error ? error.message : "历史记录暂不可用");
     } finally {

@@ -6,6 +6,9 @@ const FILTER_OPTIONS = [
   { key: "all", label: "全部" },
   { key: "vlm", label: "VLM" },
   { key: "mock", label: "Mock" },
+  { key: "real", label: "真实" },
+  { key: "suspected", label: "疑似" },
+  { key: "highly", label: "高疑" },
   { key: "forensics", label: "取证" },
   { key: "provenance", label: "凭证" },
   { key: "synthid", label: "SynthID" },
@@ -379,7 +382,7 @@ export function getInitialHistoryQuery() {
 export function getInitialHistoryFilter(): SidebarFilterKey {
   if (typeof window === "undefined") return "all";
   const value = new URLSearchParams(window.location.search).get("historyFilter");
-  return value === "vlm" || value === "mock" || value === "forensics" || value === "provenance" || value === "synthid" || value === "watermark"
+  return value === "vlm" || value === "mock" || value === "real" || value === "suspected" || value === "highly" || value === "forensics" || value === "provenance" || value === "synthid" || value === "watermark"
     ? value
     : "all";
 }

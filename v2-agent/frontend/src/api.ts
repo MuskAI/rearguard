@@ -137,12 +137,15 @@ export interface HistoryItem {
   hasSynthid?: boolean;
 }
 
-export type HistorySidebarFilter = "all" | "vlm" | "mock" | "forensics" | "provenance" | "synthid" | "watermark";
+export type HistorySidebarFilter = "all" | "vlm" | "mock" | "real" | "suspected" | "highly" | "forensics" | "provenance" | "synthid" | "watermark";
 
 export interface HistoryFilterCounts {
   all: number;
   vlm: number;
   mock: number;
+  real: number;
+  suspected: number;
+  highly: number;
   forensics: number;
   provenance: number;
   synthid: number;
@@ -236,6 +239,12 @@ export async function fetchHistory(params?: {
   if (params?.query?.trim()) search.set("query", params.query.trim());
   if (params?.filter === "vlm" || params?.filter === "mock") {
     search.set("source", params.filter);
+  } else if (params?.filter === "real") {
+    search.set("verdict", "real");
+  } else if (params?.filter === "suspected") {
+    search.set("verdict", "suspected_fake");
+  } else if (params?.filter === "highly") {
+    search.set("verdict", "highly_suspected_fake");
   } else if (params?.filter === "forensics") {
     search.set("hasForensics", "true");
   } else if (params?.filter === "provenance") {
