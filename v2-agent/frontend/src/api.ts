@@ -1,4 +1,4 @@
-export type Verdict = "real" | "suspected_fake" | "highly_suspected_fake";
+export type Verdict = "real" | "suspected_fake" | "highly_suspected_fake" | "unknown";
 export type FileType = "image" | "video" | "audio" | "document";
 const ACCESS_TOKEN_KEY = "jianzhen_access_token";
 
@@ -137,7 +137,7 @@ export interface HistoryItem {
   hasSynthid?: boolean;
 }
 
-export type HistorySidebarFilter = "all" | "vlm" | "mock" | "maps-only" | "unknown" | "real" | "suspected" | "highly" | "forensics" | "provenance" | "synthid" | "watermark";
+export type HistorySidebarFilter = "all" | "vlm" | "mock" | "maps-only" | "unknown" | "real" | "suspected" | "highly" | "unknownVerdict" | "forensics" | "provenance" | "synthid" | "watermark";
 
 export interface HistoryFilterCounts {
   all: number;
@@ -148,6 +148,7 @@ export interface HistoryFilterCounts {
   real: number;
   suspected: number;
   highly: number;
+  unknownVerdict: number;
   forensics: number;
   provenance: number;
   synthid: number;
@@ -247,6 +248,8 @@ export async function fetchHistory(params?: {
     search.set("verdict", "suspected_fake");
   } else if (params?.filter === "highly") {
     search.set("verdict", "highly_suspected_fake");
+  } else if (params?.filter === "unknownVerdict") {
+    search.set("verdict", "unknown");
   } else if (params?.filter === "forensics") {
     search.set("hasForensics", "true");
   } else if (params?.filter === "provenance") {
@@ -385,6 +388,7 @@ export const VERDICT_META: Record<Verdict, { label: string; color: string; ring:
   real: { label: "真实", color: "#3fb6a8", ring: "verdict-real" },
   suspected_fake: { label: "疑似伪造", color: "#d99a2b", ring: "verdict-warn" },
   highly_suspected_fake: { label: "高度疑似伪造", color: "#d8412f", ring: "verdict-fake" },
+  unknown: { label: "未知判定", color: "#7c8aa5", ring: "verdict-unknown" },
 };
 
 export const TYPE_LABEL: Record<FileType, string> = {

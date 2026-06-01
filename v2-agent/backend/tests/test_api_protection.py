@@ -327,6 +327,17 @@ def test_history_filters_and_counts_include_verdict_breakdown(client, monkeypatc
             "synthid": {"detected": False, "supported": True, "confidence": 0.0, "phaseMatch": 0.0, "evidenceLevel": "none", "note": "未检测到 SynthID"},
             "visibleWatermark": {"detected": False, "provider": None, "confidence": 0.0, "evidenceLevel": "none", "hits": [], "temporal": {"sampledFrames": 1, "positiveFrames": 0, "moving": False}, "note": "未检测到可见水印"},
         },
+        {
+            "verdict": "unknown",
+            "confidence": 0.12,
+            "dimensions": [],
+            "regions": [],
+            "explanation": "未知判定。",
+            "modelVersion": "qwen3-vl-flash",
+            "source": "unknown",
+            "synthid": {"detected": False, "supported": True, "confidence": 0.0, "phaseMatch": 0.0, "evidenceLevel": "none", "note": "未检测到 SynthID"},
+            "visibleWatermark": {"detected": False, "provider": None, "confidence": 0.0, "evidenceLevel": "none", "hits": [], "temporal": {"sampledFrames": 1, "positiveFrames": 0, "moving": False}, "note": "未检测到可见水印"},
+        },
     ]
 
     def fake_analyze(*args, **kwargs):
@@ -337,23 +348,28 @@ def test_history_filters_and_counts_include_verdict_breakdown(client, monkeypatc
     client.post("/api/detect", files={"file": ("real.png", b"verdict-a", "image/png")})
     client.post("/api/detect", files={"file": ("suspected.png", b"verdict-b", "image/png")})
     client.post("/api/detect", files={"file": ("highly.png", b"verdict-c", "image/png")})
+    client.post("/api/detect", files={"file": ("unknown.png", b"verdict-d", "image/png")})
 
     listing = client.get("/api/history", headers={"X-Jianzhen-Token": "test-token"})
     real_only = client.get("/api/history?verdict=real", headers={"X-Jianzhen-Token": "test-token"})
     suspected_only = client.get("/api/history?verdict=suspected_fake", headers={"X-Jianzhen-Token": "test-token"})
     highly_only = client.get("/api/history?verdict=highly_suspected_fake", headers={"X-Jianzhen-Token": "test-token"})
+    unknown_only = client.get("/api/history?verdict=unknown", headers={"X-Jianzhen-Token": "test-token"})
 
     assert listing.status_code == 200
     payload = listing.json()
     assert payload["filterCounts"]["real"] == 1
     assert payload["filterCounts"]["suspected"] == 1
     assert payload["filterCounts"]["highly"] == 1
+    assert payload["filterCounts"]["unknownVerdict"] == 1
     assert len(real_only.json()["items"]) == 1
     assert real_only.json()["items"][0]["verdict"] == "real"
     assert len(suspected_only.json()["items"]) == 1
     assert suspected_only.json()["items"][0]["verdict"] == "suspected_fake"
     assert len(highly_only.json()["items"]) == 1
     assert highly_only.json()["items"][0]["verdict"] == "highly_suspected_fake"
+    assert len(unknown_only.json()["items"]) == 1
+    assert unknown_only.json()["items"][0]["verdict"] == "unknown"
 
 
 def test_metrics_include_source_and_evidence_breakdown(client):

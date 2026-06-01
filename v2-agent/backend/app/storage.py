@@ -295,6 +295,7 @@ def list_history(
         "real": sum(1 for item in query_filtered if str(item.get("verdict") or "") == "real"),
         "suspected": sum(1 for item in query_filtered if str(item.get("verdict") or "") == "suspected_fake"),
         "highly": sum(1 for item in query_filtered if str(item.get("verdict") or "") == "highly_suspected_fake"),
+        "unknownVerdict": sum(1 for item in query_filtered if str(item.get("verdict") or "") == "unknown"),
         "forensics": sum(1 for item in query_filtered if bool(item.get("hasForensics"))),
         "provenance": sum(1 for item in query_filtered if bool(item.get("hasProvenance"))),
         "synthid": sum(1 for item in query_filtered if bool(item.get("hasSynthid"))),
