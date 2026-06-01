@@ -283,7 +283,7 @@ def test_history_filters_and_counts_include_synthid(client, monkeypatch):
     assert listing.status_code == 200
     payload = listing.json()
     assert payload["filterCounts"]["synthid"] == 1
-    assert payload["filterCounts"]["watermark"] == 1
+    assert payload["filterCounts"]["watermark"] == 0
     assert synthid_only.status_code == 200
     synthid_items = synthid_only.json()["items"]
     assert len(synthid_items) == 1

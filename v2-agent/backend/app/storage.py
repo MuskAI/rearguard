@@ -296,11 +296,7 @@ def list_history(
         "forensics": sum(1 for item in query_filtered if bool(item.get("hasForensics"))),
         "provenance": sum(1 for item in query_filtered if bool(item.get("hasProvenance"))),
         "synthid": sum(1 for item in query_filtered if bool(item.get("hasSynthid"))),
-        "watermark": sum(
-            1
-            for item in query_filtered
-            if bool(item.get("hasVisibleWatermark")) or bool(item.get("hasSynthid"))
-        ),
+        "watermark": sum(1 for item in query_filtered if bool(item.get("hasVisibleWatermark"))),
     }
 
     filtered = [
