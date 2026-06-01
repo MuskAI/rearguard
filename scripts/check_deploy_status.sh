@@ -47,8 +47,10 @@ check_target() {
   local service_name="$3"
   local internal_url="$4"
   local external_url="$5"
+  shift 5
+  local relevant_paths=("$@")
   local expected="$EXPECTED_COMMIT"
-  local output deployed service_state internal_code external_code commit_state
+  local output deployed service_state internal_code external_code repo_state code_state
   local remote_script
 
   if [[ -z "$expected" ]]; then
@@ -80,22 +82,33 @@ EOF
   done <<< "$output"
 
   if [[ "$deployed" == "missing" ]]; then
-    commit_state="missing"
+    repo_state="missing"
+    code_state="missing"
   elif [[ "$deployed" == "$expected" ]]; then
-    commit_state="match"
+    repo_state="match"
+    code_state="current"
+  elif ! git -C "$ROOT_DIR" rev-parse --verify "$deployed^{commit}" >/dev/null 2>&1; then
+    repo_state="mismatch"
+    code_state="unknown"
+  elif git -C "$ROOT_DIR" diff --quiet "$deployed" "$expected" -- "${relevant_paths[@]}"; then
+    repo_state="mismatch"
+    code_state="current"
   else
-    commit_state="mismatch"
+    repo_state="mismatch"
+    code_state="stale"
   fi
 
   printf '\n[%s]\n' "$label"
   printf 'local_head:    %s\n' "$LOCAL_HEAD"
   printf 'expected:      %s\n' "$expected"
-  printf 'deployed:      %s (%s)\n' "$deployed" "$commit_state"
+  printf 'deployed:      %s\n' "$deployed"
+  printf 'repo_state:    %s\n' "$repo_state"
+  printf 'code_state:    %s\n' "$code_state"
   printf 'service:       %s\n' "$service_state"
   printf 'internal_http: %s\n' "$internal_code"
   printf 'external_http: %s\n' "$external_code"
 
-  if [[ -n "$EXPECTED_COMMIT" && "$commit_state" != "match" ]]; then
+  if [[ -n "$EXPECTED_COMMIT" && "$repo_state" != "match" ]]; then
     status=1
   fi
   if [[ "$STRICT" == "1" ]]; then
@@ -110,7 +123,9 @@ if [[ "$TARGET" == "all" || "$TARGET" == "v1" ]]; then
     "/opt/realguard-server/DEPLOYED_COMMIT" \
     "realguard-backend.service" \
     "http://127.0.0.1:5000/api/history/image-detections" \
-    "http://127.0.0.1/api/history/image-detections"
+    "http://127.0.0.1/api/history/image-detections" \
+    "realguard-server-main/RealGuard" \
+    "realguard-server-main/frontend"
 fi
 
 if [[ "$TARGET" == "all" || "$TARGET" == "v2" ]]; then
@@ -118,7 +133,9 @@ if [[ "$TARGET" == "all" || "$TARGET" == "v2" ]]; then
     "/opt/jianzhen-v2/DEPLOYED_COMMIT" \
     "jianzhen-v2-backend.service" \
     "http://127.0.0.1:8848/api/health" \
-    "http://127.0.0.1/v2-api/health"
+    "http://127.0.0.1/v2-api/health" \
+    "v2-agent/backend" \
+    "v2-agent/frontend"
 fi
 
 exit "$status"

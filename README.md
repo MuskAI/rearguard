@@ -229,6 +229,13 @@ DEPLOY_SSH_KEY=/path/to/key ./scripts/check_deploy_status.sh
 EXPECT_COMMIT=$(git rev-parse --short HEAD) STRICT=1 DEPLOY_SSH_KEY=/path/to/key ./scripts/check_deploy_status.sh v2
 ```
 
+状态脚本会同时给出两层结论：
+
+- `repo_state`：服务器 `DEPLOYED_COMMIT` 是否与当前期望提交一致
+- `code_state`：即使 `DEPLOYED_COMMIT` 落后，`V1 / V2` 实际业务代码是否已经与当前仓库对应目录一致
+
+这样在仓库只新增了发布脚本或文档、但未改动 `V1 / V2` 业务代码时，不会把线上错误地判断成“应用版本落后”。
+
 ## 安全说明
 
 - 仓库不包含真实 API Key、短信密钥、数据库密码、SSH 私钥。
