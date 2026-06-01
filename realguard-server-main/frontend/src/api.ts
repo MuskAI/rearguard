@@ -108,7 +108,7 @@ export function getLibraries(searchType: "image" | "video") {
   );
 }
 
-export type HistoryFilterKey = "all" | "guest" | "metadata" | "issues" | "ai" | "real";
+export type HistoryFilterKey = "all" | "guest" | "metadata" | "issues" | "ai" | "real" | "hits" | "empty";
 
 export interface HistoryListResponse {
   records: HistoryRecord[];
@@ -148,10 +148,11 @@ export function getHistory(
 
 export function getRetrievalHistory(
   searchType: "image" | "video",
-  params?: { query?: string; limit?: number; offset?: number },
+  params?: { query?: string; filter?: HistoryFilterKey; limit?: number; offset?: number },
 ) {
   const search = new URLSearchParams({ search_type: searchType });
   if (params?.query?.trim()) search.set("query", params.query.trim());
+  if (params?.filter && params.filter !== "all") search.set("filter", params.filter);
   if (params?.limit) search.set("limit", String(params.limit));
   if (params?.offset) search.set("offset", String(params.offset));
   return jsonRequest<HistoryListResponse>(`/api/history/retrievals?${search.toString()}`);

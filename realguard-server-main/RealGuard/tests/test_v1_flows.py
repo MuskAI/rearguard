@@ -237,6 +237,53 @@ def test_history_endpoints_return_empty_for_fresh_guest(client):
     assert retrieve_response.get_json()["records"] == []
 
 
+def test_retrieval_history_supports_hit_filters(client, monkeypatch):
+    _login_session(client, phone="13900000000")
+
+    def fake_sql(sql, params=None, fetch=True):
+        if sql == "SELECT * FROM retrieve_data WHERE phone = %s AND search_type = %s ORDER BY createtime DESC":
+            assert params == ("13900000000", "image")
+            return [
+                {
+                    "itemid": 1,
+                    "filename": "hit.png",
+                    "result_count": 3,
+                    "top_k": 5,
+                    "file_size": "12KB",
+                    "createtime": "2026-06-01 10:00:00",
+                    "results_json": "[]",
+                },
+                {
+                    "itemid": 2,
+                    "filename": "empty.png",
+                    "result_count": 0,
+                    "top_k": 5,
+                    "file_size": "10KB",
+                    "createtime": "2026-06-01 09:00:00",
+                    "results_json": "[]",
+                },
+            ]
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+    monkeypatch.setattr(api, "excute_sql", fake_sql)
+
+    listing = client.get("/api/history/retrievals?search_type=image")
+    hits_only = client.get("/api/history/retrievals?search_type=image&filter=hits")
+    empty_only = client.get("/api/history/retrievals?search_type=image&filter=empty")
+
+    assert listing.status_code == 200
+    payload = listing.get_json()
+    assert payload["filter_counts"]["all"] == 2
+    assert payload["filter_counts"]["hits"] == 1
+    assert payload["filter_counts"]["empty"] == 1
+    assert hits_only.status_code == 200
+    assert len(hits_only.get_json()["records"]) == 1
+    assert hits_only.get_json()["records"][0]["filename"] == "hit.png"
+    assert empty_only.status_code == 200
+    assert len(empty_only.get_json()["records"]) == 1
+    assert empty_only.get_json()["records"][0]["filename"] == "empty.png"
+
+
 def test_guest_thumbnail_uses_guest_openid_lookup(client, monkeypatch, tmp_path):
     with client.session_transaction() as sess:
         sess["guest_openid"] = "guest-thumb"

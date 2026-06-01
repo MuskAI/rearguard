@@ -749,7 +749,7 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
         ? getHistory("image-detections", { query, filter: activeFilter, limit, offset })
         : targetTab === "video"
           ? getHistory("video-detections", { query, filter: activeFilter, limit, offset })
-          : getRetrievalHistory(targetTab === "imageRetrieve" ? "image" : "video", { query, limit, offset });
+          : getRetrievalHistory(targetTab === "imageRetrieve" ? "image" : "video", { query, filter: activeFilter, limit, offset });
     try {
       const data: HistoryListResponse = await request;
       if (historyRequestIdRef.current !== requestId) return;
@@ -848,6 +848,8 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
       : 0;
     return [
       { label: "当前查询", value: historyTotal || records.length },
+      { label: "有命中", value: historyFilterCounts.hits ?? 0, filterKey: "hits" as HistoryFilterKey },
+      { label: "无命中", value: historyFilterCounts.empty ?? 0, filterKey: "empty" as HistoryFilterKey },
       { label: "命中总数", value: resultCount },
       { label: "平均Top-K", value: topKAvg },
       { label: "查询类型", value: tab === "imageRetrieve" ? "图像" : "视频" },
@@ -1676,7 +1678,11 @@ function getHistoryFilterOptions(tab: HistoryTabKey): Array<{ key: HistoryFilter
       { key: "real", label: "真实结论" },
     ];
   }
-  return [];
+  return [
+    { key: "all", label: "全部" },
+    { key: "hits", label: "有命中" },
+    { key: "empty", label: "无命中" },
+  ];
 }
 
 function matchesHistoryFilter(record: HistoryRecord, tab: HistoryTabKey, filter: HistoryFilterKey) {
@@ -1693,6 +1699,8 @@ function matchesHistoryFilter(record: HistoryRecord, tab: HistoryTabKey, filter:
     if (filter === "real") return String(record.final_label || "").includes("真实");
     return true;
   }
+  if (filter === "hits") return Number(record.result_count || 0) > 0;
+  if (filter === "empty") return Number(record.result_count || 0) <= 0;
   return true;
 }
 

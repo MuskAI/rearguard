@@ -258,6 +258,15 @@ def _retrieval_history_search_fields(record):
     ]
 
 
+def _retrieval_history_matches_filter(record, filter_key):
+    result_count = int(record.get("result_count") or 0)
+    if filter_key == "hits":
+        return result_count > 0
+    if filter_key == "empty":
+        return result_count <= 0
+    return True
+
+
 @api_blueprint.route("/me")
 def me():
     user, error = _auth_required()
@@ -527,6 +536,9 @@ def retrieval_history():
     if offset_error:
         return offset_error
     query = _history_query()
+    filter_key = str(request.args.get("filter") or "all").strip()
+    if filter_key not in {"all", "hits", "empty"}:
+        return jsonify({"status": "error", "message": "filter 不受支持"}), 400
 
     search_type = request.args.get("search_type", "image")
     if search_type not in ("image", "video"):
@@ -547,4 +559,15 @@ def retrieval_history():
         if not _contains_history_query(_retrieval_history_search_fields(record), query):
             continue
         records.append(record)
-    return jsonify({"status": "success", "records": records[offset: offset + limit], "total": len(records)})
+    filter_counts = {
+        "all": len(records),
+        "hits": sum(1 for record in records if int(record.get("result_count") or 0) > 0),
+        "empty": sum(1 for record in records if int(record.get("result_count") or 0) <= 0),
+    }
+    filtered_records = [record for record in records if _retrieval_history_matches_filter(record, filter_key)]
+    return jsonify({
+        "status": "success",
+        "records": filtered_records[offset: offset + limit],
+        "total": len(filtered_records),
+        "filter_counts": filter_counts,
+    })
