@@ -51,6 +51,11 @@ V2 鉴伪 Agent：
 - ELA、噪声残差、频域、光照梯度等可解释性取证可视化。
 - C2PA 内容凭证读取与验证。
 - 浅色工作台风格，独立路径 `/v2/`。
+- 提供面向 agent 的 CLI：`python3 scripts/realguard_cli.py detect <file> --base-url http://realguard.cn --api-prefix /v2-api --pretty`，可输出机器可读的鉴伪结论、模型版本、缓存版本、证据摘要和报告号。
+
+Agent skill：
+
+- 仓库内置 `skills/realguard-forensics/`。给其他 agent（如 OpenClaw）的一句话交接：`Use $realguard-forensics and run python3 scripts/realguard_cli.py detect <file> --base-url http://realguard.cn --api-prefix /v2-api --pretty, then return a concise verdict with confidence, evidence, model version, cache version, and report id.`
 
 监控后台：
 

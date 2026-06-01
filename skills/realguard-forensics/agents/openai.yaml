@@ -1,0 +1,6 @@
+interface:
+  display_name: "RealGuard 鉴伪"
+  short_description: "用 RealGuard CLI 检测 AIGC、伪造与内容凭证"
+  default_prompt: "Use $realguard-forensics to run RealGuard CLI detection on a file and summarize the JSON verdict, confidence, evidence, report ID, model version, and cache version."
+policy:
+  allow_implicit_invocation: true
