@@ -55,6 +55,50 @@ check_target() {
   local output deployed service_state internal_code external_code repo_state code_state
   local remote_script
 
+  if [[ "$DRY_RUN" == "1" ]]; then
+    deployed="dry-run"
+    service_state="dry-run"
+    internal_code="dry-run"
+    external_code="dry-run"
+    repo_state="dry-run"
+    code_state="dry-run"
+    if [[ -z "$expected" ]]; then
+      expected="$(latest_commit_for_paths "${relevant_paths[@]}")"
+      if [[ -n "$expected" ]]; then
+        expected_source="target_paths"
+      else
+        expected="$LOCAL_HEAD"
+        expected_source="repo_head_fallback"
+      fi
+    fi
+
+    if [[ "$FORMAT" == "env" ]]; then
+      local prefix
+      prefix="$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]')"
+      printf '%s_local_head=%s\n' "$prefix" "$LOCAL_HEAD"
+      printf '%s_expected=%s\n' "$prefix" "$expected"
+      printf '%s_expected_from=%s\n' "$prefix" "$expected_source"
+      printf '%s_deployed=%s\n' "$prefix" "$deployed"
+      printf '%s_repo_state=%s\n' "$prefix" "$repo_state"
+      printf '%s_code_state=%s\n' "$prefix" "$code_state"
+      printf '%s_service=%s\n' "$prefix" "$service_state"
+      printf '%s_internal_http=%s\n' "$prefix" "$internal_code"
+      printf '%s_external_http=%s\n' "$prefix" "$external_code"
+    else
+      printf '\n[%s]\n' "$label"
+      printf 'local_head:    %s\n' "$LOCAL_HEAD"
+      printf 'expected:      %s\n' "$expected"
+      printf 'expected_from: %s\n' "$expected_source"
+      printf 'deployed:      %s\n' "$deployed"
+      printf 'repo_state:    %s\n' "$repo_state"
+      printf 'code_state:    %s\n' "$code_state"
+      printf 'service:       %s\n' "$service_state"
+      printf 'internal_http: %s\n' "$internal_code"
+      printf 'external_http: %s\n' "$external_code"
+    fi
+    return 0
+  fi
+
   if [[ -z "$expected" ]]; then
     expected="$(git -C "$ROOT_DIR" log -1 --format=%h -- "${relevant_paths[@]}")"
     if [[ -n "$expected" ]]; then

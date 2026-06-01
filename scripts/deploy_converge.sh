@@ -54,6 +54,12 @@ deploy_if_needed() {
     return 0
   fi
 
+  if [[ "$state" == "dry-run" ]]; then
+    printf '%s status unavailable in DRY RUN; would publish target.\n' "$label"
+    DEPLOY_SSH_KEY="$DEPLOY_SSH_KEY" DEPLOY_HOST="$DEPLOY_HOST" DEPLOY_USER="$DEPLOY_USER" DRY_RUN="$DRY_RUN" bash "$script_path"
+    return 0
+  fi
+
   printf '%s repo_state=%s; publishing target.\n' "$label" "$state"
   DEPLOY_SSH_KEY="$DEPLOY_SSH_KEY" DEPLOY_HOST="$DEPLOY_HOST" DEPLOY_USER="$DEPLOY_USER" DRY_RUN="$DRY_RUN" bash "$script_path"
 }

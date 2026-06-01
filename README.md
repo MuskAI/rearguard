@@ -204,6 +204,7 @@ DEPLOY_SSH_KEY=/path/to/key ./scripts/deploy_converge.sh
 ```
 
 它会先检查状态，`repo_state=match` 的目标会直接跳过，只有未对齐的目标才会调用对应发布脚本。
+在 `DRY_RUN=1` 下，状态脚本和统一入口会明确返回 `dry-run` 占位值，表示只做命令预演、不读取真实远端状态。
 
 默认会发布到 `ubuntu@124.222.3.205`，也可以覆盖：
 
