@@ -307,13 +307,14 @@ export default function AdminDashboard({
               <span><span style={{ color: sourceColors.vlm }}>■</span> VLM</span>
               <span><span style={{ color: sourceColors.mock }}>■</span> Mock</span>
               <span><span style={{ color: sourceColors["maps-only"] }}>■</span> 仅证据图</span>
+              <span><span style={{ color: sourceColors.unknown }}>■</span> 未知来源</span>
             </div>
           </div>
           <div className="h-56 flex items-end gap-1.5 sm:gap-2">
             {metrics.byDay.map((day) => (
               <div key={`${day.date}-source`} className="flex-1 min-w-0 flex flex-col items-center justify-end gap-2">
                 <div className="w-full h-full flex flex-col justify-end rounded-t overflow-hidden bg-ink-900/40">
-                  {(["vlm", "mock", "maps-only"] as const).map((key) => {
+                  {(["vlm", "mock", "maps-only", "unknown"] as const).map((key) => {
                     const total = Math.max(1, day.detections);
                     const height = `${(day.sources[key] / total) * ((day.detections / maxDay) * 100)}%`;
                     return (
