@@ -25,6 +25,7 @@ fi
 
 TARGET="${1:-all}"
 STRICT="${STRICT:-0}"
+FORMAT="${FORMAT:-text}"
 ROOT_DIR="$(repo_root)"
 LOCAL_HEAD="$(git -C "$ROOT_DIR" rev-parse --short HEAD)"
 EXPECTED_COMMIT="${EXPECT_COMMIT:-}"
@@ -105,16 +106,30 @@ EOF
     code_state="stale"
   fi
 
-  printf '\n[%s]\n' "$label"
-  printf 'local_head:    %s\n' "$LOCAL_HEAD"
-  printf 'expected:      %s\n' "$expected"
-  printf 'expected_from: %s\n' "$expected_source"
-  printf 'deployed:      %s\n' "$deployed"
-  printf 'repo_state:    %s\n' "$repo_state"
-  printf 'code_state:    %s\n' "$code_state"
-  printf 'service:       %s\n' "$service_state"
-  printf 'internal_http: %s\n' "$internal_code"
-  printf 'external_http: %s\n' "$external_code"
+  if [[ "$FORMAT" == "env" ]]; then
+    local prefix
+    prefix="$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]')"
+    printf '%s_local_head=%s\n' "$prefix" "$LOCAL_HEAD"
+    printf '%s_expected=%s\n' "$prefix" "$expected"
+    printf '%s_expected_from=%s\n' "$prefix" "$expected_source"
+    printf '%s_deployed=%s\n' "$prefix" "$deployed"
+    printf '%s_repo_state=%s\n' "$prefix" "$repo_state"
+    printf '%s_code_state=%s\n' "$prefix" "$code_state"
+    printf '%s_service=%s\n' "$prefix" "$service_state"
+    printf '%s_internal_http=%s\n' "$prefix" "$internal_code"
+    printf '%s_external_http=%s\n' "$prefix" "$external_code"
+  else
+    printf '\n[%s]\n' "$label"
+    printf 'local_head:    %s\n' "$LOCAL_HEAD"
+    printf 'expected:      %s\n' "$expected"
+    printf 'expected_from: %s\n' "$expected_source"
+    printf 'deployed:      %s\n' "$deployed"
+    printf 'repo_state:    %s\n' "$repo_state"
+    printf 'code_state:    %s\n' "$code_state"
+    printf 'service:       %s\n' "$service_state"
+    printf 'internal_http: %s\n' "$internal_code"
+    printf 'external_http: %s\n' "$external_code"
+  fi
 
   if [[ -n "$EXPECTED_COMMIT" && "$repo_state" != "match" ]]; then
     status=1

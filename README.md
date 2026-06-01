@@ -197,6 +197,14 @@ DEPLOY_SSH_KEY=/path/to/key ./scripts/deploy_v1.sh
 DEPLOY_SSH_KEY=/path/to/key ./scripts/deploy_v2.sh
 ```
 
+如果只是想快速把服务器收敛到当前 `V1 / V2` 目标版本，也可以直接使用统一入口：
+
+```bash
+DEPLOY_SSH_KEY=/path/to/key ./scripts/deploy_converge.sh
+```
+
+它会先检查状态，`repo_state=match` 的目标会直接跳过，只有未对齐的目标才会调用对应发布脚本。
+
 默认会发布到 `ubuntu@124.222.3.205`，也可以覆盖：
 
 ```bash
