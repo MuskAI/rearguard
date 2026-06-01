@@ -1657,17 +1657,22 @@ function renderHighlightedText(text: string, query: string) {
 
 function getSearchableHistoryFields(record: HistoryRecord) {
   const issueCount = Number(record.visual_issue_count || 0);
+  const resultCount = Number(record.result_count || 0);
+  const searchType = String(record.search_type || "");
   return [
     String(record.filename || ""),
     String(record.final_label || ""),
     String(record.confidence || ""),
     String(record.createtime || ""),
     String(record.top_k || ""),
-    String(record.result_count || ""),
+    String(resultCount || ""),
+    searchType,
+    searchType === "image" ? "图像检索" : searchType === "video" ? "视频检索" : "",
+    resultCount > 0 ? "有命中" : "无命中",
     Boolean(record.is_guest_record) ? "访客" : "",
     Boolean(record.has_metadata) ? "元数据" : "",
     Boolean(record.has_visual_issues) ? `可疑点${issueCount > 0 ? ` ${issueCount}` : ""}` : "",
-    record.result_count ? "数量" : "结论",
+    resultCount ? "数量" : "结论",
     record.top_k ? "Top-K" : "置信度",
   ].map((field) => String(field));
 }
