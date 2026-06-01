@@ -140,6 +140,7 @@ export default function AdminDashboard({
     { label: "平均耗时", value: `${metrics.summary.avgLatencyMs}ms` },
     { label: "缓存命中率", value: pct(metrics.summary.cacheHitRate) },
     { label: "缓存样本", value: metrics.summary.cacheEntries },
+    { label: "缓存版本", value: metrics.summary.analysisCacheVersion || "unknown" },
   ];
   const recentBase = Math.max(1, metrics.summary.recentDetections || metrics.summary.totalDetections || 1);
   const vlmRate = (metrics.bySource.vlm ?? 0) / recentBase;

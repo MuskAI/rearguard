@@ -296,6 +296,7 @@ export default function Sidebar({
         {history.map((h) => {
           const meta = VERDICT_META[h.verdict];
           const modelVersion = String(h.modelVersion || "").trim();
+          const cacheVersion = String(h.cacheVersion || "").trim();
           return (
             <div
               key={h.taskId}
@@ -334,7 +335,7 @@ export default function Sidebar({
                   {h.source === "maps-only" && <span className="text-amber-300">{renderHighlightedText("仅证据图", query)}</span>}
                   {h.source === "unknown" && <span className="text-ink-500">{renderHighlightedText("未知来源", query)}</span>}
                   {modelVersion && <span className="text-ink-500 truncate">{renderHighlightedText(modelVersion, query)}</span>}
-                  {h.cacheHit && <span className="text-jade">{renderHighlightedText("缓存", query)}</span>}
+                  {h.cacheHit && <span className="text-jade">{renderHighlightedText(cacheVersion ? `缓存 ${cacheVersion}` : "缓存", query)}</span>}
                 </div>
                 {(h.hasForensics || h.hasProvenance || h.hasVisibleWatermark || h.hasSynthid) && (
                   <div className="mt-1 flex items-center gap-1.5 text-[10px]">

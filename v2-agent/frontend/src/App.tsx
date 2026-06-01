@@ -652,10 +652,12 @@ function CapabilityBanner({ health }: { health: HealthStatus | null }) {
       : health.vlmEnabled
       ? "图像与可提取正文的文档（txt/md/docx）使用真实模型；视频、音频和其他复杂文档仍为演示判定。"
       : "当前处于 Mock 回退模式，检测结果仅用于演示流程。";
+  const cacheVersion = health?.analysisCacheVersion?.trim();
   return (
     <div className="rounded-xl border border-ink-600 bg-ink-800 px-4 py-3 text-xs sm:text-sm text-ink-500 leading-relaxed">
       <span className="text-ink-950 font-medium">当前能力：</span>
       {capabilityText}
+      {cacheVersion && ` 分析缓存版本：${cacheVersion}。`}
       {tokenProtected && " 历史记录、报告与监控指标需要访问令牌。"}
     </div>
   );

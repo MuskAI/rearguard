@@ -39,6 +39,7 @@ def test_health_exposes_access_protection(client):
 
     assert response.status_code == 200
     assert payload["accessProtectionEnabled"] is True
+    assert payload["analysisCacheVersion"] == "v6-low-ela-weight"
     assert "/api/report/{report_id}/download" in payload["protectedEndpoints"]
     assert "/api/report/{report_id}/export" in payload["protectedEndpoints"]
 
@@ -403,6 +404,7 @@ def test_metrics_include_source_and_evidence_breakdown(client):
     assert "sources" in payload["byDay"][0]
     assert "verdicts" in payload["byDay"][0]
     assert "evidence" in payload["byDay"][0]
+    assert payload["summary"]["analysisCacheVersion"] == "v6-low-ela-weight"
 
 
 def test_metrics_supports_window_sizes(client):
@@ -484,7 +486,9 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
     assert detect_b.status_code == 200
     assert detect_c.status_code == 200
     assert detect_d.status_code == 200
+    assert detect_a.json()["cacheVersion"] == "v6-low-ela-weight"
     assert detect_a_cached.json()["cacheHit"] is True
+    assert detect_a_cached.json()["cacheVersion"] == "v6-low-ela-weight"
 
     task_a = detect_a.json()["taskId"]
     task_b = detect_b.json()["taskId"]
@@ -514,6 +518,7 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
         headers={"X-Jianzhen-Token": "test-token"},
     )
     by_model = client.get("/api/history?query=mock-model", headers={"X-Jianzhen-Token": "test-token"})
+    by_cache_version = client.get("/api/history?query=%E7%BC%93%E5%AD%98%E7%89%88%E6%9C%AC%20v6-low-ela-weight", headers={"X-Jianzhen-Token": "test-token"})
     by_query = client.get("/api/history?query=%E7%9C%9F%E5%AE%9E%E6%A8%A1%E5%9E%8B", headers={"X-Jianzhen-Token": "test-token"})
     by_evidence = client.get(
         "/api/history?hasWatermark=true&hasSynthid=true&query=gemini%20%E6%B0%B4%E5%8D%B0",
@@ -556,6 +561,10 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
     assert by_model.json()["total"] == 1
     assert by_model.json()["items"][0]["modelVersion"] == "mock-model"
     assert by_model.json()["items"][0]["reportId"] == detect_b.json()["reportId"]
+
+    assert by_cache_version.status_code == 200
+    assert by_cache_version.json()["total"] >= 5
+    assert {item["cacheVersion"] for item in by_cache_version.json()["items"]} == {"v6-low-ela-weight"}
 
     assert by_query.status_code == 200
     assert by_query.json()["total"] >= 1

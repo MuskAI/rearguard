@@ -179,6 +179,7 @@ def _history_summary_from_row(row: sqlite3.Row) -> dict[str, Any]:
         "thumbnail": row["thumbnail"],
         "source": result.get("source"),
         "modelVersion": result.get("modelVersion"),
+        "cacheVersion": result.get("cacheVersion"),
         "cacheHit": bool(result.get("cacheHit")),
         "hasForensics": bool(row["forensics_json"]),
         "hasProvenance": bool(row["provenance_json"]),
@@ -211,6 +212,7 @@ def _searchable_history_fields(item: dict[str, Any]) -> list[str]:
     verdict = str(item.get("verdict") or "")
     ftype = str(item.get("type") or "")
     model_version = str(item.get("modelVersion") or "")
+    cache_version = str(item.get("cacheVersion") or "")
     provider = str(item.get("visibleWatermarkProvider") or "")
     fields = [
         item.get("name") or "",
@@ -225,6 +227,9 @@ def _searchable_history_fields(item: dict[str, Any]) -> list[str]:
         model_version,
         f"模型 {model_version}" if model_version else "",
         f"模型版本 {model_version}" if model_version else "",
+        cache_version,
+        f"缓存版本 {cache_version}" if cache_version else "",
+        f"分析缓存 {cache_version}" if cache_version else "",
         provider,
         f"{provider} 水印" if provider else "",
         "取证" if item.get("hasForensics") else "",
@@ -590,6 +595,7 @@ def metrics(days: int = 14) -> dict[str, Any]:
             "avgLatencyMs": avg_latency,
             "cacheEntries": int(total_cache),
             "cacheHitRate": round(cache_hits / cache_known, 3) if cache_known else 0.0,
+            "analysisCacheVersion": ANALYSIS_CACHE_VERSION,
         },
         "byDay": days_list,
         "byType": dict(by_type),

@@ -69,6 +69,7 @@ export interface DetectResult {
   confidence: number;
   modelVersion: string;
   source: string;
+  cacheVersion: string;
   cacheHit?: boolean;
   elapsedMs: number;
   dimensions: Dimension[];
@@ -130,6 +131,7 @@ export interface HistoryItem {
   thumbnail?: string | null;
   source?: string;
   modelVersion?: string;
+  cacheVersion?: string;
   cacheHit?: boolean;
   hasForensics?: boolean;
   hasProvenance?: boolean;
@@ -161,6 +163,7 @@ export interface HealthStatus {
   status: string;
   model: string;
   vlmEnabled: boolean;
+  analysisCacheVersion: string;
   accessProtectionEnabled: boolean;
   protectedEndpoints: string[];
 }
@@ -303,6 +306,7 @@ export interface Metrics {
     avgLatencyMs: number;
     cacheEntries: number;
     cacheHitRate: number;
+    analysisCacheVersion: string;
   };
   byDay: {
     date: string;

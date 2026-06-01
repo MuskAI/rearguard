@@ -73,7 +73,10 @@ export default function ResultCard({
             </span>
           )}
         </div>
-        <span className="text-xs text-ink-500 break-all">{result.modelVersion}</span>
+        <span className="text-xs text-ink-500 break-all">
+          {result.modelVersion}
+          {result.cacheVersion ? ` · 缓存 ${result.cacheVersion}` : ""}
+        </span>
       </div>
 
       <div className="p-4 sm:p-5 grid grid-cols-1 md:grid-cols-[auto_1fr] gap-4 sm:gap-5">
@@ -248,6 +251,7 @@ export default function ResultCard({
             <span>大小：{result.fileMeta.size}</span>
             <span>耗时：{result.elapsedMs}ms</span>
             <span>报告号：{result.reportId}</span>
+            {result.cacheVersion && <span>缓存版本：{result.cacheVersion}</span>}
           </div>
 
           <div className="grid grid-cols-1 sm:flex sm:flex-wrap gap-2">
