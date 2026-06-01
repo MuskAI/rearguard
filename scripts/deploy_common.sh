@@ -43,6 +43,22 @@ run_local() {
   run_cmd "$@"
 }
 
+run_tar_create() {
+  local base_dir="$1"
+  local archive_path="$2"
+  shift 2
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '+ %q' env
+    printf ' %q' COPYFILE_DISABLE=1 tar -C "$base_dir" -czf "$archive_path"
+    for arg in "$@"; do
+      printf ' %q' "$arg"
+    done
+    printf '\n'
+    return 0
+  fi
+  env COPYFILE_DISABLE=1 tar -C "$base_dir" -czf "$archive_path" "$@"
+}
+
 run_scp() {
   run_cmd scp -i "$DEPLOY_SSH_KEY" -o StrictHostKeyChecking=no "$@"
 }

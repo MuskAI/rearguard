@@ -47,7 +47,7 @@ log_step 2 "Build V1 frontend"
 )
 
 log_step 3 "Package V1 backend"
-run_local tar -C "$BACKEND_DIR" -czf "$ARCHIVE_PATH" run.py requirements.txt imagedetection
+run_tar_create "$BACKEND_DIR" "$ARCHIVE_PATH" run.py requirements.txt imagedetection
 write_commit_marker "$MARKER_PATH" "$COMMIT_SHA"
 
 log_step 4 "Upload V1 release"
@@ -56,6 +56,6 @@ run_scp "$MARKER_PATH" "$REMOTE:/tmp/realguard-v1.DEPLOYED_COMMIT"
 run_scp -r "$FRONTEND_DIR/dist/." "$REMOTE:/var/www/realguard-frontend/"
 
 log_step 5 "Activate V1 release"
-run_remote "sudo tar -xzf /tmp/realguard-v1-backend.tgz -C /opt/realguard-server/RealGuard && sudo install -m 644 /tmp/realguard-v1.DEPLOYED_COMMIT /opt/realguard-server/DEPLOYED_COMMIT && rm -f /tmp/realguard-v1-backend.tgz /tmp/realguard-v1.DEPLOYED_COMMIT && sudo systemctl restart realguard-backend.service && sleep 2 && systemctl is-active realguard-backend.service && curl -fsS http://127.0.0.1:5000/api/history/image-detections >/dev/null && curl -fsS -o /dev/null http://127.0.0.1/ && cat /opt/realguard-server/DEPLOYED_COMMIT"
+run_remote "sudo tar -xzf /tmp/realguard-v1-backend.tgz -C /opt/realguard-server/RealGuard && sudo install -m 644 /tmp/realguard-v1.DEPLOYED_COMMIT /opt/realguard-server/DEPLOYED_COMMIT && rm -f /tmp/realguard-v1-backend.tgz /tmp/realguard-v1.DEPLOYED_COMMIT && sudo systemctl restart realguard-backend.service && for _ in 1 2 3 4 5 6 7 8 9 10; do if curl -fsS http://127.0.0.1:5000/api/history/image-detections >/dev/null; then break; fi; sleep 1; done && systemctl is-active realguard-backend.service && curl -fsS http://127.0.0.1:5000/api/history/image-detections >/dev/null && curl -fsS -o /dev/null http://127.0.0.1/ && cat /opt/realguard-server/DEPLOYED_COMMIT"
 
 printf '\nV1 deployed from commit %s to %s\n' "$COMMIT_SHA" "$REMOTE"

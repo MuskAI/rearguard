@@ -208,7 +208,7 @@ DEPLOY_HOST=example.com DEPLOY_USER=deploy DEPLOY_SSH_KEY=/path/to/key ./scripts
 - 本地 compile / pytest / frontend build
 - 后端完整目录打包上传，避免漏传模块
 - 前端 `dist/` 静态资源同步
-- 重启对应 systemd 服务并执行健康检查
+- 重启对应 systemd 服务并轮询健康检查，避免服务启动稍慢时被误判失败
 - 在服务器写入 `DEPLOYED_COMMIT`，便于核对当前线上对应的 Git 提交
 
 仅查看将要执行的命令时可使用：
