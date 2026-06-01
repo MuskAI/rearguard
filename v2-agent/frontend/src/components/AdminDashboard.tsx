@@ -280,7 +280,7 @@ export default function AdminDashboard({
           <div className="rounded-xl border border-ink-600 bg-ink-800 p-4">
             <h2 className="font-serif text-base font-semibold text-rice mb-4">判定分布</h2>
             <div className="space-y-3">
-              {(["real", "suspected_fake", "highly_suspected_fake"] as const).map((key) => {
+              {(["real", "suspected_fake", "highly_suspected_fake", "unknown"] as const).map((key) => {
                 const meta = VERDICT_META[key];
                 const count = metrics.byVerdict[key] ?? 0;
                 const total = Math.max(1, Object.values(metrics.byVerdict).reduce((a, b) => a + (b ?? 0), 0));
@@ -339,6 +339,7 @@ export default function AdminDashboard({
               <span><span style={{ color: VERDICT_META.real.color }}>■</span> 真实</span>
               <span><span style={{ color: VERDICT_META.suspected_fake.color }}>■</span> 疑似</span>
               <span><span style={{ color: VERDICT_META.highly_suspected_fake.color }}>■</span> 高度疑似</span>
+              <span><span style={{ color: VERDICT_META.unknown.color }}>■</span> 未知判定</span>
             </div>
           </div>
           <div className="h-56 flex items-end gap-1.5 sm:gap-2">
@@ -349,6 +350,7 @@ export default function AdminDashboard({
                     "real",
                     "suspected_fake",
                     "highly_suspected_fake",
+                    "unknown",
                   ] as const).map((key) => {
                     const total = Math.max(1, day.detections);
                     const height = `${(day.verdicts[key] / total) * ((day.detections / maxDay) * 100)}%`;
@@ -499,7 +501,8 @@ export default function AdminDashboard({
                   <th className="text-left py-2 pr-3 font-medium">来源</th>
                   <th className="text-right py-2 px-3 font-medium">真实</th>
                   <th className="text-right py-2 px-3 font-medium">疑似</th>
-                  <th className="text-right py-2 pl-3 font-medium">高度疑似</th>
+                  <th className="text-right py-2 px-3 font-medium">高度疑似</th>
+                  <th className="text-right py-2 pl-3 font-medium">未知</th>
                 </tr>
               </thead>
               <tbody>
@@ -515,7 +518,8 @@ export default function AdminDashboard({
                       <td className="py-2 pr-3 text-ink-950">{item.label}</td>
                       <td className="py-2 px-3 text-right text-rice">{row.real ?? 0}</td>
                       <td className="py-2 px-3 text-right text-rice">{row.suspected_fake ?? 0}</td>
-                      <td className="py-2 pl-3 text-right text-rice">{row.highly_suspected_fake ?? 0}</td>
+                      <td className="py-2 px-3 text-right text-rice">{row.highly_suspected_fake ?? 0}</td>
+                      <td className="py-2 pl-3 text-right text-rice">{row.unknown ?? 0}</td>
                     </tr>
                   );
                 })}
