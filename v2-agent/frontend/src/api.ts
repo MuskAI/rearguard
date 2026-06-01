@@ -137,12 +137,13 @@ export interface HistoryItem {
   hasSynthid?: boolean;
 }
 
-export type HistorySidebarFilter = "all" | "vlm" | "mock" | "real" | "suspected" | "highly" | "forensics" | "provenance" | "synthid" | "watermark";
+export type HistorySidebarFilter = "all" | "vlm" | "mock" | "maps-only" | "real" | "suspected" | "highly" | "forensics" | "provenance" | "synthid" | "watermark";
 
 export interface HistoryFilterCounts {
   all: number;
   vlm: number;
   mock: number;
+  "maps-only": number;
   real: number;
   suspected: number;
   highly: number;
@@ -237,7 +238,7 @@ export async function fetchHistory(params?: {
   if (params?.limit) search.set("limit", String(params.limit));
   if (params?.offset) search.set("offset", String(params.offset));
   if (params?.query?.trim()) search.set("query", params.query.trim());
-  if (params?.filter === "vlm" || params?.filter === "mock") {
+  if (params?.filter === "vlm" || params?.filter === "mock" || params?.filter === "maps-only") {
     search.set("source", params.filter);
   } else if (params?.filter === "real") {
     search.set("verdict", "real");

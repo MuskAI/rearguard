@@ -473,6 +473,10 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
         f"/api/history?source=mock&query={detect_b.json()['reportId']}",
         headers={"X-Jianzhen-Token": "test-token"},
     )
+    by_maps_only = client.get(
+        "/api/history?source=maps-only&query=%E4%BB%85%E8%AF%81%E6%8D%AE%E5%9B%BE",
+        headers={"X-Jianzhen-Token": "test-token"},
+    )
     by_query = client.get("/api/history?query=%E7%9C%9F%E5%AE%9E%E6%A8%A1%E5%9E%8B", headers={"X-Jianzhen-Token": "test-token"})
     by_evidence = client.get(
         "/api/history?hasWatermark=true&hasSynthid=true&query=gemini%20%E6%B0%B4%E5%8D%B0",
@@ -491,6 +495,13 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
     assert by_source.json()["total"] == 1
     assert by_source.json()["items"][0]["source"] == "mock"
     assert by_source.json()["items"][0]["reportId"] == detect_b.json()["reportId"]
+    assert by_source.json()["filterCounts"]["maps-only"] == 0
+
+    assert by_maps_only.status_code == 200
+    assert by_maps_only.json()["total"] == 1
+    assert by_maps_only.json()["filterCounts"]["maps-only"] == 1
+    assert by_maps_only.json()["items"][0]["source"] == "maps-only"
+    assert by_maps_only.json()["items"][0]["reportId"] == detect_c.json()["reportId"]
 
     assert by_query.status_code == 200
     assert by_query.json()["total"] >= 1
