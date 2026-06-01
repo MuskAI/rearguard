@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>视频侵权检索 - 数字内容侵权、分析、检索和存证综合平台</title>
+    <title>视频侵权检索 - 数字内容鉴伪平台</title>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css" rel="stylesheet">
     <style>
@@ -63,7 +63,7 @@
     </style>
 </head>
 <body>
-<header class="nav"><div class="nav-inner"><a href="/index" class="nav-logo"><i class="fa fa-eye"></i><span>数字内容侵权、分析、检索和存证综合平台</span></a><nav class="nav-links"><a href="/index">首页</a><div class="dropdown"><button class="dropdown-trigger"><span>功能</span><i class="fa fa-chevron-down"></i></button><div class="dropdown-menu"><div class="dropdown-label">检测</div><a href="/image_upload" class="dropdown-item"><i class="fa fa-image"></i> 图像鉴伪</a><a href="/video_upload" class="dropdown-item"><i class="fa fa-film"></i> 视频侵权检测</a><div class="dropdown-divider"></div><div class="dropdown-label">检索</div><a href="/image_retrieve" class="dropdown-item"><i class="fa fa-search"></i> 图像侵权检索</a><a href="/video_retrieve" class="dropdown-item active-item"><i class="fa fa-play-circle"></i> 视频侵权检索</a></div></div><a href="/introduce">关于我们</a><a href="/profile">我的</a><button class="theme-btn" id="themeToggle"><i class="fa fa-moon-o"></i></button></nav></div></header>
+<header class="nav"><div class="nav-inner"><a href="/index" class="nav-logo"><i class="fa fa-eye"></i><span>数字内容鉴伪平台</span></a><nav class="nav-links"><a href="/index">首页</a><div class="dropdown"><button class="dropdown-trigger"><span>功能</span><i class="fa fa-chevron-down"></i></button><div class="dropdown-menu"><div class="dropdown-label">检测</div><a href="/image_upload" class="dropdown-item"><i class="fa fa-image"></i> 图像鉴伪</a><a href="/video_upload" class="dropdown-item"><i class="fa fa-film"></i> 视频侵权检测</a><div class="dropdown-divider"></div><div class="dropdown-label">检索</div><a href="/image_retrieve" class="dropdown-item"><i class="fa fa-search"></i> 图像侵权检索</a><a href="/video_retrieve" class="dropdown-item active-item"><i class="fa fa-play-circle"></i> 视频侵权检索</a></div></div><a href="/introduce">关于我们</a><a href="/profile">我的</a><button class="theme-btn" id="themeToggle"><i class="fa fa-moon-o"></i></button></nav></div></header>
 <main class="main"><div class="container">
     <div class="page-header"><h1><i class="fa fa-play-circle"></i> 视频侵权检索</h1><p>检索疑似侵权的视频，在数据库中检索相似的可疑视频内容</p></div>
     <div class="layout">
@@ -90,7 +90,7 @@
     <div class="results-section" id="resultsSection"><div class="card" style="display:block"><div class="results-header"><h2><i class="fa fa-bar-chart"></i> 侵权检索结果</h2><div class="results-summary" id="resultsSummary"></div></div><div class="results-loading" id="resultsLoading"><div class="dot-loader"><span></span><span></span><span></span></div><p style="color:var(--text-secondary)">正在检索可疑内容...</p></div><div class="results-error" id="resultsError"><i class="fa fa-exclamation-triangle" style="color:var(--danger)"></i><p id="errorMessage"></p><button class="retry-btn" id="retryBtn"><i class="fa fa-refresh"></i> 重试</button></div><div class="results-empty" id="resultsEmpty"><i class="fa fa-search"></i><p>未找到相似可疑内容</p></div><div id="resultsList" style="display:none"><div class="query-display"><video id="queryVideoThumb" src="" muted></video><div class="info"><div class="name" id="queryFilename"></div><div class="mode">视频侵权检索模式</div></div></div><div class="results-grid" id="resultsGrid"></div><div class="pagination" id="pagination"></div></div></div></div>
 </div></main>
 <div class="lightbox" id="lightbox" onclick="closeLightbox()"><div class="lightbox-close" onclick="closeLightbox()"><i class="fa fa-times"></i></div><video id="lightboxVideo" src="" controls onclick="event.stopPropagation()"></video></div>
-<footer class="footer"><div class="footer-logo"><i class="fa fa-eye"></i> 数字内容侵权、分析、检索和存证综合平台</div><p class="footer-copy">&copy; 2025 数字内容侵权、分析、检索和存证综合平台</p></footer>
+<footer class="footer"><div class="footer-logo"><i class="fa fa-eye"></i> 数字内容鉴伪平台</div><p class="footer-copy">&copy; 2025 数字内容鉴伪平台</p></footer>
 <script>
 (function(){
     var body=document.body,themeBtn=document.getElementById('themeToggle'),themeIcon=themeBtn.querySelector('i');function setTheme(d){if(d){body.setAttribute('data-theme','dark');themeIcon.className='fa fa-sun-o';}else{body.removeAttribute('data-theme');themeIcon.className='fa fa-moon-o';}}var saved=localStorage.getItem('theme');if(saved==='dark'||(!saved&&window.matchMedia('(prefers-color-scheme:dark)').matches))setTheme(true);themeBtn.addEventListener('click',function(){var d=body.hasAttribute('data-theme');setTheme(!d);localStorage.setItem('theme',d?'light':'dark');});window.addEventListener('scroll',function(){document.querySelector('.nav').style.boxShadow=window.scrollY>50?'var(--shadow-md)':'none';});

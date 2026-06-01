@@ -211,7 +211,7 @@ function Nav({
         <div className="nav-inner">
           <button className="nav-logo" onClick={() => go("home")}>
             <i className="fa fa-eye" />
-            <span className="logo-full">数字内容侵权、分析、检索和存证综合平台</span>
+            <span className="logo-full">数字内容鉴伪平台</span>
             <span className="logo-mobile">RealGuard</span>
           </button>
           <nav className="nav-links">
@@ -1549,8 +1549,8 @@ function AuthInput({ icon, label, value, onChange, placeholder, type = "text" }:
 function Footer() {
   return (
     <footer className="footer">
-      <div className="footer-logo"><i className="fa fa-eye" /> 数字内容侵权、分析、检索和存证综合平台</div>
-      <p className="footer-copy">&copy; 2025 数字内容侵权、分析、检索和存证综合平台</p>
+      <div className="footer-logo"><i className="fa fa-eye" /> 数字内容鉴伪平台</div>
+      <p className="footer-copy">&copy; 2025 数字内容鉴伪平台</p>
     </footer>
   );
 }
