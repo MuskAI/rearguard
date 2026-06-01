@@ -735,7 +735,7 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
 
   async function loadHistoryRecords(
     targetTab: HistoryTabKey,
-    { preserveOnError = false, append = false }: { preserveOnError?: boolean; append?: boolean } = {},
+    { preserveOnError = false, append = false, reset = false }: { preserveOnError?: boolean; append?: boolean; reset?: boolean } = {},
   ) {
     const requestId = historyRequestIdRef.current + 1;
     historyRequestIdRef.current = requestId;
@@ -743,7 +743,7 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
     setHistoryBusy(true);
     const activeFilter = isHistoryFilterSupported(targetTab, filter) ? filter : "all";
     const offset = append ? records.length : 0;
-    const limit = append ? HISTORY_PAGE_SIZE : historyLimit;
+    const limit = append ? HISTORY_PAGE_SIZE : reset ? HISTORY_PAGE_SIZE : historyLimit;
     const request =
       targetTab === "image"
         ? getHistory("image-detections", { query, filter: activeFilter, limit, offset })
@@ -781,7 +781,7 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
 
   useEffect(() => {
     if (!isHistoryFilterSupported(tab, filter)) return;
-    void loadHistoryRecords(tab);
+    void loadHistoryRecords(tab, { reset: true });
   }, [tab, filter, query]);
 
   useEffect(() => {

@@ -95,16 +95,18 @@ export default function App() {
   const loadHistory = async ({
     preserveOnError = history.length > 0,
     append = false,
+    reset = false,
   }: {
     preserveOnError?: boolean;
     append?: boolean;
+    reset?: boolean;
   } = {}) => {
     const requestId = historyRequestIdRef.current + 1;
     historyRequestIdRef.current = requestId;
     setHistoryBusy(true);
     try {
       const offset = append ? history.length : 0;
-      const limit = append ? HISTORY_PAGE_SIZE : historyLimit;
+      const limit = append ? HISTORY_PAGE_SIZE : reset ? HISTORY_PAGE_SIZE : historyLimit;
       const data = await fetchHistory({ query: historyQuery, filter: historyFilter, limit, offset });
       if (historyRequestIdRef.current !== requestId) return;
       if (append) {
@@ -150,7 +152,7 @@ export default function App() {
   }, [historyFilter, historyQuery]);
 
   useEffect(() => {
-    void loadHistory({ preserveOnError: false });
+    void loadHistory({ preserveOnError: false, reset: true });
   }, [historyFilter, historyQuery]);
 
   useEffect(() => {
