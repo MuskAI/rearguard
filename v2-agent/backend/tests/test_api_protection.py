@@ -15,8 +15,10 @@ if str(ROOT) not in sys.path:
 def client(monkeypatch, tmp_path):
     monkeypatch.setenv("JIANZHEN_ACCESS_TOKEN", "test-token")
     monkeypatch.setenv("JIANZHEN_DATA_DIR", str(tmp_path))
-    for module_name in ("app.storage", "app.main"):
+    for module_name in ("app.storage", "app.main", "storage", "main"):
         sys.modules.pop(module_name, None)
+    import app.storage as storage  # noqa: WPS433
+    importlib.reload(storage)
     import app.main as main  # noqa: WPS433
 
     importlib.reload(main)
@@ -199,6 +201,93 @@ def test_history_listing_exposes_source_and_watermark_summary(client, monkeypatc
     assert item["hasVisibleWatermark"] is True
     assert item["visibleWatermarkProvider"] == "gemini"
     assert item["hasSynthid"] is True
+
+
+def test_history_filters_and_counts_include_synthid(client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    responses = [
+        {
+            "verdict": "highly_suspected_fake",
+            "confidence": 0.92,
+            "dimensions": [],
+            "regions": [],
+            "explanation": "命中 SynthID。",
+            "modelVersion": "qwen3-vl-flash",
+            "source": "vlm",
+            "synthid": {
+                "detected": True,
+                "supported": True,
+                "confidence": 0.88,
+                "phaseMatch": 0.91,
+                "evidenceLevel": "strong",
+                "note": "检测到高置信度 SynthID",
+            },
+            "visibleWatermark": {
+                "detected": False,
+                "provider": None,
+                "confidence": 0.0,
+                "evidenceLevel": "none",
+                "hits": [],
+                "temporal": {"sampledFrames": 1, "positiveFrames": 0, "moving": False},
+                "note": "未检测到可见水印",
+            },
+        },
+        {
+            "verdict": "real",
+            "confidence": 0.63,
+            "dimensions": [],
+            "regions": [],
+            "explanation": "未命中 SynthID。",
+            "modelVersion": "mock",
+            "source": "mock",
+            "synthid": {
+                "detected": False,
+                "supported": True,
+                "confidence": 0.02,
+                "phaseMatch": 0.05,
+                "evidenceLevel": "none",
+                "note": "未检测到 SynthID",
+            },
+            "visibleWatermark": {
+                "detected": False,
+                "provider": None,
+                "confidence": 0.0,
+                "evidenceLevel": "none",
+                "hits": [],
+                "temporal": {"sampledFrames": 1, "positiveFrames": 0, "moving": False},
+                "note": "未检测到可见水印",
+            },
+        },
+    ]
+
+    def fake_analyze(*args, **kwargs):
+        return responses.pop(0)
+
+    monkeypatch.setattr(main.detector, "analyze", fake_analyze)
+
+    first = client.post(
+        "/api/detect",
+        files={"file": ("first.png", b"image-a", "image/png")},
+    )
+    second = client.post(
+        "/api/detect",
+        files={"file": ("second.png", b"image-b-different", "image/png")},
+    )
+
+    listing = client.get("/api/history", headers={"X-Jianzhen-Token": "test-token"})
+    synthid_only = client.get("/api/history?hasSynthid=true", headers={"X-Jianzhen-Token": "test-token"})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert listing.status_code == 200
+    payload = listing.json()
+    assert payload["filterCounts"]["synthid"] == 1
+    assert payload["filterCounts"]["watermark"] == 1
+    assert synthid_only.status_code == 200
+    synthid_items = synthid_only.json()["items"]
+    assert len(synthid_items) == 1
+    assert synthid_items[0]["hasSynthid"] is True
 
 
 def test_metrics_include_source_and_evidence_breakdown(client):

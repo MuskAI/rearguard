@@ -8,6 +8,7 @@ const FILTER_OPTIONS = [
   { key: "mock", label: "Mock" },
   { key: "forensics", label: "取证" },
   { key: "provenance", label: "凭证" },
+  { key: "synthid", label: "SynthID" },
   { key: "watermark", label: "水印" },
 ] as const;
 type SidebarFilterKey = HistorySidebarFilter;
@@ -378,7 +379,7 @@ export function getInitialHistoryQuery() {
 export function getInitialHistoryFilter(): SidebarFilterKey {
   if (typeof window === "undefined") return "all";
   const value = new URLSearchParams(window.location.search).get("historyFilter");
-  return value === "vlm" || value === "mock" || value === "forensics" || value === "provenance" || value === "watermark"
+  return value === "vlm" || value === "mock" || value === "forensics" || value === "provenance" || value === "synthid" || value === "watermark"
     ? value
     : "all";
 }

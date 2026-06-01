@@ -292,6 +292,7 @@ def list_history(
         "mock": sum(1 for item in query_filtered if str(item.get("source") or "") == "mock"),
         "forensics": sum(1 for item in query_filtered if bool(item.get("hasForensics"))),
         "provenance": sum(1 for item in query_filtered if bool(item.get("hasProvenance"))),
+        "synthid": sum(1 for item in query_filtered if bool(item.get("hasSynthid"))),
         "watermark": sum(
             1
             for item in query_filtered
