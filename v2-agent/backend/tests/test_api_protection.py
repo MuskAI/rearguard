@@ -442,6 +442,17 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
             "synthid": {"detected": False},
             "visibleWatermark": {"detected": False, "provider": None},
         },
+        {
+            "verdict": "real",
+            "confidence": 0.55,
+            "dimensions": [],
+            "regions": [],
+            "explanation": "未知来源模式。",
+            "modelVersion": "unknown-model",
+            "source": "unknown",
+            "synthid": {"detected": False},
+            "visibleWatermark": {"detected": False, "provider": None},
+        },
     ]
 
     monkeypatch.setattr(main.detector, "analyze", lambda *args, **kwargs: analyses.pop(0))
@@ -449,10 +460,12 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
     detect_a = client.post("/api/detect", files={"file": ("alpha.txt", b"alpha", "text/plain")})
     detect_b = client.post("/api/detect", files={"file": ("beta.txt", b"beta", "text/plain")})
     detect_c = client.post("/api/detect", files={"file": ("gamma.txt", b"gamma", "text/plain")})
+    detect_d = client.post("/api/detect", files={"file": ("delta.txt", b"delta", "text/plain")})
 
     assert detect_a.status_code == 200
     assert detect_b.status_code == 200
     assert detect_c.status_code == 200
+    assert detect_d.status_code == 200
 
     task_a = detect_a.json()["taskId"]
     task_b = detect_b.json()["taskId"]
@@ -477,6 +490,10 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
         "/api/history?source=maps-only&query=%E4%BB%85%E8%AF%81%E6%8D%AE%E5%9B%BE",
         headers={"X-Jianzhen-Token": "test-token"},
     )
+    by_unknown = client.get(
+        "/api/history?source=unknown&query=%E6%9C%AA%E7%9F%A5%E6%9D%A5%E6%BA%90",
+        headers={"X-Jianzhen-Token": "test-token"},
+    )
     by_query = client.get("/api/history?query=%E7%9C%9F%E5%AE%9E%E6%A8%A1%E5%9E%8B", headers={"X-Jianzhen-Token": "test-token"})
     by_evidence = client.get(
         "/api/history?hasWatermark=true&hasSynthid=true&query=gemini%20%E6%B0%B4%E5%8D%B0",
@@ -488,7 +505,7 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
     )
 
     assert limited.status_code == 200
-    assert limited.json()["total"] == baseline_total + 3
+    assert limited.json()["total"] == baseline_total + 4
     assert len(limited.json()["items"]) == 1
 
     assert by_source.status_code == 200
@@ -500,8 +517,15 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
     assert by_maps_only.status_code == 200
     assert by_maps_only.json()["total"] == 1
     assert by_maps_only.json()["filterCounts"]["maps-only"] == 1
+    assert by_maps_only.json()["filterCounts"]["unknown"] == 0
     assert by_maps_only.json()["items"][0]["source"] == "maps-only"
     assert by_maps_only.json()["items"][0]["reportId"] == detect_c.json()["reportId"]
+
+    assert by_unknown.status_code == 200
+    assert by_unknown.json()["total"] == 1
+    assert by_unknown.json()["filterCounts"]["unknown"] == 1
+    assert by_unknown.json()["items"][0]["source"] == "unknown"
+    assert by_unknown.json()["items"][0]["reportId"] == detect_d.json()["reportId"]
 
     assert by_query.status_code == 200
     assert by_query.json()["total"] >= 1

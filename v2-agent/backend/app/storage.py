@@ -291,6 +291,7 @@ def list_history(
         "vlm": sum(1 for item in query_filtered if str(item.get("source") or "") == "vlm"),
         "mock": sum(1 for item in query_filtered if str(item.get("source") or "") == "mock"),
         "maps-only": sum(1 for item in query_filtered if str(item.get("source") or "") == "maps-only"),
+        "unknown": sum(1 for item in query_filtered if str(item.get("source") or "") == "unknown"),
         "real": sum(1 for item in query_filtered if str(item.get("verdict") or "") == "real"),
         "suspected": sum(1 for item in query_filtered if str(item.get("verdict") or "") == "suspected_fake"),
         "highly": sum(1 for item in query_filtered if str(item.get("verdict") or "") == "highly_suspected_fake"),

@@ -7,6 +7,7 @@ const FILTER_OPTIONS = [
   { key: "vlm", label: "VLM" },
   { key: "mock", label: "Mock" },
   { key: "maps-only", label: "仅证据图" },
+  { key: "unknown", label: "未知来源" },
   { key: "real", label: "真实" },
   { key: "suspected", label: "疑似" },
   { key: "highly", label: "高疑" },
@@ -383,7 +384,7 @@ export function getInitialHistoryQuery() {
 export function getInitialHistoryFilter(): SidebarFilterKey {
   if (typeof window === "undefined") return "all";
   const value = new URLSearchParams(window.location.search).get("historyFilter");
-  return value === "vlm" || value === "mock" || value === "maps-only" || value === "real" || value === "suspected" || value === "highly" || value === "forensics" || value === "provenance" || value === "synthid" || value === "watermark"
+  return value === "vlm" || value === "mock" || value === "maps-only" || value === "unknown" || value === "real" || value === "suspected" || value === "highly" || value === "forensics" || value === "provenance" || value === "synthid" || value === "watermark"
     ? value
     : "all";
 }
