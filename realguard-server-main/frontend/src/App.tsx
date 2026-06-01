@@ -1295,14 +1295,20 @@ function HistoryRecords({
   query: string;
 }) {
   const isVideo = tab === "video" || tab === "videoRetrieve";
+  const isRetrieval = tab === "imageRetrieve" || tab === "videoRetrieve";
   return (
     <div className="history-grid">
       {records.map((record, index) => {
         const mediaUrl = historyMediaUrl(record);
         const previewUrl = historyPreviewUrl(record) || mediaUrl;
         const title = String(record.filename || `历史记录 ${index + 1}`);
-        const verdict = String(record.final_label || (record.result_count ? `${record.result_count} 条结果` : "-"));
-        const meta = String(record.confidence || record.top_k || "-");
+        const resultCount = Number(record.result_count || 0);
+        const verdict = isRetrieval
+          ? `${resultCount} 条结果`
+          : String(record.final_label || "-");
+        const meta = isRetrieval
+          ? String(record.top_k || "-")
+          : String(record.confidence || "-");
         const reportUrl = String(record.report_url || "");
         const guestRecord = Boolean(record.is_guest_record);
         const hasMetadata = Boolean(record.has_metadata);
@@ -1310,7 +1316,7 @@ function HistoryRecords({
         const issueCount = Number(record.visual_issue_count || 0);
         const timeText = String(record.createtime || "-");
         const retrievalTag = tab === "imageRetrieve" ? "图像检索" : tab === "videoRetrieve" ? "视频检索" : "";
-        const hasHits = Number(record.result_count || 0) > 0;
+        const hasHits = resultCount > 0;
         return (
           <article className="history-record" key={`${record.itemid || index}`}>
             <a className="history-media" href={mediaUrl || undefined} target={mediaUrl ? "_blank" : undefined} rel="noreferrer" aria-label={mediaUrl ? `查看 ${title}` : title}>
@@ -1340,7 +1346,7 @@ function HistoryRecords({
                   {hasIssues && <span className="history-tag issue"><i className="fa fa-exclamation-triangle" /> {renderHighlightedText(`可疑点${issueCount > 0 ? ` ${issueCount}` : ""}`, query)}</span>}
                 </div>
               )}
-              {!!record.result_count || tab === "imageRetrieve" || tab === "videoRetrieve" ? (
+              {isRetrieval ? (
                 <div className="history-tags">
                   {retrievalTag && <span className="history-tag meta"><i className="fa fa-search" /> {renderHighlightedText(retrievalTag, query)}</span>}
                   <span className={`history-tag ${hasHits ? "meta" : "issue"}`}>
@@ -1350,9 +1356,9 @@ function HistoryRecords({
                 </div>
               ) : null}
               <div className="history-row"><span>时间</span><strong>{renderHighlightedText(timeText, query)}</strong></div>
-              <div className="history-row"><span>{record.result_count ? "数量" : "结论"}</span><strong>{renderHighlightedText(verdict, query)}</strong></div>
-              <div className="history-row"><span>{record.top_k ? "Top-K" : "置信度"}</span><strong>{renderHighlightedText(meta, query)}</strong></div>
-              {!record.result_count && reportUrl && (
+              <div className="history-row"><span>{isRetrieval ? "数量" : "结论"}</span><strong>{renderHighlightedText(verdict, query)}</strong></div>
+              <div className="history-row"><span>{isRetrieval ? "Top-K" : "置信度"}</span><strong>{renderHighlightedText(meta, query)}</strong></div>
+              {!isRetrieval && reportUrl && (
                 <div className="history-actions">
                   <button
                     className="btn-code history-action-btn"
@@ -1366,7 +1372,7 @@ function HistoryRecords({
                   </button>
                 </div>
               )}
-              {!!record.result_count && reportUrl && (
+              {isRetrieval && reportUrl && (
                 <div className="history-actions">
                   <button
                     className="btn-code history-action-btn"
