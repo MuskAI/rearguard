@@ -426,7 +426,7 @@ function HomePage({ counters, setPage }: { counters: Counters; setPage: (page: P
             <FeatureCard accent="var(--primary)" icon="fa-image" title="图像鉴伪" desc="基于深度学习的图像真伪识别，支持多种场景的AIGC图像检测" onClick={() => setPage("image")} />
             <FeatureCard accent="var(--warning)" icon="fa-film" title="视频鉴伪" desc="针对视频内容的 AI 生成检测与篡改识别，帧级分析定位可疑片段。" onClick={() => setPage("video")} />
             <FeatureCard accent="var(--accent)" icon="fa-search" title="图像侵权检索" desc="检索疑似侵权的图像，在图像数据库中快速定位可疑图像内容。" onClick={() => setPage("retrieve")} />
-            <FeatureCard accent="#8b5cf6" icon="fa-play-circle" title="视频侵权检索" desc="检索疑似侵权的视频，在数据库中快速定位相似可疑视频内容。" onClick={() => setPage("retrieve")} />
+            <FeatureCard accent="var(--primary-light)" icon="fa-play-circle" title="视频侵权检索" desc="检索疑似侵权的视频，在数据库中快速定位相似可疑视频内容。" onClick={() => setPage("retrieve")} />
             <FeatureCard accent="var(--primary-dark)" icon="fa-bolt" title="V2 鉴伪 Agent" desc="独立新版系统，使用 qwen3-vl-flash 融合 ELA、噪声残差等取证证据。" onClick={() => { window.location.href = "/v2/"; }} />
           </div>
         </div>
@@ -487,6 +487,7 @@ function CopySnippetCard({
   text,
   copiedId,
   onCopy,
+  variant = "default",
 }: {
   id: string;
   title: string;
@@ -494,15 +495,21 @@ function CopySnippetCard({
   text: string;
   copiedId: string;
   onCopy: (id: string, text: string) => void;
+  variant?: "default" | "primary" | "compact";
 }) {
   const copied = copiedId === id;
   return (
-    <button type="button" className={`copy-snippet-card ${copied ? "copied" : ""}`} onClick={() => onCopy(id, text)}>
-      <span>{copied ? "已复制" : "点击复制"}</span>
+    <article className={`copy-snippet-card copy-snippet-card-${variant} ${copied ? "copied" : ""}`}>
+      <div className="copy-snippet-head">
+        <span className="copy-snippet-status">{copied ? "已复制" : "Ready to copy"}</span>
+        <button type="button" onClick={() => onCopy(id, text)} aria-label={`复制 ${title}`}>
+          {copied ? "已复制" : "复制"}
+        </button>
+      </div>
       <strong>{title}</strong>
       <p>{desc}</p>
-      <code>{text}</code>
-    </button>
+      <pre><code>{text}</code></pre>
+    </article>
   );
 }
 
@@ -530,29 +537,54 @@ function SkillEntryPanel() {
           <span><i className="fa fa-plug" /> SKILL 已介入</span>
           <span>OpenClaw / AI Agent 可调用</span>
         </div>
-        <h3>$realguard-forensics 是给外部 Agent 的公开鉴伪入口</h3>
+        <h3>把 RealGuard 变成外部 Agent 可直接调用的鉴伪工具</h3>
         <p>
-          必须做成公开 skill 的原因很直接：OpenClaw 等外部 agent 访问不到你的本地仓库路径，也不知道接口字段、报告字段和解释边界。
-          让它读取公网 <code>{REALGUARD_SKILL_URL}</code> 后，就能直接选择 V2 多模态鉴伪或 V1 图像模型，稳定输出可审计的鉴伪结论。
+          外部 agent 不需要知道你的服务器目录，也不需要猜接口字段。复制下面的交接语后，它会先读取公网 Skill，
+          再按 V2 多模态或 V1 图像模型输出可审计结论。
         </p>
-        <div className="skill-flow">
-          <span>读取公网 Skill</span>
-          <i className="fa fa-arrow-right" />
-          <span>选择 V2 或 V1</span>
-          <i className="fa fa-arrow-right" />
-          <span>返回带证据的结论</span>
+        <details className="skill-reason">
+          <summary>为什么必须公开 Skill</summary>
+          <p>
+            OpenClaw 等外部 agent 访问不到本地仓库路径，也不知道报告字段、解释边界和鉴伪输出规范。
+            公开 <code>{REALGUARD_SKILL_URL}</code> 后，任何 agent 都能用同一份说明完成调用，并把调用次数与 Token 用量纳入审计。
+          </p>
+        </details>
+        <div className="skill-protocol-rail" aria-label="Skill 接入流程">
+          <div>
+            <span>01 PUBLIC</span>
+            <strong>读取公网 Skill</strong>
+            <small>不依赖本地路径，外部 Agent 可访问</small>
+          </div>
+          <div>
+            <span>02 V2 / V1</span>
+            <strong>选择模型链路</strong>
+            <small>V2 默认，V1 兼容旧图像模型</small>
+          </div>
+          <div>
+            <span>03 AUDIT</span>
+            <strong>返回证据与用量</strong>
+            <small>结论、报告、调用次数、Token 统计</small>
+          </div>
         </div>
       </div>
       <div className="skill-entry-code">
-        <CopySnippetCard id="skill-url" title="公开 Skill URL" desc="让别的 agent 先读取这一份公共说明。" text={REALGUARD_SKILL_URL} copiedId={copiedId} onCopy={copySkill} />
-        <CopySnippetCard id="skill-v2" title="复制 V2 Skill 调用" desc="优先推荐：多模态检测、报告、tokenUsage。" text={REALGUARD_SKILL_HANDOFF_V2} copiedId={copiedId} onCopy={copySkill} />
-        <CopySnippetCard id="skill-v1" title="复制 V1 Skill 调用" desc="走 RealGuard V1 图像模型，统计调用次数。" text={REALGUARD_SKILL_HANDOFF_V1} copiedId={copiedId} onCopy={copySkill} />
-        <button onClick={() => { window.location.href = "/v2/"; }}>
-          进入 V2 Agent <i className="fa fa-arrow-right" />
-        </button>
-        <button onClick={() => { window.location.href = "/?page=developer"; }}>
-          打开开发者平台 <i className="fa fa-code" />
-        </button>
+        <div className="skill-terminal-label">
+          <span>Recommended handoff</span>
+          <strong>V2 first · click copy</strong>
+        </div>
+        <CopySnippetCard id="skill-v2" title="复制 V2 Skill 调用" desc="优先推荐：多模态检测、报告、tokenUsage 和模型版本更完整。" text={REALGUARD_SKILL_HANDOFF_V2} copiedId={copiedId} onCopy={copySkill} variant="primary" />
+        <div className="skill-secondary-copy-grid">
+          <CopySnippetCard id="skill-url" title="公开 Skill URL" desc="给别的 agent 的第一步：先读取公共说明。" text={REALGUARD_SKILL_URL} copiedId={copiedId} onCopy={copySkill} variant="compact" />
+          <CopySnippetCard id="skill-v1" title="复制 V1 Skill 调用" desc="兼容 RealGuard V1 图像模型，并统计调用次数。" text={REALGUARD_SKILL_HANDOFF_V1} copiedId={copiedId} onCopy={copySkill} variant="compact" />
+        </div>
+        <div className="skill-cta-row">
+          <button onClick={() => { window.location.href = "/v2/"; }}>
+            进入 V2 Agent <i className="fa fa-arrow-right" />
+          </button>
+          <button onClick={() => { window.location.href = "/?page=developer"; }}>
+            打开开发者平台 <i className="fa fa-code" />
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -898,22 +930,25 @@ print(r.json().get("agentSummary") or r.json())`;
                   面向 OpenClaw、外部 AI Agent 和业务系统的统一接入台。
                   这里把 API Key、公开 Skill、V1/V2 调用、用量统计和在线测试放在同一屏，避免用户在长文档里找入口。
                 </p>
+                <div className="developer-command-strip" aria-label="开发者接入流程">
+                  <span><b>01</b> Issue Key</span>
+                  <span><b>02</b> Copy Skill</span>
+                  <span><b>03</b> Run Detect</span>
+                  <span><b>04</b> Audit Usage</span>
+                </div>
                 <div className="docs-hero-actions">
                   <a href="#api-keys">生成 API Key</a>
                   <a href="#skill-copy" className="secondary">复制 Skill 调用</a>
-                  <a href="#console" className="secondary">在线测试 API</a>
-                </div>
-                <div className="developer-action-grid">
-                  {developerActionCards.map((item) => (
-                    <a href={item.href} key={item.href}>
-                      <i className={`fa ${item.icon}`} />
-                      <strong>{item.title}</strong>
-                      <small>{item.desc}</small>
-                    </a>
-                  ))}
                 </div>
               </div>
               <div id="skill-copy" className="developer-skill-console">
+                <div className="developer-console-ruler" aria-hidden="true">
+                  <span />
+                  <span />
+                  <span />
+                  <span />
+                  <span />
+                </div>
                 <div className="developer-skill-console-head">
                   <div>
                     <span>Skills Copy</span>
@@ -942,17 +977,20 @@ print(r.json().get("agentSummary") or r.json())`;
                   text={activeSkill.text}
                   copiedId={copiedDocId}
                   onCopy={copyDeveloperText}
+                  variant="primary"
                 />
-                <div className="docs-info-card compact-info">
-                  <label>V2 Base URL</label>
-                  <code>{REALGUARD_API_BASE}</code>
-                  <label>V1 Base URL</label>
-                  <code>{REALGUARD_V1_API_BASE}</code>
-                  <label>Public Skill URL</label>
-                  <code>{REALGUARD_SKILL_URL}</code>
-                </div>
               </div>
             </section>
+
+            <nav className="developer-workflow-strip" aria-label="开发者接入工作流">
+              {developerActionCards.map((item) => (
+                <a href={item.href} key={item.href}>
+                  <i className={`fa ${item.icon}`} />
+                  <strong>{item.title}</strong>
+                  <small>{item.desc}</small>
+                </a>
+              ))}
+            </nav>
 
             <section id="quickstart" className="docs-section">
               <div className="docs-section-kicker">Getting Started</div>
@@ -968,9 +1006,9 @@ print(r.json().get("agentSummary") or r.json())`;
                   公开 Skill 后，OpenClaw 只要读取公网 URL，就能稳定调用 API，并知道哪些字段必须带入最终鉴伪结论。
                 </p>
                 <div className="docs-copy-grid">
-                  <CopySnippetCard id="docs-skill-url" title="复制 Skill URL" desc="给外部 agent 的第一步：读取公共说明。" text={REALGUARD_SKILL_URL} copiedId={copiedDocId} onCopy={copyDeveloperText} />
-                  <CopySnippetCard id="docs-skill-v2" title="复制 V2 Handoff" desc="默认推荐，多模态结果和 tokenUsage 更完整。" text={REALGUARD_SKILL_HANDOFF_V2} copiedId={copiedDocId} onCopy={copyDeveloperText} />
-                  <CopySnippetCard id="docs-skill-v1" title="复制 V1 Handoff" desc="兼容 V1 图像模型，纳入调用次数统计。" text={REALGUARD_SKILL_HANDOFF_V1} copiedId={copiedDocId} onCopy={copyDeveloperText} />
+                  <CopySnippetCard id="docs-skill-url" title="复制 Skill URL" desc="给外部 agent 的第一步：读取公共说明。" text={REALGUARD_SKILL_URL} copiedId={copiedDocId} onCopy={copyDeveloperText} variant="compact" />
+                  <CopySnippetCard id="docs-skill-v2" title="复制 V2 Handoff" desc="默认推荐，多模态结果和 tokenUsage 更完整。" text={REALGUARD_SKILL_HANDOFF_V2} copiedId={copiedDocId} onCopy={copyDeveloperText} variant="primary" />
+                  <CopySnippetCard id="docs-skill-v1" title="复制 V1 Handoff" desc="兼容 V1 图像模型，纳入调用次数统计。" text={REALGUARD_SKILL_HANDOFF_V1} copiedId={copiedDocId} onCopy={copyDeveloperText} variant="compact" />
                 </div>
               </div>
               <div className="docs-code-block">
@@ -2709,10 +2747,12 @@ function validateFile(
 }
 
 function colorBg(color: string) {
-  if (color === "var(--primary)") return "rgba(37,99,235,0.1)";
-  if (color === "var(--warning)") return "rgba(245,158,11,0.1)";
-  if (color === "var(--accent)") return "rgba(6,214,160,0.1)";
-  return "rgba(139,92,246,0.1)";
+  if (color === "var(--primary)") return "rgba(14,111,132,0.12)";
+  if (color === "var(--primary-light)") return "rgba(47,167,191,0.14)";
+  if (color === "var(--primary-dark)") return "rgba(8,58,72,0.14)";
+  if (color === "var(--warning)") return "rgba(245,165,36,0.14)";
+  if (color === "var(--accent)") return "rgba(214,255,95,0.18)";
+  return "rgba(16,24,32,0.08)";
 }
 
 function errorMessage(error: unknown) {
