@@ -22,6 +22,8 @@ import {
   logout,
   registerUser,
   retrieveSearch,
+  getV2Health,
+  runV2Detect,
   sendSmsCode
 } from "./api";
 
@@ -489,6 +491,13 @@ function SkillEntryPanel() {
 }
 
 function DeveloperPlatformPage() {
+  const [token, setToken] = useState("");
+  const [fileType, setFileType] = useState("image");
+  const [testFile, setTestFile] = useState<File | null>(null);
+  const [consoleBusy, setConsoleBusy] = useState(false);
+  const [consoleStatus, setConsoleStatus] = useState<Status>(null);
+  const [consoleResult, setConsoleResult] = useState<Record<string, unknown> | null>(null);
+  const [consoleMeta, setConsoleMeta] = useState<{ endpoint: string; elapsedMs: number; at: string } | null>(null);
   const endpoints = [
     ["GET", "/health", "服务状态、模型状态、访问保护状态。"],
     ["POST", "/detect", "核心鉴伪接口。multipart 上传 file，可选 fileType。"],
@@ -506,6 +515,67 @@ function DeveloperPlatformPage() {
     ["reportId", "可用于下载和归档报告的编号。"],
     ["synthid / visibleWatermark", "水印、SynthID、可见水印等附加证据。"],
   ];
+  const jsExample = `const form = new FormData();
+form.append("file", fileInput.files[0]);
+form.append("fileType", "image");
+
+const res = await fetch("${REALGUARD_API_BASE}/detect", {
+  method: "POST",
+  headers: { "X-Jianzhen-Token": token },
+  body: form
+});
+const data = await res.json();
+console.log(data.agentSummary || data);`;
+  const pythonExample = `import requests
+
+url = "${REALGUARD_API_BASE}/detect"
+headers = {"X-Jianzhen-Token": token}  # optional
+with open("/path/to/file.png", "rb") as f:
+    r = requests.post(url, headers=headers, files={"file": f}, data={"fileType": "image"})
+r.raise_for_status()
+print(r.json().get("agentSummary") or r.json())`;
+  const cliExample = `python3 scripts/realguard_cli.py detect /path/to/file \\
+  --base-url http://124.222.3.205 \\
+  --api-prefix /v2-api \\
+  --pretty`;
+
+  const runHealthCheck = async () => {
+    const started = performance.now();
+    setConsoleBusy(true);
+    setConsoleStatus({ tone: "info", text: "正在检查 V2 API 状态..." });
+    try {
+      const result = await getV2Health(token);
+      setConsoleResult(result as Record<string, unknown>);
+      setConsoleMeta({ endpoint: "GET /health", elapsedMs: Math.round(performance.now() - started), at: new Date().toLocaleString() });
+      setConsoleStatus({ tone: "ok", text: "健康检查成功。" });
+    } catch (error) {
+      setConsoleStatus({ tone: "error", text: error instanceof Error ? error.message : "健康检查失败" });
+    } finally {
+      setConsoleBusy(false);
+    }
+  };
+
+  const runDetectTest = async () => {
+    if (!testFile) {
+      setConsoleStatus({ tone: "error", text: "请先选择要测试的文件。" });
+      return;
+    }
+    const started = performance.now();
+    setConsoleBusy(true);
+    setConsoleStatus({ tone: "info", text: "正在上传文件并调用鉴伪 API..." });
+    try {
+      const result = await runV2Detect({ file: testFile, fileType, token });
+      setConsoleResult(result as Record<string, unknown>);
+      setConsoleMeta({ endpoint: "POST /detect", elapsedMs: Math.round(performance.now() - started), at: new Date().toLocaleString() });
+      setConsoleStatus({ tone: "ok", text: `检测完成：${result.verdict || "已返回结果"}` });
+    } catch (error) {
+      setConsoleStatus({ tone: "error", text: error instanceof Error ? error.message : "检测失败" });
+    } finally {
+      setConsoleBusy(false);
+    }
+  };
+
+  const renderedResult = consoleResult ? JSON.stringify(consoleResult, null, 2) : "";
 
   return (
     <main className="main">
@@ -566,6 +636,70 @@ function DeveloperPlatformPage() {
           </div>
         </section>
 
+        <section className="developer-console">
+          <div className="developer-doc-header">
+            <div>
+              <h3>在线 API 测试台</h3>
+              <p>在网站内直接测试健康检查和鉴伪上传，验证 Token、接口连通性、响应字段和耗时。</p>
+            </div>
+          </div>
+          <div className="console-layout">
+            <div className="console-controls">
+              <label>
+                访问令牌（可选）
+                <input
+                  type="password"
+                  placeholder="X-Jianzhen-Token"
+                  value={token}
+                  onChange={(event) => setToken(event.target.value)}
+                />
+              </label>
+              <label>
+                文件类型
+                <select value={fileType} onChange={(event) => setFileType(event.target.value)}>
+                  <option value="image">image</option>
+                  <option value="video">video</option>
+                  <option value="audio">audio</option>
+                  <option value="document">document</option>
+                </select>
+              </label>
+              <label>
+                测试文件
+                <input
+                  type="file"
+                  accept="image/*,video/*,audio/*,.txt,.pdf,.doc,.docx,.md"
+                  onChange={(event) => setTestFile(event.target.files?.[0] || null)}
+                />
+              </label>
+              <div className="console-actions">
+                <button disabled={consoleBusy} onClick={runHealthCheck}>
+                  <i className={`fa ${consoleBusy ? "fa-spinner detect-spin" : "fa-heartbeat"}`} /> 健康检查
+                </button>
+                <button disabled={consoleBusy || !testFile} onClick={runDetectTest}>
+                  <i className={`fa ${consoleBusy ? "fa-spinner detect-spin" : "fa-play"}`} /> 运行鉴伪测试
+                </button>
+              </div>
+              {consoleStatus && <StatusPill status={consoleStatus} />}
+              {consoleMeta && (
+                <div className="console-meta">
+                  <span>{consoleMeta.endpoint}</span>
+                  <span>{consoleMeta.elapsedMs}ms</span>
+                  <span>{consoleMeta.at}</span>
+                </div>
+              )}
+            </div>
+            <div className="console-result">
+              <div className="console-result-header">
+                <span>响应 JSON</span>
+                {renderedResult && (
+                  <button onClick={() => navigator.clipboard?.writeText(renderedResult)}>复制</button>
+                )}
+              </div>
+              <pre>{renderedResult || "运行健康检查或鉴伪测试后，响应 JSON 会显示在这里。"}</pre>
+            </div>
+          </div>
+        </section>
+
         <section className="developer-doc-section">
           <div className="developer-doc-header">
             <h3>接口目录</h3>
@@ -579,6 +713,38 @@ function DeveloperPlatformPage() {
                 <p>{desc}</p>
               </div>
             ))}
+          </div>
+        </section>
+
+        <section className="developer-doc-section">
+          <div className="developer-doc-header">
+            <h3>代码示例</h3>
+          </div>
+          <div className="developer-grid">
+            <div className="developer-card">
+              <h3><i className="fa fa-jsfiddle" /> JavaScript Fetch</h3>
+              <pre>{jsExample}</pre>
+            </div>
+            <div className="developer-card">
+              <h3><i className="fa fa-code" /> Python Requests</h3>
+              <pre>{pythonExample}</pre>
+            </div>
+            <div className="developer-card developer-card-wide">
+              <h3><i className="fa fa-terminal" /> RealGuard CLI</h3>
+              <pre>{cliExample}</pre>
+            </div>
+          </div>
+        </section>
+
+        <section className="developer-doc-section">
+          <div className="developer-doc-header">
+            <h3>企业接入标准</h3>
+          </div>
+          <div className="developer-fields">
+            <div><code>版本固定</code><p>记录 `modelVersion` 与 `cacheVersion`，避免不同分析版本混用。</p></div>
+            <div><code>审计留痕</code><p>保存原始 JSON、`taskId`、`reportId`、文件摘要和调用时间。</p></div>
+            <div><code>错误处理</code><p>对 4xx 展示请求问题，对 5xx 做重试或降级；不要吞掉 API 错误。</p></div>
+            <div><code>结论约束</code><p>输出必须包含置信度和限制说明，不得把检测结果表述为绝对证明。</p></div>
           </div>
         </section>
 
@@ -1233,6 +1399,16 @@ function TrialHint({ used }: { used: number }) {
     <div className="trial-note">
       <i className="fa fa-info-circle" />
       <span>{used >= 1 ? "访客检测次数已用完，登录后继续使用。" : "访客可免费完成 1 次检测，本次不会要求登录。"}</span>
+    </div>
+  );
+}
+
+function StatusPill({ status }: { status: Status }) {
+  if (!status) return null;
+  return (
+    <div className={`status-pill ${status.tone}`}>
+      <i className={`fa ${status.tone === "ok" ? "fa-check-circle" : status.tone === "error" ? "fa-exclamation-circle" : "fa-info-circle"}`} />
+      <span>{status.text}</span>
     </div>
   );
 }

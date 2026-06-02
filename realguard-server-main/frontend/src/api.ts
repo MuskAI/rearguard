@@ -158,6 +158,48 @@ export function getRetrievalHistory(
   return jsonRequest<HistoryListResponse>(`/api/history/retrievals?${search.toString()}`);
 }
 
+const REALGUARD_V2_API_BASE = "http://124.222.3.205/v2-api";
+
+async function parseV2Response<T>(response: Response): Promise<T> {
+  const contentType = response.headers.get("content-type") || "";
+  const payload = contentType.includes("application/json")
+    ? await response.json()
+    : await response.text();
+  if (!response.ok) {
+    const message = typeof payload === "string"
+      ? payload
+      : payload?.detail || payload?.message || `请求失败：${response.status}`;
+    throw new Error(message);
+  }
+  return payload as T;
+}
+
+function v2Headers(token?: string) {
+  const headers = new Headers({ Accept: "application/json" });
+  const normalized = (token || "").trim();
+  if (normalized) headers.set("X-Jianzhen-Token", normalized);
+  return headers;
+}
+
+export async function getV2Health(token = "") {
+  const response = await fetch(`${REALGUARD_V2_API_BASE}/health`, {
+    headers: v2Headers(token),
+  });
+  return parseV2Response<V2HealthStatus>(response);
+}
+
+export async function runV2Detect(payload: { file: File; fileType?: string; token?: string }) {
+  const body = new FormData();
+  body.append("file", payload.file);
+  if (payload.fileType) body.append("fileType", payload.fileType);
+  const response = await fetch(`${REALGUARD_V2_API_BASE}/detect`, {
+    method: "POST",
+    headers: v2Headers(payload.token || ""),
+    body,
+  });
+  return parseV2Response<V2DetectResult>(response);
+}
+
 export type User = {
   Userid: number;
   username: string;
@@ -214,3 +256,33 @@ export type RetrieveItem = {
 };
 
 export type HistoryRecord = Record<string, unknown>;
+
+export type V2HealthStatus = {
+  ok?: boolean;
+  status?: string;
+  service?: string;
+  vlmEnabled?: boolean;
+  accessProtectionEnabled?: boolean;
+  modelVersion?: string;
+  analysisCacheVersion?: string;
+  protectedEndpoints?: string[];
+  [key: string]: unknown;
+};
+
+export type V2DetectResult = {
+  taskId?: string;
+  reportId?: string;
+  verdict?: string;
+  confidence?: number;
+  source?: string;
+  modelVersion?: string;
+  cacheVersion?: string;
+  cacheHit?: boolean;
+  elapsedMs?: number;
+  agentSummary?: Record<string, unknown>;
+  explanation?: unknown;
+  synthid?: unknown;
+  visibleWatermark?: unknown;
+  disclaimer?: string;
+  [key: string]: unknown;
+};
