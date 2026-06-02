@@ -44,6 +44,11 @@ const QUICK_COMMANDS = [
   { label: "出具鉴定报告", hint: "生成可下载报告" },
 ];
 const HISTORY_PAGE_SIZE = 100;
+const SKILL_NAME = "$realguard-forensics";
+const SKILL_COMMAND =
+  "python3 scripts/realguard_cli.py detect <file> --base-url http://realguard.cn --api-prefix /v2-api --pretty";
+const SKILL_HANDOFF =
+  `Use ${SKILL_NAME} and run ${SKILL_COMMAND}, then return a concise verdict with confidence, evidence, model version, cache version, and report id.`;
 
 function inferType(name: string): FileType {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
@@ -88,6 +93,7 @@ export default function App() {
   const [historyLimit, setHistoryLimit] = useState(HISTORY_PAGE_SIZE);
   const [view, setView] = useState<"detect" | "monitor">(() => (window.location.hash === "#monitor" ? "monitor" : "detect"));
   const [activeId, setActiveId] = useState<string>();
+  const [skillCopied, setSkillCopied] = useState<"handoff" | "command" | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const restoredHistoryItemRef = useRef(false);
@@ -205,6 +211,27 @@ export default function App() {
     setAccessToken(next);
     setMonitorReloadKey((value) => value + 1);
     await Promise.allSettled([loadHealth(), loadHistory({ preserveOnError: true })]);
+  };
+
+  const copySkillText = async (kind: "handoff" | "command", text: string) => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+      }
+      setSkillCopied(kind);
+      window.setTimeout(() => setSkillCopied(null), 1800);
+    } catch {
+      window.prompt("复制失败，请手动复制：", text);
+    }
   };
 
   const runDetect = async (file: File) => {
@@ -496,6 +523,11 @@ export default function App() {
 
         <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto bg-grid px-3 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-5">
           <CapabilityBanner health={health} />
+          <SkillInterventionCard
+            copied={skillCopied}
+            onCopyHandoff={() => copySkillText("handoff", SKILL_HANDOFF)}
+            onCopyCommand={() => copySkillText("command", SKILL_COMMAND)}
+          />
           {messages.length === 0 && <EmptyState onUpload={() => fileInputRef.current?.click()} />}
 
           {messages.map((m, i) => {
@@ -660,6 +692,89 @@ function CapabilityBanner({ health }: { health: HealthStatus | null }) {
       {cacheVersion && ` 分析缓存版本：${cacheVersion}。`}
       {tokenProtected && " 历史记录、报告与监控指标需要访问令牌。"}
     </div>
+  );
+}
+
+function SkillInterventionCard({
+  copied,
+  onCopyHandoff,
+  onCopyCommand,
+}: {
+  copied: "handoff" | "command" | null;
+  onCopyHandoff: () => void;
+  onCopyCommand: () => void;
+}) {
+  return (
+    <section className="overflow-hidden rounded-2xl border border-brand-cyan/25 bg-ink-800 shadow-sm">
+      <div className="flex flex-col gap-4 p-4 sm:p-5 lg:flex-row lg:items-stretch lg:justify-between">
+        <div className="min-w-0 flex-1">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <span className="rounded-full border border-jade/30 bg-jade/10 px-2.5 py-1 text-[11px] font-semibold tracking-[0.18em] text-jade">
+              SKILL 已介入
+            </span>
+            <span className="rounded-full border border-brand-cyan/30 bg-brand-cyan/10 px-2.5 py-1 text-[11px] text-brand-cyan">
+              OpenClaw / AI Agent 可调用
+            </span>
+          </div>
+          <h2 className="font-serif text-lg font-semibold text-rice sm:text-xl">
+            {SKILL_NAME} 正在把网页鉴伪能力开放给外部 Agent
+          </h2>
+          <p className="mt-2 max-w-3xl text-sm leading-relaxed text-ink-500">
+            网页端检测、CLI 调用和 skill 说明已经打通。其他 Agent 只需要读取仓库里的
+            <span className="mx-1 font-mono text-ink-950">skills/realguard-forensics/SKILL.md</span>
+            ，再按下面的一句话执行，就能获得同一套 RealGuard 鉴伪结论。
+          </p>
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            {[
+              ["1", "读取 Skill", "定位 SKILL.md，理解鉴伪流程和解释边界。"],
+              ["2", "调用 CLI", "上传文件到 V2 API，输出 agentSummary 与证据字段。"],
+              ["3", "返回结论", "引用 verdict、confidence、模型版本和报告号。"],
+            ].map(([step, title, desc]) => (
+              <div key={step} className="rounded-xl border border-ink-600 bg-ink-900 px-3 py-3">
+                <div className="mb-2 flex items-center gap-2">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-brand-cyan/15 text-xs font-semibold text-brand-cyan">
+                    {step}
+                  </span>
+                  <span className="text-sm font-medium text-ink-950">{title}</span>
+                </div>
+                <p className="text-xs leading-relaxed text-ink-500">{desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex w-full shrink-0 flex-col gap-3 lg:w-[420px]">
+          <div className="rounded-xl border border-ink-600 bg-ink-900 p-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-ink-950">给 OpenClaw 的一句话</span>
+              <button
+                onClick={onCopyHandoff}
+                className="rounded-lg border border-brand-cyan/30 px-2.5 py-1 text-xs text-brand-cyan hover:bg-brand-cyan/10"
+              >
+                {copied === "handoff" ? "已复制" : "复制"}
+              </button>
+            </div>
+            <code className="block whitespace-pre-wrap break-words rounded-lg bg-ink-800 px-3 py-2 font-mono text-[11px] leading-relaxed text-ink-950">
+              {SKILL_HANDOFF}
+            </code>
+          </div>
+          <div className="rounded-xl border border-ink-600 bg-ink-900 p-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-ink-950">CLI 命令</span>
+              <button
+                onClick={onCopyCommand}
+                className="rounded-lg border border-jade/30 px-2.5 py-1 text-xs text-jade hover:bg-jade/10"
+              >
+                {copied === "command" ? "已复制" : "复制"}
+              </button>
+            </div>
+            <code className="block whitespace-pre-wrap break-words rounded-lg bg-ink-800 px-3 py-2 font-mono text-[11px] leading-relaxed text-ink-950">
+              {SKILL_COMMAND}
+            </code>
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
