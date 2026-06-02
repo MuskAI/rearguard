@@ -326,89 +326,133 @@ function Nav({
 }
 
 function HomePage({ counters, setPage }: { counters: Counters; setPage: (page: PageKey) => void }) {
-  const [slide, setSlide] = useState(0);
-  const slides = [
+  const totalDetect = counters.image_detect + counters.video_detect || 10000;
+  const totalRetrieve = counters.image_retrieve + counters.video_retrieve || 5000000;
+  const workflowCards = [
     {
-      image: "/system/AIGC.jpg",
-      tag: "多模态AI检测平台",
-      title: "RealGuard\n智能内容检测",
-      desc: "覆盖图像、视频多模态内容检测与检索，从源头发现疑似侵权内容，保障数字内容安全。",
-      action: "开始检测",
-      icon: "fa-rocket",
-      page: "image" as PageKey,
-      className: "slide-1"
+      step: "01",
+      title: "内容审核团队",
+      desc: "上传图像或视频，直接获得真伪结论、置信度、证据字段和报告编号。",
+      action: "开始鉴伪",
+      icon: "fa-shield",
+      onClick: () => setPage("image"),
     },
     {
-      image: "/system/index1.jpg",
-      tag: "深度学习驱动",
-      title: "图像侵权\n智能检测",
-      desc: "基于前沿深度学习算法，精准识别AI生成图像、PS篡改等疑似侵权内容。",
-      action: "图像鉴伪",
-      icon: "fa-image",
-      page: "image" as PageKey,
-      className: "slide-2"
+      step: "02",
+      title: "版权检索场景",
+      desc: "对疑似侵权素材做相似内容检索，把重复传播和素材来源拉到同一视图。",
+      action: "检索相似内容",
+      icon: "fa-crosshairs",
+      onClick: () => setPage("retrieve"),
     },
     {
-      image: "/system/index3.jpg",
-      tag: "海量数据检索",
-      title: "多模态\n侵权检索",
-      desc: "检索疑似侵权的图像，检索疑似侵权的视频，在海量数据库中快速定位相似可疑内容。",
-      action: "开始检索",
-      icon: "fa-search",
-      page: "retrieve" as PageKey,
-      className: "slide-3"
-    }
+      step: "03",
+      title: "外部 Agent",
+      desc: "复制公开 Skill，让 OpenClaw 或其他 agent 使用 V2/V1 API 完成鉴伪。",
+      action: "复制 Skill",
+      icon: "fa-plug",
+      onClick: () => setPage("developer"),
+    },
+    {
+      step: "04",
+      title: "开发者接入",
+      desc: "生成个人 API Key，追踪调用次数与 Token 成本，并在线调试返回 JSON。",
+      action: "打开文档",
+      icon: "fa-code",
+      onClick: () => setPage("developer"),
+    },
   ];
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setSlide((value) => (value + 1) % slides.length), 6000);
-    return () => window.clearInterval(timer);
-  }, []);
 
   return (
     <>
-      <section className="hero-section">
-        <div className="hero-container">
-          <div className="carousel-wrapper">
-            <div className="carousel-track" style={{ transform: `translateX(-${slide * 100}%)` }}>
-              {slides.map((item, index) => (
-                <div className={`carousel-slide ${item.className} ${slide === index ? "active" : ""}`} key={item.title}>
-                  <img src={item.image} alt={item.tag} />
-                  <div className="carousel-overlay">
-                    <div className="hero-content">
-                      <div className="hero-tag">
-                        <span className="dot" />
-                        {item.tag}
-                      </div>
-                      <h2 className="hero-title">{item.title}</h2>
-                      <p className="hero-desc">{item.desc}</p>
-                      <button className="hero-btn" onClick={() => setPage(item.page)}>
-                        <i className={`fa ${item.icon}`} /> {item.action}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
+      <section className="home-hero-section">
+        <div className="container home-hero-grid">
+          <div className="home-hero-copy fade-up visible">
+            <div className="home-eyebrow">
+              <span>REALGUARD INTELLIGENCE</span>
+              <i>Agent-ready forensic platform</i>
             </div>
-            <button className="carousel-nav-btn prev" onClick={() => setSlide((slide + slides.length - 1) % slides.length)}>
-              <i className="fa fa-chevron-left" />
-            </button>
-            <button className="carousel-nav-btn next" onClick={() => setSlide((slide + 1) % slides.length)}>
-              <i className="fa fa-chevron-right" />
-            </button>
-            <div className="carousel-indicators">
-              {slides.map((item, index) => (
-                <button
-                  aria-label={`切换到第 ${index + 1} 张`}
-                  className={`carousel-dot ${slide === index ? "active" : ""}`}
-                  key={item.tag}
-                  onClick={() => setSlide(index)}
-                />
-              ))}
+            <h1>
+              <span>让 AIGC 鉴伪</span>
+              <span>进入证据链</span>
+            </h1>
+            <p>
+              RealGuard 面向内容审核、版权检索和外部 AI Agent，把图像/视频检测、取证证据、报告 ID、
+              API Key 与用量统计组织成一条清晰的业务流程，而不是把用户丢进零散功能入口。
+            </p>
+            <div className="home-hero-actions">
+              <button className="home-primary-action" onClick={() => setPage("image")}>
+                开始检测 <i className="fa fa-arrow-right" />
+              </button>
+              <button className="home-secondary-action" onClick={() => setPage("developer")}>
+                接入开发者平台 <i className="fa fa-code" />
+              </button>
             </div>
-            <div className="carousel-progress">
-              <div className="carousel-progress-bar" key={slide} />
+            <div className="home-trust-row" aria-label="平台能力摘要">
+              <div>
+                <strong>V1 / V2</strong>
+                <span>双链路鉴伪</span>
+              </div>
+              <div>
+                <strong>{totalDetect.toLocaleString("zh-CN")}+</strong>
+                <span>检测任务</span>
+              </div>
+              <div>
+                <strong>{totalRetrieve.toLocaleString("zh-CN")}+</strong>
+                <span>检索任务</span>
+              </div>
             </div>
+          </div>
+
+          <div className="home-briefing-board fade-up visible" aria-label="RealGuard 证据简报">
+            <div className="briefing-label">
+              <span>Live Evidence Brief</span>
+              <b>RG-0427</b>
+            </div>
+            <div className="briefing-image-card primary">
+              <img src="/system/case2.webp" alt="AI 生成检测示例" />
+              <div>
+                <span>综合判断</span>
+                <strong>AI 生成风险 73.9%</strong>
+              </div>
+            </div>
+            <div className="briefing-image-card secondary">
+              <img src="/system/case1.webp" alt="泳池场景检测示例" />
+              <div>
+                <span>辅助证据</span>
+                <strong>纹理与边缘异常</strong>
+              </div>
+            </div>
+            <div className="briefing-feed">
+              <div><span>ELA</span><strong>压缩误差图</strong><small>异常区域定位</small></div>
+              <div><span>Noise</span><strong>噪声残差</strong><small>生成纹理比对</small></div>
+              <div><span>Usage</span><strong>Calls + Tokens</strong><small>开发者成本审计</small></div>
+            </div>
+            <div className="briefing-agent-card">
+              <span>Agent handoff</span>
+              <code>Use $realguard-forensics · POST /v2-api/detect</code>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="section home-workflow-section">
+        <div className="container">
+          <div className="home-section-heading">
+            <span>Start from task</span>
+            <h2>四条路径，直接进入你要完成的工作。</h2>
+            <p>审核人员从检测开始，版权团队从检索开始，外部 Agent 从 Skill 开始，开发者从 API Key 和文档开始。</p>
+          </div>
+          <div className="home-workflow-grid">
+            {workflowCards.map((item) => (
+              <button className="home-workflow-card" onClick={item.onClick} key={item.title}>
+                <span>{item.step}</span>
+                <i className={`fa ${item.icon}`} />
+                <h3>{item.title}</h3>
+                <p>{item.desc}</p>
+                <strong>{item.action} <i className="fa fa-arrow-right" /></strong>
+              </button>
+            ))}
           </div>
         </div>
       </section>
@@ -419,9 +463,9 @@ function HomePage({ counters, setPage }: { counters: Counters; setPage: (page: P
         </div>
       </section>
 
-      <section className="section section-alt">
+      <section className="section section-alt home-capability-section">
         <div className="container">
-          <SectionHeader title="核心功能" desc="图像鉴伪、视频侵权检测、图像侵权检索、视频侵权检索，并提供独立 V2 Agent 体验入口" />
+          <SectionHeader title="核心能力" desc="检测、检索、报告与开发者接入保持独立，但在首页以同一条证据链呈现。" />
           <div className="features-grid">
             <FeatureCard accent="var(--primary)" icon="fa-image" title="图像鉴伪" desc="基于深度学习的图像真伪识别，支持多种场景的AIGC图像检测" onClick={() => setPage("image")} />
             <FeatureCard accent="var(--warning)" icon="fa-film" title="视频鉴伪" desc="针对视频内容的 AI 生成检测与篡改识别，帧级分析定位可疑片段。" onClick={() => setPage("video")} />
@@ -434,21 +478,10 @@ function HomePage({ counters, setPage }: { counters: Counters; setPage: (page: P
 
       <section className="section section-default">
         <div className="container">
-          <SectionHeader title="识别示例" desc="点击案例查看简洁检测结果" />
+          <SectionHeader title="结果不是一句话，而是一组可复核证据" desc="示例卡保留判断比例，但首页更强调报告、证据字段和后续追踪。" />
           <div className="examples-grid">
             <ExampleCard image="/system/case1.webp" title="案例一：泳池场景人物图像" desc="综合判断为 AI 生成（53.8%），点击查看检测结果。" real={46.2} fake={53.8} />
             <ExampleCard image="/system/case2.webp" title="案例二：几何色块人像图像" desc="综合判断为 AI 生成（73.9%），点击查看检测结果。" real={26.1} fake={73.9} />
-          </div>
-        </div>
-      </section>
-
-      <section className="section section-alt">
-        <div className="container">
-          <div className="stats-grid">
-            <Stat value="99.8%" label="识别准确率" />
-            <Stat value={String(counters.image_detect + counters.video_detect || 10000) + "+"} label="检测任务" />
-            <Stat value={String(counters.image_retrieve + counters.video_retrieve || 5000000) + "+"} label="检索任务" />
-            <Stat value="0.3s" label="平均响应时间" />
           </div>
         </div>
       </section>
@@ -1526,15 +1559,6 @@ function ExampleCard({ image, title, desc, real, fake }: { image: string; title:
         <Progress label="图片为真" value={real} tone="green" />
         <Progress label="图片为假" value={fake} tone="red" />
       </div>
-    </div>
-  );
-}
-
-function Stat({ value, label }: { value: string; label: string }) {
-  return (
-    <div className="stat-card fade-up visible">
-      <div className="stat-val">{value}</div>
-      <div className="stat-label">{label}</div>
     </div>
   );
 }
@@ -2747,11 +2771,11 @@ function validateFile(
 }
 
 function colorBg(color: string) {
-  if (color === "var(--primary)") return "rgba(14,111,132,0.12)";
-  if (color === "var(--primary-light)") return "rgba(47,167,191,0.14)";
-  if (color === "var(--primary-dark)") return "rgba(8,58,72,0.14)";
-  if (color === "var(--warning)") return "rgba(245,165,36,0.14)";
-  if (color === "var(--accent)") return "rgba(214,255,95,0.18)";
+  if (color === "var(--primary)") return "rgba(24,82,70,0.12)";
+  if (color === "var(--primary-light)") return "rgba(79,139,120,0.14)";
+  if (color === "var(--primary-dark)") return "rgba(11,45,40,0.14)";
+  if (color === "var(--warning)") return "rgba(201,137,44,0.16)";
+  if (color === "var(--accent)") return "rgba(255,122,69,0.16)";
   return "rgba(16,24,32,0.08)";
 }
 
