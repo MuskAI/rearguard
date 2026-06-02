@@ -217,6 +217,35 @@ def _extract_json(text: str) -> dict | None:
         return None
 
 
+def _usage_value(usage, *names: str) -> int:
+    for name in names:
+        if isinstance(usage, dict):
+            value = usage.get(name)
+        else:
+            value = getattr(usage, name, None)
+        if value is None:
+            continue
+        try:
+            return max(int(value), 0)
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+def _token_usage(resp) -> dict:
+    usage = getattr(resp, "usage", None)
+    prompt_tokens = _usage_value(usage, "prompt_tokens", "input_tokens")
+    completion_tokens = _usage_value(usage, "completion_tokens", "output_tokens")
+    total_tokens = _usage_value(usage, "total_tokens")
+    if total_tokens <= 0:
+        total_tokens = prompt_tokens + completion_tokens
+    return {
+        "promptTokens": prompt_tokens,
+        "completionTokens": completion_tokens,
+        "totalTokens": total_tokens,
+    }
+
+
 # ---------------------------------------------------------------------------
 # 真实 VLM 分析
 # ---------------------------------------------------------------------------
@@ -323,7 +352,7 @@ def analyze_image_vlm(data: bytes) -> dict | None:
     if not parsed:
         print(f"[VLM] failed to parse JSON: {content[:200]}")
         return None
-    return _normalize(parsed, "image", source="vlm", model=VLM_MODEL)
+    return _normalize(parsed, "image", source="vlm", model=VLM_MODEL, token_usage=_token_usage(resp))
 
 
 TEXT_SYSTEM = (
@@ -369,7 +398,7 @@ def analyze_text_vlm(text: str) -> dict | None:
     parsed = _extract_json(content)
     if not parsed:
         return None
-    return _normalize(parsed, "document", source="vlm", model=VLM_MODEL)
+    return _normalize(parsed, "document", source="vlm", model=VLM_MODEL, token_usage=_token_usage(resp))
 
 
 FORENSIC_SYSTEM = """你是「鉴真」可解释性取证分析引擎。你会收到一张原图，以及对它做的多张信号级取证可视化图
@@ -409,6 +438,7 @@ status 含义：ok=正常 / warn=可疑 / danger=高危。confidence 与 verdict
     findings: dict[str, dict] = {}
     verdict, confidence, summary = None, None, ""
     source = "maps-only"
+    token_usage = {"promptTokens": 0, "completionTokens": 0, "totalTokens": 0}
 
     if client is not None:
         content_parts: list[dict] = [{"type": "text", "text": "【原图】"}]
@@ -439,6 +469,7 @@ status 含义：ok=正常 / warn=可疑 / danger=高危。confidence 与 verdict
             parsed = _extract_json(resp.choices[0].message.content or "")
             if parsed:
                 source = "vlm"
+                token_usage = _token_usage(resp)
                 verdict = parsed.get("verdict")
                 confidence = parsed.get("confidence")
                 summary = str(parsed.get("summary", ""))
@@ -492,10 +523,11 @@ status 含义：ok=正常 / warn=可疑 / danger=高危。confidence 与 verdict
         "jpegPoints": jpeg_points,
         "modelVersion": VLM_MODEL if source == "vlm" else MOCK_MODEL_VERSION,
         "source": source,
+        "tokenUsage": token_usage,
     }
 
 
-def _normalize(parsed: dict, file_type: str, source: str, model: str) -> dict:
+def _normalize(parsed: dict, file_type: str, source: str, model: str, token_usage: dict | None = None) -> dict:
     """把模型返回的 JSON 规范化为标准结构，缺字段则补默认值。"""
     dims_def = DIMENSIONS_BY_TYPE[file_type]
     raw_dims = {d.get("key"): d for d in parsed.get("dimensions", []) if isinstance(d, dict)}
@@ -576,6 +608,7 @@ def _normalize(parsed: dict, file_type: str, source: str, model: str) -> dict:
         "explanation": str(parsed.get("explanation", "")) or "模型未提供详细依据。",
         "modelVersion": model,
         "source": source,
+        "tokenUsage": token_usage or {"promptTokens": 0, "completionTokens": 0, "totalTokens": 0},
     }
 
 

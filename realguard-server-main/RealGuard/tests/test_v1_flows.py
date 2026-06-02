@@ -161,6 +161,57 @@ def test_developer_api_key_lifecycle(client, monkeypatch):
     assert rejected.get_json()["valid"] is False
 
 
+def test_developer_token_usage_proxy_uses_current_user(client, monkeypatch):
+    _login_session(client)
+    monkeypatch.setattr(api, "DEVELOPER_AUTH_SECRET", "internal-secret")
+    monkeypatch.setattr(api, "DEVELOPER_USAGE_URL", "http://127.0.0.1:8848/api/developer/token-usage")
+    captured = {}
+
+    class FakeSession:
+        trust_env = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def get(self, url, params=None, headers=None, timeout=None):
+            captured["url"] = url
+            captured["params"] = params
+            captured["headers"] = headers
+            captured["timeout"] = timeout
+            captured["trust_env"] = self.trust_env
+            return _FakeResponse({
+                "days": 7,
+                "summary": {
+                    "totalRequests": 2,
+                    "billableRequests": 1,
+                    "cacheHits": 1,
+                    "promptTokens": 12,
+                    "completionTokens": 7,
+                    "totalTokens": 19,
+                    "lastEventAt": "2026-06-02T10:00:00+00:00",
+                },
+                "byDay": [],
+                "byEndpoint": [],
+                "byModel": [],
+                "byKey": [],
+            })
+
+    monkeypatch.setattr(api.requests, "Session", lambda: FakeSession())
+
+    response = client.get("/api/developer/usage?days=7")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["usage"]["summary"]["totalTokens"] == 19
+    assert captured["url"] == "http://127.0.0.1:8848/api/developer/token-usage"
+    assert captured["params"] == {"developerUserId": "1", "days": "7"}
+    assert captured["headers"]["X-RealGuard-Internal-Secret"] == "internal-secret"
+    assert captured["trust_env"] is False
+
+
 def test_guest_image_detect_returns_rewritten_url_and_then_blocks(client, monkeypatch):
     monkeypatch.setattr(detection, "_metadata_for_item", lambda itemid: {})
     monkeypatch.setattr(

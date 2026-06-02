@@ -34,6 +34,10 @@ DEVELOPER_API_KEY_PREFIX = "rg_sk_"
 DEVELOPER_API_KEY_MAX_ACTIVE = int(os.environ.get("REALGUARD_DEVELOPER_API_KEY_MAX_ACTIVE", "5"))
 DEVELOPER_API_KEY_DEFAULT_SCOPES = "detect,forensics,provenance,reports"
 DEVELOPER_AUTH_SECRET = os.environ.get("REALGUARD_DEVELOPER_AUTH_SECRET", "").strip()
+DEVELOPER_USAGE_URL = os.environ.get(
+    "REALGUARD_DEVELOPER_USAGE_URL",
+    "http://127.0.0.1:8848/api/developer/token-usage",
+).strip()
 _DEVELOPER_KEY_TABLE_READY = False
 
 
@@ -129,6 +133,21 @@ def _require_internal_developer_auth():
         return False
     submitted = request.headers.get("x-realguard-internal-secret", "").strip()
     return hmac.compare_digest(submitted, DEVELOPER_AUTH_SECRET)
+
+
+def _developer_usage_from_v2(user_id, days):
+    if not DEVELOPER_AUTH_SECRET or not DEVELOPER_USAGE_URL:
+        raise RuntimeError("Token 用量统计服务未配置")
+    with requests.Session() as sess:
+        sess.trust_env = False
+        response = sess.get(
+            DEVELOPER_USAGE_URL,
+            params={"developerUserId": str(user_id), "days": str(days)},
+            headers={"X-RealGuard-Internal-Secret": DEVELOPER_AUTH_SECRET},
+            timeout=8,
+        )
+    response.raise_for_status()
+    return response.json()
 
 
 def _history_identity(allow_empty=False):
@@ -649,6 +668,31 @@ def verify_developer_api_key():
         },
         "scopes": _developer_scopes(row.get("scopes")),
     })
+
+
+@api_blueprint.route("/developer/usage", methods=["GET"])
+def developer_token_usage():
+    user, error = _auth_required()
+    if error:
+        return error
+    try:
+        days = int(request.args.get("days", "30"))
+    except ValueError:
+        return jsonify({"status": "error", "message": "days 必须是整数"}), 400
+    if days not in (7, 14, 30, 90):
+        return jsonify({"status": "error", "message": "days 仅支持 7、14、30、90"}), 400
+
+    try:
+        usage = _developer_usage_from_v2(user["Userid"], days)
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else 502
+        if status >= 500:
+            status = 502
+        return jsonify({"status": "error", "message": "Token 用量统计服务返回异常"}), status
+    except Exception:
+        return jsonify({"status": "error", "message": "Token 用量统计服务暂不可用"}), 502
+
+    return jsonify({"status": "success", "usage": usage})
 
 
 @api_blueprint.route("/history/image-detections")

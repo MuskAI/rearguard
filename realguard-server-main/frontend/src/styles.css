@@ -1075,7 +1075,8 @@ a { text-decoration: none; color: inherit; }
 .api-key-create button,
 .api-key-list-head button,
 .api-key-row button,
-.generated-key-box button {
+.generated-key-box button,
+.token-usage-actions button {
   min-height: 38px;
   border: 0;
   border-radius: 999px;
@@ -1089,14 +1090,16 @@ a { text-decoration: none; color: inherit; }
 .api-key-create button:hover,
 .api-key-list-head button:hover,
 .api-key-row button:hover,
-.generated-key-box button:hover {
+.generated-key-box button:hover,
+.token-usage-actions button:hover {
   filter: brightness(0.96);
 }
 .docs-inline-button:disabled,
 .api-key-create button:disabled,
 .api-key-list-head button:disabled,
 .api-key-row button:disabled,
-.generated-key-box button:disabled {
+.generated-key-box button:disabled,
+.token-usage-actions button:disabled {
   opacity: 0.55;
   cursor: not-allowed;
 }
@@ -1221,6 +1224,171 @@ a { text-decoration: none; color: inherit; }
   color: #ef4444;
 }
 .empty-key-state {
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+.token-usage-panel {
+  margin-top: 1rem;
+  padding: 1.1rem;
+  border: 1px solid color-mix(in srgb, var(--primary) 28%, var(--border));
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at top left, color-mix(in srgb, var(--primary) 18%, transparent), transparent 34%),
+    linear-gradient(135deg, color-mix(in srgb, var(--bg-card) 92%, var(--primary) 8%), var(--bg-input));
+  box-shadow: var(--shadow-card);
+}
+.token-usage-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.token-usage-header h3 {
+  margin: 0.2rem 0 0.35rem;
+  font-size: clamp(1.28rem, 2.2vw, 1.9rem);
+  color: var(--text-primary);
+}
+.token-usage-header p {
+  max-width: 780px;
+  color: var(--text-secondary);
+  line-height: 1.75;
+}
+.token-usage-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-shrink: 0;
+}
+.token-usage-actions select {
+  min-height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  padding: 0 0.8rem;
+  font-weight: 800;
+}
+.token-usage-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+.token-usage-metric {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--bg-card) 86%, transparent);
+  padding: 0.9rem;
+}
+.token-usage-metric.primary {
+  border-color: color-mix(in srgb, var(--primary) 44%, var(--border));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 16%, var(--bg-card)), var(--bg-card));
+}
+.token-usage-metric span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  font-weight: 850;
+}
+.token-usage-metric strong {
+  display: block;
+  margin: 0.25rem 0;
+  color: var(--text-primary);
+  font-size: clamp(1.35rem, 2.4vw, 2.1rem);
+  line-height: 1.05;
+}
+.token-usage-metric small {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+.token-usage-breakdown {
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 0.85rem;
+  margin-top: 0.85rem;
+}
+.token-usage-card {
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--bg-card);
+  padding: 0.9rem;
+}
+.token-usage-card-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-bottom: 0.8rem;
+}
+.token-usage-card-title strong {
+  color: var(--text-primary);
+}
+.token-usage-card-title span {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+.token-usage-bars {
+  display: grid;
+  gap: 0.55rem;
+}
+.token-usage-bar-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) 92px;
+  align-items: center;
+  gap: 0.65rem;
+}
+.token-usage-bar-row span {
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+.token-usage-bar-row div {
+  height: 9px;
+  border-radius: 999px;
+  background: var(--bg-input);
+  overflow: hidden;
+}
+.token-usage-bar-row i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--primary), var(--accent));
+}
+.token-usage-bar-row strong {
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  text-align: right;
+}
+.token-usage-endpoints {
+  display: grid;
+  gap: 0.55rem;
+}
+.token-usage-endpoints div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.62rem;
+  border-radius: 14px;
+  background: var(--bg-input);
+}
+.token-usage-endpoints code {
+  color: var(--primary);
+  overflow-wrap: anywhere;
+}
+.token-usage-endpoints span {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+.token-usage-endpoints strong {
+  color: var(--text-primary);
+  font-size: 0.82rem;
+}
+.token-usage-endpoints p {
   color: var(--text-secondary);
   line-height: 1.7;
 }
@@ -1478,6 +1646,8 @@ td { color: var(--text-primary); }
   .endpoint-index-row { grid-template-columns: 72px minmax(170px, 0.8fr) minmax(0, 1fr); }
   .endpoint-index-row p { grid-column: 2 / -1; }
   .docs-resource-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .token-usage-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .token-usage-breakdown { grid-template-columns: 1fr; }
   .results-grid { grid-template-columns: repeat(3, 1fr); }
   .history-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .history-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1502,6 +1672,8 @@ td { color: var(--text-primary); }
     padding: 0.75rem;
     background: var(--bg-input);
   }
+  .token-usage-header { flex-direction: column; }
+  .token-usage-actions { width: 100%; flex-wrap: wrap; }
 }
 @media (max-width: 768px) {
   body { padding-bottom: 0; }
@@ -1514,6 +1686,9 @@ td { color: var(--text-primary); }
   .logo-full { display: none; }
   .logo-mobile { display: inline; }
   .nav-links { display: none; }
+  .token-usage-metrics { grid-template-columns: 1fr; }
+  .token-usage-bar-row { grid-template-columns: 46px minmax(0, 1fr) 78px; }
+  .token-usage-endpoints div { grid-template-columns: 1fr; align-items: start; }
   .mobile-nav-actions {
     position: fixed;
     right: 12px;

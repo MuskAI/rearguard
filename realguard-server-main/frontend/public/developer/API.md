@@ -65,8 +65,11 @@ The web platform exposes authenticated key-management endpoints for logged-in us
 | `GET` | `/api/developer/keys` | List current user's key previews, status, scopes, created time, and last-used time. |
 | `POST` | `/api/developer/keys` | Create a new key. The full `apiKey` is returned only once. |
 | `DELETE` | `/api/developer/keys/{keyId}` | Revoke one active key owned by the current user. |
+| `GET` | `/api/developer/usage?days=30` | Show the current user's token usage, request count, cache hits, and endpoint/model breakdown. |
 
 External agents should never call these management endpoints directly. They should receive a generated `rg_sk_...` key from the account owner and use it only in API requests.
+
+Token usage is tracked for cost control and auditability. Cache hits count as requests but consume `0` tokens because the model is not called again.
 
 ## API Reference
 
@@ -134,6 +137,7 @@ Important response fields:
 | `modelVersion` | Model or rule version. |
 | `cacheVersion` | Analysis cache version. |
 | `cacheHit` | Whether the result came from cache. |
+| `tokenUsage` | Prompt, completion, and total token usage for this request. Cache hits return zero token usage. |
 | `explanation` | Human-readable evidence and reasons. |
 | `synthid` | SynthID evidence when applicable. |
 | `visibleWatermark` | Visible watermark evidence when applicable. |
@@ -148,7 +152,12 @@ Example response:
   "confidence": 0.95,
   "source": "vlm",
   "modelVersion": "qwen3-vl-flash",
-  "cacheVersion": "v6-low-ela-weight"
+  "cacheVersion": "v6-low-ela-weight",
+  "tokenUsage": {
+    "promptTokens": 1240,
+    "completionTokens": 210,
+    "totalTokens": 1450
+  }
 }
 ```
 

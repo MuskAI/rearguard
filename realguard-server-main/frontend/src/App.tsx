@@ -2,6 +2,7 @@ import { FormEvent, Fragment, ReactNode, useEffect, useMemo, useRef, useState } 
 import {
   Counters,
   DeveloperApiKey,
+  DeveloperTokenUsage,
   HistoryFilterKey,
   HistoryListResponse,
   HistoryRecord,
@@ -17,6 +18,7 @@ import {
   downloadVideoReport,
   getHistory,
   getDeveloperApiKeys,
+  getDeveloperTokenUsage,
   getLibraries,
   getMe,
   getRetrievalHistory,
@@ -55,6 +57,17 @@ const REALGUARD_SKILL_COMMAND =
 const IMAGE_MAX_BYTES = 25 * 1024 * 1024;
 const VIDEO_MAX_BYTES = 512 * 1024 * 1024;
 const V2_CONSOLE_MAX_BYTES = 25 * 1024 * 1024;
+
+function formatUsageNumber(value: number | undefined | null) {
+  return Number(value || 0).toLocaleString("zh-CN");
+}
+
+function formatUsageDate(value: string | undefined | null) {
+  if (!value) return "暂无调用";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString("zh-CN", { hour12: false });
+}
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -505,6 +518,10 @@ function DeveloperPlatformPage({ user, onNeedAuth }: { user: User | null; onNeed
   const [generatedKey, setGeneratedKey] = useState("");
   const [keyBusy, setKeyBusy] = useState(false);
   const [keyStatus, setKeyStatus] = useState<Status>(null);
+  const [usageDays, setUsageDays] = useState(30);
+  const [usage, setUsage] = useState<DeveloperTokenUsage | null>(null);
+  const [usageBusy, setUsageBusy] = useState(false);
+  const [usageStatus, setUsageStatus] = useState<Status>(null);
   const [fileType, setFileType] = useState("image");
   const [testFile, setTestFile] = useState<File | null>(null);
   const [consoleBusy, setConsoleBusy] = useState(false);
@@ -516,10 +533,18 @@ function DeveloperPlatformPage({ user, onNeedAuth }: { user: User | null; onNeed
       setKeys([]);
       setGeneratedKey("");
       setKeyStatus(null);
+      setUsage(null);
+      setUsageStatus(null);
       return;
     }
-    loadDeveloperKeys();
+    void loadDeveloperKeys();
+    void loadDeveloperUsage(usageDays);
   }, [user?.Userid]);
+
+  useEffect(() => {
+    if (!user) return;
+    void loadDeveloperUsage(usageDays);
+  }, [usageDays]);
 
   async function loadDeveloperKeys() {
     try {
@@ -527,6 +552,20 @@ function DeveloperPlatformPage({ user, onNeedAuth }: { user: User | null; onNeed
       setKeys(data.keys || []);
     } catch (error) {
       setKeyStatus({ tone: "error", text: errorMessage(error) });
+    }
+  }
+
+  async function loadDeveloperUsage(days = usageDays) {
+    if (!user) return;
+    setUsageBusy(true);
+    setUsageStatus(null);
+    try {
+      const data = await getDeveloperTokenUsage(days);
+      setUsage(data.usage);
+    } catch (error) {
+      setUsageStatus({ tone: "error", text: errorMessage(error) });
+    } finally {
+      setUsageBusy(false);
     }
   }
 
@@ -572,6 +611,7 @@ function DeveloperPlatformPage({ user, onNeedAuth }: { user: User | null; onNeed
         ["#quickstart", "快速开始"],
         ["#auth", "认证"],
         ["#api-keys", "API Keys"],
+        ["#token-usage", "Token 用量"],
       ],
     },
     {
@@ -622,6 +662,7 @@ function DeveloperPlatformPage({ user, onNeedAuth }: { user: User | null; onNeed
     ["confidence", "0-1 置信度，展示时可换算百分比。"],
     ["modelVersion", "模型或规则链路版本。"],
     ["cacheVersion", "分析缓存版本，用于判断结果是否来自同一分析逻辑。"],
+    ["tokenUsage", "本次模型调用的 prompt / completion / total token；缓存命中时为 0。"],
     ["source", "vlm / mock / heuristic 等，决定结果可信度说明。"],
     ["reportId", "可用于下载和归档报告的编号。"],
     ["synthid / visibleWatermark", "水印、SynthID、可见水印等附加证据。"],
@@ -707,6 +748,7 @@ print(r.json().get("agentSummary") or r.json())`;
       setConsoleResult(result as Record<string, unknown>);
       setConsoleMeta({ endpoint: "POST /detect", elapsedMs: Math.round(performance.now() - started), at: new Date().toLocaleString() });
       setConsoleStatus({ tone: "ok", text: `检测完成：${result.verdict || "已返回结果"}` });
+      void loadDeveloperUsage(usageDays);
     } catch (error) {
       setConsoleStatus({ tone: "error", text: error instanceof Error ? error.message : "检测失败" });
     } finally {
@@ -715,6 +757,10 @@ print(r.json().get("agentSummary") or r.json())`;
   };
 
   const renderedResult = consoleResult ? JSON.stringify(consoleResult, null, 2) : "";
+  const usageSummary = usage?.summary;
+  const recentUsageDays = (usage?.byDay || []).slice(-7);
+  const maxDayTokens = Math.max(1, ...recentUsageDays.map((item) => Number(item.totalTokens || 0)));
+  const endpointUsage = usage?.byEndpoint || [];
 
   return (
     <main className="main developer-docs-page">
@@ -829,60 +875,145 @@ Authorization: Bearer rg_sk_xxx`}</pre>
                   <button className="docs-inline-button" onClick={onNeedAuth}>注册/登录开发者平台</button>
                 </div>
               ) : (
-                <div className="api-key-manager">
-                  <div className="api-key-create">
-                    <div>
-                      <span>当前账号</span>
-                      <strong>{user.username || user.phone}</strong>
-                      <small>{user.phone}</small>
+                <>
+                  <div className="api-key-manager">
+                    <div className="api-key-create">
+                      <div>
+                        <span>当前账号</span>
+                        <strong>{user.username || user.phone}</strong>
+                        <small>{user.phone}</small>
+                      </div>
+                      <label>
+                        Key 名称
+                        <input value={keyName} maxLength={120} onChange={(event) => setKeyName(event.target.value)} />
+                      </label>
+                      <button disabled={keyBusy} onClick={handleCreateKey}>
+                        <i className={`fa ${keyBusy ? "fa-spinner detect-spin" : "fa-key"}`} /> 生成 API Key
+                      </button>
+                      {keyStatus && <StatusPill status={keyStatus} />}
+                      {generatedKey && (
+                        <div className="generated-key-box">
+                          <span>完整 Key 只显示一次</span>
+                          <code>{generatedKey}</code>
+                          <div>
+                            <button onClick={() => navigator.clipboard?.writeText(generatedKey)}>复制 Key</button>
+                            <button onClick={() => setApiKey(generatedKey)}>填入测试台</button>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    <label>
-                      Key 名称
-                      <input value={keyName} maxLength={120} onChange={(event) => setKeyName(event.target.value)} />
-                    </label>
-                    <button disabled={keyBusy} onClick={handleCreateKey}>
-                      <i className={`fa ${keyBusy ? "fa-spinner detect-spin" : "fa-key"}`} /> 生成 API Key
-                    </button>
-                    {keyStatus && <StatusPill status={keyStatus} />}
-                    {generatedKey && (
-                      <div className="generated-key-box">
-                        <span>完整 Key 只显示一次</span>
-                        <code>{generatedKey}</code>
-                        <div>
-                          <button onClick={() => navigator.clipboard?.writeText(generatedKey)}>复制 Key</button>
-                          <button onClick={() => setApiKey(generatedKey)}>填入测试台</button>
+                    <div className="api-key-list">
+                      <div className="api-key-list-head">
+                        <strong>已创建 Key</strong>
+                        <button disabled={keyBusy} onClick={loadDeveloperKeys}>刷新</button>
+                      </div>
+                      {keys.length === 0 ? (
+                        <p className="empty-key-state">暂无 API Key。生成后即可在外部 agent 或业务系统中调用接口。</p>
+                      ) : (
+                        keys.map((item) => (
+                          <div className={`api-key-row ${item.status === "active" ? "active" : "revoked"}`} key={item.id}>
+                            <div>
+                              <strong>{item.name}</strong>
+                              <code>{item.preview}</code>
+                              <span>
+                                创建：{item.createdAt || "-"} · 最后使用：{item.lastUsedAt || "未使用"}
+                              </span>
+                            </div>
+                            <div>
+                              <small>{item.status}</small>
+                              {item.status === "active" && (
+                                <button disabled={keyBusy} onClick={() => handleRevokeKey(item.id)}>撤销</button>
+                              )}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  <div id="token-usage" className="token-usage-panel">
+                    <div className="token-usage-header">
+                      <div>
+                        <div className="docs-section-kicker">Token Usage</div>
+                        <h3>Token 用量统计</h3>
+                        <p>
+                          Token 统计用于成本控制、缓存命中识别、异常调用审计和按 Key 排查问题。
+                          开发者需要知道每次真实模型调用消耗了多少 prompt / completion token，避免外部 agent 失控重试。
+                        </p>
+                      </div>
+                      <div className="token-usage-actions">
+                        <select value={usageDays} onChange={(event) => setUsageDays(Number(event.target.value))}>
+                          <option value={7}>近 7 天</option>
+                          <option value={14}>近 14 天</option>
+                          <option value={30}>近 30 天</option>
+                          <option value={90}>近 90 天</option>
+                        </select>
+                        <button disabled={usageBusy} onClick={() => loadDeveloperUsage(usageDays)}>
+                          <i className={`fa ${usageBusy ? "fa-spinner detect-spin" : "fa-refresh"}`} /> 刷新用量
+                        </button>
+                      </div>
+                    </div>
+                    {usageStatus && <StatusPill status={usageStatus} />}
+                    <div className="token-usage-metrics">
+                      <div className="token-usage-metric primary">
+                        <span>总 Tokens</span>
+                        <strong>{formatUsageNumber(usageSummary?.totalTokens)}</strong>
+                        <small>
+                          Prompt {formatUsageNumber(usageSummary?.promptTokens)} / Completion {formatUsageNumber(usageSummary?.completionTokens)}
+                        </small>
+                      </div>
+                      <div className="token-usage-metric">
+                        <span>调用请求</span>
+                        <strong>{formatUsageNumber(usageSummary?.totalRequests)}</strong>
+                        <small>真实模型消耗 {formatUsageNumber(usageSummary?.billableRequests)} 次</small>
+                      </div>
+                      <div className="token-usage-metric">
+                        <span>缓存命中</span>
+                        <strong>{formatUsageNumber(usageSummary?.cacheHits)}</strong>
+                        <small>命中缓存不再重复消耗 token</small>
+                      </div>
+                      <div className="token-usage-metric">
+                        <span>最近调用</span>
+                        <strong>{usageSummary?.lastEventAt ? usageSummary.lastEventAt.slice(5, 10) : "--"}</strong>
+                        <small>{formatUsageDate(usageSummary?.lastEventAt)}</small>
+                      </div>
+                    </div>
+                    <div className="token-usage-breakdown">
+                      <div className="token-usage-card">
+                        <div className="token-usage-card-title">
+                          <strong>最近 7 天趋势</strong>
+                          <span>按 total token</span>
+                        </div>
+                        <div className="token-usage-bars">
+                          {recentUsageDays.map((item) => (
+                            <div className="token-usage-bar-row" key={item.date}>
+                              <span>{item.date?.slice(5).replace("-", "/")}</span>
+                              <div><i style={{ width: `${Math.max(3, (Number(item.totalTokens || 0) / maxDayTokens) * 100)}%` }} /></div>
+                              <strong>{formatUsageNumber(item.totalTokens)}</strong>
+                            </div>
+                          ))}
                         </div>
                       </div>
-                    )}
-                  </div>
-                  <div className="api-key-list">
-                    <div className="api-key-list-head">
-                      <strong>已创建 Key</strong>
-                      <button disabled={keyBusy} onClick={loadDeveloperKeys}>刷新</button>
-                    </div>
-                    {keys.length === 0 ? (
-                      <p className="empty-key-state">暂无 API Key。生成后即可在外部 agent 或业务系统中调用接口。</p>
-                    ) : (
-                      keys.map((item) => (
-                        <div className={`api-key-row ${item.status === "active" ? "active" : "revoked"}`} key={item.id}>
-                          <div>
-                            <strong>{item.name}</strong>
-                            <code>{item.preview}</code>
-                            <span>
-                              创建：{item.createdAt || "-"} · 最后使用：{item.lastUsedAt || "未使用"}
-                            </span>
-                          </div>
-                          <div>
-                            <small>{item.status}</small>
-                            {item.status === "active" && (
-                              <button disabled={keyBusy} onClick={() => handleRevokeKey(item.id)}>撤销</button>
-                            )}
-                          </div>
+                      <div className="token-usage-card">
+                        <div className="token-usage-card-title">
+                          <strong>端点消耗</strong>
+                          <span>Detect / Forensics</span>
                         </div>
-                      ))
-                    )}
+                        <div className="token-usage-endpoints">
+                          {endpointUsage.length === 0 ? (
+                            <p>暂无调用数据。使用在线测试台或外部 agent 调用后会在这里出现。</p>
+                          ) : endpointUsage.map((item) => (
+                            <div key={item.endpoint}>
+                              <code>{item.endpoint}</code>
+                              <span>{formatUsageNumber(item.requests)} 次</span>
+                              <strong>{formatUsageNumber(item.totalTokens)} tokens</strong>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                </div>
+                </>
               )}
             </section>
 

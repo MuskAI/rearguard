@@ -112,6 +112,60 @@ def test_developer_key_required_for_detect_when_enabled(developer_key_client):
     assert valid.json()["reportId"].startswith("RJ-RPT-")
 
 
+def test_developer_token_usage_records_model_calls_and_cache_hits(developer_key_client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    monkeypatch.setattr(
+        main.detector,
+        "analyze",
+        lambda *args, **kwargs: {
+            "verdict": "real",
+            "confidence": 0.22,
+            "dimensions": [{"key": "aigc_text", "label": "AIGC文本检测", "score": 0.22, "result": "未见明显异常"}],
+            "regions": [],
+            "explanation": "pytest token usage",
+            "modelVersion": "pytest-vlm",
+            "source": "vlm",
+            "tokenUsage": {"promptTokens": 12, "completionTokens": 7, "totalTokens": 19},
+        },
+    )
+    files = {"file": ("usage.txt", b"token usage pytest unique", "text/plain")}
+    first = developer_key_client.post(
+        "/api/detect",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+        files=files,
+    )
+    second = developer_key_client.post(
+        "/api/detect",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+        files={"file": ("usage.txt", b"token usage pytest unique", "text/plain")},
+    )
+    usage = developer_key_client.get(
+        "/api/developer/token-usage?developerUserId=1&days=30",
+        headers={"X-RealGuard-Internal-Secret": "internal-secret"},
+    )
+    other_user_usage = developer_key_client.get(
+        "/api/developer/token-usage?developerUserId=2&days=30",
+        headers={"X-RealGuard-Internal-Secret": "internal-secret"},
+    )
+    missing_secret = developer_key_client.get("/api/developer/token-usage?developerUserId=1&days=30")
+
+    assert first.status_code == 200
+    assert first.json()["tokenUsage"]["totalTokens"] == 19
+    assert second.status_code == 200
+    assert second.json()["cacheHit"] is True
+    assert second.json()["tokenUsage"]["totalTokens"] == 0
+    assert usage.status_code == 200
+    assert usage.json()["summary"]["totalRequests"] == 2
+    assert usage.json()["summary"]["billableRequests"] == 1
+    assert usage.json()["summary"]["cacheHits"] == 1
+    assert usage.json()["summary"]["totalTokens"] == 19
+    assert usage.json()["byEndpoint"][0]["endpoint"] == "/api/detect"
+    assert other_user_usage.status_code == 200
+    assert other_user_usage.json()["summary"]["totalTokens"] == 0
+    assert missing_secret.status_code == 403
+
+
 def test_developer_key_report_access_is_scoped_to_owner(developer_key_client):
     detect = developer_key_client.post(
         "/api/detect",

@@ -176,6 +176,14 @@ async def _require_developer_access(request: Request) -> dict:
     return await run_in_threadpool(_verify_developer_key_sync, api_key, request)
 
 
+def _require_internal_developer_auth(request: Request) -> None:
+    if not DEVELOPER_AUTH_SECRET:
+        raise HTTPException(status_code=503, detail="内部开发者接口未配置")
+    submitted = request.headers.get("x-realguard-internal-secret", "").strip()
+    if not secrets.compare_digest(submitted, DEVELOPER_AUTH_SECRET):
+        raise HTTPException(status_code=403, detail="内部鉴权失败")
+
+
 def _require_report_access(request: Request, item: dict) -> dict:
     if _admin_access_granted(request):
         return {"mode": "admin"}
@@ -271,6 +279,29 @@ def _image_data_uri(data: bytes, file_type: str, *, max_side: int, quality: int)
         return None
 
 
+def _usage_int(value) -> int:
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _token_usage_from_payload(payload: dict | None, *, cache_hit: bool = False) -> dict:
+    if cache_hit:
+        return {"promptTokens": 0, "completionTokens": 0, "totalTokens": 0}
+    usage = (payload or {}).get("tokenUsage") or {}
+    prompt_tokens = _usage_int(usage.get("promptTokens"))
+    completion_tokens = _usage_int(usage.get("completionTokens"))
+    total_tokens = _usage_int(usage.get("totalTokens"))
+    if total_tokens <= 0:
+        total_tokens = prompt_tokens + completion_tokens
+    return {
+        "promptTokens": prompt_tokens,
+        "completionTokens": completion_tokens,
+        "totalTokens": total_tokens,
+    }
+
+
 def _build_result(
     *,
     filename: str,
@@ -283,6 +314,7 @@ def _build_result(
     thumbnail: str | None,
     preview: str | None,
     actor: dict | None = None,
+    token_usage: dict | None = None,
 ) -> dict:
     now = datetime.now(timezone.utc)
     day = now.strftime("%Y%m%d")
@@ -310,6 +342,7 @@ def _build_result(
         "cacheVersion": storage.ANALYSIS_CACHE_VERSION,
         "cacheHit": cache_hit,
         "elapsedMs": elapsed_ms,
+        "tokenUsage": token_usage or {"promptTokens": 0, "completionTokens": 0, "totalTokens": 0},
         "dimensions": analysis["dimensions"],
         "regions": analysis["regions"],
         "explanation": analysis["explanation"],
@@ -371,6 +404,7 @@ async def detect(request: Request, file: UploadFile = File(...), fileType: str |
         analysis = await run_in_threadpool(detector.analyze, ftype, filename, data)
         storage.put_cached_analysis(ftype, sha256, analysis)
     elapsed_ms = int((time.perf_counter() - started) * 1000)
+    token_usage = _token_usage_from_payload(analysis, cache_hit=cache_hit)
 
     result = _build_result(
         filename=filename,
@@ -383,6 +417,15 @@ async def detect(request: Request, file: UploadFile = File(...), fileType: str |
         thumbnail=thumbnail,
         preview=preview,
         actor=actor,
+        token_usage=token_usage,
+    )
+    storage.record_token_usage(
+        actor=actor,
+        endpoint="/api/detect",
+        file_type=ftype,
+        result=result,
+        usage=token_usage,
+        cache_hit=cache_hit,
     )
     storage.record_event(
         "detect",
@@ -401,7 +444,7 @@ async def detect(request: Request, file: UploadFile = File(...), fileType: str |
 
 @app.post("/api/forensics")
 async def forensics(request: Request, file: UploadFile = File(...)) -> dict:
-    await _require_developer_access(request)
+    actor = await _require_developer_access(request)
     data = await _read_upload(file)
     if not data:
         raise HTTPException(status_code=400, detail="空文件")
@@ -414,6 +457,15 @@ async def forensics(request: Request, file: UploadFile = File(...)) -> dict:
     report = await run_in_threadpool(detector.explainable, data)
     report["elapsedMs"] = int((time.perf_counter() - started) * 1000)
     report["fileMeta"] = {"name": filename, "type": ftype, "size": f"{len(data) / 1024:.1f}KB"}
+    report["tokenUsage"] = _token_usage_from_payload(report)
+    storage.record_token_usage(
+        actor=actor,
+        endpoint="/api/forensics",
+        file_type=ftype,
+        result=report,
+        usage=report["tokenUsage"],
+        cache_hit=False,
+    )
     return report
 
 
@@ -577,3 +629,19 @@ def metrics(request: Request) -> dict:
     if days not in (7, 14, 30):
         raise HTTPException(status_code=400, detail="days 仅支持 7、14、30")
     return storage.metrics(days=days)
+
+
+@app.get("/api/developer/token-usage")
+def developer_token_usage(request: Request) -> dict:
+    _require_internal_developer_auth(request)
+    try:
+        days = int(request.query_params.get("days", "30"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="days 必须是整数")
+    if days not in (7, 14, 30, 90):
+        raise HTTPException(status_code=400, detail="days 仅支持 7、14、30、90")
+    developer_user_id = (request.query_params.get("developerUserId") or "").strip() or None
+    developer_key_id = (request.query_params.get("developerKeyId") or "").strip() or None
+    if not developer_user_id and not developer_key_id:
+        raise HTTPException(status_code=400, detail="developerUserId 或 developerKeyId 必填")
+    return storage.token_usage(days=days, developer_user_id=developer_user_id, developer_key_id=developer_key_id)

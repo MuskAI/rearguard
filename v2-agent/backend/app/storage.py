@@ -91,6 +91,27 @@ def _init(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_events_created_at ON request_events(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_events_type ON request_events(event_type, created_at DESC);
 
+        CREATE TABLE IF NOT EXISTS token_usage_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            developer_user_id TEXT,
+            developer_key_id TEXT,
+            task_id TEXT,
+            report_id TEXT,
+            endpoint TEXT NOT NULL,
+            model_version TEXT,
+            source TEXT,
+            file_type TEXT,
+            prompt_tokens INTEGER NOT NULL DEFAULT 0,
+            completion_tokens INTEGER NOT NULL DEFAULT 0,
+            total_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_hit INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_token_usage_created_at ON token_usage_events(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_token_usage_user_created_at ON token_usage_events(developer_user_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_token_usage_key_created_at ON token_usage_events(developer_key_id, created_at DESC);
+
         CREATE TABLE IF NOT EXISTS counters (
             name TEXT PRIMARY KEY,
             value INTEGER NOT NULL
@@ -493,6 +514,13 @@ def record_event(
         conn.commit()
 
 
+def _safe_int(value: Any) -> int:
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def metrics(days: int = 14) -> dict[str, Any]:
     since = datetime.now(timezone.utc) - timedelta(days=days - 1)
     today = datetime.now(timezone.utc).date().isoformat()
@@ -634,4 +662,154 @@ def metrics(days: int = 14) -> dict[str, Any]:
             "provenanceCompleted": provenance_completed,
         },
         "recentErrors": errors[-8:],
+    }
+
+
+def record_token_usage(
+    *,
+    actor: dict[str, Any] | None = None,
+    endpoint: str,
+    file_type: str | None = None,
+    result: dict[str, Any] | None = None,
+    usage: dict[str, Any] | None = None,
+    cache_hit: bool = False,
+) -> None:
+    payload = result or {}
+    usage_payload = usage or payload.get("tokenUsage") or {}
+    prompt_tokens = _safe_int(usage_payload.get("promptTokens"))
+    completion_tokens = _safe_int(usage_payload.get("completionTokens"))
+    total_tokens = _safe_int(usage_payload.get("totalTokens"))
+    if total_tokens <= 0:
+        total_tokens = prompt_tokens + completion_tokens
+    developer_user_id = str((actor or {}).get("userId") or "") or None
+    developer_key_id = str((actor or {}).get("keyId") or "") or None
+
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO token_usage_events
+                (created_at, developer_user_id, developer_key_id, task_id, report_id,
+                 endpoint, model_version, source, file_type, prompt_tokens,
+                 completion_tokens, total_tokens, cache_hit)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                now_iso(),
+                developer_user_id,
+                developer_key_id,
+                payload.get("taskId"),
+                payload.get("reportId"),
+                endpoint,
+                payload.get("modelVersion"),
+                payload.get("source"),
+                file_type or (payload.get("fileMeta") or {}).get("type"),
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+                int(cache_hit),
+            ),
+        )
+        conn.commit()
+
+
+def token_usage(
+    *,
+    days: int = 30,
+    developer_user_id: str | None = None,
+    developer_key_id: str | None = None,
+) -> dict[str, Any]:
+    days = max(1, min(int(days), 90))
+    since = datetime.now(timezone.utc) - timedelta(days=days - 1)
+    clauses = ["created_at >= ?"]
+    params: list[Any] = [since.isoformat()]
+    if developer_user_id:
+        clauses.append("developer_user_id = ?")
+        params.append(str(developer_user_id))
+    if developer_key_id:
+        clauses.append("developer_key_id = ?")
+        params.append(str(developer_key_id))
+
+    where_sql = " AND ".join(clauses)
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT created_at, developer_key_id, endpoint, model_version, source, file_type,
+                   prompt_tokens, completion_tokens, total_tokens, cache_hit
+            FROM token_usage_events
+            WHERE {where_sql}
+            ORDER BY created_at ASC
+            """,
+            params,
+        ).fetchall()
+
+    by_day: dict[str, dict[str, int]] = defaultdict(
+        lambda: {
+            "requests": 0,
+            "billableRequests": 0,
+            "cacheHits": 0,
+            "promptTokens": 0,
+            "completionTokens": 0,
+            "totalTokens": 0,
+        }
+    )
+    by_endpoint: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"requests": 0, "promptTokens": 0, "completionTokens": 0, "totalTokens": 0}
+    )
+    by_model: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"requests": 0, "promptTokens": 0, "completionTokens": 0, "totalTokens": 0}
+    )
+    by_key: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"requests": 0, "cacheHits": 0, "promptTokens": 0, "completionTokens": 0, "totalTokens": 0}
+    )
+
+    summary = {
+        "totalRequests": 0,
+        "billableRequests": 0,
+        "cacheHits": 0,
+        "promptTokens": 0,
+        "completionTokens": 0,
+        "totalTokens": 0,
+        "lastEventAt": None,
+    }
+
+    for row in rows:
+        prompt_tokens = int(row["prompt_tokens"] or 0)
+        completion_tokens = int(row["completion_tokens"] or 0)
+        total_tokens = int(row["total_tokens"] or 0)
+        cache_hit = int(row["cache_hit"] or 0)
+        is_billable = total_tokens > 0 and not cache_hit
+        day = row["created_at"][:10]
+        endpoint = row["endpoint"] or "unknown"
+        model = row["model_version"] or row["source"] or "unknown"
+        key = row["developer_key_id"] or "unknown"
+
+        summary["totalRequests"] += 1
+        summary["billableRequests"] += int(is_billable)
+        summary["cacheHits"] += cache_hit
+        summary["promptTokens"] += prompt_tokens
+        summary["completionTokens"] += completion_tokens
+        summary["totalTokens"] += total_tokens
+        summary["lastEventAt"] = row["created_at"]
+
+        for bucket in (by_day[day], by_endpoint[endpoint], by_model[model], by_key[key]):
+            bucket["requests"] += 1
+            bucket["promptTokens"] += prompt_tokens
+            bucket["completionTokens"] += completion_tokens
+            bucket["totalTokens"] += total_tokens
+        by_day[day]["billableRequests"] += int(is_billable)
+        by_day[day]["cacheHits"] += cache_hit
+        by_key[key]["cacheHits"] += cache_hit
+
+    days_list = []
+    for i in range(days):
+        day = (since + timedelta(days=i)).date().isoformat()
+        days_list.append({"date": day, **by_day[day]})
+
+    return {
+        "days": days,
+        "summary": summary,
+        "byDay": days_list,
+        "byEndpoint": [{"endpoint": key, **value} for key, value in sorted(by_endpoint.items())],
+        "byModel": [{"modelVersion": key, **value} for key, value in sorted(by_model.items())],
+        "byKey": [{"keyId": key, **value} for key, value in sorted(by_key.items())],
     }

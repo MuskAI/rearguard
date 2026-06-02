@@ -56,7 +56,8 @@ python3 scripts/realguard_cli.py provenance /path/to/image --base-url http://124
 ## Interpretation
 
 - Use `agentSummary` first when present.
-- Cite `verdict`, `confidence`, `source`, `modelVersion`, `cacheVersion`, `reportId`, and evidence fields.
+- Cite `verdict`, `confidence`, `source`, `modelVersion`, `cacheVersion`, `reportId`, `tokenUsage`, and evidence fields.
+- Treat `tokenUsage.totalTokens` as the model-call cost signal; cache hits may report `0` tokens.
 - Treat results as forensic evidence, not absolute proof.
 - If `source` is `mock`, `heuristic`, or another fallback, state that limitation.
 - Preserve raw JSON and report IDs for auditability.

@@ -71,6 +71,10 @@ export function getDeveloperApiKeys() {
   return jsonRequest<{ keys: DeveloperApiKey[] }>("/api/developer/keys");
 }
 
+export function getDeveloperTokenUsage(days = 30) {
+  return jsonRequest<{ usage: DeveloperTokenUsage }>(`/api/developer/usage?days=${encodeURIComponent(String(days))}`);
+}
+
 export function createDeveloperApiKey(name: string) {
   return jsonRequest<{ apiKey: string; key: DeveloperApiKey }>("/api/developer/keys", {
     method: "POST",
@@ -241,6 +245,36 @@ export type DeveloperApiKey = {
   createdAt: string;
   lastUsedAt?: string;
   revokedAt?: string;
+};
+
+export type DeveloperTokenUsageBucket = {
+  date?: string;
+  endpoint?: string;
+  modelVersion?: string;
+  keyId?: string;
+  requests: number;
+  billableRequests?: number;
+  cacheHits?: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+};
+
+export type DeveloperTokenUsage = {
+  days: number;
+  summary: {
+    totalRequests: number;
+    billableRequests: number;
+    cacheHits: number;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    lastEventAt?: string | null;
+  };
+  byDay: DeveloperTokenUsageBucket[];
+  byEndpoint: DeveloperTokenUsageBucket[];
+  byModel: DeveloperTokenUsageBucket[];
+  byKey: DeveloperTokenUsageBucket[];
 };
 
 export type ImageDetectionResult = {
