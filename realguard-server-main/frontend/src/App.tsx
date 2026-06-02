@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, Fragment, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   Counters,
   HistoryFilterKey,
@@ -498,12 +498,55 @@ function DeveloperPlatformPage() {
   const [consoleStatus, setConsoleStatus] = useState<Status>(null);
   const [consoleResult, setConsoleResult] = useState<Record<string, unknown> | null>(null);
   const [consoleMeta, setConsoleMeta] = useState<{ endpoint: string; elapsedMs: number; at: string } | null>(null);
+  const docsNavGroups = [
+    {
+      title: "开始使用",
+      links: [
+        ["#overview", "总览"],
+        ["#quickstart", "快速开始"],
+        ["#auth", "认证"],
+      ],
+    },
+    {
+      title: "API Reference",
+      links: [
+        ["#reference", "接口总览"],
+        ["#detect", "Detect"],
+        ["#forensics", "Forensics"],
+        ["#provenance", "Provenance"],
+        ["#reports", "Reports"],
+        ["#errors", "错误码"],
+      ],
+    },
+    {
+      title: "开发工具",
+      links: [
+        ["#examples", "代码示例"],
+        ["#console", "在线测试台"],
+        ["#agent-fields", "Agent 字段"],
+      ],
+    },
+    {
+      title: "资源",
+      links: [
+        ["#enterprise", "企业接入"],
+        ["#resources", "公开资源"],
+      ],
+    },
+  ];
   const endpoints = [
-    ["GET", "/health", "服务状态、模型状态、访问保护状态。"],
-    ["POST", "/detect", "核心鉴伪接口。multipart 上传 file，可选 fileType。"],
-    ["POST", "/forensics", "图像可解释性取证分析，返回 ELA、噪声、频域等证据。"],
-    ["POST", "/provenance", "图像 C2PA / SynthID / 内容凭证验证。"],
-    ["GET", "/report/{reportId}/download", "下载检测报告。"],
+    { method: "GET", path: "/health", title: "Health", desc: "服务状态、模型状态、访问保护状态。", anchor: "#health" },
+    { method: "POST", path: "/detect", title: "Detect", desc: "核心鉴伪接口。multipart 上传 file，可选 fileType。", anchor: "#detect" },
+    { method: "POST", path: "/forensics", title: "Forensics", desc: "图像可解释性取证分析，返回 ELA、噪声、频域等证据。", anchor: "#forensics" },
+    { method: "POST", path: "/provenance", title: "Provenance", desc: "图像 C2PA / SynthID / 内容凭证验证。", anchor: "#provenance" },
+    { method: "GET", path: "/report/{reportId}/download", title: "Report Download", desc: "下载 HTML 或结构化报告，用于审计归档。", anchor: "#reports" },
+  ];
+  const requestParams = [
+    ["file", "File", "required", "待检测文件。支持图片、视频、音频、文档；用 multipart/form-data 上传。"],
+    ["fileType", "string", "optional", "文件类型提示：image、video、audio、document。未传时服务会尝试自动推断。"],
+  ];
+  const reportPathParams = [
+    ["reportId", "string", "required", "检测结果返回的报告编号，例如 RJ-RPT-20260602-0001。"],
   ];
   const fields = [
     ["agentSummary", "给 AI agent 优先使用的结构化摘要。"],
@@ -514,6 +557,13 @@ function DeveloperPlatformPage() {
     ["source", "vlm / mock / heuristic 等，决定结果可信度说明。"],
     ["reportId", "可用于下载和归档报告的编号。"],
     ["synthid / visibleWatermark", "水印、SynthID、可见水印等附加证据。"],
+  ];
+  const errorRows = [
+    ["400", "Bad Request", "缺少 file、fileType 不合法或 multipart 格式错误。"],
+    ["401", "Unauthorized", "服务启用访问保护，但未传 Token 或 Token 无效。"],
+    ["413", "Payload Too Large", "文件超过服务允许大小，需要压缩或走异步/分片流程。"],
+    ["422", "Unprocessable Entity", "文件格式无法识别或不支持当前检测链路。"],
+    ["500", "Internal Server Error", "服务端分析失败；记录 taskId 并重试或转人工处理。"],
   ];
   const jsExample = `const form = new FormData();
 form.append("file", fileInput.files[0]);
@@ -526,6 +576,17 @@ const res = await fetch("${REALGUARD_API_BASE}/detect", {
 });
 const data = await res.json();
 console.log(data.agentSummary || data);`;
+  const curlDetectExample = `curl -fsS -X POST ${REALGUARD_API_BASE}/detect \\
+  -H "X-Jianzhen-Token: <token>" \\
+  -F "file=@/path/to/file.png" \\
+  -F "fileType=image"`;
+  const curlHealthExample = `curl -fsS ${REALGUARD_API_BASE}/health`;
+  const curlForensicsExample = `curl -fsS -X POST ${REALGUARD_API_BASE}/forensics \\
+  -F "file=@/path/to/image.png"`;
+  const curlProvenanceExample = `curl -fsS -X POST ${REALGUARD_API_BASE}/provenance \\
+  -F "file=@/path/to/image.png"`;
+  const curlReportExample = `curl -fsS ${REALGUARD_API_BASE}/report/<reportId>/download \\
+  -o realguard-report.html`;
   const pythonExample = `import requests
 
 url = "${REALGUARD_API_BASE}/detect"
@@ -578,198 +639,329 @@ print(r.json().get("agentSummary") or r.json())`;
   const renderedResult = consoleResult ? JSON.stringify(consoleResult, null, 2) : "";
 
   return (
-    <main className="main">
-      <div className="container developer-platform">
-        <PageHeader
-          icon="fa-code"
-          title="开发者平台"
-          desc="面向 OpenClaw、AI Agent 和业务系统的 RealGuard 鉴伪 API、Skill 与报告接口文档。"
-        />
-
-        <section className="developer-hero">
-          <div>
-            <div className="developer-badges">
-              <span>Public API</span>
-              <span>Agent Skill</span>
-              <span>Multipart Upload</span>
-            </div>
-            <h2>把鉴伪能力接入任何 Agent 或业务系统</h2>
-            <p>
-              开发者平台提供可公开访问的 Skill 文档、V2 API 基础地址、请求示例、返回字段和解释边界。
-              外部 Agent 不需要访问本地仓库，只要读取这里的文档，就能完成上传、检测、取证、凭证验证和报告下载。
-            </p>
-          </div>
-          <div className="developer-quick-card">
-            <label>API Base URL</label>
-            <code>{REALGUARD_API_BASE}</code>
-            <label>Public Skill URL</label>
-            <code>{REALGUARD_SKILL_URL}</code>
-            <label>Full API Docs</label>
-            <code>{REALGUARD_API_DOC_URL}</code>
-          </div>
-        </section>
-
-        <section className="developer-grid">
-          <div className="developer-card developer-card-wide">
-            <h3><i className="fa fa-terminal" /> 一句话接入 OpenClaw</h3>
-            <pre>{REALGUARD_SKILL_HANDOFF}</pre>
-          </div>
-          <div className="developer-card">
-            <h3><i className="fa fa-heartbeat" /> 健康检查</h3>
-            <pre>{`curl -fsS ${REALGUARD_API_BASE}/health`}</pre>
-          </div>
-          <div className="developer-card">
-            <h3><i className="fa fa-upload" /> 鉴伪检测</h3>
-            <pre>{`curl -fsS -X POST ${REALGUARD_API_BASE}/detect \\
-  -F "file=@/path/to/file" \\
-  -F "fileType=image"`}</pre>
-          </div>
-          <div className="developer-card">
-            <h3><i className="fa fa-search-plus" /> 图像取证</h3>
-            <pre>{`curl -fsS -X POST ${REALGUARD_API_BASE}/forensics \\
-  -F "file=@/path/to/image"`}</pre>
-          </div>
-          <div className="developer-card">
-            <h3><i className="fa fa-certificate" /> 内容凭证</h3>
-            <pre>{`curl -fsS -X POST ${REALGUARD_API_BASE}/provenance \\
-  -F "file=@/path/to/image"`}</pre>
-          </div>
-        </section>
-
-        <section className="developer-console">
-          <div className="developer-doc-header">
-            <div>
-              <h3>在线 API 测试台</h3>
-              <p>在网站内直接测试健康检查和鉴伪上传，验证 Token、接口连通性、响应字段和耗时。</p>
-            </div>
-          </div>
-          <div className="console-layout">
-            <div className="console-controls">
-              <label>
-                访问令牌（可选）
-                <input
-                  type="password"
-                  placeholder="X-Jianzhen-Token"
-                  value={token}
-                  onChange={(event) => setToken(event.target.value)}
-                />
-              </label>
-              <label>
-                文件类型
-                <select value={fileType} onChange={(event) => setFileType(event.target.value)}>
-                  <option value="image">image</option>
-                  <option value="video">video</option>
-                  <option value="audio">audio</option>
-                  <option value="document">document</option>
-                </select>
-              </label>
-              <label>
-                测试文件
-                <input
-                  type="file"
-                  accept="image/*,video/*,audio/*,.txt,.pdf,.doc,.docx,.md"
-                  onChange={(event) => setTestFile(event.target.files?.[0] || null)}
-                />
-              </label>
-              <div className="console-actions">
-                <button disabled={consoleBusy} onClick={runHealthCheck}>
-                  <i className={`fa ${consoleBusy ? "fa-spinner detect-spin" : "fa-heartbeat"}`} /> 健康检查
-                </button>
-                <button disabled={consoleBusy || !testFile} onClick={runDetectTest}>
-                  <i className={`fa ${consoleBusy ? "fa-spinner detect-spin" : "fa-play"}`} /> 运行鉴伪测试
-                </button>
+    <main className="main developer-docs-page">
+      <div className="container developer-platform docs-platform">
+        <div className="docs-shell">
+          <aside className="docs-sidebar" aria-label="开发者文档目录">
+            <a className="docs-brand" href="#overview">
+              <span><i className="fa fa-shield" /></span>
+              <div>
+                <strong>RealGuard API</strong>
+                <small>Developer Docs</small>
               </div>
-              {consoleStatus && <StatusPill status={consoleStatus} />}
-              {consoleMeta && (
-                <div className="console-meta">
-                  <span>{consoleMeta.endpoint}</span>
-                  <span>{consoleMeta.elapsedMs}ms</span>
-                  <span>{consoleMeta.at}</span>
+            </a>
+            {docsNavGroups.map((group) => (
+              <div className="docs-sidebar-group" key={group.title}>
+                <div className="docs-sidebar-title">{group.title}</div>
+                {group.links.map(([href, label]) => (
+                  <a key={href} href={href}>{label}</a>
+                ))}
+              </div>
+            ))}
+            <div className="docs-sidebar-card">
+              <span>Base URL</span>
+              <code>{REALGUARD_API_BASE}</code>
+            </div>
+          </aside>
+
+          <article className="docs-main">
+            <section id="overview" className="docs-section docs-hero-section">
+              <div className="docs-hero-copy">
+                <div className="developer-badges">
+                  <span>Public API</span>
+                  <span>Agent Skill</span>
+                  <span>Multipart Upload</span>
                 </div>
-              )}
-            </div>
-            <div className="console-result">
-              <div className="console-result-header">
-                <span>响应 JSON</span>
-                {renderedResult && (
-                  <button onClick={() => navigator.clipboard?.writeText(renderedResult)}>复制</button>
-                )}
+                <h1>RealGuard Developer API</h1>
+                <p>
+                  面向 OpenClaw、外部 AI Agent 和业务系统的鉴伪接口文档。
+                  这里提供公开 Skill、Base URL、认证方式、请求参数、响应字段、错误处理和在线测试台。
+                </p>
+                <div className="docs-hero-actions">
+                  <a href="#quickstart">开始调用</a>
+                  <a href="#console" className="secondary">在线测试 API</a>
+                </div>
               </div>
-              <pre>{renderedResult || "运行健康检查或鉴伪测试后，响应 JSON 会显示在这里。"}</pre>
-            </div>
-          </div>
-        </section>
-
-        <section className="developer-doc-section">
-          <div className="developer-doc-header">
-            <h3>接口目录</h3>
-            <a href={REALGUARD_API_DOC_URL} target="_blank" rel="noreferrer">打开完整 Markdown 文档</a>
-          </div>
-          <div className="developer-table">
-            {endpoints.map(([method, path, desc]) => (
-              <div className="developer-table-row" key={`${method}-${path}`}>
-                <span className={`method method-${method.toLowerCase()}`}>{method}</span>
-                <code>{path}</code>
-                <p>{desc}</p>
+              <div className="docs-info-card">
+                <label>API Base URL</label>
+                <code>{REALGUARD_API_BASE}</code>
+                <label>Public Skill URL</label>
+                <code>{REALGUARD_SKILL_URL}</code>
+                <label>Full Markdown Docs</label>
+                <code>{REALGUARD_API_DOC_URL}</code>
               </div>
-            ))}
-          </div>
-        </section>
+            </section>
 
-        <section className="developer-doc-section">
-          <div className="developer-doc-header">
-            <h3>代码示例</h3>
-          </div>
-          <div className="developer-grid">
-            <div className="developer-card">
-              <h3><i className="fa fa-jsfiddle" /> JavaScript Fetch</h3>
-              <pre>{jsExample}</pre>
-            </div>
-            <div className="developer-card">
-              <h3><i className="fa fa-code" /> Python Requests</h3>
-              <pre>{pythonExample}</pre>
-            </div>
-            <div className="developer-card developer-card-wide">
-              <h3><i className="fa fa-terminal" /> RealGuard CLI</h3>
-              <pre>{cliExample}</pre>
-            </div>
-          </div>
-        </section>
-
-        <section className="developer-doc-section">
-          <div className="developer-doc-header">
-            <h3>企业接入标准</h3>
-          </div>
-          <div className="developer-fields">
-            <div><code>版本固定</code><p>记录 `modelVersion` 与 `cacheVersion`，避免不同分析版本混用。</p></div>
-            <div><code>审计留痕</code><p>保存原始 JSON、`taskId`、`reportId`、文件摘要和调用时间。</p></div>
-            <div><code>错误处理</code><p>对 4xx 展示请求问题，对 5xx 做重试或降级；不要吞掉 API 错误。</p></div>
-            <div><code>结论约束</code><p>输出必须包含置信度和限制说明，不得把检测结果表述为绝对证明。</p></div>
-          </div>
-        </section>
-
-        <section className="developer-doc-section">
-          <div className="developer-doc-header">
-            <h3>Agent 应读取的关键字段</h3>
-          </div>
-          <div className="developer-fields">
-            {fields.map(([field, desc]) => (
-              <div key={field}>
-                <code>{field}</code>
-                <p>{desc}</p>
+            <section id="quickstart" className="docs-section">
+              <div className="docs-section-kicker">Getting Started</div>
+              <h2>快速开始</h2>
+              <p className="docs-lead">
+                第一次接入只需要三步：读取公开 Skill、上传文件调用 <code>POST /detect</code>、按
+                <code>agentSummary</code>、<code>verdict</code>、<code>confidence</code> 和 <code>reportId</code> 输出结论。
+              </p>
+              <div className="docs-callout docs-callout-strong">
+                <h3>为什么必须公开 Skill</h3>
+                <p>
+                  别的 agent 访问不到你的本地路径，也无法猜测接口字段、报告下载地址和解释边界。
+                  公开 Skill 后，OpenClaw 只要读取公网 URL，就能稳定调用 API，并知道哪些字段必须带入最终鉴伪结论。
+                </p>
+                <pre>{REALGUARD_SKILL_HANDOFF}</pre>
               </div>
-            ))}
-          </div>
-        </section>
+              <div className="docs-code-block">
+                <div className="docs-code-title"><span className="method method-post">POST</span><span>首次调用 /detect</span></div>
+                <pre>{curlDetectExample}</pre>
+              </div>
+            </section>
 
-        <section className="developer-note">
-          <h3>鉴权与解释边界</h3>
-          <p>
-            如果服务启用访问保护，请在请求头传入 <code>X-Jianzhen-Token</code> 或 <code>Authorization: Bearer &lt;token&gt;</code>。
-            Agent 输出结论时必须说明 <code>source</code>、<code>modelVersion</code> 和 <code>cacheVersion</code>；
-            若 source 为 mock、heuristic 或其他回退链路，应明确标注为演示或辅助信号，不能当作绝对证明。
-          </p>
-        </section>
+            <section id="auth" className="docs-section">
+              <div className="docs-section-kicker">Authentication</div>
+              <h2>认证</h2>
+              <p className="docs-lead">
+                当前公开环境可用于演示；如果服务开启访问保护，请在任一请求头中传入令牌。
+              </p>
+              <div className="docs-code-block compact">
+                <pre>{`X-Jianzhen-Token: <token>
+Authorization: Bearer <token>`}</pre>
+              </div>
+              <div className="docs-callout">
+                <strong>安全建议</strong>
+                <p>Token 不要写进前端源码或公开仓库。自动化 agent 应使用作用域受限的令牌，并记录调用人、时间和文件摘要。</p>
+              </div>
+            </section>
+
+            <section id="reference" className="docs-section">
+              <div className="docs-section-kicker">API Reference</div>
+              <h2>接口总览</h2>
+              <p className="docs-lead">所有接口都基于 <code>{REALGUARD_API_BASE}</code>。上传接口使用 <code>multipart/form-data</code>。</p>
+              <div className="endpoint-index">
+                {endpoints.map((endpoint) => (
+                  <a className="endpoint-index-row" href={endpoint.anchor} key={`${endpoint.method}-${endpoint.path}`}>
+                    <span className={`method method-${endpoint.method.toLowerCase()}`}>{endpoint.method}</span>
+                    <code>{endpoint.path}</code>
+                    <strong>{endpoint.title}</strong>
+                    <p>{endpoint.desc}</p>
+                  </a>
+                ))}
+              </div>
+
+              <div id="health" className="endpoint-detail">
+                <div className="endpoint-heading">
+                  <span className="method method-get">GET</span>
+                  <h3>/health</h3>
+                </div>
+                <p>检查 V2 API 可用性、模型链路状态和访问保护状态。适合作为部署探针和集成前连通性检查。</p>
+                <div className="docs-code-block compact"><pre>{curlHealthExample}</pre></div>
+              </div>
+
+              <div id="detect" className="endpoint-detail">
+                <div className="endpoint-heading">
+                  <span className="method method-post">POST</span>
+                  <h3>/detect</h3>
+                </div>
+                <p>核心鉴伪接口。上传文件后返回任务编号、鉴伪结论、置信度、证据摘要、模型版本和报告编号。</p>
+                <h4>Request body</h4>
+                <div className="docs-table docs-table-4">
+                  <strong>字段</strong><strong>类型</strong><strong>是否必填</strong><strong>说明</strong>
+                  {requestParams.map(([name, type, required, desc]) => (
+                    <Fragment key={name}>
+                      <code>{name}</code><span>{type}</span><span>{required}</span><p>{desc}</p>
+                    </Fragment>
+                  ))}
+                </div>
+                <h4>Response fields</h4>
+                <div className="docs-table docs-table-2">
+                  <strong>字段</strong><strong>说明</strong>
+                  {fields.map(([field, desc]) => (
+                    <Fragment key={field}>
+                      <code>{field}</code><p>{desc}</p>
+                    </Fragment>
+                  ))}
+                </div>
+                <div className="docs-code-block compact"><pre>{curlDetectExample}</pre></div>
+              </div>
+
+              <div id="forensics" className="endpoint-detail">
+                <div className="endpoint-heading">
+                  <span className="method method-post">POST</span>
+                  <h3>/forensics</h3>
+                </div>
+                <p>针对图像返回更细的取证证据，例如 ELA、噪声一致性、频域异常、边缘异常和可解释性摘要。</p>
+                <div className="docs-code-block compact"><pre>{curlForensicsExample}</pre></div>
+              </div>
+
+              <div id="provenance" className="endpoint-detail">
+                <div className="endpoint-heading">
+                  <span className="method method-post">POST</span>
+                  <h3>/provenance</h3>
+                </div>
+                <p>验证 C2PA、SynthID、可见水印和内容凭证信号。适合与 <code>/detect</code> 的模型结论合并展示。</p>
+                <div className="docs-code-block compact"><pre>{curlProvenanceExample}</pre></div>
+              </div>
+
+              <div id="reports" className="endpoint-detail">
+                <div className="endpoint-heading">
+                  <span className="method method-get">GET</span>
+                  <h3>/report/{"{reportId}"}/download</h3>
+                </div>
+                <p>根据检测返回的 <code>reportId</code> 下载报告，用于外部系统归档、审计或人工复核。</p>
+                <div className="docs-table docs-table-4">
+                  <strong>路径参数</strong><strong>类型</strong><strong>是否必填</strong><strong>说明</strong>
+                  {reportPathParams.map(([name, type, required, desc]) => (
+                    <Fragment key={name}>
+                      <code>{name}</code><span>{type}</span><span>{required}</span><p>{desc}</p>
+                    </Fragment>
+                  ))}
+                </div>
+                <div className="docs-code-block compact"><pre>{curlReportExample}</pre></div>
+              </div>
+            </section>
+
+            <section id="errors" className="docs-section">
+              <div className="docs-section-kicker">Errors</div>
+              <h2>错误码</h2>
+              <p className="docs-lead">Agent 不应该吞掉 API 错误。4xx 通常是请求或权限问题，5xx 应记录上下文后重试或降级。</p>
+              <div className="docs-table docs-table-3">
+                <strong>HTTP</strong><strong>名称</strong><strong>处理方式</strong>
+                {errorRows.map(([code, name, desc]) => (
+                  <Fragment key={code}>
+                    <code>{code}</code><span>{name}</span><p>{desc}</p>
+                  </Fragment>
+                ))}
+              </div>
+            </section>
+
+            <section id="examples" className="docs-section">
+              <div className="docs-section-kicker">Examples</div>
+              <h2>代码示例</h2>
+              <div className="docs-code-grid">
+                <div className="docs-code-block">
+                  <div className="docs-code-title"><i className="fa fa-jsfiddle" /> JavaScript Fetch</div>
+                  <pre>{jsExample}</pre>
+                </div>
+                <div className="docs-code-block">
+                  <div className="docs-code-title"><i className="fa fa-code" /> Python Requests</div>
+                  <pre>{pythonExample}</pre>
+                </div>
+                <div className="docs-code-block">
+                  <div className="docs-code-title"><i className="fa fa-terminal" /> RealGuard CLI</div>
+                  <pre>{cliExample}</pre>
+                </div>
+              </div>
+            </section>
+
+            <section id="console" className="docs-section docs-console-section">
+              <div className="docs-section-kicker">API Console</div>
+              <h2>在线 API 测试台</h2>
+              <p className="docs-lead">在网站内直接测试健康检查和鉴伪上传，验证 Token、接口连通性、响应字段和耗时。</p>
+              <div className="console-layout">
+                <div className="console-controls">
+                  <label>
+                    访问令牌（可选）
+                    <input
+                      type="password"
+                      placeholder="X-Jianzhen-Token"
+                      value={token}
+                      onChange={(event) => setToken(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    文件类型
+                    <select value={fileType} onChange={(event) => setFileType(event.target.value)}>
+                      <option value="image">image</option>
+                      <option value="video">video</option>
+                      <option value="audio">audio</option>
+                      <option value="document">document</option>
+                    </select>
+                  </label>
+                  <label>
+                    测试文件
+                    <input
+                      type="file"
+                      accept="image/*,video/*,audio/*,.txt,.pdf,.doc,.docx,.md"
+                      onChange={(event) => setTestFile(event.target.files?.[0] || null)}
+                    />
+                  </label>
+                  <div className="console-actions">
+                    <button disabled={consoleBusy} onClick={runHealthCheck}>
+                      <i className={`fa ${consoleBusy ? "fa-spinner detect-spin" : "fa-heartbeat"}`} /> 健康检查
+                    </button>
+                    <button disabled={consoleBusy || !testFile} onClick={runDetectTest}>
+                      <i className={`fa ${consoleBusy ? "fa-spinner detect-spin" : "fa-play"}`} /> 运行鉴伪测试
+                    </button>
+                  </div>
+                  {consoleStatus && <StatusPill status={consoleStatus} />}
+                  {consoleMeta && (
+                    <div className="console-meta">
+                      <span>{consoleMeta.endpoint}</span>
+                      <span>{consoleMeta.elapsedMs}ms</span>
+                      <span>{consoleMeta.at}</span>
+                    </div>
+                  )}
+                </div>
+                <div className="console-result">
+                  <div className="console-result-header">
+                    <span>响应 JSON</span>
+                    {renderedResult && (
+                      <button onClick={() => navigator.clipboard?.writeText(renderedResult)}>复制</button>
+                    )}
+                  </div>
+                  <pre>{renderedResult || "运行健康检查或鉴伪测试后，响应 JSON 会显示在这里。"}</pre>
+                </div>
+              </div>
+            </section>
+
+            <section id="agent-fields" className="docs-section">
+              <div className="docs-section-kicker">Agent Output</div>
+              <h2>Agent 应读取的关键字段</h2>
+              <p className="docs-lead">外部 agent 输出时至少包含结论、置信度、证据摘要、版本和报告编号，避免只输出一句“真假”。</p>
+              <div className="developer-fields">
+                {fields.map(([field, desc]) => (
+                  <div key={field}>
+                    <code>{field}</code>
+                    <p>{desc}</p>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section id="enterprise" className="docs-section">
+              <div className="docs-section-kicker">Enterprise</div>
+              <h2>企业接入标准</h2>
+              <div className="developer-fields">
+                <div><code>版本固定</code><p>记录 <code>modelVersion</code> 与 <code>cacheVersion</code>，避免不同分析版本混用。</p></div>
+                <div><code>审计留痕</code><p>保存原始 JSON、<code>taskId</code>、<code>reportId</code>、文件摘要和调用时间。</p></div>
+                <div><code>错误处理</code><p>对 4xx 展示请求问题，对 5xx 做重试或降级；不要吞掉 API 错误。</p></div>
+                <div><code>结论约束</code><p>输出必须包含置信度和限制说明，不得把检测结果表述为绝对证明。</p></div>
+              </div>
+            </section>
+
+            <section id="resources" className="docs-section docs-resource-section">
+              <div className="docs-section-kicker">Resources</div>
+              <h2>公开资源</h2>
+              <div className="docs-resource-grid">
+                <a href={REALGUARD_SKILL_URL} target="_blank" rel="noreferrer">
+                  <span>Agent Skill</span>
+                  <code>{REALGUARD_SKILL_URL}</code>
+                </a>
+                <a href={REALGUARD_API_DOC_URL} target="_blank" rel="noreferrer">
+                  <span>Markdown API Docs</span>
+                  <code>{REALGUARD_API_DOC_URL}</code>
+                </a>
+                <a href="/v2/">
+                  <span>V2 Agent Console</span>
+                  <code>http://124.222.3.205/v2/</code>
+                </a>
+              </div>
+              <div className="docs-callout">
+                <strong>解释边界</strong>
+                <p>
+                  API 结果是鉴伪证据，不是绝对证明。Agent 必须说明 <code>source</code>、<code>modelVersion</code> 和
+                  <code>cacheVersion</code>；若 source 为 mock、heuristic 或回退链路，应明确标注限制。
+                </p>
+              </div>
+            </section>
+          </article>
+        </div>
       </div>
     </main>
   );
