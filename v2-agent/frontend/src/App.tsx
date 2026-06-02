@@ -45,10 +45,11 @@ const QUICK_COMMANDS = [
 ];
 const HISTORY_PAGE_SIZE = 100;
 const SKILL_NAME = "$realguard-forensics";
+const SKILL_URL = "http://realguard.cn/v2/skills/realguard-forensics/SKILL.md";
 const SKILL_COMMAND =
   "python3 scripts/realguard_cli.py detect <file> --base-url http://realguard.cn --api-prefix /v2-api --pretty";
 const SKILL_HANDOFF =
-  `Use ${SKILL_NAME} and run ${SKILL_COMMAND}, then return a concise verdict with confidence, evidence, model version, cache version, and report id.`;
+  `Use ${SKILL_NAME}; read ${SKILL_URL}; call POST http://realguard.cn/v2-api/detect with multipart field file, or run ${SKILL_COMMAND} if the repo CLI is available; then return a concise verdict with confidence, evidence, model version, cache version, and report id.`;
 
 function inferType(name: string): FileType {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
@@ -705,30 +706,29 @@ function SkillInterventionCard({
   onCopyCommand: () => void;
 }) {
   return (
-    <section className="overflow-hidden rounded-2xl border border-brand-cyan/25 bg-ink-800 shadow-sm">
-      <div className="flex flex-col gap-4 p-4 sm:p-5 lg:flex-row lg:items-stretch lg:justify-between">
+    <section className="overflow-hidden rounded-3xl border border-brand-cyan/30 bg-ink-800 shadow-md shadow-brand-cyan/5">
+      <div className="flex flex-col gap-5 p-5 sm:p-7 lg:flex-row lg:items-stretch lg:justify-between">
         <div className="min-w-0 flex-1">
           <div className="mb-3 flex flex-wrap items-center gap-2">
-            <span className="rounded-full border border-jade/30 bg-jade/10 px-2.5 py-1 text-[11px] font-semibold tracking-[0.18em] text-jade">
+            <span className="rounded-full border border-jade/30 bg-jade/10 px-3 py-1.5 text-xs font-semibold tracking-[0.18em] text-jade">
               SKILL 已介入
             </span>
-            <span className="rounded-full border border-brand-cyan/30 bg-brand-cyan/10 px-2.5 py-1 text-[11px] text-brand-cyan">
+            <span className="rounded-full border border-brand-cyan/30 bg-brand-cyan/10 px-3 py-1.5 text-xs text-brand-cyan">
               OpenClaw / AI Agent 可调用
             </span>
           </div>
-          <h2 className="font-serif text-lg font-semibold text-rice sm:text-xl">
-            {SKILL_NAME} 正在把网页鉴伪能力开放给外部 Agent
+          <h2 className="font-serif text-2xl font-semibold text-rice sm:text-3xl">
+            {SKILL_NAME} 是给外部 Agent 的公开鉴伪入口
           </h2>
-          <p className="mt-2 max-w-3xl text-sm leading-relaxed text-ink-500">
-            网页端检测、CLI 调用和 skill 说明已经打通。其他 Agent 只需要读取仓库里的
-            <span className="mx-1 font-mono text-ink-950">skills/realguard-forensics/SKILL.md</span>
-            ，再按下面的一句话执行，就能获得同一套 RealGuard 鉴伪结论。
+          <p className="mt-3 max-w-4xl text-base leading-relaxed text-ink-500">
+            必须公开 skill 的原因是：OpenClaw 等外部 agent 无法读取你的本地仓库路径，也不知道 RealGuard 的 API、输出字段和解释边界。
+            让它读取 <span className="mx-1 font-mono text-ink-950">{SKILL_URL}</span> 后，就能直接调用公开 V2 API 或仓库 CLI，稳定输出可审计的鉴伪结论。
           </p>
           <div className="mt-4 grid gap-3 md:grid-cols-3">
             {[
-              ["1", "读取 Skill", "定位 SKILL.md，理解鉴伪流程和解释边界。"],
-              ["2", "调用 CLI", "上传文件到 V2 API，输出 agentSummary 与证据字段。"],
-              ["3", "返回结论", "引用 verdict、confidence、模型版本和报告号。"],
+              ["1", "读取公网 Skill", "通过 URL 获取鉴伪流程、API 和解释边界。"],
+              ["2", "调用 V2 API / CLI", "上传文件，输出 agentSummary 与证据字段。"],
+              ["3", "返回带证据结论", "引用 verdict、confidence、模型版本和报告号。"],
             ].map(([step, title, desc]) => (
               <div key={step} className="rounded-xl border border-ink-600 bg-ink-900 px-3 py-3">
                 <div className="mb-2 flex items-center gap-2">
@@ -744,6 +744,20 @@ function SkillInterventionCard({
         </div>
 
         <div className="flex w-full shrink-0 flex-col gap-3 lg:w-[420px]">
+          <div className="rounded-xl border border-ink-600 bg-ink-900 p-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-ink-950">公开 Skill URL</span>
+              <button
+                onClick={() => navigator.clipboard?.writeText(SKILL_URL)}
+                className="rounded-lg border border-jade/30 px-2.5 py-1 text-xs text-jade hover:bg-jade/10"
+              >
+                复制
+              </button>
+            </div>
+            <code className="block whitespace-pre-wrap break-words rounded-lg bg-ink-800 px-3 py-2 font-mono text-[11px] leading-relaxed text-ink-950">
+              {SKILL_URL}
+            </code>
+          </div>
           <div className="rounded-xl border border-ink-600 bg-ink-900 p-3">
             <div className="mb-2 flex items-center justify-between gap-2">
               <span className="text-xs font-medium text-ink-950">给 OpenClaw 的一句话</span>

@@ -38,8 +38,9 @@ const emptyCounters: Counters = {
   video_retrieve: 0
 };
 const HISTORY_PAGE_SIZE = 100;
+const REALGUARD_SKILL_URL = "http://realguard.cn/skills/realguard-forensics/SKILL.md";
 const REALGUARD_SKILL_HANDOFF =
-  "Use $realguard-forensics and run python3 scripts/realguard_cli.py detect <file> --base-url http://realguard.cn --api-prefix /v2-api --pretty, then return a concise verdict with confidence, evidence, model version, cache version, and report id.";
+  `Use $realguard-forensics; read ${REALGUARD_SKILL_URL}; call POST http://realguard.cn/v2-api/detect with multipart field file, or run python3 scripts/realguard_cli.py detect <file> --base-url http://realguard.cn --api-prefix /v2-api --pretty if the repo CLI is available; then return a concise verdict with confidence, evidence, model version, cache version, and report id.`;
 const REALGUARD_SKILL_COMMAND =
   "python3 scripts/realguard_cli.py detect <file> --base-url http://realguard.cn --api-prefix /v2-api --pretty";
 
@@ -373,6 +374,12 @@ function HomePage({ counters, setPage }: { counters: Counters; setPage: (page: P
         </div>
       </section>
 
+      <section className="section skill-entry-section">
+        <div className="container">
+          <SkillEntryPanel />
+        </div>
+      </section>
+
       <section className="section section-alt">
         <div className="container">
           <SectionHeader title="核心功能" desc="图像鉴伪、视频侵权检测、图像侵权检索、视频侵权检索，并提供独立 V2 Agent 体验入口" />
@@ -383,7 +390,6 @@ function HomePage({ counters, setPage }: { counters: Counters; setPage: (page: P
             <FeatureCard accent="#8b5cf6" icon="fa-play-circle" title="视频侵权检索" desc="检索疑似侵权的视频，在数据库中快速定位相似可疑视频内容。" onClick={() => setPage("retrieve")} />
             <FeatureCard accent="var(--primary-dark)" icon="fa-bolt" title="V2 鉴伪 Agent" desc="独立新版系统，使用 qwen3-vl-flash 融合 ELA、噪声残差等取证证据。" onClick={() => { window.location.href = "/v2/"; }} />
           </div>
-          <SkillEntryPanel />
         </div>
       </section>
 
@@ -443,20 +449,22 @@ function SkillEntryPanel() {
           <span><i className="fa fa-plug" /> SKILL 已介入</span>
           <span>OpenClaw / AI Agent 可调用</span>
         </div>
-        <h3>$realguard-forensics 已把网页鉴伪能力开放给外部 Agent</h3>
+        <h3>$realguard-forensics 是给外部 Agent 的公开鉴伪入口</h3>
         <p>
-          其他 agent 读取 <code>skills/realguard-forensics/SKILL.md</code> 后，即可通过 CLI 调用同一套 V2 鉴伪能力，
-          输出 agentSummary、证据字段、模型版本、缓存版本和报告号。
+          必须做成公开 skill 的原因很直接：OpenClaw 等外部 agent 访问不到你的本地仓库路径，也不知道接口字段、报告字段和解释边界。
+          让它读取公网 <code>{REALGUARD_SKILL_URL}</code> 后，就能直接调用公开 V2 API 或仓库 CLI，稳定输出可审计的鉴伪结论。
         </p>
         <div className="skill-flow">
-          <span>读取 Skill</span>
+          <span>读取公网 Skill</span>
           <i className="fa fa-arrow-right" />
-          <span>调用 CLI</span>
+          <span>调用 V2 API / CLI</span>
           <i className="fa fa-arrow-right" />
-          <span>返回鉴伪结论</span>
+          <span>返回带证据的结论</span>
         </div>
       </div>
       <div className="skill-entry-code">
+        <label>公开 Skill URL</label>
+        <code>{REALGUARD_SKILL_URL}</code>
         <label>给 OpenClaw 的一句话</label>
         <code>{REALGUARD_SKILL_HANDOFF}</code>
         <label>CLI 命令</label>
