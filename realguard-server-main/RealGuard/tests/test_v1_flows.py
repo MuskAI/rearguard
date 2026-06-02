@@ -163,53 +163,104 @@ def test_developer_api_key_lifecycle(client, monkeypatch):
 
 def test_developer_token_usage_proxy_uses_current_user(client, monkeypatch):
     _login_session(client)
-    monkeypatch.setattr(api, "DEVELOPER_AUTH_SECRET", "internal-secret")
-    monkeypatch.setattr(api, "DEVELOPER_USAGE_URL", "http://127.0.0.1:8848/api/developer/token-usage")
-    captured = {}
-
-    class FakeSession:
-        trust_env = True
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return None
-
-        def get(self, url, params=None, headers=None, timeout=None):
-            captured["url"] = url
-            captured["params"] = params
-            captured["headers"] = headers
-            captured["timeout"] = timeout
-            captured["trust_env"] = self.trust_env
-            return _FakeResponse({
-                "days": 7,
-                "summary": {
-                    "totalRequests": 2,
-                    "billableRequests": 1,
-                    "cacheHits": 1,
-                    "promptTokens": 12,
-                    "completionTokens": 7,
-                    "totalTokens": 19,
-                    "lastEventAt": "2026-06-02T10:00:00+00:00",
-                },
-                "byDay": [],
-                "byEndpoint": [],
-                "byModel": [],
-                "byKey": [],
-            })
-
-    monkeypatch.setattr(api.requests, "Session", lambda: FakeSession())
+    monkeypatch.setattr(
+        api,
+        "_developer_usage_from_v1",
+        lambda user_id, days: {
+            "days": days,
+            "summary": {
+                "totalRequests": 3,
+                "billableRequests": 3,
+                "cacheHits": 0,
+                "promptTokens": 0,
+                "completionTokens": 0,
+                "totalTokens": 0,
+                "lastEventAt": "2026-06-02T10:00:00",
+            },
+            "byDay": [{"date": "2026-06-02", "requests": 3, "billableRequests": 3, "cacheHits": 0, "promptTokens": 0, "completionTokens": 0, "totalTokens": 0}],
+            "byEndpoint": [{"endpoint": "/api/developer/v1/detect", "requests": 3, "totalTokens": 0}],
+            "byModel": [{"modelVersion": "realguard-v1-image", "requests": 3, "totalTokens": 0}],
+            "byKey": [],
+        },
+    )
+    monkeypatch.setattr(
+        api,
+        "_developer_usage_from_v2",
+        lambda user_id, days: {
+            "days": days,
+            "summary": {
+                "totalRequests": 2,
+                "billableRequests": 1,
+                "cacheHits": 1,
+                "promptTokens": 12,
+                "completionTokens": 7,
+                "totalTokens": 19,
+                "lastEventAt": "2026-06-02T10:05:00+00:00",
+            },
+            "byDay": [{"date": "2026-06-02", "requests": 2, "billableRequests": 1, "cacheHits": 1, "promptTokens": 12, "completionTokens": 7, "totalTokens": 19}],
+            "byEndpoint": [{"endpoint": "/api/detect", "requests": 2, "totalTokens": 19}],
+            "byModel": [{"modelVersion": "qwen3-vl-flash", "requests": 2, "totalTokens": 19}],
+            "byKey": [],
+        },
+    )
 
     response = client.get("/api/developer/usage?days=7")
 
     assert response.status_code == 200
-    payload = response.get_json()
-    assert payload["usage"]["summary"]["totalTokens"] == 19
-    assert captured["url"] == "http://127.0.0.1:8848/api/developer/token-usage"
-    assert captured["params"] == {"developerUserId": "1", "days": "7"}
-    assert captured["headers"]["X-RealGuard-Internal-Secret"] == "internal-secret"
-    assert captured["trust_env"] is False
+    summary = response.get_json()["usage"]["summary"]
+    assert summary["totalCalls"] == 5
+    assert summary["v1Calls"] == 3
+    assert summary["v2Calls"] == 2
+    assert summary["totalTokens"] == 19
+
+
+def test_developer_v1_detect_uses_api_key_and_records_call(client, monkeypatch):
+    recorded = {}
+
+    monkeypatch.setattr(
+        api,
+        "_developer_key_required",
+        lambda: ({
+            "id": 9,
+            "user_id": 1,
+            "username": "tester",
+            "phone": "13800000000",
+            "openid": "openid-1",
+        }, None),
+    )
+    monkeypatch.setattr(
+        api,
+        "image_detect_for_actor",
+        lambda user_info, is_guest=False: api.jsonify({
+            "status": "success",
+            "result": {
+                "itemid": 22,
+                "final_label": "AI生成图像",
+                "probability": 0.73,
+                "modelVersion": "realguard-v1-image",
+            },
+        }),
+    )
+
+    def fake_record(actor, **kwargs):
+        recorded["actor"] = actor
+        recorded["kwargs"] = kwargs
+        return True
+
+    monkeypatch.setattr(api, "_record_developer_usage_event", fake_record)
+
+    response = client.post(
+        "/api/developer/v1/detect",
+        headers={"X-RealGuard-Key": "rg_sk_test"},
+        data={"file": (BytesIO(b"fake-image"), "demo.png")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["result"]["modelVersion"] == "realguard-v1-image"
+    assert recorded["actor"]["id"] == 9
+    assert recorded["kwargs"]["pipeline"] == "v1"
+    assert recorded["kwargs"]["endpoint"] == "/api/developer/v1/detect"
 
 
 def test_guest_image_detect_returns_rewritten_url_and_then_blocks(client, monkeypatch):

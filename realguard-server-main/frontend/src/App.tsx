@@ -38,6 +38,7 @@ type Status = { tone: "ok" | "error" | "info"; text: string } | null;
 type AuthMode = "password" | "sms" | "register";
 type HistoryTabKey = "image" | "video" | "imageRetrieve" | "videoRetrieve";
 type HistorySummaryCard = { label: string; value: number | string; filterKey?: HistoryFilterKey };
+type DeveloperSkillMode = "v2" | "v1";
 
 const emptyCounters: Counters = {
   image_detect: 0,
@@ -48,12 +49,19 @@ const emptyCounters: Counters = {
 const HISTORY_PAGE_SIZE = 100;
 const REALGUARD_PUBLIC_ORIGIN = typeof window === "undefined" ? "http://124.222.3.205" : window.location.origin;
 const REALGUARD_API_BASE = `${REALGUARD_PUBLIC_ORIGIN}/v2-api`;
+const REALGUARD_V1_API_BASE = `${REALGUARD_PUBLIC_ORIGIN}/api/developer/v1`;
 const REALGUARD_SKILL_URL = `${REALGUARD_PUBLIC_ORIGIN}/skills/realguard-forensics/SKILL.md`;
 const REALGUARD_API_DOC_URL = `${REALGUARD_PUBLIC_ORIGIN}/developer/API.md`;
-const REALGUARD_SKILL_HANDOFF =
-  `Use $realguard-forensics; read ${REALGUARD_SKILL_URL}; call POST ${REALGUARD_API_BASE}/detect with multipart field file and X-RealGuard-Key, or run python3 scripts/realguard_cli.py detect <file> --base-url ${REALGUARD_PUBLIC_ORIGIN} --api-prefix /v2-api --token <your-api-key> --pretty if the repo CLI is available; then return a concise verdict with confidence, evidence, model version, cache version, and report id.`;
-const REALGUARD_SKILL_COMMAND =
+const REALGUARD_SKILL_HANDOFF_V2 =
+  `Use $realguard-forensics; read ${REALGUARD_SKILL_URL}; call POST ${REALGUARD_API_BASE}/detect with multipart field file and X-RealGuard-Key, or run python3 scripts/realguard_cli.py detect <file> --base-url ${REALGUARD_PUBLIC_ORIGIN} --api-prefix /v2-api --token <your-api-key> --pretty if the repo CLI is available; then return verdict, confidence, evidence, source, modelVersion, cacheVersion, tokenUsage, and reportId.`;
+const REALGUARD_SKILL_HANDOFF_V1 =
+  `Use $realguard-forensics in V1 mode; read ${REALGUARD_SKILL_URL}; call POST ${REALGUARD_V1_API_BASE}/detect with multipart field file and X-RealGuard-Key to use the RealGuard V1 image model; then return result.final_label, result.probability, result.confidence, result.visual_issues, result.itemid, and explain that V1 records call count but does not return tokenUsage.`;
+const REALGUARD_SKILL_COMMAND_V2 =
   `python3 scripts/realguard_cli.py detect <file> --base-url ${REALGUARD_PUBLIC_ORIGIN} --api-prefix /v2-api --token <your-api-key> --pretty`;
+const REALGUARD_SKILL_COMMAND_V1 =
+  `curl -fsS -X POST ${REALGUARD_V1_API_BASE}/detect \\
+  -H "X-RealGuard-Key: <your-api-key>" \\
+  -F "file=@/path/to/image.png"`;
 const IMAGE_MAX_BYTES = 25 * 1024 * 1024;
 const VIDEO_MAX_BYTES = 512 * 1024 * 1024;
 const V2_CONSOLE_MAX_BYTES = 25 * 1024 * 1024;
@@ -472,7 +480,49 @@ function FeatureCard({ accent, icon, title, desc, onClick }: { accent: string; i
   );
 }
 
+function CopySnippetCard({
+  id,
+  title,
+  desc,
+  text,
+  copiedId,
+  onCopy,
+}: {
+  id: string;
+  title: string;
+  desc: string;
+  text: string;
+  copiedId: string;
+  onCopy: (id: string, text: string) => void;
+}) {
+  const copied = copiedId === id;
+  return (
+    <button type="button" className={`copy-snippet-card ${copied ? "copied" : ""}`} onClick={() => onCopy(id, text)}>
+      <span>{copied ? "已复制" : "点击复制"}</span>
+      <strong>{title}</strong>
+      <p>{desc}</p>
+      <code>{text}</code>
+    </button>
+  );
+}
+
+async function copyTextToClipboard(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  window.prompt("复制以下内容", text);
+}
+
 function SkillEntryPanel() {
+  const [copiedId, setCopiedId] = useState("");
+
+  async function copySkill(id: string, text: string) {
+    await copyTextToClipboard(text);
+    setCopiedId(id);
+    window.setTimeout(() => setCopiedId(""), 1800);
+  }
+
   return (
     <div className="skill-entry-panel fade-up visible">
       <div className="skill-entry-main">
@@ -483,23 +533,20 @@ function SkillEntryPanel() {
         <h3>$realguard-forensics 是给外部 Agent 的公开鉴伪入口</h3>
         <p>
           必须做成公开 skill 的原因很直接：OpenClaw 等外部 agent 访问不到你的本地仓库路径，也不知道接口字段、报告字段和解释边界。
-          让它读取公网 <code>{REALGUARD_SKILL_URL}</code> 后，就能直接调用公开 V2 API 或仓库 CLI，稳定输出可审计的鉴伪结论。
+          让它读取公网 <code>{REALGUARD_SKILL_URL}</code> 后，就能直接选择 V2 多模态鉴伪或 V1 图像模型，稳定输出可审计的鉴伪结论。
         </p>
         <div className="skill-flow">
           <span>读取公网 Skill</span>
           <i className="fa fa-arrow-right" />
-          <span>调用 V2 API / CLI</span>
+          <span>选择 V2 或 V1</span>
           <i className="fa fa-arrow-right" />
           <span>返回带证据的结论</span>
         </div>
       </div>
       <div className="skill-entry-code">
-        <label>公开 Skill URL</label>
-        <code>{REALGUARD_SKILL_URL}</code>
-        <label>给 OpenClaw 的一句话</label>
-        <code>{REALGUARD_SKILL_HANDOFF}</code>
-        <label>CLI 命令</label>
-        <code>{REALGUARD_SKILL_COMMAND}</code>
+        <CopySnippetCard id="skill-url" title="公开 Skill URL" desc="让别的 agent 先读取这一份公共说明。" text={REALGUARD_SKILL_URL} copiedId={copiedId} onCopy={copySkill} />
+        <CopySnippetCard id="skill-v2" title="复制 V2 Skill 调用" desc="优先推荐：多模态检测、报告、tokenUsage。" text={REALGUARD_SKILL_HANDOFF_V2} copiedId={copiedId} onCopy={copySkill} />
+        <CopySnippetCard id="skill-v1" title="复制 V1 Skill 调用" desc="走 RealGuard V1 图像模型，统计调用次数。" text={REALGUARD_SKILL_HANDOFF_V1} copiedId={copiedId} onCopy={copySkill} />
         <button onClick={() => { window.location.href = "/v2/"; }}>
           进入 V2 Agent <i className="fa fa-arrow-right" />
         </button>
@@ -518,6 +565,8 @@ function DeveloperPlatformPage({ user, onNeedAuth }: { user: User | null; onNeed
   const [generatedKey, setGeneratedKey] = useState("");
   const [keyBusy, setKeyBusy] = useState(false);
   const [keyStatus, setKeyStatus] = useState<Status>(null);
+  const [copiedDocId, setCopiedDocId] = useState("");
+  const [skillMode, setSkillMode] = useState<DeveloperSkillMode>("v2");
   const [usageDays, setUsageDays] = useState(30);
   const [usage, setUsage] = useState<DeveloperTokenUsage | null>(null);
   const [usageBusy, setUsageBusy] = useState(false);
@@ -603,15 +652,22 @@ function DeveloperPlatformPage({ user, onNeedAuth }: { user: User | null; onNeed
       setKeyBusy(false);
     }
   }
+
+  async function copyDeveloperText(id: string, text: string) {
+    await copyTextToClipboard(text);
+    setCopiedDocId(id);
+    window.setTimeout(() => setCopiedDocId(""), 1800);
+  }
   const docsNavGroups = [
     {
       title: "开始使用",
       links: [
         ["#overview", "总览"],
         ["#quickstart", "快速开始"],
+        ["#skill-copy", "复制 Skill"],
         ["#auth", "认证"],
         ["#api-keys", "API Keys"],
-        ["#token-usage", "Token 用量"],
+        ["#token-usage", "调用统计"],
       ],
     },
     {
@@ -619,6 +675,7 @@ function DeveloperPlatformPage({ user, onNeedAuth }: { user: User | null; onNeed
       links: [
         ["#reference", "接口总览"],
         ["#detect", "Detect"],
+        ["#v1-detect", "V1 Detect"],
         ["#forensics", "Forensics"],
         ["#provenance", "Provenance"],
         ["#reports", "Reports"],
@@ -644,7 +701,8 @@ function DeveloperPlatformPage({ user, onNeedAuth }: { user: User | null; onNeed
   const endpoints = [
     { method: "GET", path: "/health", title: "Health", desc: "公开服务状态、能力摘要、上传限制和访问保护状态。", anchor: "#health" },
     { method: "GET", path: "/admin/health", title: "Admin Health", desc: "受保护的详细诊断接口，返回模型、校准、存储等内部状态。", anchor: "#admin-health" },
-    { method: "POST", path: "/detect", title: "Detect", desc: "核心鉴伪接口。multipart 上传 file，可选 fileType。", anchor: "#detect" },
+    { method: "POST", path: "/detect", title: "V2 Detect", desc: "V2 多模态鉴伪接口。multipart 上传 file，可选 fileType。", anchor: "#detect" },
+    { method: "POST", path: "/api/developer/v1/detect", title: "V1 Detect", desc: "V1 图像模型接口。multipart 上传 file，记录调用次数。", anchor: "#v1-detect" },
     { method: "POST", path: "/forensics", title: "Forensics", desc: "图像可解释性取证分析，返回 ELA、噪声、频域等证据。", anchor: "#forensics" },
     { method: "POST", path: "/provenance", title: "Provenance", desc: "图像 C2PA / SynthID / 内容凭证验证。", anchor: "#provenance" },
     { method: "GET", path: "/report/{reportId}/download", title: "Report Download", desc: "下载 HTML 或结构化报告，用于审计归档。", anchor: "#reports" },
@@ -666,6 +724,13 @@ function DeveloperPlatformPage({ user, onNeedAuth }: { user: User | null; onNeed
     ["source", "vlm / mock / heuristic 等，决定结果可信度说明。"],
     ["reportId", "可用于下载和归档报告的编号。"],
     ["synthid / visibleWatermark", "水印、SynthID、可见水印等附加证据。"],
+  ];
+  const v1Fields = [
+    ["result.final_label", "V1 图像模型输出的最终标签，例如 AI生成图像 / 真实图像。"],
+    ["result.probability", "V1 置信概率，用于排序和阈值判断。"],
+    ["result.confidence", "V1 置信等级。"],
+    ["result.visual_issues", "图像可疑区域、视觉问题或辅助证据。"],
+    ["result.itemid", "V1 站内报告和历史记录使用的编号。"],
   ];
   const errorRows = [
     ["400", "Bad Request", "缺少 file、fileType 不合法或 multipart 格式错误。"],
@@ -690,6 +755,7 @@ console.log(data.agentSummary || data);`;
   -H "X-RealGuard-Key: <your-api-key>" \\
   -F "file=@/path/to/file.png" \\
   -F "fileType=image"`;
+  const curlV1DetectExample = REALGUARD_SKILL_COMMAND_V1;
   const curlHealthExample = `curl -fsS ${REALGUARD_API_BASE}/health`;
   const curlForensicsExample = `curl -fsS -X POST ${REALGUARD_API_BASE}/forensics \\
   -H "X-RealGuard-Key: <your-api-key>" \\
@@ -708,11 +774,7 @@ with open("/path/to/file.png", "rb") as f:
     r = requests.post(url, headers=headers, files={"file": f}, data={"fileType": "image"})
 r.raise_for_status()
 print(r.json().get("agentSummary") or r.json())`;
-  const cliExample = `python3 scripts/realguard_cli.py detect /path/to/file \\
-  --base-url http://124.222.3.205 \\
-  --api-prefix /v2-api \\
-  --token <your-api-key> \\
-  --pretty`;
+  const cliExample = REALGUARD_SKILL_COMMAND_V2;
 
   const runHealthCheck = async () => {
     const started = performance.now();
@@ -759,8 +821,40 @@ print(r.json().get("agentSummary") or r.json())`;
   const renderedResult = consoleResult ? JSON.stringify(consoleResult, null, 2) : "";
   const usageSummary = usage?.summary;
   const recentUsageDays = (usage?.byDay || []).slice(-7);
-  const maxDayTokens = Math.max(1, ...recentUsageDays.map((item) => Number(item.totalTokens || 0)));
+  const totalCalls = Number(usageSummary?.totalCalls ?? usageSummary?.totalRequests ?? 0);
+  const v1Calls = Number(usageSummary?.v1Calls ?? 0);
+  const v2Calls = Number(usageSummary?.v2Calls ?? Math.max(0, totalCalls - v1Calls));
+  const maxDayCalls = Math.max(1, ...recentUsageDays.map((item) => Number(item.requests || 0)));
   const endpointUsage = usage?.byEndpoint || [];
+  const pipelineUsage = usage?.byPipeline?.length
+    ? usage.byPipeline
+    : [
+        { pipeline: "v1", requests: v1Calls, promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        { pipeline: "v2", requests: v2Calls, promptTokens: 0, completionTokens: 0, totalTokens: Number(usageSummary?.totalTokens || 0) },
+      ];
+  const skillOptions = [
+    {
+      id: "v2" as DeveloperSkillMode,
+      title: "V2 多模态 Skill 调用",
+      desc: "推荐默认使用：返回 agentSummary、报告 ID、模型版本和 tokenUsage。",
+      endpoint: "POST /v2-api/detect",
+      text: REALGUARD_SKILL_HANDOFF_V2,
+    },
+    {
+      id: "v1" as DeveloperSkillMode,
+      title: "V1 图像模型 Skill 调用",
+      desc: "用于兼容旧图像鉴伪链路，统计调用次数，响应使用 result.* 字段。",
+      endpoint: "POST /api/developer/v1/detect",
+      text: REALGUARD_SKILL_HANDOFF_V1,
+    },
+  ];
+  const activeSkill = skillOptions.find((item) => item.id === skillMode) || skillOptions[0];
+  const developerActionCards = [
+    { href: "#api-keys", icon: "fa-key", title: "生成 API Key", desc: "注册登录后生成 rg_sk_，绑定个人账号并可随时撤销。" },
+    { href: "#skill-copy", icon: "fa-copy", title: "复制 Skills 接入", desc: "一键复制 V2 或 V1 handoff，让外部 agent 直接使用。" },
+    { href: "#token-usage", icon: "fa-line-chart", title: "查看调用统计", desc: "同时统计 V1/V2 调用次数、Token、缓存命中和端点分布。" },
+    { href: "#console", icon: "fa-terminal", title: "在线测试 API", desc: "直接粘贴 Key、上传文件并查看返回 JSON。" },
+  ];
 
   return (
     <main className="main developer-docs-page">
@@ -783,36 +877,80 @@ print(r.json().get("agentSummary") or r.json())`;
               </div>
             ))}
             <div className="docs-sidebar-card">
-              <span>Base URL</span>
+              <span>V2 Base URL</span>
               <code>{REALGUARD_API_BASE}</code>
+              <span>V1 Base URL</span>
+              <code>{REALGUARD_V1_API_BASE}</code>
             </div>
           </aside>
 
           <article className="docs-main">
-            <section id="overview" className="docs-section docs-hero-section">
-              <div className="docs-hero-copy">
+            <section id="overview" className="docs-section docs-hero-section developer-workbench">
+              <div className="docs-hero-copy developer-workbench-copy">
                 <div className="developer-badges">
                   <span>Public API</span>
                   <span>Agent Skill</span>
+                  <span>V1 / V2</span>
                   <span>Multipart Upload</span>
                 </div>
-                <h1>RealGuard Developer API</h1>
+                <h1>RealGuard Developer Platform</h1>
                 <p>
-                  面向 OpenClaw、外部 AI Agent 和业务系统的鉴伪接口文档。
-                  这里提供公开 Skill、Base URL、认证方式、请求参数、响应字段、错误处理和在线测试台。
+                  面向 OpenClaw、外部 AI Agent 和业务系统的统一接入台。
+                  这里把 API Key、公开 Skill、V1/V2 调用、用量统计和在线测试放在同一屏，避免用户在长文档里找入口。
                 </p>
                 <div className="docs-hero-actions">
-                  <a href="#quickstart">开始调用</a>
+                  <a href="#api-keys">生成 API Key</a>
+                  <a href="#skill-copy" className="secondary">复制 Skill 调用</a>
                   <a href="#console" className="secondary">在线测试 API</a>
                 </div>
+                <div className="developer-action-grid">
+                  {developerActionCards.map((item) => (
+                    <a href={item.href} key={item.href}>
+                      <i className={`fa ${item.icon}`} />
+                      <strong>{item.title}</strong>
+                      <small>{item.desc}</small>
+                    </a>
+                  ))}
+                </div>
               </div>
-              <div className="docs-info-card">
-                <label>API Base URL</label>
-                <code>{REALGUARD_API_BASE}</code>
-                <label>Public Skill URL</label>
-                <code>{REALGUARD_SKILL_URL}</code>
-                <label>Full Markdown Docs</label>
-                <code>{REALGUARD_API_DOC_URL}</code>
+              <div id="skill-copy" className="developer-skill-console">
+                <div className="developer-skill-console-head">
+                  <div>
+                    <span>Skills Copy</span>
+                    <strong>点击即可复制给外部 Agent</strong>
+                  </div>
+                  <code>{activeSkill.endpoint}</code>
+                </div>
+                <div className="skill-mode-toggle" role="tablist" aria-label="选择 Skill 调用模式">
+                  {skillOptions.map((item) => (
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={skillMode === item.id}
+                      className={skillMode === item.id ? "active" : ""}
+                      onClick={() => setSkillMode(item.id)}
+                      key={item.id}
+                    >
+                      {item.id.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+                <CopySnippetCard
+                  id={`developer-skill-${activeSkill.id}`}
+                  title={activeSkill.title}
+                  desc={activeSkill.desc}
+                  text={activeSkill.text}
+                  copiedId={copiedDocId}
+                  onCopy={copyDeveloperText}
+                />
+                <div className="docs-info-card compact-info">
+                  <label>V2 Base URL</label>
+                  <code>{REALGUARD_API_BASE}</code>
+                  <label>V1 Base URL</label>
+                  <code>{REALGUARD_V1_API_BASE}</code>
+                  <label>Public Skill URL</label>
+                  <code>{REALGUARD_SKILL_URL}</code>
+                </div>
               </div>
             </section>
 
@@ -820,8 +958,8 @@ print(r.json().get("agentSummary") or r.json())`;
               <div className="docs-section-kicker">Getting Started</div>
               <h2>快速开始</h2>
               <p className="docs-lead">
-                第一次接入只需要三步：读取公开 Skill、上传文件调用 <code>POST /detect</code>、按
-                <code>agentSummary</code>、<code>verdict</code>、<code>confidence</code> 和 <code>reportId</code> 输出结论。
+                第一次接入只需要三步：读取公开 Skill、按场景选择 V2 多模态或 V1 图像模型、按关键字段输出可审计结论。
+                V2 读取 <code>agentSummary</code> / <code>tokenUsage</code>，V1 读取 <code>result.final_label</code> / <code>result.itemid</code>。
               </p>
               <div className="docs-callout docs-callout-strong">
                 <h3>为什么必须公开 Skill</h3>
@@ -829,7 +967,11 @@ print(r.json().get("agentSummary") or r.json())`;
                   别的 agent 访问不到你的本地路径，也无法猜测接口字段、报告下载地址和解释边界。
                   公开 Skill 后，OpenClaw 只要读取公网 URL，就能稳定调用 API，并知道哪些字段必须带入最终鉴伪结论。
                 </p>
-                <pre>{REALGUARD_SKILL_HANDOFF}</pre>
+                <div className="docs-copy-grid">
+                  <CopySnippetCard id="docs-skill-url" title="复制 Skill URL" desc="给外部 agent 的第一步：读取公共说明。" text={REALGUARD_SKILL_URL} copiedId={copiedDocId} onCopy={copyDeveloperText} />
+                  <CopySnippetCard id="docs-skill-v2" title="复制 V2 Handoff" desc="默认推荐，多模态结果和 tokenUsage 更完整。" text={REALGUARD_SKILL_HANDOFF_V2} copiedId={copiedDocId} onCopy={copyDeveloperText} />
+                  <CopySnippetCard id="docs-skill-v1" title="复制 V1 Handoff" desc="兼容 V1 图像模型，纳入调用次数统计。" text={REALGUARD_SKILL_HANDOFF_V1} copiedId={copiedDocId} onCopy={copyDeveloperText} />
+                </div>
               </div>
               <div className="docs-code-block">
                 <div className="docs-code-title"><span className="method method-post">POST</span><span>首次调用 /detect</span></div>
@@ -896,7 +1038,9 @@ Authorization: Bearer rg_sk_xxx`}</pre>
                           <span>完整 Key 只显示一次</span>
                           <code>{generatedKey}</code>
                           <div>
-                            <button onClick={() => navigator.clipboard?.writeText(generatedKey)}>复制 Key</button>
+                            <button onClick={() => copyDeveloperText("generated-key", generatedKey)}>
+                              {copiedDocId === "generated-key" ? "已复制" : "复制 Key"}
+                            </button>
                             <button onClick={() => setApiKey(generatedKey)}>填入测试台</button>
                           </div>
                         </div>
@@ -934,11 +1078,11 @@ Authorization: Bearer rg_sk_xxx`}</pre>
                   <div id="token-usage" className="token-usage-panel">
                     <div className="token-usage-header">
                       <div>
-                        <div className="docs-section-kicker">Token Usage</div>
-                        <h3>Token 用量统计</h3>
+                        <div className="docs-section-kicker">Usage Analytics</div>
+                        <h3>调用次数与 Token 统计</h3>
                         <p>
-                          Token 统计用于成本控制、缓存命中识别、异常调用审计和按 Key 排查问题。
-                          开发者需要知道每次真实模型调用消耗了多少 prompt / completion token，避免外部 agent 失控重试。
+                          统计不只看 Token，也要看调用次数。V1 图像模型和 V2 多模态接口会合并展示，便于发现外部 agent 重试、
+                          Key 滥用、缓存命中和真实模型成本变化。
                         </p>
                       </div>
                       <div className="token-usage-actions">
@@ -956,56 +1100,67 @@ Authorization: Bearer rg_sk_xxx`}</pre>
                     {usageStatus && <StatusPill status={usageStatus} />}
                     <div className="token-usage-metrics">
                       <div className="token-usage-metric primary">
-                        <span>总 Tokens</span>
+                        <span>总调用次数</span>
+                        <strong>{formatUsageNumber(totalCalls)}</strong>
+                        <small>
+                          V1 {formatUsageNumber(v1Calls)} 次 / V2 {formatUsageNumber(v2Calls)} 次
+                        </small>
+                      </div>
+                      <div className="token-usage-metric">
+                        <span>Token 总量</span>
                         <strong>{formatUsageNumber(usageSummary?.totalTokens)}</strong>
                         <small>
                           Prompt {formatUsageNumber(usageSummary?.promptTokens)} / Completion {formatUsageNumber(usageSummary?.completionTokens)}
                         </small>
                       </div>
                       <div className="token-usage-metric">
-                        <span>调用请求</span>
-                        <strong>{formatUsageNumber(usageSummary?.totalRequests)}</strong>
-                        <small>真实模型消耗 {formatUsageNumber(usageSummary?.billableRequests)} 次</small>
+                        <span>V1 图像模型</span>
+                        <strong>{formatUsageNumber(v1Calls)}</strong>
+                        <small>V1 记录调用次数；响应不返回 tokenUsage</small>
                       </div>
                       <div className="token-usage-metric">
-                        <span>缓存命中</span>
-                        <strong>{formatUsageNumber(usageSummary?.cacheHits)}</strong>
-                        <small>命中缓存不再重复消耗 token</small>
+                        <span>V2 多模态</span>
+                        <strong>{formatUsageNumber(v2Calls)}</strong>
+                        <small>缓存命中 {formatUsageNumber(usageSummary?.cacheHits)} 次；最近 {formatUsageDate(usageSummary?.lastEventAt)}</small>
                       </div>
-                      <div className="token-usage-metric">
-                        <span>最近调用</span>
-                        <strong>{usageSummary?.lastEventAt ? usageSummary.lastEventAt.slice(5, 10) : "--"}</strong>
-                        <small>{formatUsageDate(usageSummary?.lastEventAt)}</small>
-                      </div>
+                    </div>
+                    <div className="usage-pipeline-grid">
+                      {pipelineUsage.map((item) => (
+                        <div key={item.pipeline || "unknown"}>
+                          <span>{String(item.pipeline || "unknown").toUpperCase()}</span>
+                          <strong>{formatUsageNumber(item.requests)} 次</strong>
+                          <small>{formatUsageNumber(item.totalTokens)} tokens</small>
+                        </div>
+                      ))}
                     </div>
                     <div className="token-usage-breakdown">
                       <div className="token-usage-card">
                         <div className="token-usage-card-title">
                           <strong>最近 7 天趋势</strong>
-                          <span>按 total token</span>
+                          <span>按调用次数</span>
                         </div>
                         <div className="token-usage-bars">
                           {recentUsageDays.map((item) => (
                             <div className="token-usage-bar-row" key={item.date}>
                               <span>{item.date?.slice(5).replace("-", "/")}</span>
-                              <div><i style={{ width: `${Math.max(3, (Number(item.totalTokens || 0) / maxDayTokens) * 100)}%` }} /></div>
-                              <strong>{formatUsageNumber(item.totalTokens)}</strong>
+                              <div><i style={{ width: `${Math.max(3, (Number(item.requests || 0) / maxDayCalls) * 100)}%` }} /></div>
+                              <strong>{formatUsageNumber(item.requests)} 次</strong>
                             </div>
                           ))}
                         </div>
                       </div>
                       <div className="token-usage-card">
                         <div className="token-usage-card-title">
-                          <strong>端点消耗</strong>
-                          <span>Detect / Forensics</span>
+                          <strong>端点调用</strong>
+                          <span>Calls / Tokens</span>
                         </div>
                         <div className="token-usage-endpoints">
                           {endpointUsage.length === 0 ? (
                             <p>暂无调用数据。使用在线测试台或外部 agent 调用后会在这里出现。</p>
                           ) : endpointUsage.map((item) => (
-                            <div key={item.endpoint}>
+                            <div key={`${item.pipeline || "v2"}-${item.endpoint}`}>
                               <code>{item.endpoint}</code>
-                              <span>{formatUsageNumber(item.requests)} 次</span>
+                              <span>{String(item.pipeline || "v2").toUpperCase()} · {formatUsageNumber(item.requests)} 次</span>
                               <strong>{formatUsageNumber(item.totalTokens)} tokens</strong>
                             </div>
                           ))}
@@ -1020,7 +1175,10 @@ Authorization: Bearer rg_sk_xxx`}</pre>
             <section id="reference" className="docs-section">
               <div className="docs-section-kicker">API Reference</div>
               <h2>接口总览</h2>
-              <p className="docs-lead">所有接口都基于 <code>{REALGUARD_API_BASE}</code>。上传接口使用 <code>multipart/form-data</code>。</p>
+              <p className="docs-lead">
+                V2 接口基于 <code>{REALGUARD_API_BASE}</code>；V1 图像模型基于 <code>{REALGUARD_V1_API_BASE}</code>。
+                上传接口都使用 <code>multipart/form-data</code>，并传入 <code>X-RealGuard-Key</code>。
+              </p>
               <div className="endpoint-index">
                 {endpoints.map((endpoint) => (
                   <a className="endpoint-index-row" href={endpoint.anchor} key={`${endpoint.method}-${endpoint.path}`}>
@@ -1054,7 +1212,7 @@ Authorization: Bearer rg_sk_xxx`}</pre>
               <div id="detect" className="endpoint-detail">
                 <div className="endpoint-heading">
                   <span className="method method-post">POST</span>
-                  <h3>/detect</h3>
+                  <h3>/detect · V2</h3>
                 </div>
                 <p>核心鉴伪接口。上传文件后返回任务编号、鉴伪结论、置信度、证据摘要、模型版本和报告编号。默认上传上限为 25MB。</p>
                 <h4>Request body</h4>
@@ -1076,6 +1234,27 @@ Authorization: Bearer rg_sk_xxx`}</pre>
                   ))}
                 </div>
                 <div className="docs-code-block compact"><pre>{curlDetectExample}</pre></div>
+              </div>
+
+              <div id="v1-detect" className="endpoint-detail">
+                <div className="endpoint-heading">
+                  <span className="method method-post">POST</span>
+                  <h3>/api/developer/v1/detect · V1</h3>
+                </div>
+                <p>
+                  V1 图像模型接口。适合需要复用旧 RealGuard 图像鉴伪链路的 agent 或业务系统。
+                  请求使用 <code>file</code> 字段上传图片；平台会记录调用次数，但 V1 响应不返回 tokenUsage。
+                </p>
+                <h4>Response fields</h4>
+                <div className="docs-table docs-table-2">
+                  <strong>字段</strong><strong>说明</strong>
+                  {v1Fields.map(([field, desc]) => (
+                    <Fragment key={field}>
+                      <code>{field}</code><p>{desc}</p>
+                    </Fragment>
+                  ))}
+                </div>
+                <div className="docs-code-block compact"><pre>{curlV1DetectExample}</pre></div>
               </div>
 
               <div id="forensics" className="endpoint-detail">
@@ -1143,6 +1322,10 @@ Authorization: Bearer rg_sk_xxx`}</pre>
                 <div className="docs-code-block">
                   <div className="docs-code-title"><i className="fa fa-terminal" /> RealGuard CLI</div>
                   <pre>{cliExample}</pre>
+                </div>
+                <div className="docs-code-block">
+                  <div className="docs-code-title"><span className="method method-post">POST</span><span>V1 Image Detect</span></div>
+                  <pre>{curlV1DetectExample}</pre>
                 </div>
               </div>
             </section>
@@ -1224,9 +1407,19 @@ Authorization: Bearer rg_sk_xxx`}</pre>
             <section id="agent-fields" className="docs-section">
               <div className="docs-section-kicker">Agent Output</div>
               <h2>Agent 应读取的关键字段</h2>
-              <p className="docs-lead">外部 agent 输出时至少包含结论、置信度、证据摘要、版本和报告编号，避免只输出一句“真假”。</p>
+              <p className="docs-lead">外部 agent 输出时至少包含结论、置信度、证据摘要、版本和报告编号，避免只输出一句“真假”。V2 和 V1 的字段结构不同，必须按所选链路解析。</p>
+              <h4>V2 字段</h4>
               <div className="developer-fields">
                 {fields.map(([field, desc]) => (
+                  <div key={field}>
+                    <code>{field}</code>
+                    <p>{desc}</p>
+                  </div>
+                ))}
+              </div>
+              <h4>V1 字段</h4>
+              <div className="developer-fields">
+                {v1Fields.map(([field, desc]) => (
                   <div key={field}>
                     <code>{field}</code>
                     <p>{desc}</p>
@@ -1261,6 +1454,10 @@ Authorization: Bearer rg_sk_xxx`}</pre>
                 <a href="/v2/">
                   <span>V2 Agent Console</span>
                   <code>http://124.222.3.205/v2/</code>
+                </a>
+                <a href="#v1-detect">
+                  <span>V1 Image API</span>
+                  <code>{REALGUARD_V1_API_BASE}/detect</code>
                 </a>
               </div>
               <div className="docs-callout">

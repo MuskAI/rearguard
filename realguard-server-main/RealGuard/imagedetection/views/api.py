@@ -4,13 +4,16 @@ import io
 import json
 import os
 import secrets
+from collections import defaultdict
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote
 
 import requests
 from PIL import Image
-from flask import Blueprint, jsonify, redirect, request, send_file, session
+from flask import Blueprint, jsonify, make_response, redirect, request, send_file, session
 
+from imagedetection.views.detection import image_detect_for_actor
 from imagedetection.views.historical_record import DETECTION_BACKEND_BASE_URL, _detection_static_url
 from imagedetection.views.login import (
     _authenticate_password_user,
@@ -39,6 +42,7 @@ DEVELOPER_USAGE_URL = os.environ.get(
     "http://127.0.0.1:8848/api/developer/token-usage",
 ).strip()
 _DEVELOPER_KEY_TABLE_READY = False
+_DEVELOPER_USAGE_TABLE_READY = False
 
 
 def _current_user():
@@ -112,6 +116,38 @@ def _ensure_developer_api_key_table():
     return _DEVELOPER_KEY_TABLE_READY
 
 
+def _ensure_developer_usage_table():
+    global _DEVELOPER_USAGE_TABLE_READY
+    if _DEVELOPER_USAGE_TABLE_READY:
+        return True
+    if not _ensure_developer_api_key_table():
+        return False
+    result = excute_sql(
+        """
+        CREATE TABLE IF NOT EXISTS developer_usage_events (
+          id BIGINT NOT NULL AUTO_INCREMENT,
+          user_id INT NOT NULL,
+          key_id BIGINT NULL,
+          pipeline VARCHAR(32) NOT NULL,
+          endpoint VARCHAR(160) NOT NULL,
+          model_version VARCHAR(120) NULL,
+          status_code INT NOT NULL DEFAULT 200,
+          prompt_tokens INT NOT NULL DEFAULT 0,
+          completion_tokens INT NOT NULL DEFAULT 0,
+          total_tokens INT NOT NULL DEFAULT 0,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          KEY idx_developer_usage_user_created (user_id, created_at),
+          KEY idx_developer_usage_key_created (key_id, created_at),
+          KEY idx_developer_usage_pipeline_created (pipeline, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        fetch=False,
+    )
+    _DEVELOPER_USAGE_TABLE_READY = result is not None
+    return _DEVELOPER_USAGE_TABLE_READY
+
+
 def _developer_key_from_request():
     payload = request.get_json(silent=True) or {}
     bearer = request.headers.get("authorization", "").strip()
@@ -135,6 +171,173 @@ def _require_internal_developer_auth():
     return hmac.compare_digest(submitted, DEVELOPER_AUTH_SECRET)
 
 
+def _active_developer_key(api_key, *, touch=True):
+    if not _ensure_developer_api_key_table():
+        return None, "API Key 存储初始化失败"
+    if not api_key.startswith(DEVELOPER_API_KEY_PREFIX):
+        return None, None
+    rows = excute_sql(
+        """
+        SELECT k.id, k.user_id, k.name, k.scopes, k.status, u.phone, u.username, u.openid
+        FROM developer_api_keys k
+        JOIN user u ON u.Userid = k.user_id
+        WHERE k.key_hash = %s
+        LIMIT 1
+        """,
+        (_developer_key_hash(api_key),),
+    )
+    if rows is None:
+        return None, "API Key 校验失败"
+    if not rows or rows[0].get("status") != "active":
+        return None, None
+
+    row = rows[0]
+    if touch:
+        excute_sql(
+            """
+            UPDATE developer_api_keys
+            SET last_used_at = NOW(), last_used_ip = %s
+            WHERE id = %s
+            """,
+            (request.headers.get("x-forwarded-for", request.remote_addr or "")[:64], row["id"]),
+            fetch=False,
+        )
+    return row, None
+
+
+def _developer_key_required():
+    row, error = _active_developer_key(_developer_key_from_request())
+    if error:
+        return None, (jsonify({"status": "error", "message": error}), 500)
+    if not row:
+        return None, (jsonify({"status": "error", "message": "API Key 缺失、无效或已撤销"}), 401)
+    return row, None
+
+
+def _usage_int(value):
+    try:
+        return max(int(value or 0), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _usage_bucket():
+    return {
+        "requests": 0,
+        "billableRequests": 0,
+        "cacheHits": 0,
+        "promptTokens": 0,
+        "completionTokens": 0,
+        "totalTokens": 0,
+    }
+
+
+def _record_developer_usage_event(
+    actor,
+    *,
+    pipeline,
+    endpoint,
+    model_version,
+    status_code,
+    prompt_tokens=0,
+    completion_tokens=0,
+    total_tokens=0,
+):
+    if not actor or not _ensure_developer_usage_table():
+        return False
+    result = excute_sql(
+        """
+        INSERT INTO developer_usage_events
+          (user_id, key_id, pipeline, endpoint, model_version, status_code,
+           prompt_tokens, completion_tokens, total_tokens)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            actor.get("user_id"),
+            actor.get("id"),
+            pipeline,
+            endpoint,
+            model_version,
+            int(status_code),
+            _usage_int(prompt_tokens),
+            _usage_int(completion_tokens),
+            _usage_int(total_tokens),
+        ),
+        fetch=False,
+    )
+    return result is not None
+
+
+def _developer_usage_from_v1(user_id, days):
+    if not _ensure_developer_usage_table():
+        raise RuntimeError("V1 调用统计存储初始化失败")
+    since = datetime.now() - timedelta(days=days - 1)
+    rows = excute_sql(
+        """
+        SELECT created_at, key_id, pipeline, endpoint, model_version, status_code,
+               prompt_tokens, completion_tokens, total_tokens
+        FROM developer_usage_events
+        WHERE user_id = %s AND created_at >= %s
+        ORDER BY created_at ASC
+        """,
+        (user_id, since.strftime("%Y-%m-%d %H:%M:%S")),
+    )
+    if rows is None:
+        raise RuntimeError("读取 V1 调用统计失败")
+
+    summary = {**_usage_bucket(), "lastEventAt": None}
+    by_day = defaultdict(_usage_bucket)
+    by_endpoint = defaultdict(_usage_bucket)
+    by_model = defaultdict(_usage_bucket)
+    by_key = defaultdict(_usage_bucket)
+
+    for row in rows:
+        prompt_tokens = _usage_int(row.get("prompt_tokens"))
+        completion_tokens = _usage_int(row.get("completion_tokens"))
+        total_tokens = _usage_int(row.get("total_tokens")) or prompt_tokens + completion_tokens
+        created_at = row.get("created_at")
+        created_text = created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at or "")
+        day = created_text[:10]
+        endpoint = str(row.get("endpoint") or "unknown")
+        model = str(row.get("model_version") or "realguard-v1")
+        key = str(row.get("key_id") or "unknown")
+
+        summary["requests"] += 1
+        summary["billableRequests"] += 1
+        summary["promptTokens"] += prompt_tokens
+        summary["completionTokens"] += completion_tokens
+        summary["totalTokens"] += total_tokens
+        summary["lastEventAt"] = created_text
+        for bucket in (by_day[day], by_endpoint[endpoint], by_model[model], by_key[key]):
+            bucket["requests"] += 1
+            bucket["billableRequests"] += 1
+            bucket["promptTokens"] += prompt_tokens
+            bucket["completionTokens"] += completion_tokens
+            bucket["totalTokens"] += total_tokens
+
+    days_list = []
+    for index in range(days):
+        day = (since + timedelta(days=index)).strftime("%Y-%m-%d")
+        days_list.append({"date": day, **by_day[day]})
+
+    return {
+        "days": days,
+        "summary": {
+            "totalRequests": summary["requests"],
+            "billableRequests": summary["billableRequests"],
+            "cacheHits": summary["cacheHits"],
+            "promptTokens": summary["promptTokens"],
+            "completionTokens": summary["completionTokens"],
+            "totalTokens": summary["totalTokens"],
+            "lastEventAt": summary["lastEventAt"],
+        },
+        "byDay": days_list,
+        "byEndpoint": [{"pipeline": "v1", "endpoint": key, **value} for key, value in sorted(by_endpoint.items())],
+        "byModel": [{"pipeline": "v1", "modelVersion": key, **value} for key, value in sorted(by_model.items())],
+        "byKey": [{"pipeline": "v1", "keyId": key, **value} for key, value in sorted(by_key.items())],
+    }
+
+
 def _developer_usage_from_v2(user_id, days):
     if not DEVELOPER_AUTH_SECRET or not DEVELOPER_USAGE_URL:
         raise RuntimeError("Token 用量统计服务未配置")
@@ -148,6 +351,78 @@ def _developer_usage_from_v2(user_id, days):
         )
     response.raise_for_status()
     return response.json()
+
+
+def _empty_developer_usage(days):
+    since = datetime.now() - timedelta(days=days - 1)
+    return {
+        "days": days,
+        "summary": {
+            "totalRequests": 0,
+            "billableRequests": 0,
+            "cacheHits": 0,
+            "promptTokens": 0,
+            "completionTokens": 0,
+            "totalTokens": 0,
+            "lastEventAt": None,
+        },
+        "byDay": [{"date": (since + timedelta(days=index)).strftime("%Y-%m-%d"), **_usage_bucket()} for index in range(days)],
+        "byEndpoint": [],
+        "byModel": [],
+        "byKey": [],
+    }
+
+
+def _merge_developer_usage(v1_usage, v2_usage, days):
+    v1_summary = v1_usage.get("summary") or {}
+    v2_summary = v2_usage.get("summary") or {}
+    v1_calls = _usage_int(v1_summary.get("totalRequests"))
+    v2_calls = _usage_int(v2_summary.get("totalRequests"))
+    last_events = [value for value in (v1_summary.get("lastEventAt"), v2_summary.get("lastEventAt")) if value]
+
+    day_rows = {}
+    for pipeline, payload in (("v1", v1_usage), ("v2", v2_usage)):
+        for row in payload.get("byDay") or []:
+            date = str(row.get("date") or "")
+            bucket = day_rows.setdefault(date, {"date": date, **_usage_bucket(), "v1Calls": 0, "v2Calls": 0})
+            requests_count = _usage_int(row.get("requests"))
+            bucket["requests"] += requests_count
+            bucket[f"{pipeline}Calls"] += requests_count
+            for field in ("billableRequests", "cacheHits", "promptTokens", "completionTokens", "totalTokens"):
+                bucket[field] += _usage_int(row.get(field))
+
+    by_day = []
+    since = datetime.now() - timedelta(days=days - 1)
+    for index in range(days):
+        date = (since + timedelta(days=index)).strftime("%Y-%m-%d")
+        by_day.append(day_rows.get(date, {"date": date, **_usage_bucket(), "v1Calls": 0, "v2Calls": 0}))
+
+    def with_pipeline(pipeline, rows):
+        return [{**row, "pipeline": row.get("pipeline") or pipeline} for row in (rows or [])]
+
+    return {
+        "days": days,
+        "summary": {
+            "totalCalls": v1_calls + v2_calls,
+            "totalRequests": v1_calls + v2_calls,
+            "v1Calls": v1_calls,
+            "v2Calls": v2_calls,
+            "billableRequests": _usage_int(v1_summary.get("billableRequests")) + _usage_int(v2_summary.get("billableRequests")),
+            "cacheHits": _usage_int(v1_summary.get("cacheHits")) + _usage_int(v2_summary.get("cacheHits")),
+            "promptTokens": _usage_int(v1_summary.get("promptTokens")) + _usage_int(v2_summary.get("promptTokens")),
+            "completionTokens": _usage_int(v1_summary.get("completionTokens")) + _usage_int(v2_summary.get("completionTokens")),
+            "totalTokens": _usage_int(v1_summary.get("totalTokens")) + _usage_int(v2_summary.get("totalTokens")),
+            "lastEventAt": max(last_events) if last_events else None,
+        },
+        "byDay": by_day,
+        "byEndpoint": with_pipeline("v1", v1_usage.get("byEndpoint")) + with_pipeline("v2", v2_usage.get("byEndpoint")),
+        "byModel": with_pipeline("v1", v1_usage.get("byModel")) + with_pipeline("v2", v2_usage.get("byModel")),
+        "byKey": with_pipeline("v1", v1_usage.get("byKey")) + with_pipeline("v2", v2_usage.get("byKey")),
+        "byPipeline": [
+            {"pipeline": "v1", "requests": v1_calls, "totalTokens": _usage_int(v1_summary.get("totalTokens"))},
+            {"pipeline": "v2", "requests": v2_calls, "totalTokens": _usage_int(v2_summary.get("totalTokens"))},
+        ],
+    }
 
 
 def _history_identity(allow_empty=False):
@@ -625,38 +900,12 @@ def revoke_developer_api_key(key_id):
 def verify_developer_api_key():
     if not _require_internal_developer_auth():
         return jsonify({"status": "error", "valid": False, "message": "内部鉴权失败"}), 403
-    if not _ensure_developer_api_key_table():
-        return jsonify({"status": "error", "valid": False, "message": "API Key 存储初始化失败"}), 500
-
-    api_key = _developer_key_from_request()
-    if not api_key.startswith(DEVELOPER_API_KEY_PREFIX):
+    row, error = _active_developer_key(_developer_key_from_request(), touch=True)
+    if error:
+        return jsonify({"status": "error", "valid": False, "message": error}), 500
+    if not row:
         return jsonify({"status": "success", "valid": False}), 200
 
-    rows = excute_sql(
-        """
-        SELECT k.id, k.user_id, k.name, k.scopes, k.status, u.phone, u.username
-        FROM developer_api_keys k
-        JOIN user u ON u.Userid = k.user_id
-        WHERE k.key_hash = %s
-        LIMIT 1
-        """,
-        (_developer_key_hash(api_key),),
-    )
-    if rows is None:
-        return jsonify({"status": "error", "valid": False, "message": "API Key 校验失败"}), 500
-    if not rows or rows[0].get("status") != "active":
-        return jsonify({"status": "success", "valid": False}), 200
-
-    row = rows[0]
-    excute_sql(
-        """
-        UPDATE developer_api_keys
-        SET last_used_at = NOW(), last_used_ip = %s
-        WHERE id = %s
-        """,
-        (request.headers.get("x-forwarded-for", request.remote_addr or "")[:64], row["id"]),
-        fetch=False,
-    )
     return jsonify({
         "status": "success",
         "valid": True,
@@ -668,6 +917,28 @@ def verify_developer_api_key():
         },
         "scopes": _developer_scopes(row.get("scopes")),
     })
+
+
+@api_blueprint.route("/developer/v1/detect", methods=["POST"])
+def developer_v1_detect():
+    actor, error = _developer_key_required()
+    if error:
+        return error
+    user_info = {
+        "Userid": actor.get("user_id"),
+        "username": actor.get("username") or actor.get("phone") or "developer",
+        "phone": actor.get("phone") or "",
+        "openid": actor.get("openid") or actor.get("phone") or f"developer-{actor.get('user_id')}",
+    }
+    response = make_response(image_detect_for_actor(user_info, is_guest=False))
+    _record_developer_usage_event(
+        actor,
+        pipeline="v1",
+        endpoint="/api/developer/v1/detect",
+        model_version="realguard-v1-image",
+        status_code=response.status_code,
+    )
+    return response
 
 
 @api_blueprint.route("/developer/usage", methods=["GET"])
@@ -683,15 +954,17 @@ def developer_token_usage():
         return jsonify({"status": "error", "message": "days 仅支持 7、14、30、90"}), 400
 
     try:
-        usage = _developer_usage_from_v2(user["Userid"], days)
-    except requests.HTTPError as exc:
-        status = exc.response.status_code if exc.response is not None else 502
-        if status >= 500:
-            status = 502
-        return jsonify({"status": "error", "message": "Token 用量统计服务返回异常"}), status
-    except Exception:
-        return jsonify({"status": "error", "message": "Token 用量统计服务暂不可用"}), 502
+        v1_usage = _developer_usage_from_v1(user["Userid"], days)
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 502
 
+    v2_usage = _empty_developer_usage(days)
+    try:
+        v2_usage = _developer_usage_from_v2(user["Userid"], days)
+    except Exception:
+        pass
+
+    usage = _merge_developer_usage(v1_usage, v2_usage, days)
     return jsonify({"status": "success", "usage": usage})
 
 

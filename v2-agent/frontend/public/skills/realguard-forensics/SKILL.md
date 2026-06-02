@@ -9,9 +9,13 @@ This public skill lets an external agent use RealGuard/Jianzhen forensic detecti
 
 ## One-Sentence Handoff
 
-Use `$realguard-forensics`; read `http://124.222.3.205/v2/skills/realguard-forensics/SKILL.md`; run `python3 scripts/realguard_cli.py detect <file> --base-url http://124.222.3.205 --api-prefix /v2-api --token <your-api-key> --pretty` if the RealGuard repository CLI is available, or call `POST http://124.222.3.205/v2-api/detect` with multipart field `file` and header `X-RealGuard-Key: <your-api-key>`; then return a concise verdict with confidence, evidence, model version, cache version, and report ID.
+Use `$realguard-forensics`; read `http://124.222.3.205/v2/skills/realguard-forensics/SKILL.md`; prefer V2 by calling `POST http://124.222.3.205/v2-api/detect` with multipart field `file` and `X-RealGuard-Key: <your-api-key>` for multimodal forensic output and `tokenUsage`; alternatively use V1 by calling `POST http://124.222.3.205/api/developer/v1/detect` with multipart field `file` for the legacy image model; then return a concise verdict with confidence, evidence, model/source, usage or call-count note, and report/item ID.
 
 ## Public API
+
+Generate your API Key on `http://124.222.3.205/?page=developer`. Developer keys start with `rg_sk_` and should be passed as `X-RealGuard-Key` or `Authorization: Bearer rg_sk_...`.
+
+### V2 Multimodal API
 
 Health:
 
@@ -19,7 +23,7 @@ Health:
 curl -fsS http://124.222.3.205/v2-api/health
 ```
 
-Detect:
+Detect with V2:
 
 ```bash
 curl -fsS -X POST http://124.222.3.205/v2-api/detect \
@@ -36,7 +40,17 @@ curl -fsS -X POST http://124.222.3.205/v2-api/detect \
   -F "fileType=image"
 ```
 
-Generate your API Key on `http://124.222.3.205/?page=developer`. Developer keys start with `rg_sk_` and should be passed as `X-RealGuard-Key` or `Authorization: Bearer rg_sk_...`.
+### V1 Image API
+
+Detect with V1:
+
+```bash
+curl -fsS -X POST http://124.222.3.205/api/developer/v1/detect \
+  -H "X-RealGuard-Key: <your-api-key>" \
+  -F "file=@/path/to/image.png"
+```
+
+Use V1 when the caller explicitly needs the legacy RealGuard image model or must compare with old image-only results. V1 records API-key call count in the developer platform but does not return `tokenUsage`.
 
 ## Repository CLI
 
@@ -55,9 +69,11 @@ python3 scripts/realguard_cli.py provenance /path/to/image --base-url http://124
 
 ## Interpretation
 
-- Use `agentSummary` first when present.
-- Cite `verdict`, `confidence`, `source`, `modelVersion`, `cacheVersion`, `reportId`, `tokenUsage`, and evidence fields.
-- Treat `tokenUsage.totalTokens` as the model-call cost signal; cache hits may report `0` tokens.
+- For V2, use `agentSummary` first when present.
+- For V2, cite `verdict`, `confidence`, `source`, `modelVersion`, `cacheVersion`, `reportId`, `tokenUsage`, and evidence fields.
+- For V1, cite `result.final_label`, `result.probability`, `result.confidence`, `result.visual_issues`, and `result.itemid`.
+- Treat `tokenUsage.totalTokens` as the V2 model-call cost signal; cache hits may report `0` tokens.
+- Treat developer-platform call count as the cross-pipeline usage signal for both V1 and V2.
 - Treat results as forensic evidence, not absolute proof.
 - If `source` is `mock`, `heuristic`, or another fallback, state that limitation.
 - Preserve raw JSON and report IDs for auditability.

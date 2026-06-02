@@ -297,11 +297,14 @@ def image_detect():
     user_info, is_guest, auth_error = _detection_actor()
     if auth_error:
         return auth_error
+    return image_detect_for_actor(user_info, is_guest=is_guest)
 
-    if 'image' not in request.files or request.files['image'].filename == '':
+
+def image_detect_for_actor(user_info, *, is_guest=False):
+    file = request.files.get('image') or request.files.get('file')
+    if not file or file.filename == '':
         return jsonify({'status': 'error', 'message': '请上传图片文件'}), 400
 
-    file = request.files['image']
     filename = file.filename
 
     if not allowed_file(filename):

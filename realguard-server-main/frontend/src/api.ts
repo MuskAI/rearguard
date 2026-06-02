@@ -252,7 +252,10 @@ export type DeveloperTokenUsageBucket = {
   endpoint?: string;
   modelVersion?: string;
   keyId?: string;
+  pipeline?: "v1" | "v2" | string;
   requests: number;
+  v1Calls?: number;
+  v2Calls?: number;
   billableRequests?: number;
   cacheHits?: number;
   promptTokens: number;
@@ -263,7 +266,10 @@ export type DeveloperTokenUsageBucket = {
 export type DeveloperTokenUsage = {
   days: number;
   summary: {
+    totalCalls?: number;
     totalRequests: number;
+    v1Calls?: number;
+    v2Calls?: number;
     billableRequests: number;
     cacheHits: number;
     promptTokens: number;
@@ -275,6 +281,7 @@ export type DeveloperTokenUsage = {
   byEndpoint: DeveloperTokenUsageBucket[];
   byModel: DeveloperTokenUsageBucket[];
   byKey: DeveloperTokenUsageBucket[];
+  byPipeline?: DeveloperTokenUsageBucket[];
 };
 
 export type ImageDetectionResult = {

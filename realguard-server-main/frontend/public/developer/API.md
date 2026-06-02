@@ -1,6 +1,7 @@
 ---
 title: RealGuard Developer API
 base_url: http://124.222.3.205/v2-api
+v1_base_url: http://124.222.3.205/api/developer/v1
 skill_url: http://124.222.3.205/skills/realguard-forensics/SKILL.md
 console_url: http://124.222.3.205/?page=developer
 ---
@@ -11,10 +12,16 @@ RealGuard Developer API is the public integration surface for external agents, a
 
 ## Getting Started
 
-Base URL:
+V2 Base URL:
 
 ```text
 http://124.222.3.205/v2-api
+```
+
+V1 Base URL:
+
+```text
+http://124.222.3.205/api/developer/v1
 ```
 
 Public Skill:
@@ -32,7 +39,7 @@ http://124.222.3.205/?page=developer
 One-sentence handoff for OpenClaw or another agent:
 
 ```text
-Use $realguard-forensics; read http://124.222.3.205/skills/realguard-forensics/SKILL.md; call POST http://124.222.3.205/v2-api/detect with multipart field file and X-RealGuard-Key, or run python3 scripts/realguard_cli.py detect <file> --base-url http://124.222.3.205 --api-prefix /v2-api --token <your-api-key> --pretty if the repo CLI is available; then return a concise verdict with confidence, evidence, model version, cache version, and report id.
+Use $realguard-forensics; read http://124.222.3.205/skills/realguard-forensics/SKILL.md; prefer V2 by calling POST http://124.222.3.205/v2-api/detect with multipart field file and X-RealGuard-Key for multimodal forensic output and tokenUsage, or use V1 by calling POST http://124.222.3.205/api/developer/v1/detect with multipart field file for the legacy image model; then return verdict, confidence, evidence, model/source, usage or call-count note, and report/item id.
 ```
 
 The public Skill is required because external agents cannot access your local repository path. They need a stable public URL that documents the API, required fields, output constraints, report fields, and interpretation boundaries.
@@ -65,18 +72,24 @@ The web platform exposes authenticated key-management endpoints for logged-in us
 | `GET` | `/api/developer/keys` | List current user's key previews, status, scopes, created time, and last-used time. |
 | `POST` | `/api/developer/keys` | Create a new key. The full `apiKey` is returned only once. |
 | `DELETE` | `/api/developer/keys/{keyId}` | Revoke one active key owned by the current user. |
-| `GET` | `/api/developer/usage?days=30` | Show the current user's token usage, request count, cache hits, and endpoint/model breakdown. |
+| `GET` | `/api/developer/usage?days=30` | Show the current user's V1/V2 call count, token usage, cache hits, and endpoint/model breakdown. |
 
 External agents should never call these management endpoints directly. They should receive a generated `rg_sk_...` key from the account owner and use it only in API requests.
 
-Token usage is tracked for cost control and auditability. Cache hits count as requests but consume `0` tokens because the model is not called again.
+Usage is tracked for cost control and auditability. V1 and V2 both count calls. V2 also reports prompt, completion, and total token usage. Cache hits count as requests but consume `0` tokens because the model is not called again.
 
 ## API Reference
 
-All endpoints below are relative to:
+V2 endpoints below are relative to:
 
 ```text
 http://124.222.3.205/v2-api
+```
+
+V1 image endpoints are relative to:
+
+```text
+http://124.222.3.205/api/developer/v1
 ```
 
 ### GET /health
@@ -98,7 +111,7 @@ curl -fsS http://124.222.3.205/v2-api/admin/health \
 
 ### POST /detect
 
-Core detection endpoint. Upload a file and receive a forensic verdict, confidence score, evidence summary, model version, cache version, task ID, and report ID.
+V2 core detection endpoint. Upload a file and receive a forensic verdict, confidence score, evidence summary, model version, cache version, token usage, task ID, and report ID.
 
 Request content type:
 
@@ -160,6 +173,42 @@ Example response:
   }
 }
 ```
+
+### POST /api/developer/v1/detect
+
+V1 image detection endpoint. Use this when an agent or business workflow must reuse the legacy RealGuard image model. It accepts multipart image upload through the `file` field and requires the same `X-RealGuard-Key`.
+
+Request content type:
+
+```text
+multipart/form-data
+```
+
+Request parameters:
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `file` | File | yes | Image file to analyze with the V1 image model. |
+
+Example:
+
+```bash
+curl -fsS -X POST http://124.222.3.205/api/developer/v1/detect \
+  -H "X-RealGuard-Key: <your-api-key>" \
+  -F "file=@/path/to/image.png"
+```
+
+Important response fields:
+
+| Field | Description |
+| --- | --- |
+| `result.final_label` | V1 final image label, such as AI-generated or real image. |
+| `result.probability` | V1 confidence probability. |
+| `result.confidence` | V1 confidence level. |
+| `result.visual_issues` | Image visual issues or suspicious evidence when available. |
+| `result.itemid` | V1 history/report item ID. |
+
+V1 records API-key call count in the Developer Console. It does not return `tokenUsage`.
 
 ### POST /forensics
 
@@ -261,9 +310,19 @@ python3 scripts/realguard_cli.py detect /path/to/file \
   --pretty
 ```
 
+### V1 Image Detect
+
+```bash
+curl -fsS -X POST http://124.222.3.205/api/developer/v1/detect \
+  -H "X-RealGuard-Key: <your-api-key>" \
+  -F "file=@/path/to/image.png"
+```
+
 ## Agent Output Rules
 
-External agents should include:
+External agents should include the fields for the pipeline they called.
+
+For V2:
 
 - `verdict`
 - `confidence`
@@ -273,13 +332,22 @@ External agents should include:
 - `cacheVersion`
 - `taskId`
 - `reportId`
+- `tokenUsage`
+
+For V1:
+
+- `result.final_label`
+- `result.probability`
+- `result.confidence`
+- `result.visual_issues`
+- `result.itemid`
 
 Do not output only "real" or "fake". Always include the evidence and uncertainty.
 
 ## Interpretation Rules
 
 - Treat API results as forensic evidence, not absolute proof.
-- Always cite `verdict`, `confidence`, `source`, `modelVersion`, `cacheVersion`, and `reportId`.
+- Always cite the version/source fields returned by the selected pipeline. For V2, cite `verdict`, `confidence`, `source`, `modelVersion`, `cacheVersion`, and `reportId`. For V1, cite `result.final_label`, probability/confidence, evidence, and `result.itemid`.
 - If `source` is `mock`, `heuristic`, or another fallback chain, state that limitation.
 - Preserve raw JSON and report IDs for auditability.
 - Route low-confidence or high-impact results to human review.
