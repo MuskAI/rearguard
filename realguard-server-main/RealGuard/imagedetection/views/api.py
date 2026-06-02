@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import io
 import json
 import os
@@ -19,7 +20,7 @@ from imagedetection.views.login import (
     _sync_detection_user,
     _verify_sms_code,
 )
-from imagedetection.views.utils import excute_detection_sql, excute_sql, format_createtime
+from imagedetection.views.utils import excute_detection_sql, excute_sql, excute_sql_lastid, format_createtime
 
 
 api_blueprint = Blueprint("api_blueprint", __name__, url_prefix="/api")
@@ -29,6 +30,11 @@ THUMBNAIL_MAX_SIZE = (
     int(os.environ.get("REALGUARD_THUMBNAIL_MAX_HEIGHT", "165")),
 )
 THUMBNAIL_QUALITY = int(os.environ.get("REALGUARD_THUMBNAIL_QUALITY", "45"))
+DEVELOPER_API_KEY_PREFIX = "rg_sk_"
+DEVELOPER_API_KEY_MAX_ACTIVE = int(os.environ.get("REALGUARD_DEVELOPER_API_KEY_MAX_ACTIVE", "5"))
+DEVELOPER_API_KEY_DEFAULT_SCOPES = "detect,forensics,provenance,reports"
+DEVELOPER_AUTH_SECRET = os.environ.get("REALGUARD_DEVELOPER_AUTH_SECRET", "").strip()
+_DEVELOPER_KEY_TABLE_READY = False
 
 
 def _current_user():
@@ -41,6 +47,88 @@ def _auth_required():
     if not user:
         return None, (jsonify({"status": "error", "message": "用户未登录"}), 401)
     return user, None
+
+
+def _developer_key_hash(api_key):
+    return hashlib.sha256(f"realguard-developer-api-key:{api_key}".encode("utf-8")).hexdigest()
+
+
+def _developer_scopes(raw):
+    return [item.strip() for item in str(raw or "").split(",") if item.strip()]
+
+
+def _developer_key_preview(row):
+    return f"{row.get('key_prefix') or DEVELOPER_API_KEY_PREFIX}...{row.get('key_last4') or '****'}"
+
+
+def _developer_key_payload(row):
+    return {
+        "id": row.get("id"),
+        "name": row.get("name") or "Default key",
+        "preview": _developer_key_preview(row),
+        "scopes": _developer_scopes(row.get("scopes")),
+        "status": row.get("status") or "active",
+        "createdAt": format_createtime(row.get("created_at", "")),
+        "lastUsedAt": format_createtime(row.get("last_used_at", "")),
+        "revokedAt": format_createtime(row.get("revoked_at", "")),
+    }
+
+
+def _ensure_developer_api_key_table():
+    global _DEVELOPER_KEY_TABLE_READY
+    if _DEVELOPER_KEY_TABLE_READY:
+        return True
+    result = excute_sql(
+        """
+        CREATE TABLE IF NOT EXISTS developer_api_keys (
+          id BIGINT NOT NULL AUTO_INCREMENT,
+          user_id INT NOT NULL,
+          name VARCHAR(120) NOT NULL,
+          key_hash CHAR(64) NOT NULL,
+          key_prefix VARCHAR(16) NOT NULL DEFAULT 'rg_sk_',
+          key_last4 CHAR(4) NOT NULL,
+          scopes VARCHAR(255) NOT NULL DEFAULT 'detect,forensics,provenance,reports',
+          status VARCHAR(16) NOT NULL DEFAULT 'active',
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          last_used_at DATETIME NULL,
+          revoked_at DATETIME NULL,
+          last_used_ip VARCHAR(64) NULL,
+          PRIMARY KEY (id),
+          UNIQUE KEY uk_developer_api_key_hash (key_hash),
+          KEY idx_developer_api_keys_user_status (user_id, status),
+          KEY idx_developer_api_keys_created_at (created_at),
+          CONSTRAINT fk_developer_api_keys_user
+            FOREIGN KEY (user_id) REFERENCES `user`(Userid)
+            ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        fetch=False,
+    )
+    _DEVELOPER_KEY_TABLE_READY = result is not None
+    return _DEVELOPER_KEY_TABLE_READY
+
+
+def _developer_key_from_request():
+    payload = request.get_json(silent=True) or {}
+    bearer = request.headers.get("authorization", "").strip()
+    if bearer.lower().startswith("bearer "):
+        bearer = bearer[7:].strip()
+    else:
+        bearer = ""
+    return (
+        request.headers.get("x-realguard-key", "").strip()
+        or request.headers.get("x-realguard-api-key", "").strip()
+        or request.headers.get("x-api-key", "").strip()
+        or bearer
+        or str(payload.get("api_key") or payload.get("apiKey") or "").strip()
+    )
+
+
+def _require_internal_developer_auth():
+    if not DEVELOPER_AUTH_SECRET:
+        return False
+    submitted = request.headers.get("x-realguard-internal-secret", "").strip()
+    return hmac.compare_digest(submitted, DEVELOPER_AUTH_SECRET)
 
 
 def _history_identity(allow_empty=False):
@@ -413,6 +501,154 @@ def register():
 def logout():
     session.clear()
     return jsonify({"status": "success"})
+
+
+@api_blueprint.route("/developer/keys", methods=["GET"])
+def developer_api_keys():
+    user, error = _auth_required()
+    if error:
+        return error
+    if not _ensure_developer_api_key_table():
+        return jsonify({"status": "error", "message": "API Key 存储初始化失败"}), 500
+
+    rows = excute_sql(
+        """
+        SELECT id, name, key_prefix, key_last4, scopes, status, created_at, last_used_at, revoked_at
+        FROM developer_api_keys
+        WHERE user_id = %s
+        ORDER BY status = 'active' DESC, created_at DESC
+        """,
+        (user["Userid"],),
+    )
+    if rows is None:
+        return jsonify({"status": "error", "message": "读取 API Key 失败"}), 500
+    return jsonify({"status": "success", "keys": [_developer_key_payload(row) for row in rows]})
+
+
+@api_blueprint.route("/developer/keys", methods=["POST"])
+def create_developer_api_key():
+    user, error = _auth_required()
+    if error:
+        return error
+    if not _ensure_developer_api_key_table():
+        return jsonify({"status": "error", "message": "API Key 存储初始化失败"}), 500
+
+    payload = request.get_json(silent=True) or {}
+    name = str(payload.get("name") or "").strip() or "Default key"
+    if len(name) > 120:
+        return jsonify({"status": "error", "message": "Key 名称不能超过 120 个字符"}), 400
+
+    rows = excute_sql(
+        "SELECT COUNT(*) AS cnt FROM developer_api_keys WHERE user_id = %s AND status = 'active'",
+        (user["Userid"],),
+    )
+    active_count = int((rows or [{}])[0].get("cnt") or 0)
+    if active_count >= DEVELOPER_API_KEY_MAX_ACTIVE:
+        return jsonify({"status": "error", "message": f"最多只能保留 {DEVELOPER_API_KEY_MAX_ACTIVE} 个 active API Key"}), 400
+
+    api_key = f"{DEVELOPER_API_KEY_PREFIX}{secrets.token_urlsafe(32)}"
+    row_id = excute_sql_lastid(
+        """
+        INSERT INTO developer_api_keys
+            (user_id, name, key_hash, key_prefix, key_last4, scopes, status)
+        VALUES (%s, %s, %s, %s, %s, %s, 'active')
+        """,
+        (
+            user["Userid"],
+            name,
+            _developer_key_hash(api_key),
+            DEVELOPER_API_KEY_PREFIX,
+            api_key[-4:],
+            DEVELOPER_API_KEY_DEFAULT_SCOPES,
+        ),
+    )
+    if not row_id:
+        return jsonify({"status": "error", "message": "创建 API Key 失败，请稍后重试"}), 500
+
+    rows = excute_sql(
+        """
+        SELECT id, name, key_prefix, key_last4, scopes, status, created_at, last_used_at, revoked_at
+        FROM developer_api_keys
+        WHERE id = %s AND user_id = %s
+        LIMIT 1
+        """,
+        (row_id, user["Userid"]),
+    )
+    key_payload = _developer_key_payload((rows or [{}])[0])
+    return jsonify({"status": "success", "apiKey": api_key, "key": key_payload})
+
+
+@api_blueprint.route("/developer/keys/<int:key_id>", methods=["DELETE"])
+def revoke_developer_api_key(key_id):
+    user, error = _auth_required()
+    if error:
+        return error
+    if not _ensure_developer_api_key_table():
+        return jsonify({"status": "error", "message": "API Key 存储初始化失败"}), 500
+
+    affected = excute_sql(
+        """
+        UPDATE developer_api_keys
+        SET status = 'revoked', revoked_at = NOW()
+        WHERE id = %s AND user_id = %s AND status = 'active'
+        """,
+        (key_id, user["Userid"]),
+        fetch=False,
+    )
+    if affected is None:
+        return jsonify({"status": "error", "message": "撤销 API Key 失败"}), 500
+    if affected == 0:
+        return jsonify({"status": "error", "message": "API Key 不存在或已撤销"}), 404
+    return jsonify({"status": "success", "revoked": key_id})
+
+
+@api_blueprint.route("/developer/keys/verify", methods=["POST"])
+def verify_developer_api_key():
+    if not _require_internal_developer_auth():
+        return jsonify({"status": "error", "valid": False, "message": "内部鉴权失败"}), 403
+    if not _ensure_developer_api_key_table():
+        return jsonify({"status": "error", "valid": False, "message": "API Key 存储初始化失败"}), 500
+
+    api_key = _developer_key_from_request()
+    if not api_key.startswith(DEVELOPER_API_KEY_PREFIX):
+        return jsonify({"status": "success", "valid": False}), 200
+
+    rows = excute_sql(
+        """
+        SELECT k.id, k.user_id, k.name, k.scopes, k.status, u.phone, u.username
+        FROM developer_api_keys k
+        JOIN user u ON u.Userid = k.user_id
+        WHERE k.key_hash = %s
+        LIMIT 1
+        """,
+        (_developer_key_hash(api_key),),
+    )
+    if rows is None:
+        return jsonify({"status": "error", "valid": False, "message": "API Key 校验失败"}), 500
+    if not rows or rows[0].get("status") != "active":
+        return jsonify({"status": "success", "valid": False}), 200
+
+    row = rows[0]
+    excute_sql(
+        """
+        UPDATE developer_api_keys
+        SET last_used_at = NOW(), last_used_ip = %s
+        WHERE id = %s
+        """,
+        (request.headers.get("x-forwarded-for", request.remote_addr or "")[:64], row["id"]),
+        fetch=False,
+    )
+    return jsonify({
+        "status": "success",
+        "valid": True,
+        "keyId": row.get("id"),
+        "userId": row.get("user_id"),
+        "user": {
+            "phone": row.get("phone") or "",
+            "username": row.get("username") or "",
+        },
+        "scopes": _developer_scopes(row.get("scopes")),
+    })
 
 
 @api_blueprint.route("/history/image-detections")

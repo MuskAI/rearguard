@@ -14,7 +14,8 @@ function getStoredToken(): string {
 function withAuthHeaders(init?: HeadersInit): Headers {
   const headers = new Headers(init);
   const token = getStoredToken();
-  if (token) headers.set("X-Jianzhen-Token", token);
+  if (token.startsWith("rg_sk_")) headers.set("X-RealGuard-Key", token);
+  else if (token) headers.set("X-Jianzhen-Token", token);
   return headers;
 }
 
@@ -170,6 +171,9 @@ export interface HealthStatus {
   analysisCacheVersion: string;
   accessProtectionEnabled: boolean;
   protectedEndpoints: string[];
+  developerKeyAuthEnabled?: boolean;
+  developerKeyAuthConfigured?: boolean;
+  developerProtectedEndpoints?: string[];
 }
 
 export async function detect(file: File, fileType?: FileType): Promise<DetectResult> {

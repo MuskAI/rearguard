@@ -57,7 +57,9 @@ def _init(conn: sqlite3.Connection) -> None:
             file_size INTEGER NOT NULL,
             resolution TEXT,
             result_json TEXT NOT NULL,
-            thumbnail TEXT
+            thumbnail TEXT,
+            developer_user_id TEXT,
+            developer_key_id TEXT
         );
 
         CREATE INDEX IF NOT EXISTS idx_history_created_at ON history(created_at DESC);
@@ -95,6 +97,15 @@ def _init(conn: sqlite3.Connection) -> None:
         );
         """
     )
+    for statement in (
+        "ALTER TABLE history ADD COLUMN developer_user_id TEXT",
+        "ALTER TABLE history ADD COLUMN developer_key_id TEXT",
+    ):
+        try:
+            conn.execute(statement)
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
     conn.commit()
 
 
@@ -138,15 +149,23 @@ def put_cached_analysis(file_type: str, sha256: str, analysis: dict[str, Any]) -
         conn.commit()
 
 
-def put_history(result: dict[str, Any], sha256: str, file_size: int, thumbnail: str | None) -> None:
+def put_history(
+    result: dict[str, Any],
+    sha256: str,
+    file_size: int,
+    thumbnail: str | None,
+    actor: dict[str, Any] | None = None,
+) -> None:
     meta = result.get("fileMeta", {})
+    developer_user_id = str((actor or {}).get("userId") or "") or None
+    developer_key_id = str((actor or {}).get("keyId") or "") or None
     with _connect() as conn:
         conn.execute(
             """
             INSERT OR REPLACE INTO history
                 (task_id, report_id, created_at, sha256, file_type, file_name, file_size,
-                 resolution, result_json, thumbnail)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 resolution, result_json, thumbnail, developer_user_id, developer_key_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 result["taskId"],
@@ -159,6 +178,8 @@ def put_history(result: dict[str, Any], sha256: str, file_size: int, thumbnail: 
                 meta.get("resolution"),
                 json.dumps(result, ensure_ascii=False),
                 thumbnail,
+                developer_user_id,
+                developer_key_id,
             ),
         )
         conn.commit()
@@ -339,7 +360,8 @@ def get_history(item_id: str) -> dict[str, Any] | None:
     with _connect() as conn:
         row = conn.execute(
             """
-            SELECT h.result_json, h.thumbnail, a.forensics_json, a.provenance_json
+            SELECT h.result_json, h.thumbnail, h.developer_user_id, h.developer_key_id,
+                   a.forensics_json, a.provenance_json
             FROM history h
             LEFT JOIN history_artifacts a ON a.task_id = h.task_id
             WHERE h.task_id = ? OR h.report_id = ?
@@ -349,6 +371,8 @@ def get_history(item_id: str) -> dict[str, Any] | None:
     if not row:
         return None
     result = json.loads(row["result_json"])
+    result["_developerUserId"] = row["developer_user_id"]
+    result["_developerKeyId"] = row["developer_key_id"]
     if row["thumbnail"]:
         result.setdefault("fileMeta", {})["thumbnail"] = row["thumbnail"]
     if row["forensics_json"]:

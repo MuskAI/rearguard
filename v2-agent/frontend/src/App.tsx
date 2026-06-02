@@ -215,7 +215,7 @@ export default function App() {
   }, [messages]);
 
   const configureAccessToken = async () => {
-    const next = window.prompt("输入访问令牌。留空可清除本地保存的令牌。", getAccessToken());
+    const next = window.prompt("输入运维访问令牌或 rg_sk_ API Key。留空可清除本地保存的值。", getAccessToken());
     if (next === null) return;
     setAccessToken(next);
     setMonitorReloadKey((value) => value + 1);
@@ -708,6 +708,7 @@ function AgentAvatar() {
 
 function CapabilityBanner({ health }: { health: HealthStatus | null }) {
   const tokenProtected = Boolean(health?.accessProtectionEnabled);
+  const developerKeyProtected = Boolean(health?.developerKeyAuthEnabled);
   const capabilityText =
     health == null
       ? "尚未获取到后端状态，检测能力与访问控制信息可能不完整。"
@@ -720,7 +721,8 @@ function CapabilityBanner({ health }: { health: HealthStatus | null }) {
       <span className="text-ink-950 font-medium">当前能力：</span>
       {capabilityText}
       {cacheVersion && ` 分析缓存版本：${cacheVersion}。`}
-      {tokenProtected && " 历史记录、报告与监控指标需要访问令牌。"}
+      {developerKeyProtected && " 检测、取证和凭证接口需要开发者 API Key。"}
+      {tokenProtected && " 历史记录、报告与监控指标需要运维访问令牌。"}
     </div>
   );
 }

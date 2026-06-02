@@ -5,13 +5,16 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import secrets
 import time
 import hashlib
 import io
 from datetime import datetime, timezone
+from urllib import error as urlerror
 from urllib.parse import quote
+from urllib import request as urlrequest
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
@@ -23,6 +26,15 @@ from . import detector, provenance, reporting, storage, synthid_detector, visibl
 app = FastAPI(title="鉴真 AI 鉴伪智能体", version="0.2.0")
 ACCESS_TOKEN = os.getenv("JIANZHEN_ACCESS_TOKEN", "").strip()
 MAX_UPLOAD_BYTES = int(os.getenv("JIANZHEN_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+DEVELOPER_AUTH_URL = os.getenv("JIANZHEN_DEVELOPER_AUTH_URL", "http://127.0.0.1:5000/api/developer/keys/verify").strip()
+DEVELOPER_AUTH_SECRET = (
+    os.getenv("REALGUARD_DEVELOPER_AUTH_SECRET")
+    or os.getenv("JIANZHEN_DEVELOPER_AUTH_SECRET")
+    or ""
+).strip()
+REQUIRE_DEVELOPER_API_KEY = str(os.getenv("JIANZHEN_REQUIRE_DEVELOPER_API_KEY", "0")).lower() in {"1", "true", "yes"}
+DEVELOPER_AUTH_CONFIGURED = bool(DEVELOPER_AUTH_URL and DEVELOPER_AUTH_SECRET)
+DEVELOPER_API_KEY_REQUIRED = REQUIRE_DEVELOPER_API_KEY
 PROTECTED_ENDPOINTS = [
     "/api/admin/health",
     "/api/history",
@@ -32,6 +44,11 @@ PROTECTED_ENDPOINTS = [
     "/api/report/{report_id}/download",
     "/api/report/{report_id}/export",
     "/api/metrics",
+]
+DEVELOPER_PROTECTED_ENDPOINTS = [
+    "/api/detect",
+    "/api/forensics",
+    "/api/provenance",
 ]
 
 
@@ -83,12 +100,97 @@ def _request_token(request: Request) -> str:
     return request.headers.get("x-jianzhen-token", "").strip()
 
 
+def _admin_access_granted(request: Request) -> bool:
+    return bool(ACCESS_TOKEN) and secrets.compare_digest(_request_token(request), ACCESS_TOKEN)
+
+
 def _require_protected_access(request: Request) -> None:
     if not ACCESS_TOKEN:
         return
-    if secrets.compare_digest(_request_token(request), ACCESS_TOKEN):
+    if _admin_access_granted(request):
         return
     raise HTTPException(status_code=401, detail="访问令牌缺失或无效")
+
+
+def _request_developer_key(request: Request) -> str:
+    bearer = request.headers.get("authorization", "").strip()
+    if bearer.lower().startswith("bearer "):
+        bearer = bearer[7:].strip()
+    else:
+        bearer = ""
+    legacy = request.headers.get("x-jianzhen-token", "").strip()
+    if not legacy.startswith("rg_sk_"):
+        legacy = ""
+    return (
+        request.headers.get("x-realguard-key", "").strip()
+        or request.headers.get("x-realguard-api-key", "").strip()
+        or request.headers.get("x-api-key", "").strip()
+        or bearer
+        or legacy
+    )
+
+
+def _verify_developer_key_sync(api_key: str, request: Request) -> dict:
+    payload = json.dumps({"api_key": api_key}).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "X-RealGuard-Internal-Secret": DEVELOPER_AUTH_SECRET,
+        "X-Forwarded-For": _client_ip(request) or "",
+    }
+    verification_request = urlrequest.Request(
+        DEVELOPER_AUTH_URL,
+        data=payload,
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urlrequest.urlopen(verification_request, timeout=5) as response:
+            data = json.loads(response.read().decode("utf-8") or "{}")
+    except urlerror.HTTPError as exc:
+        if exc.code in {401, 403}:
+            raise HTTPException(status_code=503, detail="API Key 内部校验配置无效") from exc
+        raise HTTPException(status_code=503, detail="API Key 校验服务不可用") from exc
+    except (urlerror.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=503, detail="API Key 校验服务不可用") from exc
+
+    if not data.get("valid"):
+        raise HTTPException(status_code=401, detail="API Key 缺失或无效")
+    return {
+        "mode": "developer",
+        "keyId": data.get("keyId"),
+        "userId": data.get("userId"),
+        "scopes": data.get("scopes") or [],
+    }
+
+
+async def _require_developer_access(request: Request) -> dict:
+    if _admin_access_granted(request):
+        return {"mode": "admin"}
+    if not DEVELOPER_API_KEY_REQUIRED:
+        return {"mode": "public"}
+    if not DEVELOPER_AUTH_CONFIGURED:
+        raise HTTPException(status_code=503, detail="API Key 校验服务未配置")
+    api_key = _request_developer_key(request)
+    if not api_key:
+        raise HTTPException(status_code=401, detail="请在 X-RealGuard-Key 中提供 API Key")
+    return await run_in_threadpool(_verify_developer_key_sync, api_key, request)
+
+
+def _require_report_access(request: Request, item: dict) -> dict:
+    if _admin_access_granted(request):
+        return {"mode": "admin"}
+    if not DEVELOPER_API_KEY_REQUIRED:
+        return {"mode": "public"}
+    if not DEVELOPER_AUTH_CONFIGURED:
+        raise HTTPException(status_code=503, detail="API Key 校验服务未配置")
+    api_key = _request_developer_key(request)
+    if not api_key:
+        raise HTTPException(status_code=401, detail="请在 X-RealGuard-Key 中提供 API Key")
+    actor = _verify_developer_key_sync(api_key, request)
+    item_user_id = str(item.get("_developerUserId") or "")
+    if item_user_id and item_user_id == str(actor.get("userId") or ""):
+        return actor
+    raise HTTPException(status_code=403, detail="当前 API Key 无权访问该报告")
 
 
 async def _read_upload(file: UploadFile) -> bytes:
@@ -106,7 +208,10 @@ def _public_capabilities() -> dict:
         "version": app.version,
         "vlmEnabled": bool(detector.API_KEY),
         "accessProtectionEnabled": bool(ACCESS_TOKEN),
+        "developerKeyAuthEnabled": DEVELOPER_API_KEY_REQUIRED,
+        "developerKeyAuthConfigured": DEVELOPER_AUTH_CONFIGURED,
         "protectedEndpoints": PROTECTED_ENDPOINTS if ACCESS_TOKEN else [],
+        "developerProtectedEndpoints": DEVELOPER_PROTECTED_ENDPOINTS if DEVELOPER_API_KEY_REQUIRED else [],
         "analysisCacheVersion": storage.ANALYSIS_CACHE_VERSION,
         "capabilities": {
             "image": "vlm",
@@ -177,6 +282,7 @@ def _build_result(
     sha256: str,
     thumbnail: str | None,
     preview: str | None,
+    actor: dict | None = None,
 ) -> dict:
     now = datetime.now(timezone.utc)
     day = now.strftime("%Y%m%d")
@@ -215,8 +321,15 @@ def _build_result(
             else "本结果由视觉语言模型分析生成，仅供参考，不构成权威鉴定结论。"
         ),
     }
-    storage.put_history(result, sha256=sha256, file_size=len(data), thumbnail=thumbnail)
+    storage.put_history(result, sha256=sha256, file_size=len(data), thumbnail=thumbnail, actor=actor)
     return result
+
+
+def _strip_internal_history_fields(item: dict) -> dict:
+    clean = dict(item)
+    clean.pop("_developerUserId", None)
+    clean.pop("_developerKeyId", None)
+    return clean
 
 
 @app.get("/api/health")
@@ -239,6 +352,7 @@ def admin_health(request: Request) -> dict:
 
 @app.post("/api/detect")
 async def detect(request: Request, file: UploadFile = File(...), fileType: str | None = Form(default=None)) -> dict:
+    actor = await _require_developer_access(request)
     data = await _read_upload(file)
     if not data:
         raise HTTPException(status_code=400, detail="空文件")
@@ -268,6 +382,7 @@ async def detect(request: Request, file: UploadFile = File(...), fileType: str |
         sha256=sha256,
         thumbnail=thumbnail,
         preview=preview,
+        actor=actor,
     )
     storage.record_event(
         "detect",
@@ -285,7 +400,8 @@ async def detect(request: Request, file: UploadFile = File(...), fileType: str |
 
 
 @app.post("/api/forensics")
-async def forensics(file: UploadFile = File(...)) -> dict:
+async def forensics(request: Request, file: UploadFile = File(...)) -> dict:
+    await _require_developer_access(request)
     data = await _read_upload(file)
     if not data:
         raise HTTPException(status_code=400, detail="空文件")
@@ -302,7 +418,8 @@ async def forensics(file: UploadFile = File(...)) -> dict:
 
 
 @app.post("/api/provenance")
-async def provenance_check(file: UploadFile = File(...)) -> dict:
+async def provenance_check(request: Request, file: UploadFile = File(...)) -> dict:
+    await _require_developer_access(request)
     data = await _read_upload(file)
     if not data:
         raise HTTPException(status_code=400, detail="空文件")
@@ -369,7 +486,7 @@ def history_item(task_id: str, request: Request) -> dict:
     item = storage.get_history(task_id)
     if not item:
         raise HTTPException(status_code=404, detail="记录不存在")
-    return item
+    return _strip_internal_history_fields(item)
 
 
 @app.post("/api/history/{task_id}/artifacts")
@@ -398,24 +515,25 @@ def delete_item(task_id: str, request: Request) -> dict:
 
 @app.get("/api/report/{report_id}")
 def report(report_id: str, request: Request) -> dict:
-    _require_protected_access(request)
     item = storage.get_history(report_id)
     if not item:
         raise HTTPException(status_code=404, detail="报告不存在")
-    return item
+    _require_report_access(request, item)
+    return _strip_internal_history_fields(item)
 
 
 @app.get("/api/report/{report_id}/download")
 def report_download(report_id: str, request: Request) -> Response:
-    _require_protected_access(request)
     item = storage.get_history(report_id)
     if not item:
         raise HTTPException(status_code=404, detail="报告不存在")
-    filename = reporting.download_filename(item)
+    _require_report_access(request, item)
+    clean_item = _strip_internal_history_fields(item)
+    filename = reporting.download_filename(clean_item)
     html = reporting.build_report_html(
-        item,
-        forensics=item.get("forensics"),
-        provenance=item.get("provenance"),
+        clean_item,
+        forensics=clean_item.get("forensics"),
+        provenance=clean_item.get("provenance"),
     )
     return Response(
         content=html,
@@ -428,16 +546,17 @@ def report_download(report_id: str, request: Request) -> Response:
 
 @app.post("/api/report/{report_id}/export")
 def report_export(report_id: str, request: Request, payload: dict | None = Body(default=None)) -> Response:
-    _require_protected_access(request)
     item = storage.get_history(report_id)
     if not item:
         raise HTTPException(status_code=404, detail="报告不存在")
-    filename = reporting.download_filename(item)
+    _require_report_access(request, item)
+    clean_item = _strip_internal_history_fields(item)
+    filename = reporting.download_filename(clean_item)
     body = payload or {}
     html = reporting.build_report_html(
-        item,
-        forensics=body.get("forensics") or item.get("forensics"),
-        provenance=body.get("provenance") or item.get("provenance"),
+        clean_item,
+        forensics=body.get("forensics") or clean_item.get("forensics"),
+        provenance=body.get("provenance") or clean_item.get("provenance"),
     )
     return Response(
         content=html,

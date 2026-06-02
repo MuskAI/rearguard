@@ -1,6 +1,7 @@
 import { FormEvent, Fragment, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   Counters,
+  DeveloperApiKey,
   HistoryFilterKey,
   HistoryListResponse,
   HistoryRecord,
@@ -8,12 +9,14 @@ import {
   RetrieveItem,
   User,
   VideoDetectionResult,
+  createDeveloperApiKey,
   detectImage,
   detectVideo,
   downloadImageReport,
   downloadRetrieveReport,
   downloadVideoReport,
   getHistory,
+  getDeveloperApiKeys,
   getLibraries,
   getMe,
   getRetrievalHistory,
@@ -21,6 +24,7 @@ import {
   loginBySms,
   logout,
   registerUser,
+  revokeDeveloperApiKey,
   retrieveSearch,
   getV2Health,
   runV2Detect,
@@ -45,9 +49,9 @@ const REALGUARD_API_BASE = `${REALGUARD_PUBLIC_ORIGIN}/v2-api`;
 const REALGUARD_SKILL_URL = `${REALGUARD_PUBLIC_ORIGIN}/skills/realguard-forensics/SKILL.md`;
 const REALGUARD_API_DOC_URL = `${REALGUARD_PUBLIC_ORIGIN}/developer/API.md`;
 const REALGUARD_SKILL_HANDOFF =
-  `Use $realguard-forensics; read ${REALGUARD_SKILL_URL}; call POST ${REALGUARD_API_BASE}/detect with multipart field file, or run python3 scripts/realguard_cli.py detect <file> --base-url ${REALGUARD_PUBLIC_ORIGIN} --api-prefix /v2-api --pretty if the repo CLI is available; then return a concise verdict with confidence, evidence, model version, cache version, and report id.`;
+  `Use $realguard-forensics; read ${REALGUARD_SKILL_URL}; call POST ${REALGUARD_API_BASE}/detect with multipart field file and X-RealGuard-Key, or run python3 scripts/realguard_cli.py detect <file> --base-url ${REALGUARD_PUBLIC_ORIGIN} --api-prefix /v2-api --token <your-api-key> --pretty if the repo CLI is available; then return a concise verdict with confidence, evidence, model version, cache version, and report id.`;
 const REALGUARD_SKILL_COMMAND =
-  `python3 scripts/realguard_cli.py detect <file> --base-url ${REALGUARD_PUBLIC_ORIGIN} --api-prefix /v2-api --pretty`;
+  `python3 scripts/realguard_cli.py detect <file> --base-url ${REALGUARD_PUBLIC_ORIGIN} --api-prefix /v2-api --token <your-api-key> --pretty`;
 const IMAGE_MAX_BYTES = 25 * 1024 * 1024;
 const VIDEO_MAX_BYTES = 512 * 1024 * 1024;
 const V2_CONSOLE_MAX_BYTES = 25 * 1024 * 1024;
@@ -174,7 +178,7 @@ function App() {
       )}
       {page === "retrieve" && <RetrievePage onDone={refreshMe} />}
       {page === "history" && <HistoryPage setPage={setPage} />}
-      {page === "developer" && <DeveloperPlatformPage />}
+      {page === "developer" && <DeveloperPlatformPage user={user} onNeedAuth={requireAuth} />}
 
       <Footer />
 
@@ -494,14 +498,72 @@ function SkillEntryPanel() {
   );
 }
 
-function DeveloperPlatformPage() {
-  const [token, setToken] = useState("");
+function DeveloperPlatformPage({ user, onNeedAuth }: { user: User | null; onNeedAuth: () => void }) {
+  const [apiKey, setApiKey] = useState("");
+  const [keys, setKeys] = useState<DeveloperApiKey[]>([]);
+  const [keyName, setKeyName] = useState("默认生产 Key");
+  const [generatedKey, setGeneratedKey] = useState("");
+  const [keyBusy, setKeyBusy] = useState(false);
+  const [keyStatus, setKeyStatus] = useState<Status>(null);
   const [fileType, setFileType] = useState("image");
   const [testFile, setTestFile] = useState<File | null>(null);
   const [consoleBusy, setConsoleBusy] = useState(false);
   const [consoleStatus, setConsoleStatus] = useState<Status>(null);
   const [consoleResult, setConsoleResult] = useState<Record<string, unknown> | null>(null);
   const [consoleMeta, setConsoleMeta] = useState<{ endpoint: string; elapsedMs: number; at: string } | null>(null);
+  useEffect(() => {
+    if (!user) {
+      setKeys([]);
+      setGeneratedKey("");
+      setKeyStatus(null);
+      return;
+    }
+    loadDeveloperKeys();
+  }, [user?.Userid]);
+
+  async function loadDeveloperKeys() {
+    try {
+      const data = await getDeveloperApiKeys();
+      setKeys(data.keys || []);
+    } catch (error) {
+      setKeyStatus({ tone: "error", text: errorMessage(error) });
+    }
+  }
+
+  async function handleCreateKey() {
+    if (!user) {
+      onNeedAuth();
+      return;
+    }
+    setKeyBusy(true);
+    setGeneratedKey("");
+    setKeyStatus({ tone: "info", text: "正在生成 API Key..." });
+    try {
+      const data = await createDeveloperApiKey(keyName);
+      setGeneratedKey(data.apiKey);
+      setApiKey(data.apiKey);
+      setKeys((current) => [data.key, ...current.filter((item) => item.id !== data.key.id)]);
+      setKeyStatus({ tone: "ok", text: "API Key 已生成。完整 key 只显示一次，请立即复制保存。" });
+    } catch (error) {
+      setKeyStatus({ tone: "error", text: errorMessage(error) });
+    } finally {
+      setKeyBusy(false);
+    }
+  }
+
+  async function handleRevokeKey(keyId: number) {
+    setKeyBusy(true);
+    setKeyStatus({ tone: "info", text: "正在撤销 API Key..." });
+    try {
+      await revokeDeveloperApiKey(keyId);
+      await loadDeveloperKeys();
+      setKeyStatus({ tone: "ok", text: "API Key 已撤销，后续请求会被拒绝。" });
+    } catch (error) {
+      setKeyStatus({ tone: "error", text: errorMessage(error) });
+    } finally {
+      setKeyBusy(false);
+    }
+  }
   const docsNavGroups = [
     {
       title: "开始使用",
@@ -509,6 +571,7 @@ function DeveloperPlatformPage() {
         ["#overview", "总览"],
         ["#quickstart", "快速开始"],
         ["#auth", "认证"],
+        ["#api-keys", "API Keys"],
       ],
     },
     {
@@ -565,7 +628,8 @@ function DeveloperPlatformPage() {
   ];
   const errorRows = [
     ["400", "Bad Request", "缺少 file、fileType 不合法或 multipart 格式错误。"],
-    ["401", "Unauthorized", "服务启用访问保护，但未传 Token 或 Token 无效。"],
+    ["401", "Unauthorized", "需要 API Key 的接口未传 Key、Key 无效或已撤销。"],
+    ["403", "Forbidden", "API Key 无权访问该报告或资源。"],
     ["413", "Payload Too Large", "文件超过服务允许大小，需要压缩或走异步/分片流程。"],
     ["422", "Unprocessable Entity", "文件格式无法识别或不支持当前检测链路。"],
     ["500", "Internal Server Error", "服务端分析失败；记录 taskId 并重试或转人工处理。"],
@@ -576,26 +640,29 @@ form.append("fileType", "image");
 
 const res = await fetch("${REALGUARD_API_BASE}/detect", {
   method: "POST",
-  headers: { "X-Jianzhen-Token": token },
+  headers: { "X-RealGuard-Key": apiKey },
   body: form
 });
 const data = await res.json();
 console.log(data.agentSummary || data);`;
   const curlDetectExample = `curl -fsS -X POST ${REALGUARD_API_BASE}/detect \\
-  -H "X-Jianzhen-Token: <token>" \\
+  -H "X-RealGuard-Key: <your-api-key>" \\
   -F "file=@/path/to/file.png" \\
   -F "fileType=image"`;
   const curlHealthExample = `curl -fsS ${REALGUARD_API_BASE}/health`;
   const curlForensicsExample = `curl -fsS -X POST ${REALGUARD_API_BASE}/forensics \\
+  -H "X-RealGuard-Key: <your-api-key>" \\
   -F "file=@/path/to/image.png"`;
   const curlProvenanceExample = `curl -fsS -X POST ${REALGUARD_API_BASE}/provenance \\
+  -H "X-RealGuard-Key: <your-api-key>" \\
   -F "file=@/path/to/image.png"`;
   const curlReportExample = `curl -fsS ${REALGUARD_API_BASE}/report/<reportId>/download \\
+  -H "X-RealGuard-Key: <your-api-key>" \\
   -o realguard-report.html`;
   const pythonExample = `import requests
 
 url = "${REALGUARD_API_BASE}/detect"
-headers = {"X-Jianzhen-Token": token}  # optional
+headers = {"X-RealGuard-Key": api_key}
 with open("/path/to/file.png", "rb") as f:
     r = requests.post(url, headers=headers, files={"file": f}, data={"fileType": "image"})
 r.raise_for_status()
@@ -603,6 +670,7 @@ print(r.json().get("agentSummary") or r.json())`;
   const cliExample = `python3 scripts/realguard_cli.py detect /path/to/file \\
   --base-url http://124.222.3.205 \\
   --api-prefix /v2-api \\
+  --token <your-api-key> \\
   --pretty`;
 
   const runHealthCheck = async () => {
@@ -610,7 +678,7 @@ print(r.json().get("agentSummary") or r.json())`;
     setConsoleBusy(true);
     setConsoleStatus({ tone: "info", text: "正在检查 V2 API 状态..." });
     try {
-      const result = await getV2Health(token);
+      const result = await getV2Health(apiKey);
       setConsoleResult(result as Record<string, unknown>);
       setConsoleMeta({ endpoint: "GET /health", elapsedMs: Math.round(performance.now() - started), at: new Date().toLocaleString() });
       setConsoleStatus({ tone: "ok", text: "健康检查成功。" });
@@ -635,7 +703,7 @@ print(r.json().get("agentSummary") or r.json())`;
     setConsoleBusy(true);
     setConsoleStatus({ tone: "info", text: "正在上传文件并调用鉴伪 API..." });
     try {
-      const result = await runV2Detect({ file: testFile, fileType, token });
+      const result = await runV2Detect({ file: testFile, fileType, token: apiKey });
       setConsoleResult(result as Record<string, unknown>);
       setConsoleMeta({ endpoint: "POST /detect", elapsedMs: Math.round(performance.now() - started), at: new Date().toLocaleString() });
       setConsoleStatus({ tone: "ok", text: `检测完成：${result.verdict || "已返回结果"}` });
@@ -727,16 +795,95 @@ print(r.json().get("agentSummary") or r.json())`;
               <div className="docs-section-kicker">Authentication</div>
               <h2>认证</h2>
               <p className="docs-lead">
-                当前公开环境可用于演示；如果服务开启访问保护，请在任一请求头中传入令牌。
+                调用 <code>/detect</code>、<code>/forensics</code>、<code>/provenance</code> 和报告下载接口时，
+                请使用开发者平台生成的个人 API Key。每个 Key 绑定到登录用户，可撤销、可审计。
               </p>
               <div className="docs-code-block compact">
-                <pre>{`X-Jianzhen-Token: <token>
-Authorization: Bearer <token>`}</pre>
+                <pre>{`X-RealGuard-Key: rg_sk_xxx
+Authorization: Bearer rg_sk_xxx`}</pre>
               </div>
               <div className="docs-callout">
                 <strong>安全建议</strong>
-                <p>Token 不要写进前端源码或公开仓库。自动化 agent 应使用作用域受限的令牌，并记录调用人、时间和文件摘要。</p>
+                <p>API Key 不要写进前端源码或公开仓库。自动化 agent 应使用独立 Key，并记录调用人、时间、文件摘要和报告 ID。</p>
               </div>
+              <div className="docs-callout">
+                <strong>运维 Token</strong>
+                <p>
+                  <code>X-Jianzhen-Token</code> 仅用于 <code>/admin/health</code>、<code>/history</code>、
+                  <code>/metrics</code> 等管理接口，不应发给普通开发者或外部 agent。
+                </p>
+              </div>
+            </section>
+
+            <section id="api-keys" className="docs-section auth-manager-section">
+              <div className="docs-section-kicker">API Key Management</div>
+              <h2>我的 API Key</h2>
+              <p className="docs-lead">
+                注册并登录开发者平台后，可以生成自己的 <code>rg_sk_</code> Key。完整 Key 只在创建时显示一次；
+                列表中只保留预览、状态和最后使用时间。
+              </p>
+              {!user ? (
+                <div className="docs-callout docs-callout-strong">
+                  <h3>需要先注册/登录</h3>
+                  <p>API Key 需要绑定到真实账号，用于调用审计、撤销和报告权限控制。</p>
+                  <button className="docs-inline-button" onClick={onNeedAuth}>注册/登录开发者平台</button>
+                </div>
+              ) : (
+                <div className="api-key-manager">
+                  <div className="api-key-create">
+                    <div>
+                      <span>当前账号</span>
+                      <strong>{user.username || user.phone}</strong>
+                      <small>{user.phone}</small>
+                    </div>
+                    <label>
+                      Key 名称
+                      <input value={keyName} maxLength={120} onChange={(event) => setKeyName(event.target.value)} />
+                    </label>
+                    <button disabled={keyBusy} onClick={handleCreateKey}>
+                      <i className={`fa ${keyBusy ? "fa-spinner detect-spin" : "fa-key"}`} /> 生成 API Key
+                    </button>
+                    {keyStatus && <StatusPill status={keyStatus} />}
+                    {generatedKey && (
+                      <div className="generated-key-box">
+                        <span>完整 Key 只显示一次</span>
+                        <code>{generatedKey}</code>
+                        <div>
+                          <button onClick={() => navigator.clipboard?.writeText(generatedKey)}>复制 Key</button>
+                          <button onClick={() => setApiKey(generatedKey)}>填入测试台</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <div className="api-key-list">
+                    <div className="api-key-list-head">
+                      <strong>已创建 Key</strong>
+                      <button disabled={keyBusy} onClick={loadDeveloperKeys}>刷新</button>
+                    </div>
+                    {keys.length === 0 ? (
+                      <p className="empty-key-state">暂无 API Key。生成后即可在外部 agent 或业务系统中调用接口。</p>
+                    ) : (
+                      keys.map((item) => (
+                        <div className={`api-key-row ${item.status === "active" ? "active" : "revoked"}`} key={item.id}>
+                          <div>
+                            <strong>{item.name}</strong>
+                            <code>{item.preview}</code>
+                            <span>
+                              创建：{item.createdAt || "-"} · 最后使用：{item.lastUsedAt || "未使用"}
+                            </span>
+                          </div>
+                          <div>
+                            <small>{item.status}</small>
+                            {item.status === "active" && (
+                              <button disabled={keyBusy} onClick={() => handleRevokeKey(item.id)}>撤销</button>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
             </section>
 
             <section id="reference" className="docs-section">
@@ -872,16 +1019,16 @@ Authorization: Bearer <token>`}</pre>
             <section id="console" className="docs-section docs-console-section">
               <div className="docs-section-kicker">API Console</div>
               <h2>在线 API 测试台</h2>
-              <p className="docs-lead">在网站内直接测试健康检查和鉴伪上传，验证 Token、接口连通性、响应字段和耗时。</p>
+              <p className="docs-lead">在网站内直接测试健康检查和鉴伪上传，验证 API Key、接口连通性、响应字段和耗时。</p>
               <div className="console-layout">
                 <div className="console-controls">
                   <label>
-                    访问令牌（可选）
+                    API Key
                     <input
                       type="password"
-                      placeholder="X-Jianzhen-Token"
-                      value={token}
-                      onChange={(event) => setToken(event.target.value)}
+                      placeholder="rg_sk_..."
+                      value={apiKey}
+                      onChange={(event) => setApiKey(event.target.value)}
                     />
                   </label>
                   <label>

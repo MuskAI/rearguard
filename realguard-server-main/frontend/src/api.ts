@@ -67,6 +67,23 @@ export function logout() {
   return jsonRequest<Record<string, never>>("/api/logout", { method: "POST" });
 }
 
+export function getDeveloperApiKeys() {
+  return jsonRequest<{ keys: DeveloperApiKey[] }>("/api/developer/keys");
+}
+
+export function createDeveloperApiKey(name: string) {
+  return jsonRequest<{ apiKey: string; key: DeveloperApiKey }>("/api/developer/keys", {
+    method: "POST",
+    body: JSON.stringify({ name })
+  });
+}
+
+export function revokeDeveloperApiKey(keyId: number) {
+  return jsonRequest<{ revoked: number }>(`/api/developer/keys/${encodeURIComponent(String(keyId))}`, {
+    method: "DELETE"
+  });
+}
+
 export function detectImage(file: File) {
   const body = new FormData();
   body.append("image", file);
@@ -177,7 +194,8 @@ async function parseV2Response<T>(response: Response): Promise<T> {
 function v2Headers(token?: string) {
   const headers = new Headers({ Accept: "application/json" });
   const normalized = (token || "").trim();
-  if (normalized) headers.set("X-Jianzhen-Token", normalized);
+  if (normalized.startsWith("rg_sk_")) headers.set("X-RealGuard-Key", normalized);
+  else if (normalized) headers.set("X-Jianzhen-Token", normalized);
   return headers;
 }
 
@@ -212,6 +230,17 @@ export type Counters = {
   video_detect: number;
   image_retrieve: number;
   video_retrieve: number;
+};
+
+export type DeveloperApiKey = {
+  id: number;
+  name: string;
+  preview: string;
+  scopes: string[];
+  status: "active" | "revoked" | string;
+  createdAt: string;
+  lastUsedAt?: string;
+  revokedAt?: string;
 };
 
 export type ImageDetectionResult = {

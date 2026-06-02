@@ -25,6 +25,31 @@ def client(monkeypatch, tmp_path):
     return TestClient(main.app)
 
 
+@pytest.fixture
+def developer_key_client(monkeypatch, tmp_path):
+    monkeypatch.setenv("JIANZHEN_ACCESS_TOKEN", "admin-token")
+    monkeypatch.setenv("JIANZHEN_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("JIANZHEN_REQUIRE_DEVELOPER_API_KEY", "true")
+    monkeypatch.setenv("JIANZHEN_DEVELOPER_AUTH_URL", "http://realguard-v1.internal/api/developer/keys/verify")
+    monkeypatch.setenv("REALGUARD_DEVELOPER_AUTH_SECRET", "internal-secret")
+    for module_name in ("app.storage", "app.main", "storage", "main"):
+        sys.modules.pop(module_name, None)
+    import app.storage as storage  # noqa: WPS433
+    importlib.reload(storage)
+    import app.main as main  # noqa: WPS433
+    importlib.reload(main)
+
+    def fake_verify(api_key, request):
+        if api_key == "rg_sk_user1":
+            return {"mode": "developer", "keyId": 101, "userId": 1, "scopes": ["detect", "reports"]}
+        if api_key == "rg_sk_user2":
+            return {"mode": "developer", "keyId": 202, "userId": 2, "scopes": ["detect", "reports"]}
+        raise main.HTTPException(status_code=401, detail="API Key 缺失或无效")
+
+    monkeypatch.setattr(main, "_verify_developer_key_sync", fake_verify)
+    return TestClient(main.app)
+
+
 def test_metrics_requires_token(client):
     unauth = client.get("/api/metrics")
     auth = client.get("/api/metrics", headers={"X-Jianzhen-Token": "test-token"})
@@ -59,6 +84,59 @@ def test_admin_health_requires_token_and_exposes_diagnostics(client):
     assert "calibration" in payload
     assert "storage" in payload
     assert "repoPath" in payload["synthid"]
+
+
+def test_developer_key_required_for_detect_when_enabled(developer_key_client):
+    health = developer_key_client.get("/api/health")
+    missing = developer_key_client.post(
+        "/api/detect",
+        files={"file": ("sample.txt", b"hello world from pytest", "text/plain")},
+    )
+    invalid = developer_key_client.post(
+        "/api/detect",
+        headers={"X-RealGuard-Key": "rg_sk_bad"},
+        files={"file": ("sample.txt", b"hello world from pytest", "text/plain")},
+    )
+    valid = developer_key_client.post(
+        "/api/detect",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+        files={"file": ("sample.txt", b"hello world from pytest", "text/plain")},
+    )
+
+    assert missing.status_code == 401
+    assert invalid.status_code == 401
+    assert valid.status_code == 200
+    assert health.json()["developerKeyAuthEnabled"] is True
+    assert health.json()["developerKeyAuthConfigured"] is True
+    assert "/api/detect" in health.json()["developerProtectedEndpoints"]
+    assert valid.json()["reportId"].startswith("RJ-RPT-")
+
+
+def test_developer_key_report_access_is_scoped_to_owner(developer_key_client):
+    detect = developer_key_client.post(
+        "/api/detect",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+        files={"file": ("sample.txt", b"owner scoped report", "text/plain")},
+    )
+    report_id = detect.json()["reportId"]
+
+    owner = developer_key_client.get(
+        f"/api/report/{report_id}/download",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+    )
+    other_user = developer_key_client.get(
+        f"/api/report/{report_id}/download",
+        headers={"X-RealGuard-Key": "rg_sk_user2"},
+    )
+    admin = developer_key_client.get(
+        f"/api/report/{report_id}/download",
+        headers={"X-Jianzhen-Token": "admin-token"},
+    )
+
+    assert detect.status_code == 200
+    assert owner.status_code == 200
+    assert other_user.status_code == 403
+    assert admin.status_code == 200
 
 
 def test_report_download_returns_attachment_html(client):

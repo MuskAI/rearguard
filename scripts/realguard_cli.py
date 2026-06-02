@@ -25,6 +25,15 @@ class CliError(RuntimeError):
     """User-facing CLI failure."""
 
 
+def apply_auth_header(headers: dict[str, str], token: str | None) -> None:
+    if not token:
+        return
+    if token.startswith("rg_sk_"):
+        headers["X-RealGuard-Key"] = token
+    else:
+        headers["X-Jianzhen-Token"] = token
+
+
 def build_url(base_url: str, api_prefix: str, path: str) -> str:
     base = base_url.rstrip("/")
     prefix = "/" + api_prefix.strip("/") if api_prefix else ""
@@ -79,8 +88,7 @@ def request_json(
     timeout: float = 60,
 ) -> Any:
     headers = {"Accept": "application/json"}
-    if token:
-        headers["X-Jianzhen-Token"] = token
+    apply_auth_header(headers, token)
     if content_type:
         headers["Content-Type"] = content_type
 
@@ -217,8 +225,7 @@ def cmd_provenance(args: argparse.Namespace) -> int:
 def cmd_report(args: argparse.Namespace) -> int:
     url = build_url(args.base_url, args.api_prefix, f"/report/{args.report_id}/download")
     headers = {}
-    if args.token:
-        headers["X-Jianzhen-Token"] = args.token
+    apply_auth_header(headers, args.token)
     req = request.Request(url, headers=headers, method="GET")
     try:
         with request.urlopen(req, timeout=args.timeout) as resp:
@@ -237,7 +244,7 @@ def cmd_report(args: argparse.Namespace) -> int:
 def add_common_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="API host base URL")
     parser.add_argument("--api-prefix", default=DEFAULT_API_PREFIX, help="API prefix, e.g. /api or /v2-api")
-    parser.add_argument("--token", default=DEFAULT_TOKEN, help="API token or REALGUARD_CLI_TOKEN")
+    parser.add_argument("--token", default=DEFAULT_TOKEN, help="Developer API key (rg_sk_...) or admin token")
     parser.add_argument("--timeout", type=float, default=60, help="HTTP timeout in seconds")
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output")
 

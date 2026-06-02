@@ -64,6 +64,103 @@ def test_api_password_login_sets_session(client, monkeypatch):
         assert sess["user_info"]["phone"] == "13800000000"
 
 
+def test_developer_api_key_lifecycle(client, monkeypatch):
+    _login_session(client)
+    monkeypatch.setattr(api, "_ensure_developer_api_key_table", lambda: True)
+    monkeypatch.setattr(api, "DEVELOPER_AUTH_SECRET", "internal-secret")
+    rows = []
+    next_id = {"value": 0}
+
+    def fake_lastid(sql, params=None):
+        assert "INSERT INTO developer_api_keys" in sql
+        next_id["value"] += 1
+        user_id, name, key_hash, key_prefix, key_last4, scopes = params
+        rows.append({
+            "id": next_id["value"],
+            "user_id": user_id,
+            "name": name,
+            "key_hash": key_hash,
+            "key_prefix": key_prefix,
+            "key_last4": key_last4,
+            "scopes": scopes,
+            "status": "active",
+            "created_at": "2026-06-02 10:00:00",
+            "last_used_at": None,
+            "revoked_at": None,
+            "phone": "13800000000",
+            "username": "tester",
+        })
+        return next_id["value"]
+
+    def fake_sql(sql, params=None, fetch=True):
+        normalized = " ".join(sql.split())
+        if normalized.startswith("SELECT COUNT(*) AS cnt FROM developer_api_keys"):
+            user_id = params[0]
+            return [{"cnt": sum(1 for row in rows if row["user_id"] == user_id and row["status"] == "active")}]
+        if normalized.startswith("SELECT id, name, key_prefix"):
+            if "WHERE id = %s AND user_id = %s" in normalized:
+                key_id, user_id = params
+                return [row for row in rows if row["id"] == key_id and row["user_id"] == user_id]
+            user_id = params[0]
+            return [row for row in rows if row["user_id"] == user_id]
+        if normalized.startswith("UPDATE developer_api_keys SET status = 'revoked'"):
+            key_id, user_id = params
+            for row in rows:
+                if row["id"] == key_id and row["user_id"] == user_id and row["status"] == "active":
+                    row["status"] = "revoked"
+                    row["revoked_at"] = "2026-06-02 10:01:00"
+                    return 1
+            return 0
+        if normalized.startswith("SELECT k.id, k.user_id"):
+            key_hash = params[0]
+            return [row for row in rows if row["key_hash"] == key_hash]
+        if normalized.startswith("UPDATE developer_api_keys SET last_used_at"):
+            key_id = params[1]
+            for row in rows:
+                if row["id"] == key_id:
+                    row["last_used_at"] = "2026-06-02 10:02:00"
+                    return 1
+            return 0
+        raise AssertionError(f"unexpected SQL: {normalized}")
+
+    monkeypatch.setattr(api, "excute_sql", fake_sql)
+    monkeypatch.setattr(api, "excute_sql_lastid", fake_lastid)
+
+    created = client.post("/api/developer/keys", json={"name": "Agent key"})
+    payload = created.get_json()
+    api_key = payload["apiKey"]
+
+    assert created.status_code == 200
+    assert api_key.startswith("rg_sk_")
+    assert payload["key"]["preview"].endswith(api_key[-4:])
+    assert "apiKey" not in payload["key"]
+
+    listing = client.get("/api/developer/keys")
+    assert listing.status_code == 200
+    assert listing.get_json()["keys"][0]["preview"].endswith(api_key[-4:])
+    assert api_key not in json.dumps(listing.get_json(), ensure_ascii=False)
+
+    verified = client.post(
+        "/api/developer/keys/verify",
+        json={"api_key": api_key},
+        headers={"X-RealGuard-Internal-Secret": "internal-secret"},
+    )
+    assert verified.status_code == 200
+    assert verified.get_json()["valid"] is True
+    assert verified.get_json()["userId"] == 1
+
+    revoked = client.delete("/api/developer/keys/1")
+    assert revoked.status_code == 200
+
+    rejected = client.post(
+        "/api/developer/keys/verify",
+        json={"api_key": api_key},
+        headers={"X-RealGuard-Internal-Secret": "internal-secret"},
+    )
+    assert rejected.status_code == 200
+    assert rejected.get_json()["valid"] is False
+
+
 def test_guest_image_detect_returns_rewritten_url_and_then_blocks(client, monkeypatch):
     monkeypatch.setattr(detection, "_metadata_for_item", lambda itemid: {})
     monkeypatch.setattr(

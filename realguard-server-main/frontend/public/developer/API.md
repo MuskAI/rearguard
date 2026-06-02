@@ -32,21 +32,41 @@ http://124.222.3.205/?page=developer
 One-sentence handoff for OpenClaw or another agent:
 
 ```text
-Use $realguard-forensics; read http://124.222.3.205/skills/realguard-forensics/SKILL.md; call POST http://124.222.3.205/v2-api/detect with multipart field file, or run python3 scripts/realguard_cli.py detect <file> --base-url http://124.222.3.205 --api-prefix /v2-api --pretty if the repo CLI is available; then return a concise verdict with confidence, evidence, model version, cache version, and report id.
+Use $realguard-forensics; read http://124.222.3.205/skills/realguard-forensics/SKILL.md; call POST http://124.222.3.205/v2-api/detect with multipart field file and X-RealGuard-Key, or run python3 scripts/realguard_cli.py detect <file> --base-url http://124.222.3.205 --api-prefix /v2-api --token <your-api-key> --pretty if the repo CLI is available; then return a concise verdict with confidence, evidence, model version, cache version, and report id.
 ```
 
 The public Skill is required because external agents cannot access your local repository path. They need a stable public URL that documents the API, required fields, output constraints, report fields, and interpretation boundaries.
 
 ## Authentication
 
-If access protection is enabled, send either header:
+Register or log in on the Developer Console, then create a personal API Key in the **My API Key** section:
 
-```http
-X-Jianzhen-Token: <token>
-Authorization: Bearer <token>
+```text
+http://124.222.3.205/?page=developer
 ```
 
-Keep tokens out of frontend source code and public repositories. Automation agents should use scoped tokens and log caller, timestamp, file hash, and report ID.
+Use that key for developer API calls:
+
+```http
+X-RealGuard-Key: rg_sk_xxx
+Authorization: Bearer rg_sk_xxx
+```
+
+Full API Keys are shown only once when created. The platform stores only a hash, a preview, status, and usage timestamps. Revoked keys are rejected immediately by protected developer endpoints.
+
+`X-Jianzhen-Token` is reserved for internal admin endpoints such as `/admin/health`, `/history`, and `/metrics`. Do not distribute it to external developers or agents.
+
+### API Key lifecycle
+
+The web platform exposes authenticated key-management endpoints for logged-in users:
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/api/developer/keys` | List current user's key previews, status, scopes, created time, and last-used time. |
+| `POST` | `/api/developer/keys` | Create a new key. The full `apiKey` is returned only once. |
+| `DELETE` | `/api/developer/keys/{keyId}` | Revoke one active key owned by the current user. |
+
+External agents should never call these management endpoints directly. They should receive a generated `rg_sk_...` key from the account owner and use it only in API requests.
 
 ## API Reference
 
@@ -96,7 +116,7 @@ Example:
 
 ```bash
 curl -fsS -X POST http://124.222.3.205/v2-api/detect \
-  -H "X-Jianzhen-Token: <token>" \
+  -H "X-RealGuard-Key: <your-api-key>" \
   -F "file=@/path/to/file.png" \
   -F "fileType=image"
 ```
@@ -138,6 +158,7 @@ Runs image-focused forensic analysis and returns explainable evidence such as EL
 
 ```bash
 curl -fsS -X POST http://124.222.3.205/v2-api/forensics \
+  -H "X-RealGuard-Key: <your-api-key>" \
   -F "file=@/path/to/image.png"
 ```
 
@@ -147,6 +168,7 @@ Checks C2PA, SynthID, visible watermark, and related content credential signals.
 
 ```bash
 curl -fsS -X POST http://124.222.3.205/v2-api/provenance \
+  -H "X-RealGuard-Key: <your-api-key>" \
   -F "file=@/path/to/image.png"
 ```
 
@@ -164,6 +186,7 @@ Example:
 
 ```bash
 curl -fsS http://124.222.3.205/v2-api/report/<reportId>/download \
+  -H "X-RealGuard-Key: <your-api-key>" \
   -o realguard-report.html
 ```
 
@@ -174,7 +197,8 @@ Agents should not hide API errors. Treat 4xx as request or permission problems. 
 | HTTP | Name | Handling |
 | --- | --- | --- |
 | `400` | Bad Request | Missing `file`, invalid `fileType`, or malformed multipart request. |
-| `401` | Unauthorized | Access protection is enabled and the token is missing or invalid. |
+| `401` | Unauthorized | API Key is missing, invalid, or revoked. |
+| `403` | Forbidden | The API Key cannot access the requested report or resource. |
 | `413` | Payload Too Large | File exceeds service limits. Compress it or use an async/chunked flow. |
 | `422` | Unprocessable Entity | File type cannot be recognized or is unsupported by the current chain. |
 | `500` | Internal Server Error | Server-side analysis failed. Log context, retry if appropriate, or route to manual review. |
@@ -190,7 +214,7 @@ form.append("fileType", "image");
 
 const res = await fetch("http://124.222.3.205/v2-api/detect", {
   method: "POST",
-  headers: { "X-Jianzhen-Token": token },
+  headers: { "X-RealGuard-Key": apiKey },
   body: form
 });
 
@@ -204,7 +228,7 @@ console.log(data.agentSummary || data);
 import requests
 
 url = "http://124.222.3.205/v2-api/detect"
-headers = {"X-Jianzhen-Token": token}  # optional
+headers = {"X-RealGuard-Key": api_key}
 
 with open("/path/to/file.png", "rb") as f:
     response = requests.post(
@@ -224,6 +248,7 @@ print(response.json().get("agentSummary") or response.json())
 python3 scripts/realguard_cli.py detect /path/to/file \
   --base-url http://124.222.3.205 \
   --api-prefix /v2-api \
+  --token <your-api-key> \
   --pretty
 ```
 
