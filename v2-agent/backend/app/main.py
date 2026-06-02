@@ -22,10 +22,32 @@ from . import detector, provenance, reporting, storage, synthid_detector, visibl
 
 app = FastAPI(title="鉴真 AI 鉴伪智能体", version="0.2.0")
 ACCESS_TOKEN = os.getenv("JIANZHEN_ACCESS_TOKEN", "").strip()
+MAX_UPLOAD_BYTES = int(os.getenv("JIANZHEN_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+PROTECTED_ENDPOINTS = [
+    "/api/admin/health",
+    "/api/history",
+    "/api/history/{task_id}",
+    "/api/history/{task_id}/artifacts",
+    "/api/report/{report_id}",
+    "/api/report/{report_id}/download",
+    "/api/report/{report_id}/export",
+    "/api/metrics",
+]
+
+
+def _allowed_origins() -> list[str]:
+    raw = os.getenv("JIANZHEN_ALLOWED_ORIGINS", "").strip()
+    if raw:
+        return [origin.strip() for origin in raw.split(",") if origin.strip()]
+    return [
+        "http://124.222.3.205",
+        "https://realguard.cn",
+        "https://www.realguard.cn",
+    ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -67,6 +89,43 @@ def _require_protected_access(request: Request) -> None:
     if secrets.compare_digest(_request_token(request), ACCESS_TOKEN):
         return
     raise HTTPException(status_code=401, detail="访问令牌缺失或无效")
+
+
+async def _read_upload(file: UploadFile) -> bytes:
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"文件超过 {MAX_UPLOAD_BYTES // (1024 * 1024)}MB 上限")
+    return data
+
+
+def _public_capabilities() -> dict:
+    synthid_status = synthid_detector.status()
+    watermark_status = visible_watermark_detector.status()
+    return {
+        "status": "ok",
+        "version": app.version,
+        "vlmEnabled": bool(detector.API_KEY),
+        "accessProtectionEnabled": bool(ACCESS_TOKEN),
+        "protectedEndpoints": PROTECTED_ENDPOINTS if ACCESS_TOKEN else [],
+        "analysisCacheVersion": storage.ANALYSIS_CACHE_VERSION,
+        "capabilities": {
+            "image": "vlm",
+            "document": "vlm-text",
+            "video": "demo-fallback",
+            "audio": "demo-fallback",
+        },
+        "synthid": {
+            "enabled": bool(synthid_status.get("enabled")),
+            "available": bool(synthid_status.get("available")),
+        },
+        "visibleWatermark": {
+            "enabled": bool(watermark_status.get("enabled")),
+            "available": bool(watermark_status.get("available")),
+        },
+        "limits": {
+            "maxUploadBytes": MAX_UPLOAD_BYTES,
+        },
+    }
 
 
 @app.middleware("http")
@@ -162,21 +221,16 @@ def _build_result(
 
 @app.get("/api/health")
 def health() -> dict:
+    return _public_capabilities()
+
+
+@app.get("/api/admin/health")
+def admin_health(request: Request) -> dict:
+    _require_protected_access(request)
     return {
-        "status": "ok",
+        **_public_capabilities(),
         "model": detector.VLM_MODEL,
-        "vlmEnabled": bool(detector.API_KEY),
-        "accessProtectionEnabled": bool(ACCESS_TOKEN),
-        "protectedEndpoints": [
-            "/api/history",
-            "/api/history/{task_id}/artifacts",
-            "/api/report/{report_id}",
-            "/api/report/{report_id}/download",
-            "/api/report/{report_id}/export",
-            "/api/metrics",
-        ] if ACCESS_TOKEN else [],
         "calibration": detector.calibration_status(),
-        "analysisCacheVersion": storage.ANALYSIS_CACHE_VERSION,
         "synthid": synthid_detector.status(),
         "visibleWatermark": visible_watermark_detector.status(),
         "storage": str(storage.DB_PATH),
@@ -185,7 +239,7 @@ def health() -> dict:
 
 @app.post("/api/detect")
 async def detect(request: Request, file: UploadFile = File(...), fileType: str | None = Form(default=None)) -> dict:
-    data = await file.read()
+    data = await _read_upload(file)
     if not data:
         raise HTTPException(status_code=400, detail="空文件")
     filename = file.filename or "unknown"
@@ -232,7 +286,7 @@ async def detect(request: Request, file: UploadFile = File(...), fileType: str |
 
 @app.post("/api/forensics")
 async def forensics(file: UploadFile = File(...)) -> dict:
-    data = await file.read()
+    data = await _read_upload(file)
     if not data:
         raise HTTPException(status_code=400, detail="空文件")
     filename = file.filename or "unknown"
@@ -249,7 +303,7 @@ async def forensics(file: UploadFile = File(...)) -> dict:
 
 @app.post("/api/provenance")
 async def provenance_check(file: UploadFile = File(...)) -> dict:
-    data = await file.read()
+    data = await _read_upload(file)
     if not data:
         raise HTTPException(status_code=400, detail="空文件")
     filename = file.filename or "unknown"

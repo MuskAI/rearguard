@@ -44,12 +44,14 @@ const QUICK_COMMANDS = [
   { label: "出具鉴定报告", hint: "生成可下载报告" },
 ];
 const HISTORY_PAGE_SIZE = 100;
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 const SKILL_NAME = "$realguard-forensics";
-const SKILL_URL = "http://124.222.3.205/v2/skills/realguard-forensics/SKILL.md";
+const PUBLIC_ORIGIN = typeof window === "undefined" ? "http://124.222.3.205" : window.location.origin;
+const SKILL_URL = `${PUBLIC_ORIGIN}/v2/skills/realguard-forensics/SKILL.md`;
 const SKILL_COMMAND =
-  "python3 scripts/realguard_cli.py detect <file> --base-url http://124.222.3.205 --api-prefix /v2-api --pretty";
+  `python3 scripts/realguard_cli.py detect <file> --base-url ${PUBLIC_ORIGIN} --api-prefix /v2-api --pretty`;
 const SKILL_HANDOFF =
-  `Use ${SKILL_NAME}; read ${SKILL_URL}; call POST http://124.222.3.205/v2-api/detect with multipart field file, or run ${SKILL_COMMAND} if the repo CLI is available; then return a concise verdict with confidence, evidence, model version, cache version, and report id.`;
+  `Use ${SKILL_NAME}; read ${SKILL_URL}; call POST ${PUBLIC_ORIGIN}/v2-api/detect with multipart field file, or run ${SKILL_COMMAND} if the repo CLI is available; then return a concise verdict with confidence, evidence, model version, cache version, and report id.`;
 
 function inferType(name: string): FileType {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
@@ -57,6 +59,12 @@ function inferType(name: string): FileType {
   if (["mp3", "wav", "m4a", "flac", "aac"].includes(ext)) return "audio";
   if (["txt", "pdf", "doc", "docx", "md"].includes(ext)) return "document";
   return "image";
+}
+
+function formatBytes(size: number): string {
+  if (size < 1024) return `${size}B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)}KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)}MB`;
 }
 
 export default function App() {
@@ -335,7 +343,20 @@ export default function App() {
 
   const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
-    if (f) runDetect(f);
+    if (f) {
+      if (f.size > MAX_UPLOAD_BYTES) {
+        setMessages((m) => [
+          ...m,
+          {
+            kind: "user",
+            text: `检测失败：文件不能超过 ${formatBytes(MAX_UPLOAD_BYTES)}，当前文件为 ${formatBytes(f.size)}。`,
+            fileName: f.name,
+          },
+        ]);
+      } else {
+        runDetect(f);
+      }
+    }
     e.target.value = "";
   };
 

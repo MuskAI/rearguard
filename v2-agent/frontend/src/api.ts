@@ -2,9 +2,13 @@ export type Verdict = "real" | "suspected_fake" | "highly_suspected_fake" | "unk
 export type FileType = "image" | "video" | "audio" | "document";
 const ACCESS_TOKEN_KEY = "jianzhen_access_token";
 
+function tokenStorage(): Storage | null {
+  if (typeof window === "undefined") return null;
+  return window.sessionStorage;
+}
+
 function getStoredToken(): string {
-  if (typeof window === "undefined") return "";
-  return window.localStorage.getItem(ACCESS_TOKEN_KEY)?.trim() || "";
+  return tokenStorage()?.getItem(ACCESS_TOKEN_KEY)?.trim() || "";
 }
 
 function withAuthHeaders(init?: HeadersInit): Headers {
@@ -388,8 +392,9 @@ export function getAccessToken(): string {
 export function setAccessToken(token: string): void {
   if (typeof window === "undefined") return;
   const normalized = token.trim();
-  if (normalized) window.localStorage.setItem(ACCESS_TOKEN_KEY, normalized);
-  else window.localStorage.removeItem(ACCESS_TOKEN_KEY);
+  window.localStorage.removeItem(ACCESS_TOKEN_KEY);
+  if (normalized) tokenStorage()?.setItem(ACCESS_TOKEN_KEY, normalized);
+  else tokenStorage()?.removeItem(ACCESS_TOKEN_KEY);
 }
 
 export const VERDICT_META: Record<Verdict, { label: string; color: string; ring: string }> = {

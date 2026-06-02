@@ -40,8 +40,25 @@ def test_health_exposes_access_protection(client):
     assert response.status_code == 200
     assert payload["accessProtectionEnabled"] is True
     assert payload["analysisCacheVersion"] == "v6-low-ela-weight"
+    assert "model" not in payload
+    assert "calibration" not in payload
+    assert "storage" not in payload
+    assert "repoPath" not in payload["synthid"]
     assert "/api/report/{report_id}/download" in payload["protectedEndpoints"]
     assert "/api/report/{report_id}/export" in payload["protectedEndpoints"]
+
+
+def test_admin_health_requires_token_and_exposes_diagnostics(client):
+    unauth = client.get("/api/admin/health")
+    auth = client.get("/api/admin/health", headers={"X-Jianzhen-Token": "test-token"})
+    payload = auth.json()
+
+    assert unauth.status_code == 401
+    assert auth.status_code == 200
+    assert payload["model"] == "qwen3-vl-flash"
+    assert "calibration" in payload
+    assert "storage" in payload
+    assert "repoPath" in payload["synthid"]
 
 
 def test_report_download_returns_attachment_html(client):

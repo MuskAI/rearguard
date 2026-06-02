@@ -158,7 +158,7 @@ export function getRetrievalHistory(
   return jsonRequest<HistoryListResponse>(`/api/history/retrievals?${search.toString()}`);
 }
 
-const REALGUARD_V2_API_BASE = "http://124.222.3.205/v2-api";
+const REALGUARD_V2_API_BASE = (import.meta.env.VITE_V2_API_BASE_URL || "/v2-api").replace(/\/$/, "");
 
 async function parseV2Response<T>(response: Response): Promise<T> {
   const contentType = response.headers.get("content-type") || "";

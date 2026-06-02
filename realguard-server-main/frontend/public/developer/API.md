@@ -58,10 +58,19 @@ http://124.222.3.205/v2-api
 
 ### GET /health
 
-Returns service availability, model status, and access-protection status.
+Returns public service availability, coarse capability status, upload limit, and access-protection status. It does not expose internal paths or calibration thresholds.
 
 ```bash
 curl -fsS http://124.222.3.205/v2-api/health
+```
+
+### GET /admin/health
+
+Returns detailed diagnostics. This endpoint is protected when `JIANZHEN_ACCESS_TOKEN` is configured.
+
+```bash
+curl -fsS http://124.222.3.205/v2-api/admin/health \
+  -H "X-Jianzhen-Token: <token>"
 ```
 
 ### POST /detect
@@ -80,6 +89,8 @@ Request parameters:
 | --- | --- | --- | --- |
 | `file` | File | yes | File to analyze. Supports images, videos, audio, and documents. |
 | `fileType` | string | no | Type hint. Supported values: `image`, `video`, `audio`, `document`. |
+
+Default upload limit: `25MB`.
 
 Example:
 

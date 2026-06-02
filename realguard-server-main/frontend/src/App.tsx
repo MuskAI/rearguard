@@ -40,13 +40,17 @@ const emptyCounters: Counters = {
   video_retrieve: 0
 };
 const HISTORY_PAGE_SIZE = 100;
-const REALGUARD_API_BASE = "http://124.222.3.205/v2-api";
-const REALGUARD_SKILL_URL = "http://124.222.3.205/skills/realguard-forensics/SKILL.md";
-const REALGUARD_API_DOC_URL = "http://124.222.3.205/developer/API.md";
+const REALGUARD_PUBLIC_ORIGIN = typeof window === "undefined" ? "http://124.222.3.205" : window.location.origin;
+const REALGUARD_API_BASE = `${REALGUARD_PUBLIC_ORIGIN}/v2-api`;
+const REALGUARD_SKILL_URL = `${REALGUARD_PUBLIC_ORIGIN}/skills/realguard-forensics/SKILL.md`;
+const REALGUARD_API_DOC_URL = `${REALGUARD_PUBLIC_ORIGIN}/developer/API.md`;
 const REALGUARD_SKILL_HANDOFF =
-  `Use $realguard-forensics; read ${REALGUARD_SKILL_URL}; call POST http://124.222.3.205/v2-api/detect with multipart field file, or run python3 scripts/realguard_cli.py detect <file> --base-url http://124.222.3.205 --api-prefix /v2-api --pretty if the repo CLI is available; then return a concise verdict with confidence, evidence, model version, cache version, and report id.`;
+  `Use $realguard-forensics; read ${REALGUARD_SKILL_URL}; call POST ${REALGUARD_API_BASE}/detect with multipart field file, or run python3 scripts/realguard_cli.py detect <file> --base-url ${REALGUARD_PUBLIC_ORIGIN} --api-prefix /v2-api --pretty if the repo CLI is available; then return a concise verdict with confidence, evidence, model version, cache version, and report id.`;
 const REALGUARD_SKILL_COMMAND =
-  "python3 scripts/realguard_cli.py detect <file> --base-url http://124.222.3.205 --api-prefix /v2-api --pretty";
+  `python3 scripts/realguard_cli.py detect <file> --base-url ${REALGUARD_PUBLIC_ORIGIN} --api-prefix /v2-api --pretty`;
+const IMAGE_MAX_BYTES = 25 * 1024 * 1024;
+const VIDEO_MAX_BYTES = 512 * 1024 * 1024;
+const V2_CONSOLE_MAX_BYTES = 25 * 1024 * 1024;
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -535,7 +539,8 @@ function DeveloperPlatformPage() {
     },
   ];
   const endpoints = [
-    { method: "GET", path: "/health", title: "Health", desc: "服务状态、模型状态、访问保护状态。", anchor: "#health" },
+    { method: "GET", path: "/health", title: "Health", desc: "公开服务状态、能力摘要、上传限制和访问保护状态。", anchor: "#health" },
+    { method: "GET", path: "/admin/health", title: "Admin Health", desc: "受保护的详细诊断接口，返回模型、校准、存储等内部状态。", anchor: "#admin-health" },
     { method: "POST", path: "/detect", title: "Detect", desc: "核心鉴伪接口。multipart 上传 file，可选 fileType。", anchor: "#detect" },
     { method: "POST", path: "/forensics", title: "Forensics", desc: "图像可解释性取证分析，返回 ELA、噪声、频域等证据。", anchor: "#forensics" },
     { method: "POST", path: "/provenance", title: "Provenance", desc: "图像 C2PA / SynthID / 内容凭证验证。", anchor: "#provenance" },
@@ -619,6 +624,11 @@ print(r.json().get("agentSummary") or r.json())`;
   const runDetectTest = async () => {
     if (!testFile) {
       setConsoleStatus({ tone: "error", text: "请先选择要测试的文件。" });
+      return;
+    }
+    const message = validateFile(testFile, { kind: "测试文件", maxBytes: V2_CONSOLE_MAX_BYTES });
+    if (message) {
+      setConsoleStatus({ tone: "error", text: message });
       return;
     }
     const started = performance.now();
@@ -749,8 +759,18 @@ Authorization: Bearer <token>`}</pre>
                   <span className="method method-get">GET</span>
                   <h3>/health</h3>
                 </div>
-                <p>检查 V2 API 可用性、模型链路状态和访问保护状态。适合作为部署探针和集成前连通性检查。</p>
+                <p>检查 V2 API 可用性、粗粒度能力、上传限制和访问保护状态。公开接口不会返回内部路径或详细阈值。</p>
                 <div className="docs-code-block compact"><pre>{curlHealthExample}</pre></div>
+              </div>
+
+              <div id="admin-health" className="endpoint-detail">
+                <div className="endpoint-heading">
+                  <span className="method method-get">GET</span>
+                  <h3>/admin/health</h3>
+                </div>
+                <p>受保护的详细诊断接口。启用访问令牌后，需要传入 <code>X-Jianzhen-Token</code>。</p>
+                <div className="docs-code-block compact"><pre>{`curl -fsS ${REALGUARD_API_BASE}/admin/health \\
+  -H "X-Jianzhen-Token: <token>"`}</pre></div>
               </div>
 
               <div id="detect" className="endpoint-detail">
@@ -758,7 +778,7 @@ Authorization: Bearer <token>`}</pre>
                   <span className="method method-post">POST</span>
                   <h3>/detect</h3>
                 </div>
-                <p>核心鉴伪接口。上传文件后返回任务编号、鉴伪结论、置信度、证据摘要、模型版本和报告编号。</p>
+                <p>核心鉴伪接口。上传文件后返回任务编号、鉴伪结论、置信度、证据摘要、模型版本和报告编号。默认上传上限为 25MB。</p>
                 <h4>Request body</h4>
                 <div className="docs-table docs-table-4">
                   <strong>字段</strong><strong>类型</strong><strong>是否必填</strong><strong>说明</strong>
@@ -875,11 +895,24 @@ Authorization: Bearer <token>`}</pre>
                   </label>
                   <label>
                     测试文件
-                    <input
-                      type="file"
-                      accept="image/*,video/*,audio/*,.txt,.pdf,.doc,.docx,.md"
-                      onChange={(event) => setTestFile(event.target.files?.[0] || null)}
-                    />
+                  <input
+                    type="file"
+                    accept="image/*,video/*,audio/*,.txt,.pdf,.doc,.docx,.md"
+                    onChange={(event) => {
+                      const selected = event.target.files?.[0] || null;
+                      if (selected) {
+                        const validation = validateFile(selected, { kind: "测试文件", maxBytes: V2_CONSOLE_MAX_BYTES });
+                        if (validation) {
+                          setConsoleStatus({ tone: "error", text: validation });
+                          event.target.value = "";
+                          setTestFile(null);
+                          return;
+                        }
+                      }
+                      setConsoleStatus(selected ? { tone: "info", text: `已选择：${selected.name}` } : null);
+                      setTestFile(selected);
+                    }}
+                  />
                   </label>
                   <div className="console-actions">
                     <button disabled={consoleBusy} onClick={runHealthCheck}>
@@ -1011,6 +1044,13 @@ function ImageDetectionPage({
   const [busy, setBusy] = useState(false);
 
   function selectFile(next: File | null) {
+    if (next) {
+      const message = validateFile(next, { kind: "图片", maxBytes: IMAGE_MAX_BYTES, mimePrefixes: ["image/"] });
+      if (message) {
+        setStatus({ tone: "error", text: message });
+        return;
+      }
+    }
     setFile(next);
     setResult(null);
     setPreview(next ? URL.createObjectURL(next) : "");
@@ -1123,6 +1163,19 @@ function VideoDetectionPage({
   const [status, setStatus] = useState<Status>({ tone: "info", text: "等待上传视频或填写URL..." });
   const [busy, setBusy] = useState(false);
 
+  function selectFile(next: File | null) {
+    if (next) {
+      const message = validateFile(next, { kind: "视频", maxBytes: VIDEO_MAX_BYTES, mimePrefixes: ["video/"] });
+      if (message) {
+        setStatus({ tone: "error", text: message });
+        return;
+      }
+    }
+    setFile(next);
+    setResult(null);
+    setStatus({ tone: "info", text: next ? `已选择: ${next.name}` : "等待上传视频或填写URL..." });
+  }
+
   async function submit() {
     if (!file && !videoUrl.trim()) {
       setStatus({ tone: "error", text: "请上传视频或填写视频 URL" });
@@ -1155,7 +1208,7 @@ function VideoDetectionPage({
           <div className="card">
             <div className="section-label"><i className="fa fa-upload" /> 上传视频</div>
             {isGuest && <TrialHint used={guestDetections} />}
-            <UploadBox accept="video/*" file={file} onFile={setFile} kind="视频" />
+            <UploadBox accept="video/*" file={file} onFile={selectFile} kind="视频" />
             <div className="url-or">或</div>
             <div className="section-label"><i className="fa fa-link" /> 输入视频URL</div>
             <div className="url-input-wrap">
@@ -1189,6 +1242,10 @@ function RetrievePage({ onDone }: { onDone: () => Promise<void> }) {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    setFile(null);
+    setResults([]);
+    setBaseUrl("");
+    setStatus({ tone: "info", text: searchType === "image" ? "等待上传图片..." : "等待上传视频..." });
     getLibraries(searchType)
       .then((data) => {
         setLibraries(data.libraries || []);
@@ -1196,6 +1253,23 @@ function RetrievePage({ onDone }: { onDone: () => Promise<void> }) {
       })
       .catch((error) => setStatus({ tone: "error", text: errorMessage(error) }));
   }, [searchType]);
+
+  function selectFile(next: File | null) {
+    if (next) {
+      const message = validateFile(next, {
+        kind: searchType === "image" ? "图片" : "视频",
+        maxBytes: searchType === "image" ? IMAGE_MAX_BYTES : VIDEO_MAX_BYTES,
+        mimePrefixes: [searchType === "image" ? "image/" : "video/"],
+      });
+      if (message) {
+        setStatus({ tone: "error", text: message });
+        return;
+      }
+    }
+    setFile(next);
+    setResults([]);
+    setStatus({ tone: "info", text: next ? `已选择: ${next.name}` : "等待上传查询文件..." });
+  }
 
   async function submit() {
     if (!file) {
@@ -1224,7 +1298,7 @@ function RetrievePage({ onDone }: { onDone: () => Promise<void> }) {
         <div className="layout">
           <div className="card">
             <div className="section-label"><i className="fa fa-upload" /> 文件上传</div>
-            <UploadBox accept={searchType === "image" ? "image/*" : "video/*"} file={file} onFile={setFile} kind={searchType === "image" ? "图片" : "视频"} />
+            <UploadBox accept={searchType === "image" ? "image/*" : "video/*"} file={file} onFile={selectFile} kind={searchType === "image" ? "图片" : "视频"} />
             <button className="btn-primary" disabled={!file || busy} onClick={submit}><i className="fa fa-search" /> 开始检索</button>
           </div>
           <div className="card">
@@ -1268,6 +1342,7 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
   const [historyLimit, setHistoryLimit] = useState(HISTORY_PAGE_SIZE);
   const [historyTotal, setHistoryTotal] = useState(0);
   const [historyFilterCounts, setHistoryFilterCounts] = useState<Partial<Record<HistoryFilterKey, number>>>({});
+  const [debouncedQuery, setDebouncedQuery] = useState(() => getInitialHistoryQuery());
   const historyRequestIdRef = useRef(0);
 
   async function loadHistoryRecords(
@@ -1283,10 +1358,10 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
     const limit = append ? HISTORY_PAGE_SIZE : reset ? HISTORY_PAGE_SIZE : historyLimit;
     const request =
       targetTab === "image"
-        ? getHistory("image-detections", { query, filter: activeFilter, limit, offset })
+        ? getHistory("image-detections", { query: debouncedQuery, filter: activeFilter, limit, offset })
         : targetTab === "video"
-          ? getHistory("video-detections", { query, filter: activeFilter, limit, offset })
-          : getRetrievalHistory(targetTab === "imageRetrieve" ? "image" : "video", { query, filter: activeFilter, limit, offset });
+          ? getHistory("video-detections", { query: debouncedQuery, filter: activeFilter, limit, offset })
+          : getRetrievalHistory(targetTab === "imageRetrieve" ? "image" : "video", { query: debouncedQuery, filter: activeFilter, limit, offset });
     try {
       const data: HistoryListResponse = await request;
       if (historyRequestIdRef.current !== requestId) return;
@@ -1319,7 +1394,12 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
   useEffect(() => {
     if (!isHistoryFilterSupported(tab, filter)) return;
     void loadHistoryRecords(tab, { reset: true });
-  }, [tab, filter, query]);
+  }, [tab, filter, debouncedQuery]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedQuery(query), 300);
+    return () => window.clearTimeout(timer);
+  }, [query]);
 
   useEffect(() => {
     if (!isHistoryFilterSupported(tab, filter)) {
@@ -2028,7 +2108,7 @@ function AuthForm({ onAuthed }: { onAuthed: () => Promise<void> }) {
     setCodeBusy(true);
     try {
       const data = await sendSmsCode(phone, scene);
-      if (data.debug_code) {
+      if (data.debug_code && import.meta.env.DEV) {
         setSmsCode(data.debug_code);
         setStatus({ tone: "ok", text: `开发模式已自动填入验证码：${data.debug_code}` });
       } else {
@@ -2137,6 +2217,20 @@ function formatSize(size: number) {
   if (size < 1024) return `${size}B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)}KB`;
   return `${(size / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+function validateFile(
+  file: File,
+  options: { kind: string; maxBytes: number; mimePrefixes?: string[] },
+) {
+  if (file.size > options.maxBytes) {
+    return `${options.kind}不能超过 ${formatSize(options.maxBytes)}，当前文件为 ${formatSize(file.size)}。`;
+  }
+  if (options.mimePrefixes?.length && file.type) {
+    const allowed = options.mimePrefixes.some((prefix) => file.type.startsWith(prefix));
+    if (!allowed) return `请选择${options.kind}文件，当前文件类型为 ${file.type}。`;
+  }
+  return "";
 }
 
 function colorBg(color: string) {
