@@ -25,7 +25,7 @@ import {
   sendSmsCode
 } from "./api";
 
-type PageKey = "home" | "image" | "video" | "retrieve" | "history";
+type PageKey = "home" | "image" | "video" | "retrieve" | "history" | "developer";
 type Status = { tone: "ok" | "error" | "info"; text: string } | null;
 type AuthMode = "password" | "sms" | "register";
 type HistoryTabKey = "image" | "video" | "imageRetrieve" | "videoRetrieve";
@@ -38,7 +38,9 @@ const emptyCounters: Counters = {
   video_retrieve: 0
 };
 const HISTORY_PAGE_SIZE = 100;
+const REALGUARD_API_BASE = "http://124.222.3.205/v2-api";
 const REALGUARD_SKILL_URL = "http://124.222.3.205/skills/realguard-forensics/SKILL.md";
+const REALGUARD_API_DOC_URL = "http://124.222.3.205/developer/API.md";
 const REALGUARD_SKILL_HANDOFF =
   `Use $realguard-forensics; read ${REALGUARD_SKILL_URL}; call POST http://124.222.3.205/v2-api/detect with multipart field file, or run python3 scripts/realguard_cli.py detect <file> --base-url http://124.222.3.205 --api-prefix /v2-api --pretty if the repo CLI is available; then return a concise verdict with confidence, evidence, model version, cache version, and report id.`;
 const REALGUARD_SKILL_COMMAND =
@@ -166,6 +168,7 @@ function App() {
       )}
       {page === "retrieve" && <RetrievePage onDone={refreshMe} />}
       {page === "history" && <HistoryPage setPage={setPage} />}
+      {page === "developer" && <DeveloperPlatformPage />}
 
       <Footer />
 
@@ -249,6 +252,9 @@ function Nav({
             <button className={page === "history" ? "active" : ""} onClick={() => go("history")}>
               历史记录
             </button>
+            <button className={page === "developer" ? "active" : ""} onClick={() => go("developer")}>
+              开发者平台
+            </button>
             <button onClick={() => { window.location.href = "/v2/"; }}>V2 Agent</button>
             <button onClick={authAction}>{user ? "退出" : "登录"}</button>
             <button className="theme-btn" title="切换主题" onClick={() => setDark(!dark)}>
@@ -272,6 +278,7 @@ function Nav({
           <button className={page === "retrieve" ? "active" : ""} onClick={() => go("retrieve")}><i className="fa fa-search" /> 侵权检索</button>
           <button onClick={() => { window.location.href = "/v2/"; }}><i className="fa fa-bolt" /> V2 Agent</button>
           <button className={page === "history" ? "active" : ""} onClick={() => go("history")}><i className="fa fa-clock-o" /> 历史记录</button>
+          <button className={page === "developer" ? "active" : ""} onClick={() => go("developer")}><i className="fa fa-code" /> 开发者平台</button>
           <button onClick={authAction}><i className={`fa ${user ? "fa-sign-out" : "fa-user"}`} /> {user ? "退出登录" : "登录/注册"}</button>
         </div>
       </header>
@@ -281,6 +288,7 @@ function Nav({
         <button className={page === "video" ? "active" : ""} onClick={() => go("video")}><i className="fa fa-film" /><span>视频</span></button>
         <button className={page === "retrieve" ? "active" : ""} onClick={() => go("retrieve")}><i className="fa fa-search" /><span>检索</span></button>
         <button className={page === "history" ? "active" : ""} onClick={() => go("history")}><i className="fa fa-clock-o" /><span>历史</span></button>
+        <button className={page === "developer" ? "active" : ""} onClick={() => go("developer")}><i className="fa fa-code" /><span>开发</span></button>
       </nav>
     </>
   );
@@ -472,8 +480,132 @@ function SkillEntryPanel() {
         <button onClick={() => { window.location.href = "/v2/"; }}>
           进入 V2 Agent <i className="fa fa-arrow-right" />
         </button>
+        <button onClick={() => { window.location.href = "/?page=developer"; }}>
+          打开开发者平台 <i className="fa fa-code" />
+        </button>
       </div>
     </div>
+  );
+}
+
+function DeveloperPlatformPage() {
+  const endpoints = [
+    ["GET", "/health", "服务状态、模型状态、访问保护状态。"],
+    ["POST", "/detect", "核心鉴伪接口。multipart 上传 file，可选 fileType。"],
+    ["POST", "/forensics", "图像可解释性取证分析，返回 ELA、噪声、频域等证据。"],
+    ["POST", "/provenance", "图像 C2PA / SynthID / 内容凭证验证。"],
+    ["GET", "/report/{reportId}/download", "下载检测报告。"],
+  ];
+  const fields = [
+    ["agentSummary", "给 AI agent 优先使用的结构化摘要。"],
+    ["verdict", "鉴伪结论，例如 real / suspected / likely_ai_generated / unknown。"],
+    ["confidence", "0-1 置信度，展示时可换算百分比。"],
+    ["modelVersion", "模型或规则链路版本。"],
+    ["cacheVersion", "分析缓存版本，用于判断结果是否来自同一分析逻辑。"],
+    ["source", "vlm / mock / heuristic 等，决定结果可信度说明。"],
+    ["reportId", "可用于下载和归档报告的编号。"],
+    ["synthid / visibleWatermark", "水印、SynthID、可见水印等附加证据。"],
+  ];
+
+  return (
+    <main className="main">
+      <div className="container developer-platform">
+        <PageHeader
+          icon="fa-code"
+          title="开发者平台"
+          desc="面向 OpenClaw、AI Agent 和业务系统的 RealGuard 鉴伪 API、Skill 与报告接口文档。"
+        />
+
+        <section className="developer-hero">
+          <div>
+            <div className="developer-badges">
+              <span>Public API</span>
+              <span>Agent Skill</span>
+              <span>Multipart Upload</span>
+            </div>
+            <h2>把鉴伪能力接入任何 Agent 或业务系统</h2>
+            <p>
+              开发者平台提供可公开访问的 Skill 文档、V2 API 基础地址、请求示例、返回字段和解释边界。
+              外部 Agent 不需要访问本地仓库，只要读取这里的文档，就能完成上传、检测、取证、凭证验证和报告下载。
+            </p>
+          </div>
+          <div className="developer-quick-card">
+            <label>API Base URL</label>
+            <code>{REALGUARD_API_BASE}</code>
+            <label>Public Skill URL</label>
+            <code>{REALGUARD_SKILL_URL}</code>
+            <label>Full API Docs</label>
+            <code>{REALGUARD_API_DOC_URL}</code>
+          </div>
+        </section>
+
+        <section className="developer-grid">
+          <div className="developer-card developer-card-wide">
+            <h3><i className="fa fa-terminal" /> 一句话接入 OpenClaw</h3>
+            <pre>{REALGUARD_SKILL_HANDOFF}</pre>
+          </div>
+          <div className="developer-card">
+            <h3><i className="fa fa-heartbeat" /> 健康检查</h3>
+            <pre>{`curl -fsS ${REALGUARD_API_BASE}/health`}</pre>
+          </div>
+          <div className="developer-card">
+            <h3><i className="fa fa-upload" /> 鉴伪检测</h3>
+            <pre>{`curl -fsS -X POST ${REALGUARD_API_BASE}/detect \\
+  -F "file=@/path/to/file" \\
+  -F "fileType=image"`}</pre>
+          </div>
+          <div className="developer-card">
+            <h3><i className="fa fa-search-plus" /> 图像取证</h3>
+            <pre>{`curl -fsS -X POST ${REALGUARD_API_BASE}/forensics \\
+  -F "file=@/path/to/image"`}</pre>
+          </div>
+          <div className="developer-card">
+            <h3><i className="fa fa-certificate" /> 内容凭证</h3>
+            <pre>{`curl -fsS -X POST ${REALGUARD_API_BASE}/provenance \\
+  -F "file=@/path/to/image"`}</pre>
+          </div>
+        </section>
+
+        <section className="developer-doc-section">
+          <div className="developer-doc-header">
+            <h3>接口目录</h3>
+            <a href={REALGUARD_API_DOC_URL} target="_blank" rel="noreferrer">打开完整 Markdown 文档</a>
+          </div>
+          <div className="developer-table">
+            {endpoints.map(([method, path, desc]) => (
+              <div className="developer-table-row" key={`${method}-${path}`}>
+                <span className={`method method-${method.toLowerCase()}`}>{method}</span>
+                <code>{path}</code>
+                <p>{desc}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="developer-doc-section">
+          <div className="developer-doc-header">
+            <h3>Agent 应读取的关键字段</h3>
+          </div>
+          <div className="developer-fields">
+            {fields.map(([field, desc]) => (
+              <div key={field}>
+                <code>{field}</code>
+                <p>{desc}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="developer-note">
+          <h3>鉴权与解释边界</h3>
+          <p>
+            如果服务启用访问保护，请在请求头传入 <code>X-Jianzhen-Token</code> 或 <code>Authorization: Bearer &lt;token&gt;</code>。
+            Agent 输出结论时必须说明 <code>source</code>、<code>modelVersion</code> 和 <code>cacheVersion</code>；
+            若 source 为 mock、heuristic 或其他回退链路，应明确标注为演示或辅助信号，不能当作绝对证明。
+          </p>
+        </section>
+      </div>
+    </main>
   );
 }
 
@@ -1684,7 +1816,7 @@ function setGuestDetectionsStorage(value: number) {
 function getInitialPage(): PageKey {
   if (typeof window === "undefined") return "home";
   const value = new URLSearchParams(window.location.search).get("page") as PageKey | null;
-  return value && ["home", "image", "video", "retrieve", "history"].includes(value) ? value : "home";
+  return value && ["home", "image", "video", "retrieve", "history", "developer"].includes(value) ? value : "home";
 }
 
 function getInitialHistoryTab(): HistoryTabKey {

@@ -512,6 +512,14 @@ export default function App() {
             )}
             <button
               onClick={() => {
+                window.location.href = "/?page=developer";
+              }}
+              className="h-9 px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950 hover:border-brand-cyan/50"
+            >
+              开发者
+            </button>
+            <button
+              onClick={() => {
                 window.location.hash = "monitor";
                 setView("monitor");
               }}
