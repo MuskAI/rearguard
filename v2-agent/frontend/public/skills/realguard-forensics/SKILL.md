@@ -9,27 +9,27 @@ This public skill lets an external agent use RealGuard/Jianzhen forensic detecti
 
 ## One-Sentence Handoff
 
-Use `$realguard-forensics`; read `http://realguard.cn/v2/skills/realguard-forensics/SKILL.md`; run `python3 scripts/realguard_cli.py detect <file> --base-url http://realguard.cn --api-prefix /v2-api --pretty` if the RealGuard repository CLI is available, or call `POST http://realguard.cn/v2-api/detect` with multipart field `file`; then return a concise verdict with confidence, evidence, model version, cache version, and report ID.
+Use `$realguard-forensics`; read `http://124.222.3.205/v2/skills/realguard-forensics/SKILL.md`; run `python3 scripts/realguard_cli.py detect <file> --base-url http://124.222.3.205 --api-prefix /v2-api --pretty` if the RealGuard repository CLI is available, or call `POST http://124.222.3.205/v2-api/detect` with multipart field `file`; then return a concise verdict with confidence, evidence, model version, cache version, and report ID.
 
 ## Public API
 
 Health:
 
 ```bash
-curl -fsS http://realguard.cn/v2-api/health
+curl -fsS http://124.222.3.205/v2-api/health
 ```
 
 Detect:
 
 ```bash
-curl -fsS -X POST http://realguard.cn/v2-api/detect \
+curl -fsS -X POST http://124.222.3.205/v2-api/detect \
   -F "file=@/path/to/file"
 ```
 
 Optional file type override:
 
 ```bash
-curl -fsS -X POST http://realguard.cn/v2-api/detect \
+curl -fsS -X POST http://124.222.3.205/v2-api/detect \
   -F "file=@/path/to/file" \
   -F "fileType=image"
 ```
@@ -41,14 +41,14 @@ If access protection is enabled, pass `X-Jianzhen-Token: <token>` or `Authorizat
 When the RealGuard repository is available locally:
 
 ```bash
-python3 scripts/realguard_cli.py detect /path/to/file --base-url http://realguard.cn --api-prefix /v2-api --pretty
+python3 scripts/realguard_cli.py detect /path/to/file --base-url http://124.222.3.205 --api-prefix /v2-api --pretty
 ```
 
 For image-only evidence:
 
 ```bash
-python3 scripts/realguard_cli.py forensics /path/to/image --base-url http://realguard.cn --api-prefix /v2-api --pretty
-python3 scripts/realguard_cli.py provenance /path/to/image --base-url http://realguard.cn --api-prefix /v2-api --pretty
+python3 scripts/realguard_cli.py forensics /path/to/image --base-url http://124.222.3.205 --api-prefix /v2-api --pretty
+python3 scripts/realguard_cli.py provenance /path/to/image --base-url http://124.222.3.205 --api-prefix /v2-api --pretty
 ```
 
 ## Interpretation

@@ -45,11 +45,11 @@ const QUICK_COMMANDS = [
 ];
 const HISTORY_PAGE_SIZE = 100;
 const SKILL_NAME = "$realguard-forensics";
-const SKILL_URL = "http://realguard.cn/v2/skills/realguard-forensics/SKILL.md";
+const SKILL_URL = "http://124.222.3.205/v2/skills/realguard-forensics/SKILL.md";
 const SKILL_COMMAND =
-  "python3 scripts/realguard_cli.py detect <file> --base-url http://realguard.cn --api-prefix /v2-api --pretty";
+  "python3 scripts/realguard_cli.py detect <file> --base-url http://124.222.3.205 --api-prefix /v2-api --pretty";
 const SKILL_HANDOFF =
-  `Use ${SKILL_NAME}; read ${SKILL_URL}; call POST http://realguard.cn/v2-api/detect with multipart field file, or run ${SKILL_COMMAND} if the repo CLI is available; then return a concise verdict with confidence, evidence, model version, cache version, and report id.`;
+  `Use ${SKILL_NAME}; read ${SKILL_URL}; call POST http://124.222.3.205/v2-api/detect with multipart field file, or run ${SKILL_COMMAND} if the repo CLI is available; then return a concise verdict with confidence, evidence, model version, cache version, and report id.`;
 
 function inferType(name: string): FileType {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";

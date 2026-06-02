@@ -38,11 +38,11 @@ const emptyCounters: Counters = {
   video_retrieve: 0
 };
 const HISTORY_PAGE_SIZE = 100;
-const REALGUARD_SKILL_URL = "http://realguard.cn/skills/realguard-forensics/SKILL.md";
+const REALGUARD_SKILL_URL = "http://124.222.3.205/skills/realguard-forensics/SKILL.md";
 const REALGUARD_SKILL_HANDOFF =
-  `Use $realguard-forensics; read ${REALGUARD_SKILL_URL}; call POST http://realguard.cn/v2-api/detect with multipart field file, or run python3 scripts/realguard_cli.py detect <file> --base-url http://realguard.cn --api-prefix /v2-api --pretty if the repo CLI is available; then return a concise verdict with confidence, evidence, model version, cache version, and report id.`;
+  `Use $realguard-forensics; read ${REALGUARD_SKILL_URL}; call POST http://124.222.3.205/v2-api/detect with multipart field file, or run python3 scripts/realguard_cli.py detect <file> --base-url http://124.222.3.205 --api-prefix /v2-api --pretty if the repo CLI is available; then return a concise verdict with confidence, evidence, model version, cache version, and report id.`;
 const REALGUARD_SKILL_COMMAND =
-  "python3 scripts/realguard_cli.py detect <file> --base-url http://realguard.cn --api-prefix /v2-api --pretty";
+  "python3 scripts/realguard_cli.py detect <file> --base-url http://124.222.3.205 --api-prefix /v2-api --pretty";
 
 function App() {
   const [user, setUser] = useState<User | null>(null);

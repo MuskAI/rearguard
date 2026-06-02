@@ -8,9 +8,9 @@ RealGuard 是一个面向数字内容鉴伪、侵权检索和运营监控的 Web
 
 生产环境示例：
 
-- 主站：`http://realguard.cn/`
-- V2：`http://realguard.cn/v2/`
-- V2 API：`http://realguard.cn/v2-api/`
+- 主站：`http://124.222.3.205/`
+- V2：`http://124.222.3.205/v2/`
+- V2 API：`http://124.222.3.205/v2-api/`
 - 监控后台：`http://analytics.realguard.cn/`
 
 ## 目录结构
@@ -51,11 +51,11 @@ V2 鉴伪 Agent：
 - ELA、噪声残差、频域、光照梯度等可解释性取证可视化。
 - C2PA 内容凭证读取与验证。
 - 浅色工作台风格，独立路径 `/v2/`。
-- 提供面向 agent 的 CLI：`python3 scripts/realguard_cli.py detect <file> --base-url http://realguard.cn --api-prefix /v2-api --pretty`，可输出机器可读的鉴伪结论、模型版本、缓存版本、证据摘要和报告号。
+- 提供面向 agent 的 CLI：`python3 scripts/realguard_cli.py detect <file> --base-url http://124.222.3.205 --api-prefix /v2-api --pretty`，可输出机器可读的鉴伪结论、模型版本、缓存版本、证据摘要和报告号。
 
 Agent skill：
 
-- 仓库内置 `skills/realguard-forensics/`。给其他 agent（如 OpenClaw）的一句话交接：`Use $realguard-forensics and run python3 scripts/realguard_cli.py detect <file> --base-url http://realguard.cn --api-prefix /v2-api --pretty, then return a concise verdict with confidence, evidence, model version, cache version, and report id.`
+- 仓库内置 `skills/realguard-forensics/`。给其他 agent（如 OpenClaw）的一句话交接：`Use $realguard-forensics and run python3 scripts/realguard_cli.py detect <file> --base-url http://124.222.3.205 --api-prefix /v2-api --pretty, then return a concise verdict with confidence, evidence, model version, cache version, and report id.`
 
 监控后台：
 
