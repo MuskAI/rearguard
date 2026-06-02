@@ -38,6 +38,10 @@ const emptyCounters: Counters = {
   video_retrieve: 0
 };
 const HISTORY_PAGE_SIZE = 100;
+const REALGUARD_SKILL_HANDOFF =
+  "Use $realguard-forensics and run python3 scripts/realguard_cli.py detect <file> --base-url http://realguard.cn --api-prefix /v2-api --pretty, then return a concise verdict with confidence, evidence, model version, cache version, and report id.";
+const REALGUARD_SKILL_COMMAND =
+  "python3 scripts/realguard_cli.py detect <file> --base-url http://realguard.cn --api-prefix /v2-api --pretty";
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -379,6 +383,7 @@ function HomePage({ counters, setPage }: { counters: Counters; setPage: (page: P
             <FeatureCard accent="#8b5cf6" icon="fa-play-circle" title="视频侵权检索" desc="检索疑似侵权的视频，在数据库中快速定位相似可疑视频内容。" onClick={() => setPage("retrieve")} />
             <FeatureCard accent="var(--primary-dark)" icon="fa-bolt" title="V2 鉴伪 Agent" desc="独立新版系统，使用 qwen3-vl-flash 融合 ELA、噪声残差等取证证据。" onClick={() => { window.location.href = "/v2/"; }} />
           </div>
+          <SkillEntryPanel />
         </div>
       </section>
 
@@ -427,6 +432,40 @@ function FeatureCard({ accent, icon, title, desc, onClick }: { accent: string; i
         进入功能 <i className="fa fa-arrow-right" />
       </span>
     </button>
+  );
+}
+
+function SkillEntryPanel() {
+  return (
+    <div className="skill-entry-panel fade-up visible">
+      <div className="skill-entry-main">
+        <div className="skill-entry-badges">
+          <span><i className="fa fa-plug" /> SKILL 已介入</span>
+          <span>OpenClaw / AI Agent 可调用</span>
+        </div>
+        <h3>$realguard-forensics 已把网页鉴伪能力开放给外部 Agent</h3>
+        <p>
+          其他 agent 读取 <code>skills/realguard-forensics/SKILL.md</code> 后，即可通过 CLI 调用同一套 V2 鉴伪能力，
+          输出 agentSummary、证据字段、模型版本、缓存版本和报告号。
+        </p>
+        <div className="skill-flow">
+          <span>读取 Skill</span>
+          <i className="fa fa-arrow-right" />
+          <span>调用 CLI</span>
+          <i className="fa fa-arrow-right" />
+          <span>返回鉴伪结论</span>
+        </div>
+      </div>
+      <div className="skill-entry-code">
+        <label>给 OpenClaw 的一句话</label>
+        <code>{REALGUARD_SKILL_HANDOFF}</code>
+        <label>CLI 命令</label>
+        <code>{REALGUARD_SKILL_COMMAND}</code>
+        <button onClick={() => { window.location.href = "/v2/"; }}>
+          进入 V2 Agent <i className="fa fa-arrow-right" />
+        </button>
+      </div>
+    </div>
   );
 }
 
