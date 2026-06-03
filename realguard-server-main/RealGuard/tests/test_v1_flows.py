@@ -312,6 +312,60 @@ def test_guest_image_detect_returns_rewritten_url_and_then_blocks(client, monkey
     assert "请登录后继续检测" in second.get_json()["message"]
 
 
+def test_image_detect_falls_back_to_v2_when_v1_backend_is_down(client, monkeypatch):
+    _login_session(client)
+    monkeypatch.setattr(detection, "V2_DETECT_API", "http://v2.local/api/detect")
+    monkeypatch.setattr(detection, "V2_INTERNAL_TOKEN", "internal-token")
+    monkeypatch.setattr(detection, "IMAGE_DETECT_FALLBACK", "v2")
+    monkeypatch.setattr(detection, "_metadata_for_item", lambda itemid: {})
+    monkeypatch.setattr(
+        detection,
+        "_save_local_upload",
+        lambda image_bytes, folder, filename: ("stored-demo.png", "/tmp/stored-demo.png"),
+    )
+    monkeypatch.setattr(detection, "get_image_info", lambda path: ("PNG", "320x240"))
+    monkeypatch.setattr(detection, "get_file_size_str", lambda path: "1KB")
+    monkeypatch.setattr(detection, "excute_detection_sql_lastid", lambda sql, params=None: 88)
+
+    def fake_backend_post(url, **kwargs):
+        if url == detection.IMAGE_DETECT_API:
+            raise detection.requests.ConnectionError("connection refused")
+        assert url == "http://v2.local/api/detect"
+        assert kwargs["headers"]["X-Jianzhen-Token"] == "internal-token"
+        return _FakeResponse(
+            {
+                "taskId": "rj-20260603-0001",
+                "reportId": "RJ-RPT-20260603-0001",
+                "verdict": "suspected_fake",
+                "confidence": 0.76,
+                "modelVersion": "qwen3-vl-flash",
+                "source": "vlm",
+                "explanation": "V2 evidence summary",
+                "dimensions": [
+                    {"key": "aigc", "label": "AIGC生成检测", "score": 0.76, "result": "疑似生成"},
+                ],
+                "regions": [],
+                "tokenUsage": {"promptTokens": 10, "completionTokens": 5, "totalTokens": 15},
+                "fileMeta": {"size": "1KB", "resolution": "320x240"},
+            }
+        )
+
+    monkeypatch.setattr(detection, "_backend_post", fake_backend_post)
+
+    response = client.post(
+        "/image_upload/detect",
+        data={"image": (BytesIO(b"fake-image"), "demo.png")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["result"]["itemid"] == 88
+    assert payload["result"]["final_label"] == "AI生成图像"
+    assert payload["result"]["probability"] == pytest.approx(0.76)
+    assert payload["result"]["image_url"] == "/static/uploads/openid-1/image/stored-demo.png"
+
+
 def test_video_detect_logged_in_builds_public_media_url(client, monkeypatch):
     _login_session(client)
     monkeypatch.setattr(

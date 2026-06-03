@@ -15,6 +15,7 @@ DETECTION_PUBLIC_STATIC_PREFIX = os.environ.get(
     'REALGUARD_DETECTION_PUBLIC_STATIC_PREFIX',
     '/detection-static'
 ).rstrip('/')
+STATIC_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'static'))
 
 
 def _detection_static_url(kind, item):
@@ -22,6 +23,9 @@ def _detection_static_url(kind, item):
     folder = (item or {}).get('openid') or (item or {}).get('phone') or 'guest'
     if not filename:
         return ''
+    local_path = os.path.join(STATIC_ROOT, 'uploads', folder, kind, filename)
+    if os.path.exists(local_path):
+        return f"/static/uploads/{folder}/{kind}/{filename}"
     if DETECTION_PUBLIC_STATIC_PREFIX:
         return f"{DETECTION_PUBLIC_STATIC_PREFIX}/uploads/{folder}/{kind}/{filename}"
     return f"{DETECTION_BACKEND_BASE_URL}/static/uploads/{folder}/{kind}/{filename}"

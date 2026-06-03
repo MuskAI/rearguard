@@ -113,6 +113,27 @@ def excute_detection_sql(sql, params=None, fetch=True):
             conn.close()
 
 
+def excute_detection_sql_lastid(sql, params=None):
+    """
+    执行鉴伪库 INSERT 并返回 last_insert_id。
+    """
+    conn = None
+    try:
+        conn = get_detection_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute(sql, params)
+            conn.commit()
+            return cursor.lastrowid
+    except Exception as e:
+        print(f"[DETECTION SQL ERROR] {e}")
+        if conn:
+            conn.rollback()
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
 def create_folder(path):
     """递归创建文件夹"""
     os.makedirs(path, exist_ok=True)

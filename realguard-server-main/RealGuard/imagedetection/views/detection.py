@@ -1,6 +1,7 @@
 import os
 import json
 import uuid
+import io
 import requests
 from urllib.parse import urlparse
 
@@ -9,7 +10,12 @@ from werkzeug.utils import secure_filename
 
 from imagedetection.views import reporting
 from imagedetection.views.utils import (
-    excute_detection_sql
+    create_folder,
+    excute_detection_sql,
+    excute_detection_sql_lastid,
+    get_file_size_str,
+    get_image_info,
+    safe_truncate,
 )
 
 image_upload_blueprint = Blueprint('image_upload_blueprint', __name__, static_folder='static')
@@ -26,10 +32,22 @@ DETECTION_PUBLIC_STATIC_PREFIX = os.environ.get(
 ).rstrip('/')
 IMAGE_DETECT_API = f"{DETECTION_BACKEND_BASE_URL}/image"
 VIDEO_DETECT_API = f"{DETECTION_BACKEND_BASE_URL}/video"
+V2_DETECT_API = os.environ.get(
+    'REALGUARD_V2_INTERNAL_DETECT_URL',
+    'http://127.0.0.1:8848/api/detect'
+).strip()
+V2_INTERNAL_TOKEN = (
+    os.environ.get('REALGUARD_V2_INTERNAL_TOKEN')
+    or os.environ.get('JIANZHEN_ACCESS_TOKEN')
+    or ''
+).strip()
+IMAGE_DETECT_FALLBACK = os.environ.get('REALGUARD_IMAGE_DETECT_FALLBACK', 'v2').strip().lower()
 VIDEO_DETECT_TIMEOUT_NORMAL = 120
 IMAGE_DETECT_TIMEOUT = 180
+V2_DETECT_TIMEOUT = int(os.environ.get('REALGUARD_V2_DETECT_TIMEOUT', '180'))
 GUEST_DETECTION_SESSION_KEY = 'guest_detection_count'
 GUEST_DETECTION_LIMIT = int(os.environ.get('REALGUARD_GUEST_DETECTION_LIMIT', '1'))
+STATIC_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'static'))
 
 
 def allowed_file(filename):
@@ -162,6 +180,9 @@ def _backend_static_url(kind, record):
     folder = (record or {}).get('openid') or (record or {}).get('phone') or 'guest'
     if not filename:
         return ''
+    local_path = os.path.join(STATIC_ROOT, 'uploads', folder, kind, filename)
+    if os.path.exists(local_path):
+        return f"/static/uploads/{folder}/{kind}/{filename}"
     return f"{DETECTION_PUBLIC_STATIC_PREFIX}/uploads/{folder}/{kind}/{filename}"
 
 
@@ -169,6 +190,8 @@ def _public_backend_static_url(value):
     """Rewrite private detection-backend static URLs to the public Nginx proxy path."""
     if not value:
         return ''
+    if str(value).startswith('/static/'):
+        return str(value)
     parsed = urlparse(str(value))
     path = parsed.path if parsed.scheme and parsed.netloc else str(value)
     marker = '/static/'
@@ -200,6 +223,135 @@ def _backend_post(url, **kwargs):
     with requests.Session() as sess:
         sess.trust_env = False
         return sess.post(url, **kwargs)
+
+
+def _v2_fallback_enabled():
+    return IMAGE_DETECT_FALLBACK in ('v2', 'auto', '1', 'true', 'yes') and bool(V2_DETECT_API and V2_INTERNAL_TOKEN)
+
+
+def _save_local_upload(image_bytes, folder, filename):
+    upload_dir = os.path.join(STATIC_ROOT, 'uploads', folder, 'image')
+    create_folder(upload_dir)
+    safe_name = secure_filename(filename) or f"{uuid.uuid4().hex}.png"
+    stored_name = f"{uuid.uuid4().hex[:12]}-{safe_name}"
+    file_path = os.path.join(upload_dir, stored_name)
+    with open(file_path, 'wb') as out:
+        out.write(image_bytes)
+    return stored_name, file_path
+
+
+def _extract_v2_visual_issues(payload):
+    issues = []
+    for region in payload.get('regions') or []:
+        label = str(region.get('label') or '').strip()
+        score = _to_float(region.get('score'), 0.0)
+        if label:
+            issues.append(f"{label}（{round(score * 100, 1)}%）" if score else label)
+    for dim in payload.get('dimensions') or []:
+        label = str(dim.get('label') or dim.get('key') or '').strip()
+        result = str(dim.get('result') or '').strip()
+        score = _to_float(dim.get('score'), 0.0)
+        if label and result:
+            suffix = f"（{round(score * 100, 1)}%）" if score else ""
+            issues.append(f"{label}: {result}{suffix}")
+    return issues[:6]
+
+
+def _fake_percentage_from_v2(payload):
+    verdict = str(payload.get('verdict') or '').strip().lower()
+    confidence = _to_float(payload.get('confidence'), 0.5)
+    if confidence > 1:
+        confidence = confidence / 100.0
+    confidence = max(0.0, min(1.0, confidence))
+    if verdict == 'real':
+        return round((1.0 - confidence) * 100, 1)
+    if verdict in ('suspected_fake', 'highly_suspected_fake', 'fake', 'ai', 'likely_ai_generated'):
+        return round(confidence * 100, 1)
+    return 50.0
+
+
+def _insert_v2_fallback_record(payload, image_bytes, filename, backend_openid, phone, user_info):
+    stored_name, file_path = _save_local_upload(image_bytes, backend_openid or phone or 'guest', filename)
+    img_format, resolution = get_image_info(file_path)
+    file_size = (payload.get('fileMeta') or {}).get('size') or get_file_size_str(file_path)
+    fake_pct = _fake_percentage_from_v2(payload)
+    final_label = 'AI生成图像' if fake_pct >= 50 else '真实图像'
+    confidence_level = _conf_level_from_score(_conf_score_from_api(payload.get('confidence'), fake_pct))
+    explanation = str(payload.get('explanation') or '').strip() or _to_user_explanation(final_label, confidence_level)
+    visual_issues = _extract_v2_visual_issues(payload)
+    if visual_issues:
+        explanation = f"{explanation}\n视觉可疑点\n" + "\n".join(f"- {item}" for item in visual_issues)
+
+    itemid = excute_detection_sql_lastid(
+        """
+        INSERT INTO data
+            (createtime, filename, fake, detector_probability, openid, phone, aigc,
+             file_size, img_format, resolution, clarity, explantation, Userid)
+        VALUES (NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            stored_name,
+            fake_pct,
+            fake_pct / 100.0,
+            backend_openid,
+            phone,
+            final_label,
+            file_size,
+            img_format,
+            resolution,
+            confidence_level,
+            safe_truncate(explanation, 500),
+            (user_info or {}).get('Userid'),
+        ),
+    )
+    if not itemid:
+        raise RuntimeError('检测结果写入失败')
+
+    return {
+        'code': 200,
+        'msg': 'success',
+        'data': {
+            'data_itemid': itemid,
+            'fake_percentage': fake_pct,
+            'final_label': final_label,
+            'confidence': confidence_level,
+            'image_url': f"/static/uploads/{backend_openid or phone or 'guest'}/image/{stored_name}",
+            'filename': stored_name,
+            'file_size': file_size,
+            'img_format': img_format,
+            'resolution': resolution,
+            'explanation': explanation,
+            'visual_issues': visual_issues,
+            'agent_reasoning': json.dumps({
+                'fallback': 'jianzhen-v2',
+                'taskId': payload.get('taskId'),
+                'reportId': payload.get('reportId'),
+                'modelVersion': payload.get('modelVersion'),
+                'source': payload.get('source'),
+                'tokenUsage': payload.get('tokenUsage'),
+            }, ensure_ascii=False),
+            'meta': {
+                'file_size': file_size,
+                'img_format': img_format,
+                'resolution': resolution,
+            },
+        },
+    }
+
+
+def _detect_with_v2_fallback(image_bytes, safe_name, mimetype, backend_openid, phone, user_info):
+    if not _v2_fallback_enabled():
+        return None
+    response = _backend_post(
+        V2_DETECT_API,
+        headers={'X-Jianzhen-Token': V2_INTERNAL_TOKEN},
+        files={'file': (safe_name, io.BytesIO(image_bytes), mimetype or 'application/octet-stream')},
+        data={'fileType': 'image'},
+        timeout=V2_DETECT_TIMEOUT,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    return _insert_v2_fallback_record(payload, image_bytes, safe_name, backend_openid, phone, user_info)
 
 
 def _conf_level_from_score(score):
@@ -312,19 +464,40 @@ def image_detect_for_actor(user_info, *, is_guest=False):
 
     backend_openid, phone = _backend_identity(user_info)
     safe_name = secure_filename(filename) or filename
+    mimetype = file.mimetype or 'application/octet-stream'
+    file.stream.seek(0)
+    image_bytes = file.stream.read()
+    if not image_bytes:
+        return jsonify({'status': 'error', 'message': '请上传非空图片文件'}), 400
 
     try:
-        file.stream.seek(0)
         api_resp = _backend_post(
             IMAGE_DETECT_API,
-            files={'image_file': (safe_name, file.stream, file.mimetype or 'application/octet-stream')},
+            files={'image_file': (safe_name, io.BytesIO(image_bytes), mimetype)},
             data={'openid': backend_openid, 'phone': phone},
             timeout=IMAGE_DETECT_TIMEOUT,
         )
         api_resp.raise_for_status()
         api_json = api_resp.json()
     except requests.RequestException as e:
-        return jsonify({'status': 'error', 'message': f'调用图像鉴伪后端失败: {str(e)}'}), 502
+        try:
+            api_json = _detect_with_v2_fallback(image_bytes, safe_name, mimetype, backend_openid, phone, user_info)
+        except Exception as fallback_error:
+            return jsonify({
+                'status': 'error',
+                'message': (
+                    '图像鉴伪服务暂不可用：V1 模型服务未监听 127.0.0.1:15000，'
+                    f'且 V2 兜底调用失败: {str(fallback_error)}'
+                )
+            }), 502
+        if not api_json:
+            return jsonify({
+                'status': 'error',
+                'message': (
+                    '图像鉴伪服务暂不可用：V1 模型服务未监听 127.0.0.1:15000，'
+                    '且未配置 V2 兜底检测令牌 REALGUARD_V2_INTERNAL_TOKEN'
+                )
+            }), 502
     except ValueError:
         return jsonify({'status': 'error', 'message': '图像鉴伪后端返回了非 JSON 数据'}), 502
 
