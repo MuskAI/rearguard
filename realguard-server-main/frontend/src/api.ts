@@ -38,17 +38,17 @@ export function sendSmsCode(phone: string, scene: "login" | "register" | "reset"
   });
 }
 
-export function loginByPassword(phone: string, secret: string) {
+export function loginByPassword(phone: string, secret: string, acceptedTerms: boolean) {
   return jsonRequest<{ user: User }>("/api/login/password", {
     method: "POST",
-    body: JSON.stringify({ phone, secret })
+    body: JSON.stringify({ phone, secret, accepted_terms: acceptedTerms })
   });
 }
 
-export function loginBySms(phone: string, smsCode: string) {
+export function loginBySms(phone: string, smsCode: string, acceptedTerms: boolean) {
   return jsonRequest<{ user: User }>("/api/login/sms", {
     method: "POST",
-    body: JSON.stringify({ phone, sms_code: smsCode })
+    body: JSON.stringify({ phone, sms_code: smsCode, accepted_terms: acceptedTerms })
   });
 }
 

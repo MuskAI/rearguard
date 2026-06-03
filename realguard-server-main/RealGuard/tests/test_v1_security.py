@@ -123,6 +123,36 @@ def test_retrieve_history_result_uses_user_phone_and_local_proxy(client, monkeyp
     assert seen
 
 
+def test_login_password_requires_terms_acceptance(client, monkeypatch):
+    def fail_auth(phone, secret):
+        pytest.fail("password authentication should not run before terms acceptance")
+
+    monkeypatch.setattr(api, "_authenticate_password_user", fail_auth)
+
+    response = client.post(
+        "/api/login/password",
+        json={"phone": "13800000000", "secret": "Password123", "accepted_terms": False},
+    )
+
+    assert response.status_code == 400
+    assert "用户协议" in response.get_json()["message"]
+
+
+def test_login_sms_requires_terms_acceptance(client, monkeypatch):
+    def fail_verify(scene, phone, code):
+        pytest.fail("SMS verification should not run before terms acceptance")
+
+    monkeypatch.setattr(api, "_verify_sms_code", fail_verify)
+
+    response = client.post(
+        "/api/login/sms",
+        json={"phone": "13800000000", "sms_code": "123456", "accepted_terms": False},
+    )
+
+    assert response.status_code == 400
+    assert "用户协议" in response.get_json()["message"]
+
+
 def test_login_sms_unknown_user_is_rejected_without_auto_create(client, monkeypatch):
     monkeypatch.setattr(api, "_verify_sms_code", lambda scene, phone, code: (True, ""))
     monkeypatch.setattr(api, "_find_user_by_phone", lambda phone: None)
@@ -134,7 +164,7 @@ def test_login_sms_unknown_user_is_rejected_without_auto_create(client, monkeypa
 
     response = client.post(
         "/api/login/sms",
-        json={"phone": "13800000000", "sms_code": "123456"},
+        json={"phone": "13800000000", "sms_code": "123456", "accepted_terms": True},
     )
 
     assert response.status_code == 404

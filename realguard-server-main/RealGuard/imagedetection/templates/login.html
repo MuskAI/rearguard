@@ -43,6 +43,9 @@
         .btn-code{border:1px solid var(--border);border-radius:12px;background:var(--bg-card);color:var(--primary);font-size:.84rem;font-weight:600;font-family:inherit;cursor:pointer;transition:all .2s}
         .btn-code:hover:not(:disabled){border-color:var(--primary);box-shadow:0 0 0 3px rgba(37,99,235,.08)}
         .btn-code:disabled{color:var(--text-muted);cursor:not-allowed}
+        .terms-row{display:flex;gap:8px;align-items:flex-start;color:var(--text-secondary);font-size:.78rem;line-height:1.55;margin-top:.2rem}
+        .terms-row input{margin-top:3px}
+        .terms-row a{color:var(--primary);font-weight:600}
         .form-footer{text-align:center;margin-top:1.2rem;font-size:.85rem;color:var(--text-muted)}
         .form-footer a{color:var(--primary);font-weight:600}
         .form-footer a:hover{text-decoration:underline}
@@ -89,6 +92,10 @@
                     <input type="password" name="secret" placeholder="请输入密码" required>
                 </div>
             </div>
+            <label class="terms-row">
+                <input type="checkbox" name="accepted_terms" value="1" required>
+                <span>我已阅读并同意 <a href="/legal/terms.html" target="_blank" rel="noopener">用户协议</a> 和 <a href="/legal/privacy.html" target="_blank" rel="noopener">隐私政策</a></span>
+            </label>
             <button type="submit" class="btn-primary"><i class="fa fa-sign-in"></i> 登录</button>
         </form>
         <form action="/login_sms_verify" method="post" class="login-panel {% if login_mode == 'sms' %}active{% endif %}" data-login-panel="sms">
@@ -109,6 +116,10 @@
                     <button type="button" class="btn-code" data-sms-btn="login">获取验证码</button>
                 </div>
             </div>
+            <label class="terms-row">
+                <input type="checkbox" name="accepted_terms" value="1" required>
+                <span>我已阅读并同意 <a href="/legal/terms.html" target="_blank" rel="noopener">用户协议</a> 和 <a href="/legal/privacy.html" target="_blank" rel="noopener">隐私政策</a></span>
+            </label>
             <button type="submit" class="btn-primary"><i class="fa fa-sign-in"></i> 验证码登录</button>
         </form>
         <form action="/password_reset_verify" method="post" class="login-panel {% if login_mode == 'reset' %}active{% endif %}" data-login-panel="reset">

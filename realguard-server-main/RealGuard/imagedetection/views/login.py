@@ -78,6 +78,17 @@ def _ensure_user_account_columns():
     return True
 
 
+def _record_terms_acceptance(phone):
+    if not _ensure_user_account_columns():
+        return False
+    result = excute_sql(
+        "UPDATE user SET terms_version = %s, terms_accepted_at = NOW() WHERE phone = %s",
+        (TERMS_VERSION, phone),
+        fetch=False
+    )
+    return result is not None
+
+
 def _hash_code(code):
     secret = os.environ.get('SECRET_KEY') or 'realguard-sms-code'
     return hashlib.sha256((secret + ':' + code).encode('utf-8')).hexdigest()
@@ -350,9 +361,13 @@ def login_verify():
 
         if not phone or not secret:
             return render_template('login.html', error='请输入手机号和密码')
+        if not _truthy(request.form.get('accepted_terms')):
+            return render_template('login.html', error='请先阅读并同意用户协议和隐私政策')
 
         user = _authenticate_password_user(phone, secret)
         if user:
+            if not _record_terms_acceptance(phone):
+                return render_template('login.html', error='协议确认记录失败，请稍后重试')
             _sync_detection_user(phone, user.get('username') or phone, user.get('openid', '') or phone)
             session.permanent = True
             session['user_info'] = {
@@ -375,12 +390,16 @@ def login_sms_verify():
 
         if not _is_valid_phone(phone):
             return render_template('login.html', error='请输入正确的手机号', login_mode='sms')
+        if not _truthy(request.form.get('accepted_terms')):
+            return render_template('login.html', error='请先阅读并同意用户协议和隐私政策', login_mode='sms')
         ok, message = _verify_sms_code('login', phone, sms_code)
         if not ok:
             return render_template('login.html', error=message, login_mode='sms')
 
         user = _find_user_by_phone(phone)
         if user:
+            if not _record_terms_acceptance(phone):
+                return render_template('login.html', error='协议确认记录失败，请稍后重试', login_mode='sms')
             _sync_detection_user(phone, user.get('username') or phone, user.get('openid', '') or phone)
             session.permanent = True
             session['user_info'] = {

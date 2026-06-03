@@ -116,6 +116,17 @@ def _set_session_user(user, phone):
     return session["user_info"]
 
 
+def _record_terms_acceptance(phone):
+    if not _ensure_user_account_columns():
+        return False
+    result = excute_sql(
+        "UPDATE user SET terms_version = %s, terms_accepted_at = NOW() WHERE phone = %s",
+        (TERMS_VERSION, phone),
+        fetch=False,
+    )
+    return result is not None
+
+
 def _developer_key_hash(api_key):
     return hashlib.sha256(f"realguard-developer-api-key:{api_key}".encode("utf-8")).hexdigest()
 
@@ -765,13 +776,18 @@ def login_password():
     payload = request.get_json(silent=True) or request.form
     phone = (payload.get("phone") or "").strip()
     secret = (payload.get("secret") or "").strip()
+    accepted_terms = _truthy(payload.get("accepted_terms") or payload.get("acceptedTerms"))
 
     if not phone or not secret:
         return jsonify({"status": "error", "message": "请输入手机号和密码"}), 400
+    if not accepted_terms:
+        return jsonify({"status": "error", "message": "请先阅读并同意用户协议和隐私政策"}), 400
 
     user = _authenticate_password_user(phone, secret)
     if not user:
         return jsonify({"status": "error", "message": "手机号或密码错误"}), 401
+    if not _record_terms_acceptance(phone):
+        return jsonify({"status": "error", "message": "协议确认记录失败，请稍后重试"}), 500
 
     return jsonify({"status": "success", "user": _set_session_user(user, phone)})
 
@@ -781,9 +797,12 @@ def login_sms():
     payload = request.get_json(silent=True) or request.form
     phone = (payload.get("phone") or "").strip()
     sms_code = (payload.get("sms_code") or "").strip()
+    accepted_terms = _truthy(payload.get("accepted_terms") or payload.get("acceptedTerms"))
 
     if not _is_valid_phone(phone):
         return jsonify({"status": "error", "message": "请输入正确的手机号"}), 400
+    if not accepted_terms:
+        return jsonify({"status": "error", "message": "请先阅读并同意用户协议和隐私政策"}), 400
     ok, message = _verify_sms_code("login", phone, sms_code)
     if not ok:
         return jsonify({"status": "error", "message": message}), 400
@@ -791,6 +810,8 @@ def login_sms():
     user = _find_user_by_phone(phone)
     if not user:
         return jsonify({"status": "error", "message": "该手机号尚未注册，请先注册"}), 404
+    if not _record_terms_acceptance(phone):
+        return jsonify({"status": "error", "message": "协议确认记录失败，请稍后重试"}), 500
 
     return jsonify({"status": "success", "user": _set_session_user(user, phone)})
 

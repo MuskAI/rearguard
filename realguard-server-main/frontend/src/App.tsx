@@ -3260,19 +3260,19 @@ function AuthForm({ onAuthed, lang }: { onAuthed: () => Promise<void>; lang: Lan
       setStatus({ tone: "error", text: tr("请输入短信验证码", "Enter the SMS code") });
       return;
     }
+    if ((mode === "password" || mode === "sms" || mode === "register") && !acceptedTerms) {
+      setStatus({ tone: "error", text: text.termsRequired });
+      return;
+    }
     setBusy(true);
     setStatus(null);
     try {
-      if (mode === "password") await loginByPassword(phone, secret);
-      else if (mode === "sms") await loginBySms(phone, smsCode);
+      if (mode === "password") await loginByPassword(phone, secret, acceptedTerms);
+      else if (mode === "sms") await loginBySms(phone, smsCode, acceptedTerms);
       else if (mode === "register") {
         const passwordError = passwordPolicyMessage(secret);
         if (passwordError) {
           setStatus({ tone: "error", text: passwordError });
-          return;
-        }
-        if (!acceptedTerms) {
-          setStatus({ tone: "error", text: text.termsRequired });
           return;
         }
         await registerUser({ phone, secret, username, sms_code: smsCode, accepted_terms: acceptedTerms, terms_version: REALGUARD_TERMS_VERSION });
@@ -3310,6 +3310,7 @@ function AuthForm({ onAuthed, lang }: { onAuthed: () => Promise<void>; lang: Lan
   const passwordPlaceholder = mode === "password" ? text.passwordPlaceholder : text.newPasswordPlaceholder;
   const submitText = mode === "register" ? text.create : mode === "reset" ? text.resetAction : text.login;
   const submitIcon = mode === "register" ? "fa-user-plus" : mode === "reset" ? "fa-refresh" : "fa-sign-in";
+  const requiresTerms = mode !== "reset";
 
   return (
     <>
@@ -3360,7 +3361,7 @@ function AuthForm({ onAuthed, lang }: { onAuthed: () => Promise<void>; lang: Lan
             </div>
           </div>
         )}
-        {mode === "register" && (
+        {requiresTerms && (
           <label className="terms-check">
             <input type="checkbox" checked={acceptedTerms} onChange={(event) => setAcceptedTerms(event.target.checked)} />
             <span>

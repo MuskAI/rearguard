@@ -54,8 +54,12 @@ def test_api_password_login_sets_session(client, monkeypatch):
         },
     )
     monkeypatch.setattr(api, "_sync_detection_user", lambda *args, **kwargs: None)
+    monkeypatch.setattr(api, "_record_terms_acceptance", lambda phone: True)
 
-    response = client.post("/api/login/password", json={"phone": "13800000000", "secret": "hashed-pass"})
+    response = client.post(
+        "/api/login/password",
+        json={"phone": "13800000000", "secret": "hashed-pass", "accepted_terms": True},
+    )
 
     assert response.status_code == 200
     payload = response.get_json()
