@@ -285,14 +285,13 @@ def _insert_v2_fallback_record(payload, image_bytes, filename, backend_openid, p
     itemid = excute_detection_sql_lastid(
         """
         INSERT INTO data
-            (createtime, filename, fake, detector_probability, openid, phone, aigc,
+            (createtime, filename, fake, openid, phone, aigc,
              file_size, img_format, resolution, clarity, explantation, Userid)
-        VALUES (NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             stored_name,
             fake_pct,
-            fake_pct / 100.0,
             backend_openid,
             phone,
             final_label,
@@ -300,7 +299,7 @@ def _insert_v2_fallback_record(payload, image_bytes, filename, backend_openid, p
             img_format,
             resolution,
             confidence_level,
-            safe_truncate(explanation, 500),
+            safe_truncate(explanation, 145),
             (user_info or {}).get('Userid'),
         ),
     )
