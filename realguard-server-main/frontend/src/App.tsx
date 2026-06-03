@@ -39,6 +39,17 @@ type AuthMode = "password" | "sms" | "register";
 type HistoryTabKey = "image" | "video" | "imageRetrieve" | "videoRetrieve";
 type HistorySummaryCard = { label: string; value: number | string; filterKey?: HistoryFilterKey };
 type DeveloperSkillMode = "v2" | "v1";
+type Lang = "zh" | "en";
+type LocalizedText = { zh: string; en: string };
+type AgentSkillRecommendation = {
+  rank: string;
+  name: string;
+  source: string;
+  category: LocalizedText;
+  fit: LocalizedText;
+  desc: LocalizedText;
+  href: string;
+};
 
 const emptyCounters: Counters = {
   image_detect: 0,
@@ -62,19 +73,551 @@ const REALGUARD_SKILL_COMMAND_V1 =
   `curl -fsS -X POST ${REALGUARD_V1_API_BASE}/detect \\
   -H "X-RealGuard-Key: <your-api-key>" \\
   -F "file=@/path/to/image.png"`;
+const FRONTEND_AGENT_SKILLS: AgentSkillRecommendation[] = [
+  {
+    rank: "01",
+    name: "frontend-skill",
+    source: "OpenAI",
+    category: { zh: "品牌页 / 营销页", en: "Landing / Brand" },
+    fit: { zh: "品牌页、营销页、演示首屏", en: "Landing pages, brand pages, demo hero sections" },
+    desc: {
+      zh: "强化视觉论点、内容节奏和首屏记忆点，适合做官网与产品展示页的第一轮风格定调。",
+      en: "Sharpens the visual thesis, content rhythm, and first-screen quality for marketing and demo pages.",
+    },
+    href: "https://github.com/openai/skills/tree/main/skills/.curated/frontend-skill",
+  },
+  {
+    rank: "02",
+    name: "frontend-design",
+    source: "Anthropic",
+    category: { zh: "视觉完成度", en: "Visual Craft" },
+    fit: { zh: "高完成度界面、强风格页面", en: "Polished interfaces with a strong point of view" },
+    desc: {
+      zh: "把页面从模板化推进到有辨识度的成品，适合处理配色、排版、动效和视觉细节。",
+      en: "Moves a page beyond template work into a distinctive product-quality interface.",
+    },
+    href: "https://github.com/anthropics/skills/tree/main/skills/frontend-design",
+  },
+  {
+    rank: "03",
+    name: "figma-implement-design",
+    source: "OpenAI",
+    category: { zh: "设计稿到代码", en: "Design to Code" },
+    fit: { zh: "设计稿还原、设计协作", en: "Figma implementation and design collaboration" },
+    desc: {
+      zh: "用于从 Figma 结构落到真实代码，减少设计稿与前端实现之间的信息损耗。",
+      en: "Turns Figma structure into working code while preserving design intent.",
+    },
+    href: "https://github.com/openai/skills/tree/main/skills/.curated/figma-implement-design",
+  },
+  {
+    rank: "04",
+    name: "web-design-guidelines",
+    source: "Vercel",
+    category: { zh: "界面审查", en: "UI Review" },
+    fit: { zh: "可访问性、表单、交互审查", en: "Accessibility, forms, motion, and interaction review" },
+    desc: {
+      zh: "适合作为上线前审查清单，系统补齐排版、状态、动效、表单和可访问性问题。",
+      en: "A strong pre-launch review checklist for accessibility, forms, states, motion, and layout.",
+    },
+    href: "https://github.com/vercel-labs/agent-skills/tree/main/skills/web-design-guidelines",
+  },
+  {
+    rank: "05",
+    name: "react-best-practices",
+    source: "Vercel",
+    category: { zh: "React 质量", en: "React Quality" },
+    fit: { zh: "React / Next.js 实现质量", en: "React / Next.js implementation quality" },
+    desc: {
+      zh: "提升组件组织、性能边界和工程实现质量，避免只好看但不可维护的页面。",
+      en: "Improves component structure, performance boundaries, and maintainability.",
+    },
+    href: "https://github.com/vercel-labs/agent-skills/tree/main/skills/react-best-practices",
+  },
+  {
+    rank: "06",
+    name: "playwright",
+    source: "OpenAI",
+    category: { zh: "浏览器验证", en: "Browser QA" },
+    fit: { zh: "真实浏览器验证、截图回归", en: "Real browser QA and screenshot regression" },
+    desc: {
+      zh: "前端改完必须验证真实交互、响应式布局和关键流程，Playwright 是通用执行层。",
+      en: "Validates real interactions, responsive layouts, and critical user flows.",
+    },
+    href: "https://github.com/openai/skills/tree/main/skills/.curated/playwright",
+  },
+  {
+    rank: "07",
+    name: "webapp-testing",
+    source: "Anthropic",
+    category: { zh: "应用验收", en: "App Testing" },
+    fit: { zh: "本地页面行为、日志和回归", en: "Local app behavior, logs, and regressions" },
+    desc: {
+      zh: "更贴近日常 Web 应用验收，适合检查页面状态、控制台错误和交互回归。",
+      en: "Useful for daily web app validation across UI state, logs, and regressions.",
+    },
+    href: "https://github.com/anthropics/skills/tree/main/skills/webapp-testing",
+  },
+  {
+    rank: "08",
+    name: "canvas-design",
+    source: "Anthropic",
+    category: { zh: "创意界面", en: "Creative UI" },
+    fit: { zh: "画布式交互、概念设计", en: "Canvas interactions and concept design" },
+    desc: {
+      zh: "适合自由视觉探索、展示型产品页和更具实验感的创意界面。",
+      en: "Good for freer visual exploration, canvas-like interactions, and concept pages.",
+    },
+    href: "https://github.com/anthropics/skills/tree/main/skills/canvas-design",
+  },
+  {
+    rank: "09",
+    name: "brand-guidelines",
+    source: "Anthropic",
+    category: { zh: "品牌体系", en: "Brand System" },
+    fit: { zh: "官网、营销页、设计系统", en: "Websites, marketing pages, and design systems" },
+    desc: {
+      zh: "把页面设计上升到品牌一致性层面，适合产品、设计和内容团队共同使用。",
+      en: "Connects interface decisions to a coherent brand system.",
+    },
+    href: "https://github.com/anthropics/skills/tree/main/skills/brand-guidelines",
+  },
+  {
+    rank: "10",
+    name: "vercel-deploy-claimable",
+    source: "Vercel",
+    category: { zh: "预览闭环", en: "Preview Loop" },
+    fit: { zh: "快速预览、反馈闭环", en: "Fast preview deployment and feedback loops" },
+    desc: {
+      zh: "严格说不是设计技能，但能让前端和产品页面快速部署预览，缩短反馈链路。",
+      en: "Not a design skill, but it shortens the build-preview-feedback loop.",
+    },
+    href: "https://github.com/vercel-labs/agent-skills/tree/main/skills/vercel-deploy-claimable",
+  },
+];
+const UI_TEXT = {
+  zh: {
+    boot: "正在连接系统...",
+    nav: {
+      brand: "数字内容鉴伪平台",
+      brandMobile: "鉴伪平台",
+      home: "首页",
+      functions: "功能",
+      detection: "检测",
+      retrieve: "检索",
+      imageDetect: "图像鉴伪",
+      videoDetect: "视频鉴伪",
+      imageRetrieve: "图像侵权检索",
+      videoRetrieve: "视频侵权检索",
+      history: "历史记录",
+      developer: "开发者平台",
+      v2: "新版鉴伪",
+      login: "登录",
+      logout: "退出",
+      logoutFull: "退出登录",
+      loginRegister: "登录/注册",
+      menu: "菜单",
+      openMenu: "打开菜单",
+      theme: "切换主题",
+      language: "EN",
+      languageAria: "切换到英文",
+      mobileShort: {
+        home: "首页",
+        image: "图像",
+        video: "视频",
+        retrieve: "检索",
+        history: "历史",
+        developer: "开发",
+      },
+    },
+    trial: {
+      title: "访客体验",
+      desc: "首次检测无需登录，第二次检测前请登录。",
+      action: "登录/注册",
+    },
+    home: {
+      eyebrow: "鉴伪情报平台",
+      eyebrowNote: "面向智能体接入",
+      titleLine1: "让生成内容鉴伪",
+      titleLine2: "进入证据链",
+      desc: "RealGuard 面向内容审核、版权检索和外部智能体，把图像和视频检测、取证证据、报告编号、密钥与用量统计组织成一条清晰流程。",
+      primaryAction: "开始检测",
+      secondaryAction: "接入开发者平台",
+      trust1: "双链路鉴伪",
+      trust2: "检测任务",
+      trust3: "检索任务",
+      briefingLabel: "实时证据简报",
+      overall: "综合判断",
+      risk: "生成风险 73.9%",
+      support: "辅助证据",
+      texture: "纹理与边缘异常",
+      ela: "压缩误差图",
+      elaSmall: "异常区域定位",
+      noise: "噪声残差",
+      noiseSmall: "生成纹理比对",
+      usage: "调用与用量",
+      usageSmall: "开发者成本审计",
+      handoff: "智能体交接",
+      workflowKicker: "从任务开始",
+      workflowTitle: "四条路径，直接进入你要完成的工作。",
+      workflowDesc: "审核人员从检测开始，版权团队从检索开始，外部智能体从技能开始，开发者从密钥和文档开始。",
+      capabilitiesTitle: "核心能力",
+      capabilitiesDesc: "检测、检索、报告与开发者接入保持独立，但在首页以同一条证据链呈现。",
+      evidenceTitle: "结果不是一句话，而是一组可复核证据",
+      evidenceDesc: "示例卡保留判断比例，但首页更强调报告、证据字段和后续追踪。",
+    },
+    workflow: [
+      ["内容审核团队", "上传图像或视频，直接获得真伪结论、置信度、证据字段和报告编号。", "开始鉴伪"],
+      ["版权检索场景", "对疑似侵权素材做相似内容检索，把重复传播和素材来源拉到同一视图。", "检索相似内容"],
+      ["外部智能体", "复制公开技能，让 OpenClaw 或其他智能体使用 V2/V1 接口完成鉴伪。", "复制技能"],
+      ["开发者接入", "生成个人密钥，追踪调用次数与用量成本，并在线调试返回结果。", "打开文档"],
+    ],
+    features: [
+      ["图像鉴伪", "基于深度学习的图像真伪识别，支持多种场景的生成图像检测。"],
+      ["视频鉴伪", "针对视频内容的生成检测与篡改识别，帧级分析定位可疑片段。"],
+      ["图像侵权检索", "检索疑似侵权的图像，在图像数据库中快速定位可疑内容。"],
+      ["视频侵权检索", "检索疑似侵权的视频，在数据库中快速定位相似可疑视频内容。"],
+      ["新版鉴伪智能体", "独立新版系统，融合误差图、噪声残差等取证证据。"],
+    ],
+    examples: [
+      ["案例一：泳池场景人物图像", "综合判断为生成图像（53.8%），点击查看检测结果。"],
+      ["案例二：几何色块人像图像", "综合判断为生成图像（73.9%），点击查看检测结果。"],
+    ],
+    skillsTop: {
+      kicker: "推荐技能",
+      title: "面向前端、产品与界面设计的十个常用智能体技能",
+      desc: "这些技能按设计落地频率、视觉/交互质量提升和在 Codex、Claude Code 等工具中的复用性排序。",
+      source: "来源",
+      bestFor: "适合",
+      open: "查看来源",
+    },
+    skillPanel: {
+      badge1: "技能已接入",
+      badge2: "外部智能体可调用",
+      title: "把 RealGuard 变成外部智能体可直接调用的鉴伪工具",
+      desc: "外部智能体不需要知道你的服务器目录，也不需要猜接口字段。复制下面的交接语后，它会先读取公网技能，再按 V2 多模态或 V1 图像模型输出可审计结论。",
+      reasonTitle: "为什么必须公开技能",
+      reason: "OpenClaw 等外部智能体访问不到本地仓库路径，也不知道报告字段、解释边界和鉴伪输出规范。公开技能后，任何智能体都能用同一份说明完成调用，并把调用次数与用量纳入审计。",
+      protocol: [
+        ["01 公开", "读取公网技能", "不依赖本地路径，外部智能体可访问"],
+        ["02 选择", "选择模型链路", "默认 V2，V1 兼容旧图像模型"],
+        ["03 审计", "返回证据与用量", "结论、报告、调用次数、用量统计"],
+      ],
+      terminalLabel: "推荐交接语",
+      terminalStrong: "优先 V2，点击复制",
+      copyV2Title: "复制 V2 技能调用",
+      copyV2Desc: "优先推荐：多模态检测、报告、用量统计和模型版本更完整。",
+      copyUrlTitle: "公开技能地址",
+      copyUrlDesc: "给别的智能体的第一步：先读取公共说明。",
+      copyV1Title: "复制 V1 技能调用",
+      copyV1Desc: "兼容 RealGuard V1 图像模型，并统计调用次数。",
+      openV2: "进入新版鉴伪",
+      openDev: "打开开发者平台",
+    },
+    copy: {
+      ready: "点击复制",
+      copied: "已复制",
+      copy: "复制",
+      aria: "复制",
+      prompt: "复制以下内容",
+    },
+    pages: {
+      imageTitle: "图像鉴伪",
+      imageDesc: "上传图片或选择示例图片，检测生成内容与可疑篡改痕迹。",
+      videoTitle: "视频鉴伪",
+      videoDesc: "上传本地视频或输入地址，检测视频真伪与可疑片段。",
+      retrieveImageTitle: "图像侵权检索",
+      retrieveVideoTitle: "视频侵权检索",
+      retrieveDesc: "在数据库中检索视觉相似的可疑内容。",
+      historyTitle: "历史记录",
+      historyDesc: "查看检测与检索历史记录。",
+    },
+    developer: {
+      docsBrandSmall: "开发者文档",
+      badges: ["公开接口", "智能体技能", "双版本", "文件上传"],
+      title: "RealGuard 开发者平台",
+      desc: "面向 OpenClaw、外部智能体和业务系统的统一接入台。这里把密钥、公开技能、V1/V2 调用、用量统计和在线测试放在同一屏。",
+      commands: ["签发密钥", "复制技能", "运行检测", "审计用量"],
+      keyAction: "生成密钥",
+      skillAction: "复制技能调用",
+      skillsCopy: "技能复制",
+      skillsCopyTitle: "点击即可复制给外部智能体",
+      workflow: [
+        ["生成密钥", "注册登录后生成个人密钥，绑定账号并可随时撤销。"],
+        ["复制技能接入", "一键复制 V2 或 V1 交接语，让外部智能体直接使用。"],
+        ["查看调用统计", "同时统计 V1/V2 调用次数、用量、缓存命中和端点分布。"],
+        ["在线测试接口", "直接粘贴密钥、上传文件并查看返回结果。"],
+      ],
+      navGroups: ["开始使用", "接口参考", "开发工具", "资源"],
+      navLinks: {
+        overview: "总览",
+        quickstart: "快速开始",
+        skillCopy: "复制技能",
+        auth: "认证",
+        apiKeys: "密钥",
+        tokenUsage: "调用统计",
+        reference: "接口总览",
+        detect: "检测",
+        v1Detect: "V1 检测",
+        forensics: "取证分析",
+        provenance: "来源验证",
+        reports: "报告",
+        errors: "错误码",
+        examples: "代码示例",
+        console: "在线测试台",
+        agentFields: "智能体字段",
+        enterprise: "企业接入",
+        resources: "公开资源",
+      },
+    },
+    auth: {
+      title: "账户登录",
+      desc: "登录后 30 天内自动保持状态",
+      password: "密码登录",
+      sms: "验证码登录",
+      register: "注册",
+      phone: "手机号",
+      username: "用户名",
+      passwordLabel: "密码",
+      smsCode: "短信验证码",
+      phonePlaceholder: "请输入手机号",
+      usernamePlaceholder: "请输入用户名",
+      passwordPlaceholder: "请输入密码",
+      smsPlaceholder: "请输入验证码",
+      sendCode: "获取验证码",
+      sending: "发送中",
+      create: "创建账号",
+      login: "登录",
+    },
+    footer: {
+      brand: "数字内容鉴伪平台",
+      copy: "© 2026 数字内容鉴伪平台",
+    },
+  },
+  en: {
+    boot: "Connecting to RealGuard...",
+    nav: {
+      brand: "Digital Content Forensics",
+      brandMobile: "RealGuard",
+      home: "Home",
+      functions: "Tools",
+      detection: "Detection",
+      retrieve: "Retrieval",
+      imageDetect: "Image Forensics",
+      videoDetect: "Video Forensics",
+      imageRetrieve: "Image Retrieval",
+      videoRetrieve: "Video Retrieval",
+      history: "History",
+      developer: "Developer",
+      v2: "V2 Agent",
+      login: "Log in",
+      logout: "Log out",
+      logoutFull: "Log out",
+      loginRegister: "Log in / Sign up",
+      menu: "Menu",
+      openMenu: "Open menu",
+      theme: "Toggle theme",
+      language: "中",
+      languageAria: "Switch to Chinese",
+      mobileShort: {
+        home: "Home",
+        image: "Image",
+        video: "Video",
+        retrieve: "Search",
+        history: "History",
+        developer: "Dev",
+      },
+    },
+    trial: {
+      title: "Guest access",
+      desc: "Your first detection is free. Please log in before the second one.",
+      action: "Log in / Sign up",
+    },
+    home: {
+      eyebrow: "Forensic intelligence platform",
+      eyebrowNote: "Agent-ready integration",
+      titleLine1: "Bring AIGC forensics",
+      titleLine2: "into the evidence chain",
+      desc: "RealGuard organizes image and video detection, forensic evidence, report IDs, API keys, and usage metrics into a single workflow for reviewers, copyright teams, and external agents.",
+      primaryAction: "Start detection",
+      secondaryAction: "Open developer platform",
+      trust1: "Dual V1 / V2 pipeline",
+      trust2: "Detection tasks",
+      trust3: "Retrieval tasks",
+      briefingLabel: "Live evidence brief",
+      overall: "Overall verdict",
+      risk: "AI risk 73.9%",
+      support: "Supporting evidence",
+      texture: "Texture and edge anomalies",
+      ela: "ELA map",
+      elaSmall: "Suspicious region localization",
+      noise: "Noise residual",
+      noiseSmall: "Generated texture comparison",
+      usage: "Calls and tokens",
+      usageSmall: "Developer cost audit",
+      handoff: "Agent handoff",
+      workflowKicker: "Start from the task",
+      workflowTitle: "Four paths into the work users actually need to finish.",
+      workflowDesc: "Reviewers start with detection, copyright teams start with retrieval, agents start with skills, and developers start with keys and docs.",
+      capabilitiesTitle: "Core capabilities",
+      capabilitiesDesc: "Detection, retrieval, reports, and developer access stay separate but are presented as one evidence workflow.",
+      evidenceTitle: "A result is not a sentence. It is a reviewable evidence set.",
+      evidenceDesc: "Examples keep the probability view while emphasizing reports, evidence fields, and follow-up tracking.",
+    },
+    workflow: [
+      ["Content review teams", "Upload images or videos and receive verdicts, confidence, evidence fields, and report IDs.", "Start forensics"],
+      ["Copyright retrieval", "Search visually similar assets and inspect reposts, matches, and source clues in one view.", "Search similar content"],
+      ["External agents", "Copy the public skill so OpenClaw or other agents can call V2/V1 APIs.", "Copy skill"],
+      ["Developer integration", "Generate personal keys, track calls and usage cost, and debug JSON responses online.", "Open docs"],
+    ],
+    features: [
+      ["Image Forensics", "Deep-learning image authenticity detection across generated-image scenarios."],
+      ["Video Forensics", "AI-generation and tamper detection for videos with frame-level suspicious segment analysis."],
+      ["Image Retrieval", "Find visually similar images and suspicious matches in image databases."],
+      ["Video Retrieval", "Search suspicious videos and locate visually similar video content."],
+      ["V2 Forensic Agent", "A newer standalone pipeline combining ELA, noise residuals, and other forensic evidence."],
+    ],
+    examples: [
+      ["Case 1: Poolside person image", "Overall verdict: likely AI-generated (53.8%). Open the detection result."],
+      ["Case 2: Geometric portrait image", "Overall verdict: likely AI-generated (73.9%). Open the detection result."],
+    ],
+    skillsTop: {
+      kicker: "Recommended skills",
+      title: "Top 10 Agent Skills for frontend, product, and UI work",
+      desc: "Ranked by implementation frequency, direct impact on visual and interaction quality, and reuse value in Codex, Claude Code, and similar agents.",
+      source: "Source",
+      bestFor: "Best for",
+      open: "Open source",
+    },
+    skillPanel: {
+      badge1: "Skill integrated",
+      badge2: "Callable by external agents",
+      title: "Turn RealGuard into a forensics tool external agents can call directly",
+      desc: "External agents do not need local server paths or guessed request fields. Copy the handoff text and the agent will read the public skill, then call either the V2 multimodal pipeline or V1 image model.",
+      reasonTitle: "Why the skill must be public",
+      reason: "External agents such as OpenClaw cannot access local repository paths and do not know report fields, output boundaries, or evidence requirements. A public skill gives every agent the same integration contract and audit expectations.",
+      protocol: [
+        ["01 Public", "Read public skill", "No local path dependency"],
+        ["02 Choose", "Select model pipeline", "V2 by default, V1 for legacy image mode"],
+        ["03 Audit", "Return evidence and usage", "Verdict, report, call count, usage metrics"],
+      ],
+      terminalLabel: "Recommended handoff",
+      terminalStrong: "V2 first · click to copy",
+      copyV2Title: "Copy V2 skill handoff",
+      copyV2Desc: "Recommended: multimodal detection, reports, usage metrics, and model version.",
+      copyUrlTitle: "Public skill URL",
+      copyUrlDesc: "The first step for another agent: read the public instruction.",
+      copyV1Title: "Copy V1 skill handoff",
+      copyV1Desc: "Compatible with the RealGuard V1 image model and call-count tracking.",
+      openV2: "Open V2 Agent",
+      openDev: "Open developer platform",
+    },
+    copy: {
+      ready: "Click to copy",
+      copied: "Copied",
+      copy: "Copy",
+      aria: "Copy",
+      prompt: "Copy this text",
+    },
+    pages: {
+      imageTitle: "Image Forensics",
+      imageDesc: "Upload an image or select a sample to detect generated content and suspicious tampering.",
+      videoTitle: "Video Forensics",
+      videoDesc: "Upload a local video or enter a URL to inspect authenticity and suspicious segments.",
+      retrieveImageTitle: "Image Retrieval",
+      retrieveVideoTitle: "Video Retrieval",
+      retrieveDesc: "Search visually similar suspicious content in the database.",
+      historyTitle: "History",
+      historyDesc: "Review detection and retrieval records.",
+    },
+    developer: {
+      docsBrandSmall: "Developer Docs",
+      badges: ["Public API", "Agent Skill", "V1 / V2", "Multipart Upload"],
+      title: "RealGuard Developer Platform",
+      desc: "A unified integration desk for OpenClaw, external AI agents, and business systems, combining API keys, public skills, V1/V2 calls, usage metrics, and online testing.",
+      commands: ["Issue key", "Copy skill", "Run detect", "Audit usage"],
+      keyAction: "Generate API key",
+      skillAction: "Copy skill handoff",
+      skillsCopy: "Skills copy",
+      skillsCopyTitle: "Click to copy for external agents",
+      workflow: [
+        ["Generate API key", "Create a personal key after registration, bind it to your account, and revoke it anytime."],
+        ["Copy skill integration", "Copy a V2 or V1 handoff so external agents can use RealGuard directly."],
+        ["Inspect usage", "Track V1/V2 calls, tokens, cache hits, and endpoint distribution."],
+        ["Test API online", "Paste a key, upload a file, and inspect the returned JSON."],
+      ],
+      navGroups: ["Start", "API Reference", "Developer Tools", "Resources"],
+      navLinks: {
+        overview: "Overview",
+        quickstart: "Quickstart",
+        skillCopy: "Copy Skill",
+        auth: "Authentication",
+        apiKeys: "API Keys",
+        tokenUsage: "Usage",
+        reference: "Endpoint Index",
+        detect: "Detect",
+        v1Detect: "V1 Detect",
+        forensics: "Forensics",
+        provenance: "Provenance",
+        reports: "Reports",
+        errors: "Errors",
+        examples: "Code Examples",
+        console: "API Console",
+        agentFields: "Agent Fields",
+        enterprise: "Enterprise",
+        resources: "Public Resources",
+      },
+    },
+    auth: {
+      title: "Account login",
+      desc: "Stay signed in for 30 days",
+      password: "Password",
+      sms: "SMS code",
+      register: "Sign up",
+      phone: "Phone",
+      username: "Username",
+      passwordLabel: "Password",
+      smsCode: "SMS code",
+      phonePlaceholder: "Enter phone number",
+      usernamePlaceholder: "Enter username",
+      passwordPlaceholder: "Enter password",
+      smsPlaceholder: "Enter code",
+      sendCode: "Send code",
+      sending: "Sending",
+      create: "Create account",
+      login: "Log in",
+    },
+    footer: {
+      brand: "Digital Content Forensics",
+      copy: "© 2026 Digital Content Forensics Platform",
+    },
+  },
+} as const;
 const IMAGE_MAX_BYTES = 25 * 1024 * 1024;
 const VIDEO_MAX_BYTES = 512 * 1024 * 1024;
 const V2_CONSOLE_MAX_BYTES = 25 * 1024 * 1024;
 
-function formatUsageNumber(value: number | undefined | null) {
-  return Number(value || 0).toLocaleString("zh-CN");
+function formatUsageNumber(value: number | undefined | null, lang: Lang = "zh") {
+  return Number(value || 0).toLocaleString(localeFor(lang));
 }
 
-function formatUsageDate(value: string | undefined | null) {
-  if (!value) return "暂无调用";
+function formatUsageDate(value: string | undefined | null, lang: Lang = "zh") {
+  if (!value) return translate(lang, "暂无调用", "No calls yet");
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleString("zh-CN", { hour12: false });
+  return parsed.toLocaleString(localeFor(lang), { hour12: false });
+}
+
+function pickText(text: LocalizedText, lang: Lang) {
+  return text[lang];
+}
+
+function localeFor(lang: Lang) {
+  return lang === "zh" ? "zh-CN" : "en-US";
+}
+
+function translate(lang: Lang, zh: string, en: string) {
+  return lang === "zh" ? zh : en;
 }
 
 function App() {
@@ -85,7 +628,9 @@ function App() {
   const [authOpen, setAuthOpen] = useState(false);
   const [guestDetections, setGuestDetections] = useState(() => getGuestDetections());
   const [dark, setDark] = useState(() => getStorage()?.getItem("theme") === "dark");
+  const [lang, setLang] = useState<Lang>(() => getInitialLang());
   const deviceType = useDeviceType();
+  const text = UI_TEXT[lang];
 
   useEffect(() => {
     document.body.toggleAttribute("data-theme", dark);
@@ -93,8 +638,46 @@ function App() {
   }, [dark]);
 
   useEffect(() => {
+    document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
+    document.title = lang === "zh" ? "数字内容鉴伪平台" : "Digital Content Forensics Platform";
+    document.body.dataset.lang = lang;
+    getStorage()?.setItem("realguard_lang", lang);
+  }, [lang]);
+
+  useEffect(() => {
     document.body.dataset.device = deviceType;
   }, [deviceType]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const elements = Array.from(document.querySelectorAll<HTMLElement>(".fade-up"));
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    if (reduceMotion || !("IntersectionObserver" in window)) {
+      elements.forEach((element) => element.classList.add("visible"));
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          entry.target.classList.add("visible");
+          observer.unobserve(entry.target);
+        });
+      },
+      { threshold: 0.16, rootMargin: "0px 0px -8% 0px" }
+    );
+
+    elements.forEach((element, index) => {
+      if (!element.style.getPropertyValue("--reveal-delay")) {
+        element.style.setProperty("--reveal-delay", `${Math.min(index * 55, 360)}ms`);
+      }
+      observer.observe(element);
+    });
+
+    return () => observer.disconnect();
+  }, [page]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -150,7 +733,7 @@ function App() {
     return (
       <div className="boot-screen">
         <i className="fa fa-circle-o-notch fa-spin" />
-        <span>正在连接系统...</span>
+        <span>{text.boot}</span>
       </div>
     );
   }
@@ -163,6 +746,8 @@ function App() {
         user={user}
         dark={dark}
         setDark={setDark}
+        lang={lang}
+        setLang={setLang}
         onLogin={requireAuth}
         onLogout={handleLogout}
       />
@@ -172,17 +757,18 @@ function App() {
           <div className="container">
             <span className="trial-icon"><i className="fa fa-info-circle" /></span>
             <span className="trial-copy">
-              <strong>访客体验</strong>
-              <span>首次检测无需登录，第二次检测前请登录。</span>
+              <strong>{text.trial.title}</strong>
+              <span>{text.trial.desc}</span>
             </span>
-            <button onClick={requireAuth}>登录/注册</button>
+            <button onClick={requireAuth}>{text.trial.action}</button>
           </div>
         </div>
       )}
 
-      {page === "home" && <HomePage counters={counters} setPage={setPage} />}
+      {page === "home" && <HomePage counters={counters} setPage={setPage} lang={lang} />}
       {page === "image" && (
         <ImageDetectionPage
+          lang={lang}
           isGuest={!user}
           guestDetections={guestDetections}
           onNeedAuth={requireAuth}
@@ -191,20 +777,22 @@ function App() {
       )}
       {page === "video" && (
         <VideoDetectionPage
+          lang={lang}
           isGuest={!user}
           guestDetections={guestDetections}
           onNeedAuth={requireAuth}
           onDone={handleDetectionDone}
         />
       )}
-      {page === "retrieve" && <RetrievePage onDone={refreshMe} />}
-      {page === "history" && <HistoryPage setPage={setPage} />}
-      {page === "developer" && <DeveloperPlatformPage user={user} onNeedAuth={requireAuth} />}
+      {page === "retrieve" && <RetrievePage onDone={refreshMe} lang={lang} />}
+      {page === "history" && <HistoryPage setPage={setPage} lang={lang} />}
+      {page === "developer" && <DeveloperPlatformPage user={user} onNeedAuth={requireAuth} lang={lang} />}
 
-      <Footer />
+      <Footer lang={lang} />
 
       {authOpen && (
         <AuthModal
+          lang={lang}
           onClose={() => setAuthOpen(false)}
           onAuthed={async () => {
             await refreshMe();
@@ -222,6 +810,8 @@ function Nav({
   user,
   dark,
   setDark,
+  lang,
+  setLang,
   onLogin,
   onLogout
 }: {
@@ -230,10 +820,13 @@ function Nav({
   user: User | null;
   dark: boolean;
   setDark: (value: boolean) => void;
+  lang: Lang;
+  setLang: (value: Lang) => void;
   onLogin: () => void;
   onLogout: () => void;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const text = UI_TEXT[lang].nav;
   const go = (next: PageKey) => {
     setPage(next);
     setMobileOpen(false);
@@ -250,114 +843,131 @@ function Nav({
         <div className="nav-inner">
           <button className="nav-logo" onClick={() => go("home")}>
             <i className="fa fa-eye" />
-            <span className="logo-full">数字内容鉴伪平台</span>
-            <span className="logo-mobile">RealGuard</span>
+            <span className="logo-full">{text.brand}</span>
+            <span className="logo-mobile">{text.brandMobile}</span>
           </button>
           <nav className="nav-links">
             <button className={page === "home" ? "active" : ""} onClick={() => go("home")}>
-              首页
+              {text.home}
             </button>
             <div className="dropdown">
               <button className={`dropdown-trigger ${["image", "video", "retrieve"].includes(page) ? "active" : ""}`}>
-                <span>功能</span>
+                <span>{text.functions}</span>
                 <i className="fa fa-chevron-down" />
               </button>
               <div className="dropdown-menu">
-                <div className="dropdown-label">检测</div>
+                <div className="dropdown-label">{text.detection}</div>
                 <button className={`dropdown-item ${page === "image" ? "active-item" : ""}`} onClick={() => go("image")}>
-                  <i className="fa fa-image" /> 图像鉴伪
+                  <i className="fa fa-image" /> {text.imageDetect}
                 </button>
                 <button className={`dropdown-item ${page === "video" ? "active-item" : ""}`} onClick={() => go("video")}>
-                  <i className="fa fa-film" /> 视频鉴伪
+                  <i className="fa fa-film" /> {text.videoDetect}
                 </button>
                 <div className="dropdown-divider" />
-                <div className="dropdown-label">检索</div>
+                <div className="dropdown-label">{text.retrieve}</div>
                 <button className={`dropdown-item ${page === "retrieve" ? "active-item" : ""}`} onClick={() => go("retrieve")}>
-                  <i className="fa fa-search" /> 图像侵权检索
+                  <i className="fa fa-search" /> {text.imageRetrieve}
                 </button>
                 <button className="dropdown-item" onClick={() => go("retrieve")}>
-                  <i className="fa fa-play-circle" /> 视频侵权检索
+                  <i className="fa fa-play-circle" /> {text.videoRetrieve}
                 </button>
               </div>
             </div>
             <button className={page === "history" ? "active" : ""} onClick={() => go("history")}>
-              历史记录
+              {text.history}
             </button>
             <button className={page === "developer" ? "active" : ""} onClick={() => go("developer")}>
-              开发者平台
+              {text.developer}
             </button>
-            <button onClick={() => { window.location.href = "/v2/"; }}>V2 Agent</button>
-            <button onClick={authAction}>{user ? "退出" : "登录"}</button>
-            <button className="theme-btn" title="切换主题" onClick={() => setDark(!dark)}>
+            <button onClick={() => { window.location.href = "/v2/"; }}>{text.v2}</button>
+            <button onClick={authAction}>{user ? text.logout : text.login}</button>
+            <button
+              className="language-toggle"
+              title={text.languageAria}
+              aria-label={text.languageAria}
+              onClick={() => setLang(lang === "zh" ? "en" : "zh")}
+            >
+              {text.language}
+            </button>
+            <button className="theme-btn" title={text.theme} onClick={() => setDark(!dark)}>
               <i className={`fa ${dark ? "fa-sun-o" : "fa-moon-o"}`} />
             </button>
           </nav>
           <div className="mobile-nav-actions">
-            <button className="theme-btn" title="切换主题" onClick={() => setDark(!dark)}>
+            <button
+              className="language-toggle"
+              title={text.languageAria}
+              aria-label={text.languageAria}
+              onClick={() => setLang(lang === "zh" ? "en" : "zh")}
+            >
+              {text.language}
+            </button>
+            <button className="theme-btn" title={text.theme} onClick={() => setDark(!dark)}>
               <i className={`fa ${dark ? "fa-sun-o" : "fa-moon-o"}`} />
             </button>
-            <button className="mobile-menu-btn" aria-label="打开菜单" onClick={() => setMobileOpen(!mobileOpen)}>
+            <button className="mobile-menu-btn" aria-label={text.openMenu} onClick={() => setMobileOpen(!mobileOpen)}>
               <i className={`fa ${mobileOpen ? "fa-times" : "fa-bars"}`} />
-              <span>菜单</span>
+              <span>{text.menu}</span>
             </button>
           </div>
         </div>
         <div className={`mobile-panel ${mobileOpen ? "open" : ""}`}>
-          <button className={page === "home" ? "active" : ""} onClick={() => go("home")}><i className="fa fa-home" /> 首页</button>
-          <button className={page === "image" ? "active" : ""} onClick={() => go("image")}><i className="fa fa-image" /> 图像鉴伪</button>
-          <button className={page === "video" ? "active" : ""} onClick={() => go("video")}><i className="fa fa-film" /> 视频鉴伪</button>
-          <button className={page === "retrieve" ? "active" : ""} onClick={() => go("retrieve")}><i className="fa fa-search" /> 侵权检索</button>
-          <button onClick={() => { window.location.href = "/v2/"; }}><i className="fa fa-bolt" /> V2 Agent</button>
-          <button className={page === "history" ? "active" : ""} onClick={() => go("history")}><i className="fa fa-clock-o" /> 历史记录</button>
-          <button className={page === "developer" ? "active" : ""} onClick={() => go("developer")}><i className="fa fa-code" /> 开发者平台</button>
-          <button onClick={authAction}><i className={`fa ${user ? "fa-sign-out" : "fa-user"}`} /> {user ? "退出登录" : "登录/注册"}</button>
+          <button className={page === "home" ? "active" : ""} onClick={() => go("home")}><i className="fa fa-home" /> {text.home}</button>
+          <button className={page === "image" ? "active" : ""} onClick={() => go("image")}><i className="fa fa-image" /> {text.imageDetect}</button>
+          <button className={page === "video" ? "active" : ""} onClick={() => go("video")}><i className="fa fa-film" /> {text.videoDetect}</button>
+          <button className={page === "retrieve" ? "active" : ""} onClick={() => go("retrieve")}><i className="fa fa-search" /> {text.imageRetrieve}</button>
+          <button onClick={() => { window.location.href = "/v2/"; }}><i className="fa fa-bolt" /> {text.v2}</button>
+          <button className={page === "history" ? "active" : ""} onClick={() => go("history")}><i className="fa fa-clock-o" /> {text.history}</button>
+          <button className={page === "developer" ? "active" : ""} onClick={() => go("developer")}><i className="fa fa-code" /> {text.developer}</button>
+          <button onClick={authAction}><i className={`fa ${user ? "fa-sign-out" : "fa-user"}`} /> {user ? text.logoutFull : text.loginRegister}</button>
         </div>
       </header>
       <nav className="mobile-bottom-nav">
-        <button className={page === "home" ? "active" : ""} onClick={() => go("home")}><i className="fa fa-home" /><span>首页</span></button>
-        <button className={page === "image" ? "active" : ""} onClick={() => go("image")}><i className="fa fa-image" /><span>图像</span></button>
-        <button className={page === "video" ? "active" : ""} onClick={() => go("video")}><i className="fa fa-film" /><span>视频</span></button>
-        <button className={page === "retrieve" ? "active" : ""} onClick={() => go("retrieve")}><i className="fa fa-search" /><span>检索</span></button>
-        <button className={page === "history" ? "active" : ""} onClick={() => go("history")}><i className="fa fa-clock-o" /><span>历史</span></button>
-        <button className={page === "developer" ? "active" : ""} onClick={() => go("developer")}><i className="fa fa-code" /><span>开发</span></button>
+        <button className={page === "home" ? "active" : ""} onClick={() => go("home")}><i className="fa fa-home" /><span>{text.mobileShort.home}</span></button>
+        <button className={page === "image" ? "active" : ""} onClick={() => go("image")}><i className="fa fa-image" /><span>{text.mobileShort.image}</span></button>
+        <button className={page === "video" ? "active" : ""} onClick={() => go("video")}><i className="fa fa-film" /><span>{text.mobileShort.video}</span></button>
+        <button className={page === "retrieve" ? "active" : ""} onClick={() => go("retrieve")}><i className="fa fa-search" /><span>{text.mobileShort.retrieve}</span></button>
+        <button className={page === "history" ? "active" : ""} onClick={() => go("history")}><i className="fa fa-clock-o" /><span>{text.mobileShort.history}</span></button>
+        <button className={page === "developer" ? "active" : ""} onClick={() => go("developer")}><i className="fa fa-code" /><span>{text.mobileShort.developer}</span></button>
       </nav>
     </>
   );
 }
 
-function HomePage({ counters, setPage }: { counters: Counters; setPage: (page: PageKey) => void }) {
+function HomePage({ counters, setPage, lang }: { counters: Counters; setPage: (page: PageKey) => void; lang: Lang }) {
+  const text = UI_TEXT[lang];
   const totalDetect = counters.image_detect + counters.video_detect || 10000;
   const totalRetrieve = counters.image_retrieve + counters.video_retrieve || 5000000;
   const workflowCards = [
     {
       step: "01",
-      title: "内容审核团队",
-      desc: "上传图像或视频，直接获得真伪结论、置信度、证据字段和报告编号。",
-      action: "开始鉴伪",
+      title: text.workflow[0][0],
+      desc: text.workflow[0][1],
+      action: text.workflow[0][2],
       icon: "fa-shield",
       onClick: () => setPage("image"),
     },
     {
       step: "02",
-      title: "版权检索场景",
-      desc: "对疑似侵权素材做相似内容检索，把重复传播和素材来源拉到同一视图。",
-      action: "检索相似内容",
+      title: text.workflow[1][0],
+      desc: text.workflow[1][1],
+      action: text.workflow[1][2],
       icon: "fa-crosshairs",
       onClick: () => setPage("retrieve"),
     },
     {
       step: "03",
-      title: "外部 Agent",
-      desc: "复制公开 Skill，让 OpenClaw 或其他 agent 使用 V2/V1 API 完成鉴伪。",
-      action: "复制 Skill",
+      title: text.workflow[2][0],
+      desc: text.workflow[2][1],
+      action: text.workflow[2][2],
       icon: "fa-plug",
       onClick: () => setPage("developer"),
     },
     {
       step: "04",
-      title: "开发者接入",
-      desc: "生成个人 API Key，追踪调用次数与 Token 成本，并在线调试返回 JSON。",
-      action: "打开文档",
+      title: text.workflow[3][0],
+      desc: text.workflow[3][1],
+      action: text.workflow[3][2],
       icon: "fa-code",
       onClick: () => setPage("developer"),
     },
@@ -369,67 +979,64 @@ function HomePage({ counters, setPage }: { counters: Counters; setPage: (page: P
         <div className="container home-hero-grid">
           <div className="home-hero-copy fade-up visible">
             <div className="home-eyebrow">
-              <span>REALGUARD INTELLIGENCE</span>
-              <i>Agent-ready forensic platform</i>
+              <span>{text.home.eyebrow}</span>
+              <i>{text.home.eyebrowNote}</i>
             </div>
             <h1>
-              <span>让 AIGC 鉴伪</span>
-              <span>进入证据链</span>
+              <span>{text.home.titleLine1}</span>
+              <span>{text.home.titleLine2}</span>
             </h1>
-            <p>
-              RealGuard 面向内容审核、版权检索和外部 AI Agent，把图像/视频检测、取证证据、报告 ID、
-              API Key 与用量统计组织成一条清晰的业务流程，而不是把用户丢进零散功能入口。
-            </p>
+            <p>{text.home.desc}</p>
             <div className="home-hero-actions">
               <button className="home-primary-action" onClick={() => setPage("image")}>
-                开始检测 <i className="fa fa-arrow-right" />
+                {text.home.primaryAction} <i className="fa fa-arrow-right" />
               </button>
               <button className="home-secondary-action" onClick={() => setPage("developer")}>
-                接入开发者平台 <i className="fa fa-code" />
+                {text.home.secondaryAction} <i className="fa fa-code" />
               </button>
             </div>
-            <div className="home-trust-row" aria-label="平台能力摘要">
+            <div className="home-trust-row" aria-label={lang === "zh" ? "平台能力摘要" : "Platform capability summary"}>
               <div>
                 <strong>V1 / V2</strong>
-                <span>双链路鉴伪</span>
+                <span>{text.home.trust1}</span>
               </div>
               <div>
-                <strong>{totalDetect.toLocaleString("zh-CN")}+</strong>
-                <span>检测任务</span>
+                <strong>{totalDetect.toLocaleString(localeFor(lang))}+</strong>
+                <span>{text.home.trust2}</span>
               </div>
               <div>
-                <strong>{totalRetrieve.toLocaleString("zh-CN")}+</strong>
-                <span>检索任务</span>
+                <strong>{totalRetrieve.toLocaleString(localeFor(lang))}+</strong>
+                <span>{text.home.trust3}</span>
               </div>
             </div>
           </div>
 
-          <div className="home-briefing-board fade-up visible" aria-label="RealGuard 证据简报">
+          <div className="home-briefing-board fade-up visible" aria-label={lang === "zh" ? "RealGuard 证据简报" : "RealGuard evidence brief"}>
             <div className="briefing-label">
-              <span>Live Evidence Brief</span>
+              <span>{text.home.briefingLabel}</span>
               <b>RG-0427</b>
             </div>
             <div className="briefing-image-card primary">
-              <img src="/system/case2.webp" alt="AI 生成检测示例" />
+              <img src="/system/case2.webp" alt={lang === "zh" ? "生成图像检测示例" : "Generated image detection sample"} />
               <div>
-                <span>综合判断</span>
-                <strong>AI 生成风险 73.9%</strong>
+                <span>{text.home.overall}</span>
+                <strong>{text.home.risk}</strong>
               </div>
             </div>
             <div className="briefing-image-card secondary">
-              <img src="/system/case1.webp" alt="泳池场景检测示例" />
+              <img src="/system/case1.webp" alt={lang === "zh" ? "泳池场景检测示例" : "Poolside image detection sample"} />
               <div>
-                <span>辅助证据</span>
-                <strong>纹理与边缘异常</strong>
+                <span>{text.home.support}</span>
+                <strong>{text.home.texture}</strong>
               </div>
             </div>
             <div className="briefing-feed">
-              <div><span>ELA</span><strong>压缩误差图</strong><small>异常区域定位</small></div>
-              <div><span>Noise</span><strong>噪声残差</strong><small>生成纹理比对</small></div>
-              <div><span>Usage</span><strong>Calls + Tokens</strong><small>开发者成本审计</small></div>
+              <div><span>ELA</span><strong>{text.home.ela}</strong><small>{text.home.elaSmall}</small></div>
+              <div><span>{lang === "zh" ? "噪声" : "Noise"}</span><strong>{text.home.noise}</strong><small>{text.home.noiseSmall}</small></div>
+              <div><span>{lang === "zh" ? "用量" : "Usage"}</span><strong>{text.home.usage}</strong><small>{text.home.usageSmall}</small></div>
             </div>
             <div className="briefing-agent-card">
-              <span>Agent handoff</span>
+              <span>{text.home.handoff}</span>
               <code>Use $realguard-forensics · POST /v2-api/detect</code>
             </div>
           </div>
@@ -439,9 +1046,9 @@ function HomePage({ counters, setPage }: { counters: Counters; setPage: (page: P
       <section className="section home-workflow-section">
         <div className="container">
           <div className="home-section-heading">
-            <span>Start from task</span>
-            <h2>四条路径，直接进入你要完成的工作。</h2>
-            <p>审核人员从检测开始，版权团队从检索开始，外部 Agent 从 Skill 开始，开发者从 API Key 和文档开始。</p>
+            <span>{text.home.workflowKicker}</span>
+            <h2>{text.home.workflowTitle}</h2>
+            <p>{text.home.workflowDesc}</p>
           </div>
           <div className="home-workflow-grid">
             {workflowCards.map((item) => (
@@ -457,31 +1064,33 @@ function HomePage({ counters, setPage }: { counters: Counters; setPage: (page: P
         </div>
       </section>
 
+      <AgentSkillRecommendations lang={lang} />
+
       <section className="section skill-entry-section">
         <div className="container">
-          <SkillEntryPanel />
+          <SkillEntryPanel lang={lang} />
         </div>
       </section>
 
       <section className="section section-alt home-capability-section">
         <div className="container">
-          <SectionHeader title="核心能力" desc="检测、检索、报告与开发者接入保持独立，但在首页以同一条证据链呈现。" />
+          <SectionHeader title={text.home.capabilitiesTitle} desc={text.home.capabilitiesDesc} />
           <div className="features-grid">
-            <FeatureCard accent="var(--primary)" icon="fa-image" title="图像鉴伪" desc="基于深度学习的图像真伪识别，支持多种场景的AIGC图像检测" onClick={() => setPage("image")} />
-            <FeatureCard accent="var(--warning)" icon="fa-film" title="视频鉴伪" desc="针对视频内容的 AI 生成检测与篡改识别，帧级分析定位可疑片段。" onClick={() => setPage("video")} />
-            <FeatureCard accent="var(--accent)" icon="fa-search" title="图像侵权检索" desc="检索疑似侵权的图像，在图像数据库中快速定位可疑图像内容。" onClick={() => setPage("retrieve")} />
-            <FeatureCard accent="var(--primary-light)" icon="fa-play-circle" title="视频侵权检索" desc="检索疑似侵权的视频，在数据库中快速定位相似可疑视频内容。" onClick={() => setPage("retrieve")} />
-            <FeatureCard accent="var(--primary-dark)" icon="fa-bolt" title="V2 鉴伪 Agent" desc="独立新版系统，使用 qwen3-vl-flash 融合 ELA、噪声残差等取证证据。" onClick={() => { window.location.href = "/v2/"; }} />
+            <FeatureCard accent="var(--primary)" icon="fa-image" title={text.features[0][0]} desc={text.features[0][1]} action={lang === "zh" ? "进入功能" : "Open tool"} onClick={() => setPage("image")} />
+            <FeatureCard accent="var(--warning)" icon="fa-film" title={text.features[1][0]} desc={text.features[1][1]} action={lang === "zh" ? "进入功能" : "Open tool"} onClick={() => setPage("video")} />
+            <FeatureCard accent="var(--accent)" icon="fa-search" title={text.features[2][0]} desc={text.features[2][1]} action={lang === "zh" ? "进入功能" : "Open tool"} onClick={() => setPage("retrieve")} />
+            <FeatureCard accent="var(--primary-light)" icon="fa-play-circle" title={text.features[3][0]} desc={text.features[3][1]} action={lang === "zh" ? "进入功能" : "Open tool"} onClick={() => setPage("retrieve")} />
+            <FeatureCard accent="var(--primary-dark)" icon="fa-bolt" title={text.features[4][0]} desc={text.features[4][1]} action={lang === "zh" ? "进入新版" : "Open V2"} onClick={() => { window.location.href = "/v2/"; }} />
           </div>
         </div>
       </section>
 
       <section className="section section-default">
         <div className="container">
-          <SectionHeader title="结果不是一句话，而是一组可复核证据" desc="示例卡保留判断比例，但首页更强调报告、证据字段和后续追踪。" />
+          <SectionHeader title={text.home.evidenceTitle} desc={text.home.evidenceDesc} />
           <div className="examples-grid">
-            <ExampleCard image="/system/case1.webp" title="案例一：泳池场景人物图像" desc="综合判断为 AI 生成（53.8%），点击查看检测结果。" real={46.2} fake={53.8} />
-            <ExampleCard image="/system/case2.webp" title="案例二：几何色块人像图像" desc="综合判断为 AI 生成（73.9%），点击查看检测结果。" real={26.1} fake={73.9} />
+            <ExampleCard image="/system/case1.webp" title={text.examples[0][0]} desc={text.examples[0][1]} real={46.2} fake={53.8} lang={lang} />
+            <ExampleCard image="/system/case2.webp" title={text.examples[1][0]} desc={text.examples[1][1]} real={26.1} fake={73.9} lang={lang} />
           </div>
         </div>
       </section>
@@ -498,7 +1107,48 @@ function SectionHeader({ title, desc }: { title: string; desc: string }) {
   );
 }
 
-function FeatureCard({ accent, icon, title, desc, onClick }: { accent: string; icon: string; title: string; desc: string; onClick: () => void }) {
+function AgentSkillRecommendations({ lang }: { lang: Lang }) {
+  const text = UI_TEXT[lang].skillsTop;
+  return (
+    <section className="section agent-skills-section">
+      <div className="container">
+        <div className="agent-skills-head fade-up visible">
+          <div>
+            <span>{text.kicker}</span>
+            <h2>{text.title}</h2>
+          </div>
+          <p>{text.desc}</p>
+        </div>
+        <div className="agent-skills-grid">
+          {FRONTEND_AGENT_SKILLS.map((skill) => (
+            <a
+              className="agent-skill-card fade-up visible"
+              href={skill.href}
+              target="_blank"
+              rel="noreferrer"
+              key={skill.name}
+              style={{ "--skill-rank": `"${skill.rank}"` } as React.CSSProperties}
+            >
+              <div className="agent-skill-rank">{skill.rank}</div>
+              <div className="agent-skill-main">
+                <div className="agent-skill-meta">
+                  <span>{pickText(skill.category, lang)}</span>
+                  <small>{text.source}: {skill.source}</small>
+                </div>
+                <h3>{skill.name}</h3>
+                <p>{pickText(skill.desc, lang)}</p>
+                <strong>{text.bestFor}: {pickText(skill.fit, lang)}</strong>
+              </div>
+              <span className="agent-skill-open">{text.open} <i className="fa fa-arrow-up" /></span>
+            </a>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function FeatureCard({ accent, icon, title, desc, action, onClick }: { accent: string; icon: string; title: string; desc: string; action: string; onClick: () => void }) {
   return (
     <button className="feature-card fade-up visible" style={{ "--card-accent": accent } as React.CSSProperties} onClick={onClick}>
       <div className="feature-icon" style={{ background: colorBg(accent), color: accent }}>
@@ -507,7 +1157,7 @@ function FeatureCard({ accent, icon, title, desc, onClick }: { accent: string; i
       <h3>{title}</h3>
       <p>{desc}</p>
       <span className="feature-link">
-        进入功能 <i className="fa fa-arrow-right" />
+        {action} <i className="fa fa-arrow-right" />
       </span>
     </button>
   );
@@ -520,6 +1170,7 @@ function CopySnippetCard({
   text,
   copiedId,
   onCopy,
+  lang = "zh",
   variant = "default",
 }: {
   id: string;
@@ -528,16 +1179,30 @@ function CopySnippetCard({
   text: string;
   copiedId: string;
   onCopy: (id: string, text: string) => void;
+  lang?: Lang;
   variant?: "default" | "primary" | "compact";
 }) {
   const copied = copiedId === id;
+  const copyText = UI_TEXT[lang].copy;
+  const handleCopy = () => onCopy(id, text);
   return (
-    <article className={`copy-snippet-card copy-snippet-card-${variant} ${copied ? "copied" : ""}`}>
+    <article
+      className={`copy-snippet-card copy-snippet-card-${variant} ${copied ? "copied" : ""}`}
+      role="button"
+      tabIndex={0}
+      onClick={handleCopy}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        handleCopy();
+      }}
+      aria-label={`${copyText.aria}: ${title}`}
+    >
       <div className="copy-snippet-head">
-        <span className="copy-snippet-status">{copied ? "已复制" : "Ready to copy"}</span>
-        <button type="button" onClick={() => onCopy(id, text)} aria-label={`复制 ${title}`}>
-          {copied ? "已复制" : "复制"}
-        </button>
+        <span className="copy-snippet-status">{copied ? copyText.copied : copyText.ready}</span>
+        <span className="copy-snippet-action" aria-hidden="true">
+          {copied ? copyText.copied : copyText.copy}
+        </span>
       </div>
       <strong>{title}</strong>
       <p>{desc}</p>
@@ -546,76 +1211,91 @@ function CopySnippetCard({
   );
 }
 
-async function copyTextToClipboard(text: string) {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
+async function copyTextToClipboard(text: string, promptLabel = "复制以下内容") {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall through to the selection-based copy path for insecure contexts or denied clipboard permissions.
   }
-  window.prompt("复制以下内容", text);
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  try {
+    if (document.execCommand("copy")) {
+      return true;
+    }
+  } catch {
+    // Prompt is the final fallback when both browser copy paths fail.
+  } finally {
+    document.body.removeChild(textarea);
+  }
+  window.prompt(promptLabel, text);
+  return false;
 }
 
-function SkillEntryPanel() {
+function SkillEntryPanel({ lang }: { lang: Lang }) {
   const [copiedId, setCopiedId] = useState("");
+  const text = UI_TEXT[lang];
 
   async function copySkill(id: string, text: string) {
-    await copyTextToClipboard(text);
-    setCopiedId(id);
-    window.setTimeout(() => setCopiedId(""), 1800);
+    try {
+      await copyTextToClipboard(text, UI_TEXT[lang].copy.prompt);
+    } finally {
+      setCopiedId(id);
+      window.setTimeout(() => setCopiedId(""), 2400);
+    }
   }
 
   return (
     <div className="skill-entry-panel fade-up visible">
       <div className="skill-entry-main">
         <div className="skill-entry-badges">
-          <span><i className="fa fa-plug" /> SKILL 已介入</span>
-          <span>OpenClaw / AI Agent 可调用</span>
+          <span><i className="fa fa-plug" /> {text.skillPanel.badge1}</span>
+          <span>{text.skillPanel.badge2}</span>
         </div>
-        <h3>把 RealGuard 变成外部 Agent 可直接调用的鉴伪工具</h3>
-        <p>
-          外部 agent 不需要知道你的服务器目录，也不需要猜接口字段。复制下面的交接语后，它会先读取公网 Skill，
-          再按 V2 多模态或 V1 图像模型输出可审计结论。
-        </p>
+        <h3>{text.skillPanel.title}</h3>
+        <p>{text.skillPanel.desc}</p>
         <details className="skill-reason">
-          <summary>为什么必须公开 Skill</summary>
+          <summary>{text.skillPanel.reasonTitle}</summary>
           <p>
-            OpenClaw 等外部 agent 访问不到本地仓库路径，也不知道报告字段、解释边界和鉴伪输出规范。
-            公开 <code>{REALGUARD_SKILL_URL}</code> 后，任何 agent 都能用同一份说明完成调用，并把调用次数与 Token 用量纳入审计。
+            {text.skillPanel.reason} <code>{REALGUARD_SKILL_URL}</code>
           </p>
         </details>
-        <div className="skill-protocol-rail" aria-label="Skill 接入流程">
-          <div>
-            <span>01 PUBLIC</span>
-            <strong>读取公网 Skill</strong>
-            <small>不依赖本地路径，外部 Agent 可访问</small>
-          </div>
-          <div>
-            <span>02 V2 / V1</span>
-            <strong>选择模型链路</strong>
-            <small>V2 默认，V1 兼容旧图像模型</small>
-          </div>
-          <div>
-            <span>03 AUDIT</span>
-            <strong>返回证据与用量</strong>
-            <small>结论、报告、调用次数、Token 统计</small>
-          </div>
+        <div className="skill-protocol-rail" aria-label={lang === "zh" ? "技能接入流程" : "Skill integration flow"}>
+          {text.skillPanel.protocol.map((item) => (
+            <div key={item[0]}>
+              <span>{item[0]}</span>
+              <strong>{item[1]}</strong>
+              <small>{item[2]}</small>
+            </div>
+          ))}
         </div>
       </div>
       <div className="skill-entry-code">
         <div className="skill-terminal-label">
-          <span>Recommended handoff</span>
-          <strong>V2 first · click copy</strong>
+          <span>{text.skillPanel.terminalLabel}</span>
+          <strong>{text.skillPanel.terminalStrong}</strong>
         </div>
-        <CopySnippetCard id="skill-v2" title="复制 V2 Skill 调用" desc="优先推荐：多模态检测、报告、tokenUsage 和模型版本更完整。" text={REALGUARD_SKILL_HANDOFF_V2} copiedId={copiedId} onCopy={copySkill} variant="primary" />
+        <CopySnippetCard id="skill-v2" title={text.skillPanel.copyV2Title} desc={text.skillPanel.copyV2Desc} text={REALGUARD_SKILL_HANDOFF_V2} copiedId={copiedId} onCopy={copySkill} lang={lang} variant="primary" />
         <div className="skill-secondary-copy-grid">
-          <CopySnippetCard id="skill-url" title="公开 Skill URL" desc="给别的 agent 的第一步：先读取公共说明。" text={REALGUARD_SKILL_URL} copiedId={copiedId} onCopy={copySkill} variant="compact" />
-          <CopySnippetCard id="skill-v1" title="复制 V1 Skill 调用" desc="兼容 RealGuard V1 图像模型，并统计调用次数。" text={REALGUARD_SKILL_HANDOFF_V1} copiedId={copiedId} onCopy={copySkill} variant="compact" />
+          <CopySnippetCard id="skill-url" title={text.skillPanel.copyUrlTitle} desc={text.skillPanel.copyUrlDesc} text={REALGUARD_SKILL_URL} copiedId={copiedId} onCopy={copySkill} lang={lang} variant="compact" />
+          <CopySnippetCard id="skill-v1" title={text.skillPanel.copyV1Title} desc={text.skillPanel.copyV1Desc} text={REALGUARD_SKILL_HANDOFF_V1} copiedId={copiedId} onCopy={copySkill} lang={lang} variant="compact" />
         </div>
         <div className="skill-cta-row">
           <button onClick={() => { window.location.href = "/v2/"; }}>
-            进入 V2 Agent <i className="fa fa-arrow-right" />
+            {text.skillPanel.openV2} <i className="fa fa-arrow-right" />
           </button>
           <button onClick={() => { window.location.href = "/?page=developer"; }}>
-            打开开发者平台 <i className="fa fa-code" />
+            {text.skillPanel.openDev} <i className="fa fa-code" />
           </button>
         </div>
       </div>
@@ -623,10 +1303,10 @@ function SkillEntryPanel() {
   );
 }
 
-function DeveloperPlatformPage({ user, onNeedAuth }: { user: User | null; onNeedAuth: () => void }) {
+function DeveloperPlatformPage({ user, onNeedAuth, lang }: { user: User | null; onNeedAuth: () => void; lang: Lang }) {
   const [apiKey, setApiKey] = useState("");
   const [keys, setKeys] = useState<DeveloperApiKey[]>([]);
-  const [keyName, setKeyName] = useState("默认生产 Key");
+  const [keyName, setKeyName] = useState(lang === "zh" ? "默认生产 Key" : "Default production key");
   const [generatedKey, setGeneratedKey] = useState("");
   const [keyBusy, setKeyBusy] = useState(false);
   const [keyStatus, setKeyStatus] = useState<Status>(null);
@@ -642,6 +1322,8 @@ function DeveloperPlatformPage({ user, onNeedAuth }: { user: User | null; onNeed
   const [consoleStatus, setConsoleStatus] = useState<Status>(null);
   const [consoleResult, setConsoleResult] = useState<Record<string, unknown> | null>(null);
   const [consoleMeta, setConsoleMeta] = useState<{ endpoint: string; elapsedMs: number; at: string } | null>(null);
+  const text = UI_TEXT[lang].developer;
+  const tr = (zh: string, en: string) => translate(lang, zh, en);
   useEffect(() => {
     if (!user) {
       setKeys([]);
@@ -690,13 +1372,13 @@ function DeveloperPlatformPage({ user, onNeedAuth }: { user: User | null; onNeed
     }
     setKeyBusy(true);
     setGeneratedKey("");
-    setKeyStatus({ tone: "info", text: "正在生成 API Key..." });
+    setKeyStatus({ tone: "info", text: lang === "zh" ? "正在生成密钥..." : "Generating API key..." });
     try {
       const data = await createDeveloperApiKey(keyName);
       setGeneratedKey(data.apiKey);
       setApiKey(data.apiKey);
       setKeys((current) => [data.key, ...current.filter((item) => item.id !== data.key.id)]);
-      setKeyStatus({ tone: "ok", text: "API Key 已生成。完整 key 只显示一次，请立即复制保存。" });
+      setKeyStatus({ tone: "ok", text: lang === "zh" ? "密钥已生成。完整密钥只显示一次，请立即复制保存。" : "API key generated. The full key is shown only once. Copy it now." });
     } catch (error) {
       setKeyStatus({ tone: "error", text: errorMessage(error) });
     } finally {
@@ -706,11 +1388,11 @@ function DeveloperPlatformPage({ user, onNeedAuth }: { user: User | null; onNeed
 
   async function handleRevokeKey(keyId: number) {
     setKeyBusy(true);
-    setKeyStatus({ tone: "info", text: "正在撤销 API Key..." });
+    setKeyStatus({ tone: "info", text: lang === "zh" ? "正在撤销密钥..." : "Revoking API key..." });
     try {
       await revokeDeveloperApiKey(keyId);
       await loadDeveloperKeys();
-      setKeyStatus({ tone: "ok", text: "API Key 已撤销，后续请求会被拒绝。" });
+      setKeyStatus({ tone: "ok", text: lang === "zh" ? "密钥已撤销，后续请求会被拒绝。" : "API key revoked. Future requests will be rejected." });
     } catch (error) {
       setKeyStatus({ tone: "error", text: errorMessage(error) });
     } finally {
@@ -719,91 +1401,94 @@ function DeveloperPlatformPage({ user, onNeedAuth }: { user: User | null; onNeed
   }
 
   async function copyDeveloperText(id: string, text: string) {
-    await copyTextToClipboard(text);
-    setCopiedDocId(id);
-    window.setTimeout(() => setCopiedDocId(""), 1800);
+    try {
+      await copyTextToClipboard(text, UI_TEXT[lang].copy.prompt);
+    } finally {
+      setCopiedDocId(id);
+      window.setTimeout(() => setCopiedDocId(""), 2400);
+    }
   }
   const docsNavGroups = [
     {
-      title: "开始使用",
+      title: text.navGroups[0],
       links: [
-        ["#overview", "总览"],
-        ["#quickstart", "快速开始"],
-        ["#skill-copy", "复制 Skill"],
-        ["#auth", "认证"],
-        ["#api-keys", "API Keys"],
-        ["#token-usage", "调用统计"],
+        ["#overview", text.navLinks.overview],
+        ["#quickstart", text.navLinks.quickstart],
+        ["#skill-copy", text.navLinks.skillCopy],
+        ["#auth", text.navLinks.auth],
+        ["#api-keys", text.navLinks.apiKeys],
+        ["#token-usage", text.navLinks.tokenUsage],
       ],
     },
     {
-      title: "API Reference",
+      title: text.navGroups[1],
       links: [
-        ["#reference", "接口总览"],
-        ["#detect", "Detect"],
-        ["#v1-detect", "V1 Detect"],
-        ["#forensics", "Forensics"],
-        ["#provenance", "Provenance"],
-        ["#reports", "Reports"],
-        ["#errors", "错误码"],
+        ["#reference", text.navLinks.reference],
+        ["#detect", text.navLinks.detect],
+        ["#v1-detect", text.navLinks.v1Detect],
+        ["#forensics", text.navLinks.forensics],
+        ["#provenance", text.navLinks.provenance],
+        ["#reports", text.navLinks.reports],
+        ["#errors", text.navLinks.errors],
       ],
     },
     {
-      title: "开发工具",
+      title: text.navGroups[2],
       links: [
-        ["#examples", "代码示例"],
-        ["#console", "在线测试台"],
-        ["#agent-fields", "Agent 字段"],
+        ["#examples", text.navLinks.examples],
+        ["#console", text.navLinks.console],
+        ["#agent-fields", text.navLinks.agentFields],
       ],
     },
     {
-      title: "资源",
+      title: text.navGroups[3],
       links: [
-        ["#enterprise", "企业接入"],
-        ["#resources", "公开资源"],
+        ["#enterprise", text.navLinks.enterprise],
+        ["#resources", text.navLinks.resources],
       ],
     },
   ];
   const endpoints = [
-    { method: "GET", path: "/health", title: "Health", desc: "公开服务状态、能力摘要、上传限制和访问保护状态。", anchor: "#health" },
-    { method: "GET", path: "/admin/health", title: "Admin Health", desc: "受保护的详细诊断接口，返回模型、校准、存储等内部状态。", anchor: "#admin-health" },
-    { method: "POST", path: "/detect", title: "V2 Detect", desc: "V2 多模态鉴伪接口。multipart 上传 file，可选 fileType。", anchor: "#detect" },
-    { method: "POST", path: "/api/developer/v1/detect", title: "V1 Detect", desc: "V1 图像模型接口。multipart 上传 file，记录调用次数。", anchor: "#v1-detect" },
-    { method: "POST", path: "/forensics", title: "Forensics", desc: "图像可解释性取证分析，返回 ELA、噪声、频域等证据。", anchor: "#forensics" },
-    { method: "POST", path: "/provenance", title: "Provenance", desc: "图像 C2PA / SynthID / 内容凭证验证。", anchor: "#provenance" },
-    { method: "GET", path: "/report/{reportId}/download", title: "Report Download", desc: "下载 HTML 或结构化报告，用于审计归档。", anchor: "#reports" },
+    { method: "GET", path: "/health", title: "Health", desc: tr("公开服务状态、能力摘要、上传限制和访问保护状态。", "Public service health, capability summary, upload limits, and access protection status."), anchor: "#health" },
+    { method: "GET", path: "/admin/health", title: "Admin Health", desc: tr("受保护的详细诊断接口，返回模型、校准、存储等内部状态。", "Protected diagnostics for model, calibration, storage, and internal service status."), anchor: "#admin-health" },
+    { method: "POST", path: "/detect", title: "V2 Detect", desc: tr("V2 多模态鉴伪接口。multipart 上传 file，可选 fileType。", "V2 multimodal forensics endpoint. Upload file with multipart/form-data and optional fileType."), anchor: "#detect" },
+    { method: "POST", path: "/api/developer/v1/detect", title: "V1 Detect", desc: tr("V1 图像模型接口。multipart 上传 file，记录调用次数。", "V1 image model endpoint. Upload file with multipart/form-data; calls are counted."), anchor: "#v1-detect" },
+    { method: "POST", path: "/forensics", title: "Forensics", desc: tr("图像可解释性取证分析，返回 ELA、噪声、频域等证据。", "Image explainability forensics returning ELA, noise, frequency-domain, and related evidence."), anchor: "#forensics" },
+    { method: "POST", path: "/provenance", title: "Provenance", desc: tr("图像 C2PA / SynthID / 内容凭证验证。", "C2PA, SynthID, visible watermark, and content-credential verification."), anchor: "#provenance" },
+    { method: "GET", path: "/report/{reportId}/download", title: "Report Download", desc: tr("下载 HTML 或结构化报告，用于审计归档。", "Download HTML or structured reports for audit archives."), anchor: "#reports" },
   ];
   const requestParams = [
-    ["file", "File", "required", "待检测文件。支持图片、视频、音频、文档；用 multipart/form-data 上传。"],
-    ["fileType", "string", "optional", "文件类型提示：image、video、audio、document。未传时服务会尝试自动推断。"],
+    ["file", "File", tr("必填", "required"), tr("待检测文件。支持图片、视频、音频、文档；用 multipart/form-data 上传。", "File to analyze. Supports images, videos, audio, and documents via multipart/form-data.")],
+    ["fileType", "string", tr("选填", "optional"), tr("文件类型提示：image、video、audio、document。未传时服务会尝试自动推断。", "File type hint: image, video, audio, or document. The service infers it when omitted.")],
   ];
   const reportPathParams = [
-    ["reportId", "string", "required", "检测结果返回的报告编号，例如 RJ-RPT-20260602-0001。"],
+    ["reportId", "string", tr("必填", "required"), tr("检测结果返回的报告编号，例如 RJ-RPT-20260602-0001。", "Report ID returned by detection, for example RJ-RPT-20260602-0001.")],
   ];
   const fields = [
-    ["agentSummary", "给 AI agent 优先使用的结构化摘要。"],
-    ["verdict", "鉴伪结论，例如 real / suspected / likely_ai_generated / unknown。"],
-    ["confidence", "0-1 置信度，展示时可换算百分比。"],
-    ["modelVersion", "模型或规则链路版本。"],
-    ["cacheVersion", "分析缓存版本，用于判断结果是否来自同一分析逻辑。"],
-    ["tokenUsage", "本次模型调用的 prompt / completion / total token；缓存命中时为 0。"],
-    ["source", "vlm / mock / heuristic 等，决定结果可信度说明。"],
-    ["reportId", "可用于下载和归档报告的编号。"],
-    ["synthid / visibleWatermark", "水印、SynthID、可见水印等附加证据。"],
+    ["agentSummary", tr("给智能体优先使用的结构化摘要。", "Structured summary intended for agent output.")],
+    ["verdict", tr("鉴伪结论，例如 real / suspected / likely_ai_generated / unknown。", "Forensic verdict, for example real, suspected, likely_ai_generated, or unknown.")],
+    ["confidence", tr("0-1 置信度，展示时可换算百分比。", "Confidence from 0 to 1; convert to a percentage for display.")],
+    ["modelVersion", tr("模型或规则链路版本。", "Model or rule-chain version.")],
+    ["cacheVersion", tr("分析缓存版本，用于判断结果是否来自同一分析逻辑。", "Analysis cache version, useful for comparing whether results used the same logic.")],
+    ["tokenUsage", tr("本次模型调用的 prompt / completion / total token；缓存命中时为 0。", "Prompt, completion, and total tokens for this model call; zero on cache hits.")],
+    ["source", tr("vlm / mock / heuristic 等，决定结果可信度说明。", "Source such as vlm, mock, or heuristic, which determines how limitations should be explained.")],
+    ["reportId", tr("可用于下载和归档报告的编号。", "ID used to download and archive the report.")],
+    ["synthid / visibleWatermark", tr("水印、SynthID、可见水印等附加证据。", "Additional evidence such as watermark, SynthID, or visible watermark signals.")],
   ];
   const v1Fields = [
-    ["result.final_label", "V1 图像模型输出的最终标签，例如 AI生成图像 / 真实图像。"],
-    ["result.probability", "V1 置信概率，用于排序和阈值判断。"],
-    ["result.confidence", "V1 置信等级。"],
-    ["result.visual_issues", "图像可疑区域、视觉问题或辅助证据。"],
-    ["result.itemid", "V1 站内报告和历史记录使用的编号。"],
+    ["result.final_label", tr("V1 图像模型输出的最终标签，例如 AI生成图像 / 真实图像。", "Final V1 image-model label, for example AI-generated image or real image.")],
+    ["result.probability", tr("V1 置信概率，用于排序和阈值判断。", "V1 confidence probability for ranking and threshold decisions.")],
+    ["result.confidence", tr("V1 置信等级。", "V1 confidence level.")],
+    ["result.visual_issues", tr("图像可疑区域、视觉问题或辅助证据。", "Suspicious regions, visual issues, or supporting evidence.")],
+    ["result.itemid", tr("V1 站内报告和历史记录使用的编号。", "V1 item ID used for site reports and history records.")],
   ];
   const errorRows = [
-    ["400", "Bad Request", "缺少 file、fileType 不合法或 multipart 格式错误。"],
-    ["401", "Unauthorized", "需要 API Key 的接口未传 Key、Key 无效或已撤销。"],
-    ["403", "Forbidden", "API Key 无权访问该报告或资源。"],
-    ["413", "Payload Too Large", "文件超过服务允许大小，需要压缩或走异步/分片流程。"],
-    ["422", "Unprocessable Entity", "文件格式无法识别或不支持当前检测链路。"],
-    ["500", "Internal Server Error", "服务端分析失败；记录 taskId 并重试或转人工处理。"],
+    ["400", "Bad Request", tr("缺少 file、fileType 不合法或 multipart 格式错误。", "Missing file, invalid fileType, or malformed multipart body.")],
+    ["401", "Unauthorized", tr("需要 API Key 的接口未传 Key、Key 无效或已撤销。", "The endpoint requires an API key, or the key is invalid or revoked.")],
+    ["403", "Forbidden", tr("API Key 无权访问该报告或资源。", "The API key is not allowed to access this report or resource.")],
+    ["413", "Payload Too Large", tr("文件超过服务允许大小，需要压缩或走异步/分片流程。", "The file exceeds the service limit. Compress it or use an async/chunked flow.")],
+    ["422", "Unprocessable Entity", tr("文件格式无法识别或不支持当前检测链路。", "The file format cannot be recognized or is unsupported by the selected pipeline.")],
+    ["500", "Internal Server Error", tr("服务端分析失败；记录 taskId 并重试或转人工处理。", "Server-side analysis failed. Record the taskId, then retry or escalate to manual review.")],
   ];
   const jsExample = `const form = new FormData();
 form.append("file", fileInput.files[0]);
@@ -844,14 +1529,14 @@ print(r.json().get("agentSummary") or r.json())`;
   const runHealthCheck = async () => {
     const started = performance.now();
     setConsoleBusy(true);
-    setConsoleStatus({ tone: "info", text: "正在检查 V2 API 状态..." });
+    setConsoleStatus({ tone: "info", text: tr("正在检查 V2 API 状态...", "Checking V2 API status...") });
     try {
       const result = await getV2Health(apiKey);
       setConsoleResult(result as Record<string, unknown>);
-      setConsoleMeta({ endpoint: "GET /health", elapsedMs: Math.round(performance.now() - started), at: new Date().toLocaleString() });
-      setConsoleStatus({ tone: "ok", text: "健康检查成功。" });
+      setConsoleMeta({ endpoint: "GET /health", elapsedMs: Math.round(performance.now() - started), at: new Date().toLocaleString(localeFor(lang), { hour12: false }) });
+      setConsoleStatus({ tone: "ok", text: tr("健康检查成功。", "Health check succeeded.") });
     } catch (error) {
-      setConsoleStatus({ tone: "error", text: error instanceof Error ? error.message : "健康检查失败" });
+      setConsoleStatus({ tone: "error", text: error instanceof Error ? error.message : tr("健康检查失败", "Health check failed") });
     } finally {
       setConsoleBusy(false);
     }
@@ -859,25 +1544,25 @@ print(r.json().get("agentSummary") or r.json())`;
 
   const runDetectTest = async () => {
     if (!testFile) {
-      setConsoleStatus({ tone: "error", text: "请先选择要测试的文件。" });
+      setConsoleStatus({ tone: "error", text: tr("请先选择要测试的文件。", "Select a file to test first.") });
       return;
     }
-    const message = validateFile(testFile, { kind: "测试文件", maxBytes: V2_CONSOLE_MAX_BYTES });
+    const message = validateFile(testFile, { kind: tr("测试文件", "test file"), maxBytes: V2_CONSOLE_MAX_BYTES, lang });
     if (message) {
       setConsoleStatus({ tone: "error", text: message });
       return;
     }
     const started = performance.now();
     setConsoleBusy(true);
-    setConsoleStatus({ tone: "info", text: "正在上传文件并调用鉴伪 API..." });
+    setConsoleStatus({ tone: "info", text: tr("正在上传文件并调用鉴伪 API...", "Uploading file and calling the forensics API...") });
     try {
       const result = await runV2Detect({ file: testFile, fileType, token: apiKey });
       setConsoleResult(result as Record<string, unknown>);
-      setConsoleMeta({ endpoint: "POST /detect", elapsedMs: Math.round(performance.now() - started), at: new Date().toLocaleString() });
-      setConsoleStatus({ tone: "ok", text: `检测完成：${result.verdict || "已返回结果"}` });
+      setConsoleMeta({ endpoint: "POST /detect", elapsedMs: Math.round(performance.now() - started), at: new Date().toLocaleString(localeFor(lang), { hour12: false }) });
+      setConsoleStatus({ tone: "ok", text: tr(`检测完成：${result.verdict || "已返回结果"}`, `Detection complete: ${result.verdict || "result returned"}`) });
       void loadDeveloperUsage(usageDays);
     } catch (error) {
-      setConsoleStatus({ tone: "error", text: error instanceof Error ? error.message : "检测失败" });
+      setConsoleStatus({ tone: "error", text: error instanceof Error ? error.message : tr("检测失败", "Detection failed") });
     } finally {
       setConsoleBusy(false);
     }
@@ -900,37 +1585,37 @@ print(r.json().get("agentSummary") or r.json())`;
   const skillOptions = [
     {
       id: "v2" as DeveloperSkillMode,
-      title: "V2 多模态 Skill 调用",
-      desc: "推荐默认使用：返回 agentSummary、报告 ID、模型版本和 tokenUsage。",
+      title: lang === "zh" ? "V2 多模态技能调用" : "V2 multimodal skill handoff",
+      desc: lang === "zh" ? "推荐默认使用：返回摘要、报告编号、模型版本和用量统计。" : "Recommended by default: returns summary, report ID, model version, and usage metrics.",
       endpoint: "POST /v2-api/detect",
       text: REALGUARD_SKILL_HANDOFF_V2,
     },
     {
       id: "v1" as DeveloperSkillMode,
-      title: "V1 图像模型 Skill 调用",
-      desc: "用于兼容旧图像鉴伪链路，统计调用次数，响应使用 result.* 字段。",
+      title: lang === "zh" ? "V1 图像模型技能调用" : "V1 image-model skill handoff",
+      desc: lang === "zh" ? "用于兼容旧图像鉴伪链路，统计调用次数，响应使用 result.* 字段。" : "For the legacy image forensics pipeline with call-count tracking and result.* response fields.",
       endpoint: "POST /api/developer/v1/detect",
       text: REALGUARD_SKILL_HANDOFF_V1,
     },
   ];
   const activeSkill = skillOptions.find((item) => item.id === skillMode) || skillOptions[0];
   const developerActionCards = [
-    { href: "#api-keys", icon: "fa-key", title: "生成 API Key", desc: "注册登录后生成 rg_sk_，绑定个人账号并可随时撤销。" },
-    { href: "#skill-copy", icon: "fa-copy", title: "复制 Skills 接入", desc: "一键复制 V2 或 V1 handoff，让外部 agent 直接使用。" },
-    { href: "#token-usage", icon: "fa-line-chart", title: "查看调用统计", desc: "同时统计 V1/V2 调用次数、Token、缓存命中和端点分布。" },
-    { href: "#console", icon: "fa-terminal", title: "在线测试 API", desc: "直接粘贴 Key、上传文件并查看返回 JSON。" },
+    { href: "#api-keys", icon: "fa-key", title: text.workflow[0][0], desc: text.workflow[0][1] },
+    { href: "#skill-copy", icon: "fa-copy", title: text.workflow[1][0], desc: text.workflow[1][1] },
+    { href: "#token-usage", icon: "fa-line-chart", title: text.workflow[2][0], desc: text.workflow[2][1] },
+    { href: "#console", icon: "fa-terminal", title: text.workflow[3][0], desc: text.workflow[3][1] },
   ];
 
   return (
     <main className="main developer-docs-page">
       <div className="container developer-platform docs-platform">
         <div className="docs-shell">
-          <aside className="docs-sidebar" aria-label="开发者文档目录">
+          <aside className="docs-sidebar" aria-label={tr("开发者文档目录", "Developer documentation navigation")}>
             <a className="docs-brand" href="#overview">
               <span><i className="fa fa-shield" /></span>
               <div>
                 <strong>RealGuard API</strong>
-                <small>Developer Docs</small>
+                <small>{text.docsBrandSmall}</small>
               </div>
             </a>
             {docsNavGroups.map((group) => (
@@ -953,25 +1638,18 @@ print(r.json().get("agentSummary") or r.json())`;
             <section id="overview" className="docs-section docs-hero-section developer-workbench">
               <div className="docs-hero-copy developer-workbench-copy">
                 <div className="developer-badges">
-                  <span>Public API</span>
-                  <span>Agent Skill</span>
-                  <span>V1 / V2</span>
-                  <span>Multipart Upload</span>
+                  {text.badges.map((badge) => <span key={badge}>{badge}</span>)}
                 </div>
-                <h1>RealGuard Developer Platform</h1>
-                <p>
-                  面向 OpenClaw、外部 AI Agent 和业务系统的统一接入台。
-                  这里把 API Key、公开 Skill、V1/V2 调用、用量统计和在线测试放在同一屏，避免用户在长文档里找入口。
-                </p>
-                <div className="developer-command-strip" aria-label="开发者接入流程">
-                  <span><b>01</b> Issue Key</span>
-                  <span><b>02</b> Copy Skill</span>
-                  <span><b>03</b> Run Detect</span>
-                  <span><b>04</b> Audit Usage</span>
+                <h1>{text.title}</h1>
+                <p>{text.desc}</p>
+                <div className="developer-command-strip" aria-label={tr("开发者接入流程", "Developer integration flow")}>
+                  {text.commands.map((item, index) => (
+                    <span key={item}><b>{String(index + 1).padStart(2, "0")}</b> {item}</span>
+                  ))}
                 </div>
                 <div className="docs-hero-actions">
-                  <a href="#api-keys">生成 API Key</a>
-                  <a href="#skill-copy" className="secondary">复制 Skill 调用</a>
+                  <a href="#api-keys">{text.keyAction}</a>
+                  <a href="#skill-copy" className="secondary">{text.skillAction}</a>
                 </div>
               </div>
               <div id="skill-copy" className="developer-skill-console">
@@ -984,12 +1662,12 @@ print(r.json().get("agentSummary") or r.json())`;
                 </div>
                 <div className="developer-skill-console-head">
                   <div>
-                    <span>Skills Copy</span>
-                    <strong>点击即可复制给外部 Agent</strong>
+                    <span>{text.skillsCopy}</span>
+                    <strong>{text.skillsCopyTitle}</strong>
                   </div>
                   <code>{activeSkill.endpoint}</code>
                 </div>
-                <div className="skill-mode-toggle" role="tablist" aria-label="选择 Skill 调用模式">
+                <div className="skill-mode-toggle" role="tablist" aria-label={tr("选择技能调用模式", "Select skill call mode")}>
                   {skillOptions.map((item) => (
                     <button
                       type="button"
@@ -1010,12 +1688,13 @@ print(r.json().get("agentSummary") or r.json())`;
                   text={activeSkill.text}
                   copiedId={copiedDocId}
                   onCopy={copyDeveloperText}
+                  lang={lang}
                   variant="primary"
                 />
               </div>
             </section>
 
-            <nav className="developer-workflow-strip" aria-label="开发者接入工作流">
+            <nav className="developer-workflow-strip" aria-label={tr("开发者接入工作流", "Developer integration workflow")}>
               {developerActionCards.map((item) => (
                 <a href={item.href} key={item.href}>
                   <i className={`fa ${item.icon}`} />
@@ -1026,104 +1705,112 @@ print(r.json().get("agentSummary") or r.json())`;
             </nav>
 
             <section id="quickstart" className="docs-section">
-              <div className="docs-section-kicker">Getting Started</div>
-              <h2>快速开始</h2>
+              <div className="docs-section-kicker">{tr("开始使用", "Getting Started")}</div>
+              <h2>{tr("快速开始", "Quickstart")}</h2>
               <p className="docs-lead">
-                第一次接入只需要三步：读取公开 Skill、按场景选择 V2 多模态或 V1 图像模型、按关键字段输出可审计结论。
-                V2 读取 <code>agentSummary</code> / <code>tokenUsage</code>，V1 读取 <code>result.final_label</code> / <code>result.itemid</code>。
+                {tr(
+                  "第一次接入只需要三步：读取公开技能、按场景选择 V2 多模态或 V1 图像模型、按关键字段输出可审计结论。",
+                  "First integration takes three steps: read the public skill, choose V2 multimodal or V1 image model for the scenario, then output an auditable result from key fields."
+                )}
+                {" "}
+                {tr("V2 读取", "For V2 read")} <code>agentSummary</code> / <code>tokenUsage</code>
+                {tr("，V1 读取", "; for V1 read")} <code>result.final_label</code> / <code>result.itemid</code>{tr("。", ".")}
               </p>
               <div className="docs-callout docs-callout-strong">
-                <h3>为什么必须公开 Skill</h3>
+                <h3>{tr("为什么必须公开技能", "Why the skill must be public")}</h3>
                 <p>
-                  别的 agent 访问不到你的本地路径，也无法猜测接口字段、报告下载地址和解释边界。
-                  公开 Skill 后，OpenClaw 只要读取公网 URL，就能稳定调用 API，并知道哪些字段必须带入最终鉴伪结论。
+                  {tr(
+                    "别的智能体访问不到你的本地路径，也无法猜测接口字段、报告下载地址和解释边界。公开技能后，OpenClaw 只要读取公网地址，就能稳定调用接口，并知道哪些字段必须带入最终鉴伪结论。",
+                    "Other agents cannot access your local paths or infer request fields, report download URLs, and explanation boundaries. With a public skill, OpenClaw can read the public URL, call the API reliably, and include the required fields in the final forensics result."
+                  )}
                 </p>
                 <div className="docs-copy-grid">
-                  <CopySnippetCard id="docs-skill-url" title="复制 Skill URL" desc="给外部 agent 的第一步：读取公共说明。" text={REALGUARD_SKILL_URL} copiedId={copiedDocId} onCopy={copyDeveloperText} variant="compact" />
-                  <CopySnippetCard id="docs-skill-v2" title="复制 V2 Handoff" desc="默认推荐，多模态结果和 tokenUsage 更完整。" text={REALGUARD_SKILL_HANDOFF_V2} copiedId={copiedDocId} onCopy={copyDeveloperText} variant="primary" />
-                  <CopySnippetCard id="docs-skill-v1" title="复制 V1 Handoff" desc="兼容 V1 图像模型，纳入调用次数统计。" text={REALGUARD_SKILL_HANDOFF_V1} copiedId={copiedDocId} onCopy={copyDeveloperText} variant="compact" />
+                  <CopySnippetCard id="docs-skill-url" title={UI_TEXT[lang].skillPanel.copyUrlTitle} desc={UI_TEXT[lang].skillPanel.copyUrlDesc} text={REALGUARD_SKILL_URL} copiedId={copiedDocId} onCopy={copyDeveloperText} lang={lang} variant="compact" />
+                  <CopySnippetCard id="docs-skill-v2" title={UI_TEXT[lang].skillPanel.copyV2Title} desc={UI_TEXT[lang].skillPanel.copyV2Desc} text={REALGUARD_SKILL_HANDOFF_V2} copiedId={copiedDocId} onCopy={copyDeveloperText} lang={lang} variant="primary" />
+                  <CopySnippetCard id="docs-skill-v1" title={UI_TEXT[lang].skillPanel.copyV1Title} desc={UI_TEXT[lang].skillPanel.copyV1Desc} text={REALGUARD_SKILL_HANDOFF_V1} copiedId={copiedDocId} onCopy={copyDeveloperText} lang={lang} variant="compact" />
                 </div>
               </div>
               <div className="docs-code-block">
-                <div className="docs-code-title"><span className="method method-post">POST</span><span>首次调用 /detect</span></div>
+                <div className="docs-code-title"><span className="method method-post">POST</span><span>{tr("首次调用 /detect", "First /detect call")}</span></div>
                 <pre>{curlDetectExample}</pre>
               </div>
             </section>
 
             <section id="auth" className="docs-section">
               <div className="docs-section-kicker">Authentication</div>
-              <h2>认证</h2>
+              <h2>{tr("认证", "Authentication")}</h2>
               <p className="docs-lead">
-                调用 <code>/detect</code>、<code>/forensics</code>、<code>/provenance</code> 和报告下载接口时，
-                请使用开发者平台生成的个人 API Key。每个 Key 绑定到登录用户，可撤销、可审计。
+                {tr("调用", "Use a personal API key generated in the developer platform when calling")} <code>/detect</code>{tr("、", ", ")}<code>/forensics</code>{tr("、", ", ")}<code>/provenance</code>
+                {tr(" 和报告下载接口时，请使用开发者平台生成的个人 API Key。每个 Key 绑定到登录用户，可撤销、可审计。", " and report-download endpoints. Each key is bound to the signed-in user and can be revoked and audited.")}
               </p>
               <div className="docs-code-block compact">
                 <pre>{`X-RealGuard-Key: rg_sk_xxx
 Authorization: Bearer rg_sk_xxx`}</pre>
               </div>
               <div className="docs-callout">
-                <strong>安全建议</strong>
-                <p>API Key 不要写进前端源码或公开仓库。自动化 agent 应使用独立 Key，并记录调用人、时间、文件摘要和报告 ID。</p>
+                <strong>{tr("安全建议", "Security guidance")}</strong>
+                <p>{tr("API Key 不要写进前端源码或公开仓库。自动化智能体应使用独立 Key，并记录调用人、时间、文件摘要和报告 ID。", "Do not put API keys in frontend source code or public repositories. Automated agents should use dedicated keys and log caller, time, file digest, and report ID.")}</p>
               </div>
               <div className="docs-callout">
-                <strong>运维 Token</strong>
+                <strong>{tr("运维 Token", "Operations token")}</strong>
                 <p>
-                  <code>X-Jianzhen-Token</code> 仅用于 <code>/admin/health</code>、<code>/history</code>、
-                  <code>/metrics</code> 等管理接口，不应发给普通开发者或外部 agent。
+                  <code>X-Jianzhen-Token</code>
+                  {tr(" 仅用于 ", " is only for ")}<code>/admin/health</code>{tr("、", ", ")}<code>/history</code>{tr("、", ", ")}<code>/metrics</code>
+                  {tr(" 等管理接口，不应发给普通开发者或外部智能体。", " and other administrative endpoints. Do not share it with normal developers or external agents.")}
                 </p>
               </div>
             </section>
 
             <section id="api-keys" className="docs-section auth-manager-section">
               <div className="docs-section-kicker">API Key Management</div>
-              <h2>我的 API Key</h2>
+              <h2>{tr("我的 API Key", "My API Keys")}</h2>
               <p className="docs-lead">
-                注册并登录开发者平台后，可以生成自己的 <code>rg_sk_</code> Key。完整 Key 只在创建时显示一次；
-                列表中只保留预览、状态和最后使用时间。
+                {tr("注册并登录开发者平台后，可以生成自己的", "After registration and login, generate your own")} <code>rg_sk_</code> Key{tr("。", ". ")}
+                {tr("完整 Key 只在创建时显示一次；列表中只保留预览、状态和最后使用时间。", "The full key is shown only once at creation; the list keeps only preview, status, and last-used time.")}
               </p>
               {!user ? (
                 <div className="docs-callout docs-callout-strong">
-                  <h3>需要先注册/登录</h3>
-                  <p>API Key 需要绑定到真实账号，用于调用审计、撤销和报告权限控制。</p>
-                  <button className="docs-inline-button" onClick={onNeedAuth}>注册/登录开发者平台</button>
+                  <h3>{tr("需要先注册/登录", "Sign up or log in first")}</h3>
+                  <p>{tr("API Key 需要绑定到真实账号，用于调用审计、撤销和报告权限控制。", "API keys must be bound to a real account for call audit, revocation, and report access control.")}</p>
+                  <button className="docs-inline-button" onClick={onNeedAuth}>{tr("注册/登录开发者平台", "Sign up / log in to developer platform")}</button>
                 </div>
               ) : (
                 <>
                   <div className="api-key-manager">
                     <div className="api-key-create">
                       <div>
-                        <span>当前账号</span>
+                        <span>{tr("当前账号", "Current account")}</span>
                         <strong>{user.username || user.phone}</strong>
                         <small>{user.phone}</small>
                       </div>
                       <label>
-                        Key 名称
+                        {tr("Key 名称", "Key name")}
                         <input value={keyName} maxLength={120} onChange={(event) => setKeyName(event.target.value)} />
                       </label>
                       <button disabled={keyBusy} onClick={handleCreateKey}>
-                        <i className={`fa ${keyBusy ? "fa-spinner detect-spin" : "fa-key"}`} /> 生成 API Key
+                        <i className={`fa ${keyBusy ? "fa-spinner detect-spin" : "fa-key"}`} /> {tr("生成 API Key", "Generate API key")}
                       </button>
                       {keyStatus && <StatusPill status={keyStatus} />}
                       {generatedKey && (
                         <div className="generated-key-box">
-                          <span>完整 Key 只显示一次</span>
+                          <span>{tr("完整 Key 只显示一次", "The full key is shown only once")}</span>
                           <code>{generatedKey}</code>
                           <div>
                             <button onClick={() => copyDeveloperText("generated-key", generatedKey)}>
-                              {copiedDocId === "generated-key" ? "已复制" : "复制 Key"}
+                              {copiedDocId === "generated-key" ? UI_TEXT[lang].copy.copied : tr("复制 Key", "Copy key")}
                             </button>
-                            <button onClick={() => setApiKey(generatedKey)}>填入测试台</button>
+                            <button onClick={() => setApiKey(generatedKey)}>{tr("填入测试台", "Fill into console")}</button>
                           </div>
                         </div>
                       )}
                     </div>
                     <div className="api-key-list">
                       <div className="api-key-list-head">
-                        <strong>已创建 Key</strong>
-                        <button disabled={keyBusy} onClick={loadDeveloperKeys}>刷新</button>
+                        <strong>{tr("已创建 Key", "Created keys")}</strong>
+                        <button disabled={keyBusy} onClick={loadDeveloperKeys}>{tr("刷新", "Refresh")}</button>
                       </div>
                       {keys.length === 0 ? (
-                        <p className="empty-key-state">暂无 API Key。生成后即可在外部 agent 或业务系统中调用接口。</p>
+                        <p className="empty-key-state">{tr("暂无 API Key。生成后即可在外部智能体或业务系统中调用接口。", "No API keys yet. Generate one to call the API from external agents or business systems.")}</p>
                       ) : (
                         keys.map((item) => (
                           <div className={`api-key-row ${item.status === "active" ? "active" : "revoked"}`} key={item.id}>
@@ -1131,13 +1818,13 @@ Authorization: Bearer rg_sk_xxx`}</pre>
                               <strong>{item.name}</strong>
                               <code>{item.preview}</code>
                               <span>
-                                创建：{item.createdAt || "-"} · 最后使用：{item.lastUsedAt || "未使用"}
+                                {tr("创建：", "Created: ")}{item.createdAt || "-"} · {tr("最后使用：", "Last used: ")}{item.lastUsedAt || tr("未使用", "Never")}
                               </span>
                             </div>
                             <div>
                               <small>{item.status}</small>
                               {item.status === "active" && (
-                                <button disabled={keyBusy} onClick={() => handleRevokeKey(item.id)}>撤销</button>
+                                <button disabled={keyBusy} onClick={() => handleRevokeKey(item.id)}>{tr("撤销", "Revoke")}</button>
                               )}
                             </div>
                           </div>
@@ -1150,89 +1837,91 @@ Authorization: Bearer rg_sk_xxx`}</pre>
                     <div className="token-usage-header">
                       <div>
                         <div className="docs-section-kicker">Usage Analytics</div>
-                        <h3>调用次数与 Token 统计</h3>
+                        <h3>{tr("调用次数与用量统计", "Calls and usage analytics")}</h3>
                         <p>
-                          统计不只看 Token，也要看调用次数。V1 图像模型和 V2 多模态接口会合并展示，便于发现外部 agent 重试、
-                          Key 滥用、缓存命中和真实模型成本变化。
+                          {tr(
+                            "统计不只看 Token，也要看调用次数。V1 图像模型和 V2 多模态接口会合并展示，便于发现外部智能体重试、Key 滥用、缓存命中和真实模型成本变化。",
+                            "Usage analytics track both tokens and call counts. V1 image-model calls and V2 multimodal calls are shown together so retries, key misuse, cache hits, and real model cost changes are visible."
+                          )}
                         </p>
                       </div>
                       <div className="token-usage-actions">
                         <select value={usageDays} onChange={(event) => setUsageDays(Number(event.target.value))}>
-                          <option value={7}>近 7 天</option>
-                          <option value={14}>近 14 天</option>
-                          <option value={30}>近 30 天</option>
-                          <option value={90}>近 90 天</option>
+                          <option value={7}>{tr("近 7 天", "Last 7 days")}</option>
+                          <option value={14}>{tr("近 14 天", "Last 14 days")}</option>
+                          <option value={30}>{tr("近 30 天", "Last 30 days")}</option>
+                          <option value={90}>{tr("近 90 天", "Last 90 days")}</option>
                         </select>
                         <button disabled={usageBusy} onClick={() => loadDeveloperUsage(usageDays)}>
-                          <i className={`fa ${usageBusy ? "fa-spinner detect-spin" : "fa-refresh"}`} /> 刷新用量
+                          <i className={`fa ${usageBusy ? "fa-spinner detect-spin" : "fa-refresh"}`} /> {tr("刷新用量", "Refresh usage")}
                         </button>
                       </div>
                     </div>
                     {usageStatus && <StatusPill status={usageStatus} />}
                     <div className="token-usage-metrics">
                       <div className="token-usage-metric primary">
-                        <span>总调用次数</span>
-                        <strong>{formatUsageNumber(totalCalls)}</strong>
+                        <span>{tr("总调用次数", "Total calls")}</span>
+                        <strong>{formatUsageNumber(totalCalls, lang)}</strong>
                         <small>
-                          V1 {formatUsageNumber(v1Calls)} 次 / V2 {formatUsageNumber(v2Calls)} 次
+                          V1 {formatUsageNumber(v1Calls, lang)} {tr("次", "calls")} / V2 {formatUsageNumber(v2Calls, lang)} {tr("次", "calls")}
                         </small>
                       </div>
                       <div className="token-usage-metric">
-                        <span>Token 总量</span>
-                        <strong>{formatUsageNumber(usageSummary?.totalTokens)}</strong>
+                        <span>{tr("Token 总量", "Total tokens")}</span>
+                        <strong>{formatUsageNumber(usageSummary?.totalTokens, lang)}</strong>
                         <small>
-                          Prompt {formatUsageNumber(usageSummary?.promptTokens)} / Completion {formatUsageNumber(usageSummary?.completionTokens)}
+                          Prompt {formatUsageNumber(usageSummary?.promptTokens, lang)} / Completion {formatUsageNumber(usageSummary?.completionTokens, lang)}
                         </small>
                       </div>
                       <div className="token-usage-metric">
-                        <span>V1 图像模型</span>
-                        <strong>{formatUsageNumber(v1Calls)}</strong>
-                        <small>V1 记录调用次数；响应不返回 tokenUsage</small>
+                        <span>{tr("V1 图像模型", "V1 image model")}</span>
+                        <strong>{formatUsageNumber(v1Calls, lang)}</strong>
+                        <small>{tr("V1 记录调用次数；响应不返回 tokenUsage", "V1 records call count; the response does not return tokenUsage.")}</small>
                       </div>
                       <div className="token-usage-metric">
-                        <span>V2 多模态</span>
-                        <strong>{formatUsageNumber(v2Calls)}</strong>
-                        <small>缓存命中 {formatUsageNumber(usageSummary?.cacheHits)} 次；最近 {formatUsageDate(usageSummary?.lastEventAt)}</small>
+                        <span>{tr("V2 多模态", "V2 multimodal")}</span>
+                        <strong>{formatUsageNumber(v2Calls, lang)}</strong>
+                        <small>{tr("缓存命中", "Cache hits")} {formatUsageNumber(usageSummary?.cacheHits, lang)} {tr("次；最近", "times; latest")} {formatUsageDate(usageSummary?.lastEventAt, lang)}</small>
                       </div>
                     </div>
                     <div className="usage-pipeline-grid">
                       {pipelineUsage.map((item) => (
                         <div key={item.pipeline || "unknown"}>
                           <span>{String(item.pipeline || "unknown").toUpperCase()}</span>
-                          <strong>{formatUsageNumber(item.requests)} 次</strong>
-                          <small>{formatUsageNumber(item.totalTokens)} tokens</small>
+                          <strong>{formatUsageNumber(item.requests, lang)} {tr("次", "calls")}</strong>
+                          <small>{formatUsageNumber(item.totalTokens, lang)} tokens</small>
                         </div>
                       ))}
                     </div>
                     <div className="token-usage-breakdown">
                       <div className="token-usage-card">
                         <div className="token-usage-card-title">
-                          <strong>最近 7 天趋势</strong>
-                          <span>按调用次数</span>
+                          <strong>{tr("最近 7 天趋势", "Last 7 days")}</strong>
+                          <span>{tr("按调用次数", "By call count")}</span>
                         </div>
                         <div className="token-usage-bars">
                           {recentUsageDays.map((item) => (
                             <div className="token-usage-bar-row" key={item.date}>
                               <span>{item.date?.slice(5).replace("-", "/")}</span>
                               <div><i style={{ width: `${Math.max(3, (Number(item.requests || 0) / maxDayCalls) * 100)}%` }} /></div>
-                              <strong>{formatUsageNumber(item.requests)} 次</strong>
+                              <strong>{formatUsageNumber(item.requests, lang)} {tr("次", "calls")}</strong>
                             </div>
                           ))}
                         </div>
                       </div>
                       <div className="token-usage-card">
                         <div className="token-usage-card-title">
-                          <strong>端点调用</strong>
+                          <strong>{tr("端点调用", "Endpoint calls")}</strong>
                           <span>Calls / Tokens</span>
                         </div>
                         <div className="token-usage-endpoints">
                           {endpointUsage.length === 0 ? (
-                            <p>暂无调用数据。使用在线测试台或外部 agent 调用后会在这里出现。</p>
+                            <p>{tr("暂无调用数据。使用在线测试台或外部智能体调用后会在这里出现。", "No usage data yet. Calls from the online console or external agents will appear here.")}</p>
                           ) : endpointUsage.map((item) => (
                             <div key={`${item.pipeline || "v2"}-${item.endpoint}`}>
                               <code>{item.endpoint}</code>
-                              <span>{String(item.pipeline || "v2").toUpperCase()} · {formatUsageNumber(item.requests)} 次</span>
-                              <strong>{formatUsageNumber(item.totalTokens)} tokens</strong>
+                              <span>{String(item.pipeline || "v2").toUpperCase()} · {formatUsageNumber(item.requests, lang)} {tr("次", "calls")}</span>
+                              <strong>{formatUsageNumber(item.totalTokens, lang)} tokens</strong>
                             </div>
                           ))}
                         </div>
@@ -1245,10 +1934,10 @@ Authorization: Bearer rg_sk_xxx`}</pre>
 
             <section id="reference" className="docs-section">
               <div className="docs-section-kicker">API Reference</div>
-              <h2>接口总览</h2>
+              <h2>{tr("接口总览", "Endpoint index")}</h2>
               <p className="docs-lead">
-                V2 接口基于 <code>{REALGUARD_API_BASE}</code>；V1 图像模型基于 <code>{REALGUARD_V1_API_BASE}</code>。
-                上传接口都使用 <code>multipart/form-data</code>，并传入 <code>X-RealGuard-Key</code>。
+                V2 {tr("接口基于", "endpoints use")} <code>{REALGUARD_API_BASE}</code>{tr("；", "; ")}V1 {tr("图像模型基于", "image model uses")} <code>{REALGUARD_V1_API_BASE}</code>{tr("。", ". ")}
+                {tr("上传接口都使用", "Upload endpoints use")} <code>multipart/form-data</code>{tr("，并传入", " and require")} <code>X-RealGuard-Key</code>{tr("。", ".")}
               </p>
               <div className="endpoint-index">
                 {endpoints.map((endpoint) => (
@@ -1266,7 +1955,7 @@ Authorization: Bearer rg_sk_xxx`}</pre>
                   <span className="method method-get">GET</span>
                   <h3>/health</h3>
                 </div>
-                <p>检查 V2 API 可用性、粗粒度能力、上传限制和访问保护状态。公开接口不会返回内部路径或详细阈值。</p>
+                <p>{tr("检查 V2 API 可用性、粗粒度能力、上传限制和访问保护状态。公开接口不会返回内部路径或详细阈值。", "Checks V2 API availability, high-level capabilities, upload limits, and access protection. The public endpoint does not return internal paths or detailed thresholds.")}</p>
                 <div className="docs-code-block compact"><pre>{curlHealthExample}</pre></div>
               </div>
 
@@ -1275,7 +1964,7 @@ Authorization: Bearer rg_sk_xxx`}</pre>
                   <span className="method method-get">GET</span>
                   <h3>/admin/health</h3>
                 </div>
-                <p>受保护的详细诊断接口。启用访问令牌后，需要传入 <code>X-Jianzhen-Token</code>。</p>
+                <p>{tr("受保护的详细诊断接口。启用访问令牌后，需要传入", "Protected detailed diagnostics. When access tokens are enabled, pass")} <code>X-Jianzhen-Token</code>{tr("。", ".")}</p>
                 <div className="docs-code-block compact"><pre>{`curl -fsS ${REALGUARD_API_BASE}/admin/health \\
   -H "X-Jianzhen-Token: <token>"`}</pre></div>
               </div>
@@ -1285,10 +1974,10 @@ Authorization: Bearer rg_sk_xxx`}</pre>
                   <span className="method method-post">POST</span>
                   <h3>/detect · V2</h3>
                 </div>
-                <p>核心鉴伪接口。上传文件后返回任务编号、鉴伪结论、置信度、证据摘要、模型版本和报告编号。默认上传上限为 25MB。</p>
+                <p>{tr("核心鉴伪接口。上传文件后返回任务编号、鉴伪结论、置信度、证据摘要、模型版本和报告编号。默认上传上限为 25MB。", "Core forensics endpoint. Upload a file to receive task ID, verdict, confidence, evidence summary, model version, and report ID. Default upload limit is 25 MB.")}</p>
                 <h4>Request body</h4>
                 <div className="docs-table docs-table-4">
-                  <strong>字段</strong><strong>类型</strong><strong>是否必填</strong><strong>说明</strong>
+                  <strong>{tr("字段", "Field")}</strong><strong>{tr("类型", "Type")}</strong><strong>{tr("是否必填", "Required")}</strong><strong>{tr("说明", "Description")}</strong>
                   {requestParams.map(([name, type, required, desc]) => (
                     <Fragment key={name}>
                       <code>{name}</code><span>{type}</span><span>{required}</span><p>{desc}</p>
@@ -1297,7 +1986,7 @@ Authorization: Bearer rg_sk_xxx`}</pre>
                 </div>
                 <h4>Response fields</h4>
                 <div className="docs-table docs-table-2">
-                  <strong>字段</strong><strong>说明</strong>
+                  <strong>{tr("字段", "Field")}</strong><strong>{tr("说明", "Description")}</strong>
                   {fields.map(([field, desc]) => (
                     <Fragment key={field}>
                       <code>{field}</code><p>{desc}</p>
@@ -1313,12 +2002,12 @@ Authorization: Bearer rg_sk_xxx`}</pre>
                   <h3>/api/developer/v1/detect · V1</h3>
                 </div>
                 <p>
-                  V1 图像模型接口。适合需要复用旧 RealGuard 图像鉴伪链路的 agent 或业务系统。
-                  请求使用 <code>file</code> 字段上传图片；平台会记录调用次数，但 V1 响应不返回 tokenUsage。
+                  {tr("V1 图像模型接口。适合需要复用旧 RealGuard 图像鉴伪链路的智能体或业务系统。请求使用", "V1 image-model endpoint for agents or business systems that need the legacy RealGuard image-forensics pipeline. Upload an image with the")} <code>file</code>
+                  {tr("字段上传图片；平台会记录调用次数，但 V1 响应不返回 tokenUsage。", " field. The platform records call count, but V1 responses do not return tokenUsage.")}
                 </p>
                 <h4>Response fields</h4>
                 <div className="docs-table docs-table-2">
-                  <strong>字段</strong><strong>说明</strong>
+                  <strong>{tr("字段", "Field")}</strong><strong>{tr("说明", "Description")}</strong>
                   {v1Fields.map(([field, desc]) => (
                     <Fragment key={field}>
                       <code>{field}</code><p>{desc}</p>
@@ -1333,7 +2022,7 @@ Authorization: Bearer rg_sk_xxx`}</pre>
                   <span className="method method-post">POST</span>
                   <h3>/forensics</h3>
                 </div>
-                <p>针对图像返回更细的取证证据，例如 ELA、噪声一致性、频域异常、边缘异常和可解释性摘要。</p>
+                <p>{tr("针对图像返回更细的取证证据，例如 ELA、噪声一致性、频域异常、边缘异常和可解释性摘要。", "Returns deeper image forensics evidence such as ELA, noise consistency, frequency anomalies, edge anomalies, and explainability summaries.")}</p>
                 <div className="docs-code-block compact"><pre>{curlForensicsExample}</pre></div>
               </div>
 
@@ -1342,7 +2031,7 @@ Authorization: Bearer rg_sk_xxx`}</pre>
                   <span className="method method-post">POST</span>
                   <h3>/provenance</h3>
                 </div>
-                <p>验证 C2PA、SynthID、可见水印和内容凭证信号。适合与 <code>/detect</code> 的模型结论合并展示。</p>
+                <p>{tr("验证 C2PA、SynthID、可见水印和内容凭证信号。适合与", "Verifies C2PA, SynthID, visible watermark, and content-credential signals. Combine it with")} <code>/detect</code>{tr("的模型结论合并展示。", " model verdicts for display.")}</p>
                 <div className="docs-code-block compact"><pre>{curlProvenanceExample}</pre></div>
               </div>
 
@@ -1351,9 +2040,9 @@ Authorization: Bearer rg_sk_xxx`}</pre>
                   <span className="method method-get">GET</span>
                   <h3>/report/{"{reportId}"}/download</h3>
                 </div>
-                <p>根据检测返回的 <code>reportId</code> 下载报告，用于外部系统归档、审计或人工复核。</p>
+                <p>{tr("根据检测返回的", "Download a report with the")} <code>reportId</code>{tr("下载报告，用于外部系统归档、审计或人工复核。", " returned by detection for external archiving, auditing, or manual review.")}</p>
                 <div className="docs-table docs-table-4">
-                  <strong>路径参数</strong><strong>类型</strong><strong>是否必填</strong><strong>说明</strong>
+                  <strong>{tr("路径参数", "Path parameter")}</strong><strong>{tr("类型", "Type")}</strong><strong>{tr("是否必填", "Required")}</strong><strong>{tr("说明", "Description")}</strong>
                   {reportPathParams.map(([name, type, required, desc]) => (
                     <Fragment key={name}>
                       <code>{name}</code><span>{type}</span><span>{required}</span><p>{desc}</p>
@@ -1366,10 +2055,10 @@ Authorization: Bearer rg_sk_xxx`}</pre>
 
             <section id="errors" className="docs-section">
               <div className="docs-section-kicker">Errors</div>
-              <h2>错误码</h2>
-              <p className="docs-lead">Agent 不应该吞掉 API 错误。4xx 通常是请求或权限问题，5xx 应记录上下文后重试或降级。</p>
+              <h2>{tr("错误码", "Error codes")}</h2>
+              <p className="docs-lead">{tr("智能体不应该吞掉 API 错误。4xx 通常是请求或权限问题，5xx 应记录上下文后重试或降级。", "Agents should not hide API errors. 4xx usually means request or permission issues; 5xx should be logged with context before retry or fallback.")}</p>
               <div className="docs-table docs-table-3">
-                <strong>HTTP</strong><strong>名称</strong><strong>处理方式</strong>
+                <strong>HTTP</strong><strong>{tr("名称", "Name")}</strong><strong>{tr("处理方式", "Handling")}</strong>
                 {errorRows.map(([code, name, desc]) => (
                   <Fragment key={code}>
                     <code>{code}</code><span>{name}</span><p>{desc}</p>
@@ -1380,7 +2069,7 @@ Authorization: Bearer rg_sk_xxx`}</pre>
 
             <section id="examples" className="docs-section">
               <div className="docs-section-kicker">Examples</div>
-              <h2>代码示例</h2>
+              <h2>{tr("代码示例", "Code examples")}</h2>
               <div className="docs-code-grid">
                 <div className="docs-code-block">
                   <div className="docs-code-title"><i className="fa fa-jsfiddle" /> JavaScript Fetch</div>
@@ -1403,8 +2092,8 @@ Authorization: Bearer rg_sk_xxx`}</pre>
 
             <section id="console" className="docs-section docs-console-section">
               <div className="docs-section-kicker">API Console</div>
-              <h2>在线 API 测试台</h2>
-              <p className="docs-lead">在网站内直接测试健康检查和鉴伪上传，验证 API Key、接口连通性、响应字段和耗时。</p>
+              <h2>{tr("在线 API 测试台", "Online API console")}</h2>
+              <p className="docs-lead">{tr("在网站内直接测试健康检查和鉴伪上传，验证 API Key、接口连通性、响应字段和耗时。", "Test health checks and forensic uploads directly on the site to verify API keys, connectivity, response fields, and latency.")}</p>
               <div className="console-layout">
                 <div className="console-controls">
                   <label>
@@ -1417,7 +2106,7 @@ Authorization: Bearer rg_sk_xxx`}</pre>
                     />
                   </label>
                   <label>
-                    文件类型
+                    {tr("文件类型", "File type")}
                     <select value={fileType} onChange={(event) => setFileType(event.target.value)}>
                       <option value="image">image</option>
                       <option value="video">video</option>
@@ -1426,14 +2115,14 @@ Authorization: Bearer rg_sk_xxx`}</pre>
                     </select>
                   </label>
                   <label>
-                    测试文件
+                    {tr("测试文件", "Test file")}
                   <input
                     type="file"
                     accept="image/*,video/*,audio/*,.txt,.pdf,.doc,.docx,.md"
                     onChange={(event) => {
                       const selected = event.target.files?.[0] || null;
                       if (selected) {
-                        const validation = validateFile(selected, { kind: "测试文件", maxBytes: V2_CONSOLE_MAX_BYTES });
+                        const validation = validateFile(selected, { kind: tr("测试文件", "test file"), maxBytes: V2_CONSOLE_MAX_BYTES, lang });
                         if (validation) {
                           setConsoleStatus({ tone: "error", text: validation });
                           event.target.value = "";
@@ -1441,17 +2130,17 @@ Authorization: Bearer rg_sk_xxx`}</pre>
                           return;
                         }
                       }
-                      setConsoleStatus(selected ? { tone: "info", text: `已选择：${selected.name}` } : null);
+                      setConsoleStatus(selected ? { tone: "info", text: tr(`已选择：${selected.name}`, `Selected: ${selected.name}`) } : null);
                       setTestFile(selected);
                     }}
                   />
                   </label>
                   <div className="console-actions">
                     <button disabled={consoleBusy} onClick={runHealthCheck}>
-                      <i className={`fa ${consoleBusy ? "fa-spinner detect-spin" : "fa-heartbeat"}`} /> 健康检查
+                      <i className={`fa ${consoleBusy ? "fa-spinner detect-spin" : "fa-heartbeat"}`} /> {tr("健康检查", "Health check")}
                     </button>
                     <button disabled={consoleBusy || !testFile} onClick={runDetectTest}>
-                      <i className={`fa ${consoleBusy ? "fa-spinner detect-spin" : "fa-play"}`} /> 运行鉴伪测试
+                      <i className={`fa ${consoleBusy ? "fa-spinner detect-spin" : "fa-play"}`} /> {tr("运行鉴伪测试", "Run detection test")}
                     </button>
                   </div>
                   {consoleStatus && <StatusPill status={consoleStatus} />}
@@ -1465,21 +2154,21 @@ Authorization: Bearer rg_sk_xxx`}</pre>
                 </div>
                 <div className="console-result">
                   <div className="console-result-header">
-                    <span>响应 JSON</span>
+                    <span>{tr("响应 JSON", "Response JSON")}</span>
                     {renderedResult && (
-                      <button onClick={() => navigator.clipboard?.writeText(renderedResult)}>复制</button>
+                      <button onClick={() => copyDeveloperText("console-json", renderedResult)}>{copiedDocId === "console-json" ? UI_TEXT[lang].copy.copied : UI_TEXT[lang].copy.copy}</button>
                     )}
                   </div>
-                  <pre>{renderedResult || "运行健康检查或鉴伪测试后，响应 JSON 会显示在这里。"}</pre>
+                  <pre>{renderedResult || tr("运行健康检查或鉴伪测试后，响应 JSON 会显示在这里。", "Run a health check or detection test and the response JSON will appear here.")}</pre>
                 </div>
               </div>
             </section>
 
             <section id="agent-fields" className="docs-section">
               <div className="docs-section-kicker">Agent Output</div>
-              <h2>Agent 应读取的关键字段</h2>
-              <p className="docs-lead">外部 agent 输出时至少包含结论、置信度、证据摘要、版本和报告编号，避免只输出一句“真假”。V2 和 V1 的字段结构不同，必须按所选链路解析。</p>
-              <h4>V2 字段</h4>
+              <h2>{tr("智能体应读取的关键字段", "Key fields agents should read")}</h2>
+              <p className="docs-lead">{tr("外部智能体输出时至少包含结论、置信度、证据摘要、版本和报告编号，避免只输出一句“真假”。V2 和 V1 的字段结构不同，必须按所选链路解析。", "External agents should output at least verdict, confidence, evidence summary, version, and report ID, not just a one-word true/false answer. V2 and V1 have different field structures and must be parsed according to the selected pipeline.")}</p>
+              <h4>{tr("V2 字段", "V2 fields")}</h4>
               <div className="developer-fields">
                 {fields.map(([field, desc]) => (
                   <div key={field}>
@@ -1488,7 +2177,7 @@ Authorization: Bearer rg_sk_xxx`}</pre>
                   </div>
                 ))}
               </div>
-              <h4>V1 字段</h4>
+              <h4>{tr("V1 字段", "V1 fields")}</h4>
               <div className="developer-fields">
                 {v1Fields.map(([field, desc]) => (
                   <div key={field}>
@@ -1501,18 +2190,18 @@ Authorization: Bearer rg_sk_xxx`}</pre>
 
             <section id="enterprise" className="docs-section">
               <div className="docs-section-kicker">Enterprise</div>
-              <h2>企业接入标准</h2>
+              <h2>{tr("企业接入标准", "Enterprise integration standards")}</h2>
               <div className="developer-fields">
-                <div><code>版本固定</code><p>记录 <code>modelVersion</code> 与 <code>cacheVersion</code>，避免不同分析版本混用。</p></div>
-                <div><code>审计留痕</code><p>保存原始 JSON、<code>taskId</code>、<code>reportId</code>、文件摘要和调用时间。</p></div>
-                <div><code>错误处理</code><p>对 4xx 展示请求问题，对 5xx 做重试或降级；不要吞掉 API 错误。</p></div>
-                <div><code>结论约束</code><p>输出必须包含置信度和限制说明，不得把检测结果表述为绝对证明。</p></div>
+                <div><code>{tr("版本固定", "Version pinning")}</code><p>{tr("记录", "Record")} <code>modelVersion</code> {tr("与", "and")} <code>cacheVersion</code>{tr("，避免不同分析版本混用。", " to avoid mixing results from different analysis logic.")}</p></div>
+                <div><code>{tr("审计留痕", "Audit trail")}</code><p>{tr("保存原始 JSON、", "Save raw JSON, ")}<code>taskId</code>{tr("、", ", ")}<code>reportId</code>{tr("、文件摘要和调用时间。", ", file digest, and call time.")}</p></div>
+                <div><code>{tr("错误处理", "Error handling")}</code><p>{tr("对 4xx 展示请求问题，对 5xx 做重试或降级；不要吞掉 API 错误。", "Show request issues for 4xx, retry or degrade for 5xx, and never hide API errors.")}</p></div>
+                <div><code>{tr("结论约束", "Verdict constraints")}</code><p>{tr("输出必须包含置信度和限制说明，不得把检测结果表述为绝对证明。", "Output must include confidence and limitations; do not present detection as absolute proof.")}</p></div>
               </div>
             </section>
 
             <section id="resources" className="docs-section docs-resource-section">
               <div className="docs-section-kicker">Resources</div>
-              <h2>公开资源</h2>
+              <h2>{tr("公开资源", "Public resources")}</h2>
               <div className="docs-resource-grid">
                 <a href={REALGUARD_SKILL_URL} target="_blank" rel="noreferrer">
                   <span>Agent Skill</span>
@@ -1532,10 +2221,10 @@ Authorization: Bearer rg_sk_xxx`}</pre>
                 </a>
               </div>
               <div className="docs-callout">
-                <strong>解释边界</strong>
+                <strong>{tr("解释边界", "Explanation boundary")}</strong>
                 <p>
-                  API 结果是鉴伪证据，不是绝对证明。Agent 必须说明 <code>source</code>、<code>modelVersion</code> 和
-                  <code>cacheVersion</code>；若 source 为 mock、heuristic 或回退链路，应明确标注限制。
+                  {tr("API 结果是鉴伪证据，不是绝对证明。智能体必须说明", "API results are forensic evidence, not absolute proof. Agents must state")} <code>source</code>{tr("、", ", ")}<code>modelVersion</code> {tr("和", "and")}
+                  <code>cacheVersion</code>{tr("；若 source 为 mock、heuristic 或回退链路，应明确标注限制。", "; if source is mock, heuristic, or a fallback path, limitations must be clearly marked.")}
                 </p>
               </div>
             </section>
@@ -1546,43 +2235,48 @@ Authorization: Bearer rg_sk_xxx`}</pre>
   );
 }
 
-function ExampleCard({ image, title, desc, real, fake }: { image: string; title: string; desc: string; real: number; fake: number }) {
+function ExampleCard({ image, title, desc, real, fake, lang }: { image: string; title: string; desc: string; real: number; fake: number; lang: Lang }) {
   return (
     <div className="example-card fade-up visible">
       <div className="example-img">
         <img src={image} alt={title} />
-        <span className="example-badge fake">伪造图像</span>
+        <span className="example-badge fake">{lang === "zh" ? "生成图像" : "Generated image"}</span>
       </div>
       <div className="example-body">
         <h3>{title}</h3>
         <p>{desc}</p>
-        <Progress label="图片为真" value={real} tone="green" />
-        <Progress label="图片为假" value={fake} tone="red" />
+        <Progress label={lang === "zh" ? "真实概率" : "Real probability"} value={real} tone="green" />
+        <Progress label={lang === "zh" ? "生成概率" : "Generated probability"} value={fake} tone="red" />
       </div>
     </div>
   );
 }
 
 function ImageDetectionPage({
+  lang,
   isGuest,
   guestDetections,
   onNeedAuth,
   onDone
 }: {
+  lang: Lang;
   isGuest: boolean;
   guestDetections: number;
   onNeedAuth: () => void;
   onDone: () => Promise<void>;
 }) {
+  const pageText = UI_TEXT[lang].pages;
+  const tr = (zh: string, en: string) => translate(lang, zh, en);
+  const imageKind = tr("图片", "image");
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState("");
   const [result, setResult] = useState<ImageDetectionResult | null>(null);
-  const [status, setStatus] = useState<Status>({ tone: "info", text: "等待上传图片..." });
+  const [status, setStatus] = useState<Status>({ tone: "info", text: tr("等待上传图片...", "Waiting for image upload...") });
   const [busy, setBusy] = useState(false);
 
   function selectFile(next: File | null) {
     if (next) {
-      const message = validateFile(next, { kind: "图片", maxBytes: IMAGE_MAX_BYTES, mimePrefixes: ["image/"] });
+      const message = validateFile(next, { kind: imageKind, maxBytes: IMAGE_MAX_BYTES, mimePrefixes: ["image/"], lang });
       if (message) {
         setStatus({ tone: "error", text: message });
         return;
@@ -1591,25 +2285,25 @@ function ImageDetectionPage({
     setFile(next);
     setResult(null);
     setPreview(next ? URL.createObjectURL(next) : "");
-    setStatus({ tone: "info", text: next ? `已选择: ${next.name}` : "等待上传图片..." });
+    setStatus({ tone: "info", text: next ? tr(`已选择: ${next.name}`, `Selected: ${next.name}`) : tr("等待上传图片...", "Waiting for image upload...") });
   }
 
   async function submit() {
     if (!file) {
-      setStatus({ tone: "error", text: "请先选择图片" });
+      setStatus({ tone: "error", text: tr("请先选择图片", "Select an image first") });
       return;
     }
     if (isGuest && guestDetections >= 1) {
-      setStatus({ tone: "info", text: "访客免费检测次数已用完，请登录后继续检测" });
+      setStatus({ tone: "info", text: tr("访客免费检测次数已用完，请登录后继续检测", "Guest free detection has been used. Log in to continue.") });
       onNeedAuth();
       return;
     }
     setBusy(true);
-    setStatus({ tone: "info", text: "正在分析图像……" });
+    setStatus({ tone: "info", text: tr("正在分析图像……", "Analyzing image...") });
     try {
       const data = await detectImage(file);
       setResult(data.result);
-      setStatus({ tone: "ok", text: "检测完成" });
+      setStatus({ tone: "ok", text: tr("检测完成", "Detection complete") });
       await onDone();
     } catch (error) {
       setStatus({ tone: "error", text: errorMessage(error) });
@@ -1620,17 +2314,17 @@ function ImageDetectionPage({
 
   async function detectSample(sample: { image: string; title: string }) {
     if (isGuest && guestDetections >= 1) {
-      setStatus({ tone: "info", text: "访客免费检测次数已用完，请登录后继续检测" });
+      setStatus({ tone: "info", text: tr("访客免费检测次数已用完，请登录后继续检测", "Guest free detection has been used. Log in to continue.") });
       onNeedAuth();
       return;
     }
     setBusy(true);
     setResult(null);
-    setStatus({ tone: "info", text: `正在加载示例图片：${sample.title}` });
+    setStatus({ tone: "info", text: tr(`正在加载示例图片：${sample.title}`, `Loading sample image: ${sample.title}`) });
     try {
       const response = await fetch(sample.image);
       if (!response.ok) {
-        throw new Error(`示例图片加载失败：${response.status}`);
+        throw new Error(tr(`示例图片加载失败：${response.status}`, `Sample image failed to load: ${response.status}`));
       }
       const blob = await response.blob();
       const ext = sample.image.split(".").pop()?.split("?")[0] || "jpg";
@@ -1639,10 +2333,10 @@ function ImageDetectionPage({
       });
       setFile(sampleFile);
       setPreview(URL.createObjectURL(sampleFile));
-      setStatus({ tone: "info", text: "正在分析示例图片……" });
+      setStatus({ tone: "info", text: tr("正在分析示例图片……", "Analyzing sample image...") });
       const data = await detectImage(sampleFile);
       setResult(data.result);
-      setStatus({ tone: "ok", text: "示例图片检测完成" });
+      setStatus({ tone: "ok", text: tr("示例图片检测完成", "Sample image detection complete") });
       await onDone();
     } catch (error) {
       setStatus({ tone: "error", text: errorMessage(error) });
@@ -1654,28 +2348,28 @@ function ImageDetectionPage({
   return (
     <main className="main">
       <div className="container">
-        <PageHeader icon="fa-image" title="图像鉴伪" desc="上传图片或选择示例图片，使用AI模型检测疑似侵权内容" />
+        <PageHeader icon="fa-image" title={pageText.imageTitle} desc={pageText.imageDesc} />
         <div className="layout">
           <div className="card">
-            <div className="section-label"><i className="fa fa-cogs" /> 选择检测模型</div>
+            <div className="section-label"><i className="fa fa-cogs" /> {tr("选择检测模型", "Select detection model")}</div>
             <div className="model-tabs">
-              <button className="model-tab active"><i className="fa fa-magic" /> AIGC检测</button>
-              <button className="model-tab"><i className="fa fa-paint-brush" /> PS篡改检测</button>
+              <button className="model-tab active"><i className="fa fa-magic" /> {tr("生成内容检测", "AIGC detection")}</button>
+              <button className="model-tab"><i className="fa fa-paint-brush" /> {tr("篡改检测", "Tamper detection")}</button>
             </div>
-            <div className="model-desc"><strong>AIGC检测：</strong>基于检测器快速判定AI生成概率，并结合元数据做辅助展示。</div>
+            <div className="model-desc"><strong>{tr("生成内容检测：", "AIGC detection: ")}</strong>{tr("基于检测器快速判定生成概率，并结合元数据做辅助展示。", "Quickly estimates generation probability and uses metadata as supporting context.")}</div>
             <div className="card-divider" />
-            <div className="section-label"><i className="fa fa-upload" /> 上传图片</div>
-            {isGuest && <TrialHint used={guestDetections} />}
-            <UploadBox accept="image/*" file={file} preview={preview} onFile={selectFile} kind="图片" />
+            <div className="section-label"><i className="fa fa-upload" /> {tr("上传图片", "Upload image")}</div>
+            {isGuest && <TrialHint used={guestDetections} lang={lang} />}
+            <UploadBox accept="image/*" file={file} preview={preview} onFile={selectFile} kind={imageKind} lang={lang} />
             <button className={`btn-primary ${busy ? "detecting" : ""}`} disabled={!file || busy} onClick={submit}>
-              <i className={`fa ${busy ? "fa-circle-o-notch detect-spin" : "fa-search"}`} /> {busy ? "Agent正在分析" : "开始检测"}
+              <i className={`fa ${busy ? "fa-circle-o-notch detect-spin" : "fa-search"}`} /> {busy ? tr("正在分析", "Analyzing") : tr("开始检测", "Start detection")}
             </button>
           </div>
           <div className="card">
-            <div className="section-label"><i className="fa fa-info-circle" /> 当前状态</div>
+            <div className="section-label"><i className="fa fa-info-circle" /> {tr("当前状态", "Current status")}</div>
             <StatusRow status={status} busy={busy} />
             <div className="card-divider" />
-            {result ? <ImageResult result={result} /> : <ImageSamples onSelect={detectSample} busy={busy} />}
+            {result ? <ImageResult result={result} lang={lang} /> : <ImageSamples onSelect={detectSample} busy={busy} lang={lang} />}
           </div>
         </div>
       </div>
@@ -1684,25 +2378,30 @@ function ImageDetectionPage({
 }
 
 function VideoDetectionPage({
+  lang,
   isGuest,
   guestDetections,
   onNeedAuth,
   onDone
 }: {
+  lang: Lang;
   isGuest: boolean;
   guestDetections: number;
   onNeedAuth: () => void;
   onDone: () => Promise<void>;
 }) {
+  const pageText = UI_TEXT[lang].pages;
+  const tr = (zh: string, en: string) => translate(lang, zh, en);
+  const videoKind = tr("视频", "video");
   const [file, setFile] = useState<File | null>(null);
   const [videoUrl, setVideoUrl] = useState("");
   const [result, setResult] = useState<VideoDetectionResult | null>(null);
-  const [status, setStatus] = useState<Status>({ tone: "info", text: "等待上传视频或填写URL..." });
+  const [status, setStatus] = useState<Status>({ tone: "info", text: tr("等待上传视频或填写 URL...", "Waiting for video upload or URL...") });
   const [busy, setBusy] = useState(false);
 
   function selectFile(next: File | null) {
     if (next) {
-      const message = validateFile(next, { kind: "视频", maxBytes: VIDEO_MAX_BYTES, mimePrefixes: ["video/"] });
+      const message = validateFile(next, { kind: videoKind, maxBytes: VIDEO_MAX_BYTES, mimePrefixes: ["video/"], lang });
       if (message) {
         setStatus({ tone: "error", text: message });
         return;
@@ -1710,25 +2409,25 @@ function VideoDetectionPage({
     }
     setFile(next);
     setResult(null);
-    setStatus({ tone: "info", text: next ? `已选择: ${next.name}` : "等待上传视频或填写URL..." });
+    setStatus({ tone: "info", text: next ? tr(`已选择: ${next.name}`, `Selected: ${next.name}`) : tr("等待上传视频或填写 URL...", "Waiting for video upload or URL...") });
   }
 
   async function submit() {
     if (!file && !videoUrl.trim()) {
-      setStatus({ tone: "error", text: "请上传视频或填写视频 URL" });
+      setStatus({ tone: "error", text: tr("请上传视频或填写视频 URL", "Upload a video or enter a video URL") });
       return;
     }
     if (isGuest && guestDetections >= 1) {
-      setStatus({ tone: "info", text: "访客免费检测次数已用完，请登录后继续检测" });
+      setStatus({ tone: "info", text: tr("访客免费检测次数已用完，请登录后继续检测", "Guest free detection has been used. Log in to continue.") });
       onNeedAuth();
       return;
     }
     setBusy(true);
-    setStatus({ tone: "info", text: "正在分析视频帧与编码特征…" });
+    setStatus({ tone: "info", text: tr("正在分析视频帧与编码特征…", "Analyzing video frames and encoding features...") });
     try {
       const data = await detectVideo({ file: file || undefined, videoUrl, fastMode: true });
       setResult(data.result);
-      setStatus({ tone: "ok", text: "检测完成" });
+      setStatus({ tone: "ok", text: tr("检测完成", "Detection complete") });
       await onDone();
     } catch (error) {
       setStatus({ tone: "error", text: errorMessage(error) });
@@ -1740,26 +2439,26 @@ function VideoDetectionPage({
   return (
     <main className="main">
       <div className="container">
-        <PageHeader icon="fa-film" title="视频检测" desc="上传本地视频或输入URL，使用AI模型检测视频真伪" />
+        <PageHeader icon="fa-film" title={pageText.videoTitle} desc={pageText.videoDesc} />
         <div className="layout">
           <div className="card">
-            <div className="section-label"><i className="fa fa-upload" /> 上传视频</div>
-            {isGuest && <TrialHint used={guestDetections} />}
-            <UploadBox accept="video/*" file={file} onFile={selectFile} kind="视频" />
-            <div className="url-or">或</div>
-            <div className="section-label"><i className="fa fa-link" /> 输入视频URL</div>
+            <div className="section-label"><i className="fa fa-upload" /> {tr("上传视频", "Upload video")}</div>
+            {isGuest && <TrialHint used={guestDetections} lang={lang} />}
+            <UploadBox accept="video/*" file={file} onFile={selectFile} kind={videoKind} lang={lang} />
+            <div className="url-or">{tr("或", "or")}</div>
+            <div className="section-label"><i className="fa fa-link" /> {tr("输入视频 URL", "Enter video URL")}</div>
             <div className="url-input-wrap">
               <input className="url-input" value={videoUrl} onChange={(event) => setVideoUrl(event.target.value)} placeholder="https://example.com/video.mp4" />
             </div>
             <button className={`btn-primary ${busy ? "detecting" : ""}`} disabled={busy || (!file && !videoUrl.trim())} onClick={submit}>
-              <i className={`fa ${busy ? "fa-spinner detect-spin" : "fa-search"}`} /> {busy ? "检测中…" : "开始检测"}
+              <i className={`fa ${busy ? "fa-spinner detect-spin" : "fa-search"}`} /> {busy ? tr("检测中…", "Detecting...") : tr("开始检测", "Start detection")}
             </button>
           </div>
           <div className="card">
-            <div className="section-label"><i className="fa fa-info-circle" /> 当前状态</div>
+            <div className="section-label"><i className="fa fa-info-circle" /> {tr("当前状态", "Current status")}</div>
             <StatusRow status={status} busy={busy} />
             <div className="card-divider" />
-            {result ? <VideoResult result={result} /> : <VideoSamples />}
+            {result ? <VideoResult result={result} lang={lang} /> : <VideoSamples lang={lang} />}
           </div>
         </div>
       </div>
@@ -1767,7 +2466,8 @@ function VideoDetectionPage({
   );
 }
 
-function RetrievePage({ onDone }: { onDone: () => Promise<void> }) {
+function RetrievePage({ onDone, lang }: { onDone: () => Promise<void>; lang: Lang }) {
+  const tr = (zh: string, en: string) => translate(lang, zh, en);
   const [searchType, setSearchType] = useState<"image" | "video">("image");
   const [file, setFile] = useState<File | null>(null);
   const [libraries, setLibraries] = useState<string[]>([]);
@@ -1775,14 +2475,14 @@ function RetrievePage({ onDone }: { onDone: () => Promise<void> }) {
   const [topK, setTopK] = useState(50);
   const [results, setResults] = useState<RetrieveItem[]>([]);
   const [baseUrl, setBaseUrl] = useState("");
-  const [status, setStatus] = useState<Status>({ tone: "info", text: "等待上传图片..." });
+  const [status, setStatus] = useState<Status>({ tone: "info", text: tr("等待上传图片...", "Waiting for image upload...") });
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     setFile(null);
     setResults([]);
     setBaseUrl("");
-    setStatus({ tone: "info", text: searchType === "image" ? "等待上传图片..." : "等待上传视频..." });
+    setStatus({ tone: "info", text: searchType === "image" ? tr("等待上传图片...", "Waiting for image upload...") : tr("等待上传视频...", "Waiting for video upload...") });
     getLibraries(searchType)
       .then((data) => {
         setLibraries(data.libraries || []);
@@ -1794,9 +2494,10 @@ function RetrievePage({ onDone }: { onDone: () => Promise<void> }) {
   function selectFile(next: File | null) {
     if (next) {
       const message = validateFile(next, {
-        kind: searchType === "image" ? "图片" : "视频",
+        kind: searchType === "image" ? tr("图片", "image") : tr("视频", "video"),
         maxBytes: searchType === "image" ? IMAGE_MAX_BYTES : VIDEO_MAX_BYTES,
         mimePrefixes: [searchType === "image" ? "image/" : "video/"],
+        lang,
       });
       if (message) {
         setStatus({ tone: "error", text: message });
@@ -1805,21 +2506,21 @@ function RetrievePage({ onDone }: { onDone: () => Promise<void> }) {
     }
     setFile(next);
     setResults([]);
-    setStatus({ tone: "info", text: next ? `已选择: ${next.name}` : "等待上传查询文件..." });
+    setStatus({ tone: "info", text: next ? tr(`已选择: ${next.name}`, `Selected: ${next.name}`) : tr("等待上传查询文件...", "Waiting for query file...") });
   }
 
   async function submit() {
     if (!file) {
-      setStatus({ tone: "error", text: "请先上传查询文件" });
+      setStatus({ tone: "error", text: tr("请先上传查询文件", "Upload a query file first") });
       return;
     }
     setBusy(true);
-    setStatus({ tone: "info", text: "正在检索可疑内容..." });
+    setStatus({ tone: "info", text: tr("正在检索可疑内容...", "Searching suspicious content...") });
     try {
       const data = await retrieveSearch({ file, searchType, dataset, topK });
       setResults(data.results || []);
       setBaseUrl(data.base_url || "");
-      setStatus({ tone: "ok", text: `检索完成，共 ${data.results?.length || 0} 条可疑结果` });
+      setStatus({ tone: "ok", text: tr(`检索完成，共 ${data.results?.length || 0} 条可疑结果`, `Search complete, ${data.results?.length || 0} suspicious results`) });
       await onDone();
     } catch (error) {
       setStatus({ tone: "error", text: errorMessage(error) });
@@ -1831,25 +2532,25 @@ function RetrievePage({ onDone }: { onDone: () => Promise<void> }) {
   return (
     <main className="main">
       <div className="container">
-        <PageHeader icon="fa-search" title={searchType === "image" ? "图像侵权检索" : "视频侵权检索"} desc="在数据库中检索视觉相似的可疑内容" />
+        <PageHeader icon="fa-search" title={searchType === "image" ? UI_TEXT[lang].pages.retrieveImageTitle : UI_TEXT[lang].pages.retrieveVideoTitle} desc={UI_TEXT[lang].pages.retrieveDesc} />
         <div className="layout">
           <div className="card">
-            <div className="section-label"><i className="fa fa-upload" /> 文件上传</div>
-            <UploadBox accept={searchType === "image" ? "image/*" : "video/*"} file={file} onFile={selectFile} kind={searchType === "image" ? "图片" : "视频"} />
-            <button className="btn-primary" disabled={!file || busy} onClick={submit}><i className="fa fa-search" /> 开始检索</button>
+            <div className="section-label"><i className="fa fa-upload" /> {tr("文件上传", "File upload")}</div>
+            <UploadBox accept={searchType === "image" ? "image/*" : "video/*"} file={file} onFile={selectFile} kind={searchType === "image" ? tr("图片", "image") : tr("视频", "video")} lang={lang} />
+            <button className="btn-primary" disabled={!file || busy} onClick={submit}><i className="fa fa-search" /> {busy ? tr("检索中...", "Searching...") : tr("开始检索", "Start retrieval")}</button>
           </div>
           <div className="card">
-            <div className="section-label"><i className="fa fa-sliders" /> 检索参数</div>
-            <label className="param-label">检索类型</label>
+            <div className="section-label"><i className="fa fa-sliders" /> {tr("检索参数", "Retrieval parameters")}</div>
+            <label className="param-label">{tr("检索类型", "Retrieval type")}</label>
             <select className="param-select" value={searchType} onChange={(event) => setSearchType(event.target.value as "image" | "video")}>
-              <option value="image">图像侵权检索</option>
-              <option value="video">视频侵权检索</option>
+              <option value="image">{UI_TEXT[lang].pages.retrieveImageTitle}</option>
+              <option value="video">{UI_TEXT[lang].pages.retrieveVideoTitle}</option>
             </select>
-            <label className="param-label">检索库</label>
+            <label className="param-label">{tr("检索库", "Library")}</label>
             <select className="param-select" value={dataset} onChange={(event) => setDataset(event.target.value)}>
-              {libraries.length ? libraries.map((item) => <option key={item} value={item}>{item}</option>) : <option value="">无可用检索库</option>}
+              {libraries.length ? libraries.map((item) => <option key={item} value={item}>{item}</option>) : <option value="">{tr("无可用检索库", "No available libraries")}</option>}
             </select>
-            <label className="param-label">返回数量</label>
+            <label className="param-label">{tr("返回数量", "Result count")}</label>
             <select className="param-select" value={topK} onChange={(event) => setTopK(Number(event.target.value))}>
               <option value={5}>Top 5</option>
               <option value={10}>Top 10</option>
@@ -1857,18 +2558,18 @@ function RetrievePage({ onDone }: { onDone: () => Promise<void> }) {
               <option value={50}>Top 50</option>
             </select>
             <div className="status-box">
-              <div className="status-label"><i className="fa fa-info-circle" /> 状态信息</div>
+              <div className="status-label"><i className="fa fa-info-circle" /> {tr("状态信息", "Status")}</div>
               <div className="status-text">{status?.text}</div>
             </div>
           </div>
         </div>
-        {results.length > 0 && <RetrieveResults results={results} baseUrl={baseUrl} searchType={searchType} />}
+        {results.length > 0 && <RetrieveResults results={results} baseUrl={baseUrl} searchType={searchType} lang={lang} />}
       </div>
     </main>
   );
 }
 
-function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
+function HistoryPage({ setPage, lang }: { setPage: (page: PageKey) => void; lang: Lang }) {
   const [tab, setTab] = useState<HistoryTabKey>(() => getInitialHistoryTab());
   const [records, setRecords] = useState<HistoryRecord[]>([]);
   const [status, setStatus] = useState<Status>(null);
@@ -1881,6 +2582,7 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
   const [historyFilterCounts, setHistoryFilterCounts] = useState<Partial<Record<HistoryFilterKey, number>>>({});
   const [debouncedQuery, setDebouncedQuery] = useState(() => getInitialHistoryQuery());
   const historyRequestIdRef = useRef(0);
+  const tr = (zh: string, en: string) => translate(lang, zh, en);
 
   async function loadHistoryRecords(
     targetTab: HistoryTabKey,
@@ -1888,7 +2590,7 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
   ) {
     const requestId = historyRequestIdRef.current + 1;
     historyRequestIdRef.current = requestId;
-    setStatus({ tone: "info", text: "正在加载历史记录" });
+    setStatus({ tone: "info", text: tr("正在加载历史记录", "Loading history records") });
     setHistoryBusy(true);
     const activeFilter = isHistoryFilterSupported(targetTab, filter) ? filter : "all";
     const offset = append ? records.length : 0;
@@ -1982,18 +2684,18 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
   const summaryCards = useMemo<HistorySummaryCard[]>(() => {
     if (tab === "image") {
       return [
-        { label: "当前记录", value: historyFilterCounts.all ?? historyTotal, filterKey: "all" as HistoryFilterKey },
-        { label: "访客记录", value: historyFilterCounts.guest ?? 0, filterKey: "guest" as HistoryFilterKey },
-        { label: "带元数据", value: historyFilterCounts.metadata ?? 0, filterKey: "metadata" as HistoryFilterKey },
-        { label: "有可疑点", value: historyFilterCounts.issues ?? 0, filterKey: "issues" as HistoryFilterKey },
+        { label: tr("当前记录", "Current records"), value: historyFilterCounts.all ?? historyTotal, filterKey: "all" as HistoryFilterKey },
+        { label: tr("访客记录", "Guest records"), value: historyFilterCounts.guest ?? 0, filterKey: "guest" as HistoryFilterKey },
+        { label: tr("带元数据", "With metadata"), value: historyFilterCounts.metadata ?? 0, filterKey: "metadata" as HistoryFilterKey },
+        { label: tr("有可疑点", "With issues"), value: historyFilterCounts.issues ?? 0, filterKey: "issues" as HistoryFilterKey },
       ];
     }
     if (tab === "video") {
       return [
-        { label: "当前记录", value: historyFilterCounts.all ?? historyTotal, filterKey: "all" as HistoryFilterKey },
-        { label: "访客记录", value: historyFilterCounts.guest ?? 0, filterKey: "guest" as HistoryFilterKey },
-        { label: "AI结论", value: historyFilterCounts.ai ?? 0, filterKey: "ai" as HistoryFilterKey },
-        { label: "真实结论", value: historyFilterCounts.real ?? 0, filterKey: "real" as HistoryFilterKey },
+        { label: tr("当前记录", "Current records"), value: historyFilterCounts.all ?? historyTotal, filterKey: "all" as HistoryFilterKey },
+        { label: tr("访客记录", "Guest records"), value: historyFilterCounts.guest ?? 0, filterKey: "guest" as HistoryFilterKey },
+        { label: tr("生成结论", "AI verdicts"), value: historyFilterCounts.ai ?? 0, filterKey: "ai" as HistoryFilterKey },
+        { label: tr("真实结论", "Real verdicts"), value: historyFilterCounts.real ?? 0, filterKey: "real" as HistoryFilterKey },
       ];
     }
     const resultCount = records.reduce((sum, record) => sum + Number(record.result_count || 0), 0);
@@ -2001,42 +2703,38 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
       ? Math.round((records.reduce((sum, record) => sum + Number(record.top_k || 0), 0) / records.length) * 10) / 10
       : 0;
     return [
-      { label: "当前查询", value: historyTotal || records.length },
-      { label: "有命中", value: historyFilterCounts.hits ?? 0, filterKey: "hits" as HistoryFilterKey },
-      { label: "无命中", value: historyFilterCounts.empty ?? 0, filterKey: "empty" as HistoryFilterKey },
-      { label: "命中总数", value: resultCount },
-      { label: "平均Top-K", value: topKAvg },
-      { label: "查询类型", value: tab === "imageRetrieve" ? "图像" : "视频" },
+      { label: tr("当前查询", "Current query"), value: historyTotal || records.length },
+      { label: tr("有命中", "With hits"), value: historyFilterCounts.hits ?? 0, filterKey: "hits" as HistoryFilterKey },
+      { label: tr("无命中", "No hits"), value: historyFilterCounts.empty ?? 0, filterKey: "empty" as HistoryFilterKey },
+      { label: tr("命中总数", "Total hits"), value: resultCount },
+      { label: tr("平均 Top-K", "Average Top-K"), value: topKAvg },
+      { label: tr("查询类型", "Query type"), value: tab === "imageRetrieve" ? tr("图像", "Image") : tr("视频", "Video") },
     ];
-  }, [historyFilterCounts, historyTotal, records, tab]);
+  }, [historyFilterCounts, historyTotal, records, tab, lang]);
 
-  const filterOptions = getHistoryFilterOptions(tab);
-  const activeSummary = getHistoryActiveSummary(tab, filter, query);
+  const filterOptions = getHistoryFilterOptions(tab, lang);
+  const activeSummary = getHistoryActiveSummary(tab, filter, query, lang);
   const matchSummary =
     records.length === historyTotal
-      ? `当前展示 ${records.length} 条记录`
-      : `当前匹配 ${records.length} / ${historyTotal} 条记录`;
+      ? tr(`当前展示 ${records.length} 条记录`, `Showing ${records.length} records`)
+      : tr(`当前匹配 ${records.length} / ${historyTotal} 条记录`, `Matched ${records.length} / ${historyTotal} records`);
 
   async function copyCurrentView() {
     const url = window.location.href;
-    try {
-      await navigator.clipboard.writeText(url);
-      setCopied(true);
-    } catch {
-      window.prompt("复制当前历史视图链接", url);
-    }
+    await copyTextToClipboard(url, tr("复制当前历史视图链接", "Copy current history view URL"));
+    setCopied(true);
   }
 
   return (
     <main className="main">
       <div className="container">
-        <PageHeader icon="fa-history" title="历史记录" desc="查看您的检测与检索历史记录" />
+        <PageHeader icon="fa-history" title={UI_TEXT[lang].pages.historyTitle} desc={UI_TEXT[lang].pages.historyDesc} />
         <div className="card">
           <div className="model-tabs history-tabs">
-            <button className={`model-tab ${tab === "image" ? "active" : ""}`} onClick={() => updateHistoryTab("image")}>图像鉴伪</button>
-            <button className={`model-tab ${tab === "video" ? "active" : ""}`} onClick={() => updateHistoryTab("video")}>视频鉴伪</button>
-            <button className={`model-tab ${tab === "imageRetrieve" ? "active" : ""}`} onClick={() => updateHistoryTab("imageRetrieve")}>图像检索</button>
-            <button className={`model-tab ${tab === "videoRetrieve" ? "active" : ""}`} onClick={() => updateHistoryTab("videoRetrieve")}>视频检索</button>
+            <button className={`model-tab ${tab === "image" ? "active" : ""}`} onClick={() => updateHistoryTab("image")}>{UI_TEXT[lang].pages.imageTitle}</button>
+            <button className={`model-tab ${tab === "video" ? "active" : ""}`} onClick={() => updateHistoryTab("video")}>{UI_TEXT[lang].pages.videoTitle}</button>
+            <button className={`model-tab ${tab === "imageRetrieve" ? "active" : ""}`} onClick={() => updateHistoryTab("imageRetrieve")}>{tr("图像检索", "Image retrieval")}</button>
+            <button className={`model-tab ${tab === "videoRetrieve" ? "active" : ""}`} onClick={() => updateHistoryTab("videoRetrieve")}>{tr("视频检索", "Video retrieval")}</button>
           </div>
           {status && <div className={`notice ${status.tone}`}>{status.text}</div>}
           {records.length ? (
@@ -2063,12 +2761,12 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
                   <input
                     value={query}
                     onChange={(event) => updateHistoryQuery(event.target.value)}
-                    placeholder={tab === "imageRetrieve" || tab === "videoRetrieve" ? "按文件名、命中库、首个命中、时间搜索历史记录" : "按文件名、结论、时间搜索历史记录"}
+                    placeholder={tab === "imageRetrieve" || tab === "videoRetrieve" ? tr("按文件名、命中库、首个命中、时间搜索历史记录", "Search by filename, library, first hit, or time") : tr("按文件名、结论、时间搜索历史记录", "Search by filename, verdict, or time")}
                   />
                 </div>
                 {query && (
                   <button type="button" className="btn-code history-search-clear" onClick={() => updateHistoryQuery("")}>
-                    清空
+                    {tr("清空", "Clear")}
                   </button>
                 )}
               </div>
@@ -2090,7 +2788,7 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
                   }}
                   disabled={historyBusy}
                 >
-                  {historyBusy ? "刷新中" : "刷新记录"}
+                  {historyBusy ? tr("刷新中", "Refreshing") : tr("刷新记录", "Refresh records")}
                 </button>
                 <button
                   type="button"
@@ -2099,7 +2797,7 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
                   }`}
                   onClick={copyCurrentView}
                 >
-                  {copied ? "已复制视图链接" : "复制当前视图"}
+                  {copied ? tr("已复制视图链接", "View URL copied") : tr("复制当前视图", "Copy current view")}
                 </button>
                 {(filter !== "all" || query.trim()) && (
                   <button
@@ -2110,7 +2808,7 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
                     updateHistoryQuery("");
                   }}
                 >
-                  重置条件
+                  {tr("重置条件", "Reset filters")}
                   </button>
                 )}
               </div>
@@ -2131,7 +2829,7 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
               )}
               {records.length ? (
                 <>
-                  <HistoryRecords records={records} tab={tab} query={query} />
+                  <HistoryRecords records={records} tab={tab} query={query} lang={lang} />
                   {records.length < historyTotal && (
                     <div className="history-load-more">
                       <button
@@ -2143,7 +2841,7 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
                           void loadHistoryRecords(tab, { preserveOnError: true, append: true });
                         }}
                       >
-                        {historyBusy ? "加载中" : "加载更多"}
+                        {historyBusy ? tr("加载中", "Loading") : tr("加载更多", "Load more")}
                       </button>
                     </div>
                   )}
@@ -2151,10 +2849,10 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
               ) : (
                 <EmptyState
                   icon="fa-filter"
-                  text="当前筛选条件下暂无记录"
+                  text={tr("当前筛选条件下暂无记录", "No records match the current filters")}
                   actions={[
-                    { label: "清除条件", onClick: () => { updateHistoryFilter("all"); updateHistoryQuery(""); } },
-                    { label: tab === "video" ? "去视频鉴伪" : tab === "image" ? "去图像鉴伪" : "去侵权检索", onClick: () => setPage(tab === "video" ? "video" : tab === "image" ? "image" : "retrieve") },
+                    { label: tr("清除条件", "Clear filters"), onClick: () => { updateHistoryFilter("all"); updateHistoryQuery(""); } },
+                    { label: tab === "video" ? UI_TEXT[lang].pages.videoTitle : tab === "image" ? UI_TEXT[lang].pages.imageTitle : tr("去侵权检索", "Go to retrieval"), onClick: () => setPage(tab === "video" ? "video" : tab === "image" ? "image" : "retrieve") },
                   ]}
                 />
               )}
@@ -2164,27 +2862,27 @@ function HistoryPage({ setPage }: { setPage: (page: PageKey) => void }) {
               icon="fa-exclamation-triangle"
               text={status.text}
               actions={[
-                { label: historyBusy ? "加载中" : "重试加载", onClick: () => { void loadHistoryRecords(tab); } },
-                { label: tab === "video" ? "去视频鉴伪" : tab === "image" ? "去图像鉴伪" : "去侵权检索", onClick: () => setPage(tab === "video" ? "video" : tab === "image" ? "image" : "retrieve") },
+                { label: historyBusy ? tr("加载中", "Loading") : tr("重试加载", "Retry"), onClick: () => { void loadHistoryRecords(tab); } },
+                { label: tab === "video" ? UI_TEXT[lang].pages.videoTitle : tab === "image" ? UI_TEXT[lang].pages.imageTitle : tr("去侵权检索", "Go to retrieval"), onClick: () => setPage(tab === "video" ? "video" : tab === "image" ? "image" : "retrieve") },
               ]}
             />
           ) : !status && (filter !== "all" || query.trim()) ? (
             <EmptyState
               icon="fa-filter"
-              text="当前筛选条件下暂无记录"
+              text={tr("当前筛选条件下暂无记录", "No records match the current filters")}
               actions={[
-                { label: "清除条件", onClick: () => { updateHistoryFilter("all"); updateHistoryQuery(""); } },
-                { label: tab === "video" ? "去视频鉴伪" : tab === "image" ? "去图像鉴伪" : "去侵权检索", onClick: () => setPage(tab === "video" ? "video" : tab === "image" ? "image" : "retrieve") },
+                { label: tr("清除条件", "Clear filters"), onClick: () => { updateHistoryFilter("all"); updateHistoryQuery(""); } },
+                { label: tab === "video" ? UI_TEXT[lang].pages.videoTitle : tab === "image" ? UI_TEXT[lang].pages.imageTitle : tr("去侵权检索", "Go to retrieval"), onClick: () => setPage(tab === "video" ? "video" : tab === "image" ? "image" : "retrieve") },
               ]}
             />
           ) : !status && (
             <EmptyState
               icon="fa-clock-o"
-              text="暂无记录"
+              text={tr("暂无记录", "No records yet")}
               actions={[
-                { label: "去图像鉴伪", onClick: () => setPage("image") },
-                { label: "去视频鉴伪", onClick: () => setPage("video") },
-                { label: "去侵权检索", onClick: () => setPage("retrieve") },
+                { label: UI_TEXT[lang].pages.imageTitle, onClick: () => setPage("image") },
+                { label: UI_TEXT[lang].pages.videoTitle, onClick: () => setPage("video") },
+                { label: tr("去侵权检索", "Go to retrieval"), onClick: () => setPage("retrieve") },
               ]}
             />
           )}
@@ -2203,11 +2901,15 @@ function PageHeader({ icon, title, desc }: { icon: string; title: string; desc: 
   );
 }
 
-function TrialHint({ used }: { used: number }) {
+function TrialHint({ used, lang }: { used: number; lang: Lang }) {
   return (
     <div className="trial-note">
       <i className="fa fa-info-circle" />
-      <span>{used >= 1 ? "访客检测次数已用完，登录后继续使用。" : "访客可免费完成 1 次检测，本次不会要求登录。"}</span>
+      <span>
+        {used >= 1
+          ? translate(lang, "访客检测次数已用完，登录后继续使用。", "Guest detection has been used. Log in to continue.")
+          : translate(lang, "访客可免费完成 1 次检测，本次不会要求登录。", "Guests can complete one free detection. This run does not require login.")}
+      </span>
     </div>
   );
 }
@@ -2227,30 +2929,33 @@ function UploadBox({
   file,
   preview,
   onFile,
-  kind
+  kind,
+  lang
 }: {
   accept: string;
   file: File | null;
   preview?: string;
   onFile: (file: File | null) => void;
   kind: string;
+  lang: Lang;
 }) {
+  const tr = (zh: string, en: string) => translate(lang, zh, en);
   return (
     <div className="upload-area">
       <input accept={accept} type="file" id={`file-${kind}`} onChange={(event) => onFile(event.target.files?.[0] || null)} />
       {!file ? (
         <label htmlFor={`file-${kind}`} className="upload-placeholder">
           <div className="upload-icon"><i className="fa fa-cloud-upload" /></div>
-          <div className="upload-text">拖放{kind}到此处，或点击上传</div>
-          <div className="upload-hint">支持常见{kind}格式</div>
+          <div className="upload-text">{tr(`拖放${kind}到此处，或点击上传`, `Drop ${kind} here, or click to upload`)}</div>
+          <div className="upload-hint">{tr(`支持常见${kind}格式`, `Supports common ${kind} formats`)}</div>
         </label>
       ) : (
         <div className="file-preview visible">
-          {preview && <img src={preview} alt="预览" />}
+          {preview && <img src={preview} alt={tr("预览", "Preview")} />}
           <div className="file-meta">
             <span>{file.name}</span><span>·</span><span>{formatSize(file.size)}</span><span className="file-badge">{kind}</span>
           </div>
-          <button className="clear-btn" onClick={() => onFile(null)}><i className="fa fa-times" /> 清除</button>
+          <button className="clear-btn" onClick={() => onFile(null)}><i className="fa fa-times" /> {tr("清除", "Clear")}</button>
         </div>
       )}
     </div>
@@ -2268,36 +2973,48 @@ function StatusRow({ status, busy }: { status: Status; busy: boolean }) {
 
 function ImageSamples({
   onSelect,
-  busy
+  busy,
+  lang
 }: {
   onSelect: (sample: { image: string; title: string }) => void;
   busy: boolean;
+  lang: Lang;
 }) {
+  const tr = (zh: string, en: string) => translate(lang, zh, en);
   return (
     <>
-      <div className="section-label"><i className="fa fa-th-large" style={{ color: "var(--warning)" }} /> 示例图片 <span className="label-muted">点击直接检测</span></div>
+      <div className="section-label"><i className="fa fa-th-large" style={{ color: "var(--warning)" }} /> {tr("示例图片", "Sample images")} <span className="label-muted">{tr("点击直接检测", "Click to detect")}</span></div>
       <div className="sample-list">
-        <SampleItem image="/system/index1.jpg" title="示例图片 1" label="点击检测" neutral disabled={busy} onClick={onSelect} />
-        <SampleItem image="/system/index2.jpg" title="示例图片 2" label="点击检测" neutral disabled={busy} onClick={onSelect} />
-        <SampleItem image="/system/index3.jpg" title="示例图片 3" label="点击检测" neutral disabled={busy} onClick={onSelect} />
+        <SampleItem image="/system/index1.jpg" title={tr("示例图片 1", "Sample image 1")} label={tr("点击检测", "Detect")} neutral disabled={busy} onClick={onSelect} lang={lang} />
+        <SampleItem image="/system/index2.jpg" title={tr("示例图片 2", "Sample image 2")} label={tr("点击检测", "Detect")} neutral disabled={busy} onClick={onSelect} lang={lang} />
+        <SampleItem image="/system/index3.jpg" title={tr("示例图片 3", "Sample image 3")} label={tr("点击检测", "Detect")} neutral disabled={busy} onClick={onSelect} lang={lang} />
       </div>
       <div className="card-divider" />
-      <Tips items={["AIGC检测：识别SD、DALL-E、Midjourney等AI生成图像", "PS篡改检测：识别拼接、修补、克隆等篡改痕迹", "结果包含概率、置信度与简洁结论"]} />
+      <Tips lang={lang} items={[
+        tr("生成内容检测：识别 SD、DALL-E、Midjourney 等模型生成图像", "AIGC detection: identifies images generated by SD, DALL-E, Midjourney, and similar models"),
+        tr("篡改检测：识别拼接、修补、克隆等篡改痕迹", "Tamper detection: identifies splicing, inpainting, cloning, and related traces"),
+        tr("结果包含概率、置信度与简洁结论", "Results include probability, confidence, and a concise verdict"),
+      ]} />
     </>
   );
 }
 
-function VideoSamples() {
+function VideoSamples({ lang }: { lang: Lang }) {
+  const tr = (zh: string, en: string) => translate(lang, zh, en);
   return (
     <>
-      <div className="section-label"><i className="fa fa-th-large" style={{ color: "var(--warning)" }} /> 示例视频 <span className="label-muted">点击查看效果</span></div>
+      <div className="section-label"><i className="fa fa-th-large" style={{ color: "var(--warning)" }} /> {tr("示例视频", "Sample videos")} <span className="label-muted">{tr("点击查看效果", "Click to preview")}</span></div>
       <div className="sample-list">
-        <SampleItem image="/system/video5227-cover.jpg" title="示例视频 1（video5227）" label="示例" fake play />
-        <SampleItem image="/system/video189-cover.jpg" title="示例视频 2（video189）" label="示例" play />
-        <SampleItem image="/system/video6785-cover.jpg" title="示例视频 3（video6785）" label="示例" fake play />
+        <SampleItem image="/system/video5227-cover.jpg" title={tr("示例视频 1（video5227）", "Sample video 1 (video5227)")} label={tr("示例", "Sample")} fake play lang={lang} />
+        <SampleItem image="/system/video189-cover.jpg" title={tr("示例视频 2（video189）", "Sample video 2 (video189)")} label={tr("示例", "Sample")} play lang={lang} />
+        <SampleItem image="/system/video6785-cover.jpg" title={tr("示例视频 3（video6785）", "Sample video 3 (video6785)")} label={tr("示例", "Sample")} fake play lang={lang} />
       </div>
       <div className="card-divider" />
-      <Tips items={["支持本地文件上传和远程URL两种方式", "若文件和URL同时存在，优先使用本地文件", "检测结果包含AI/真实概率、置信度和说明"]} />
+      <Tips lang={lang} items={[
+        tr("支持本地文件上传和远程 URL 两种方式", "Supports both local upload and remote URL input"),
+        tr("若文件和 URL 同时存在，优先使用本地文件", "If both file and URL are present, local file takes priority"),
+        tr("检测结果包含生成/真实概率、置信度和说明", "Results include generated/real probabilities, confidence, and explanation"),
+      ]} />
     </>
   );
 }
@@ -2310,7 +3027,8 @@ function SampleItem({
   neutral,
   play,
   disabled,
-  onClick
+  onClick,
+  lang
 }: {
   image: string;
   title: string;
@@ -2320,6 +3038,7 @@ function SampleItem({
   play?: boolean;
   disabled?: boolean;
   onClick?: (sample: { image: string; title: string }) => void;
+  lang: Lang;
 }) {
   const labelClass = neutral ? "neutral" : fake ? "fake" : "real";
   const labelIcon = neutral ? "fa-search" : fake ? "fa-times" : "fa-check";
@@ -2334,17 +3053,17 @@ function SampleItem({
         <div className="sample-name">{title}</div>
         <div className="sample-meta">
           <span className={`sample-label ${labelClass}`}><i className={`fa ${labelIcon}`} /> {label}</span>
-          <span className="sample-hint">查看 <i className="fa fa-chevron-right" /></span>
+          <span className="sample-hint">{translate(lang, "查看", "View")} <i className="fa fa-chevron-right" /></span>
         </div>
       </div>
     </button>
   );
 }
 
-function Tips({ items }: { items: string[] }) {
+function Tips({ items, lang }: { items: string[]; lang: Lang }) {
   return (
     <>
-      <div className="section-label"><i className="fa fa-lightbulb-o" style={{ color: "var(--warning)" }} /> 使用说明</div>
+      <div className="section-label"><i className="fa fa-lightbulb-o" style={{ color: "var(--warning)" }} /> {translate(lang, "使用说明", "Usage notes")}</div>
       <ul className="tips-list">
         {items.map((item) => <li key={item}><i className="fa fa-check-circle" /><span>{item}</span></li>)}
       </ul>
@@ -2352,25 +3071,26 @@ function Tips({ items }: { items: string[] }) {
   );
 }
 
-function ImageResult({ result }: { result: ImageDetectionResult }) {
+function ImageResult({ result, lang }: { result: ImageDetectionResult; lang: Lang }) {
   const probability = Math.round((result.probability || 0) * 1000) / 10;
+  const tr = (zh: string, en: string) => translate(lang, zh, en);
   return (
     <div className="result-panel">
-      <div className="section-label"><i className="fa fa-bar-chart" /> 检测结果</div>
+      <div className="section-label"><i className="fa fa-bar-chart" /> {tr("检测结果", "Detection result")}</div>
       {result.image_url && <img className="result-media" src={result.image_url} alt={result.filename} />}
       <div className="verdict-row">
         <span className={result.final_label.includes("AI") ? "pill danger" : "pill ok"}>{result.final_label}</span>
         <strong>{probability}%</strong>
       </div>
       <div className="case-kv">
-        <Info label="置信度" value={result.confidence || "-"} />
-        <Info label="文件名" value={result.filename || "-"} />
-        <Info label="格式" value={result.img_format || "-"} />
-        <Info label="分辨率" value={result.resolution || "-"} />
+        <Info label={tr("置信度", "Confidence")} value={result.confidence || "-"} />
+        <Info label={tr("文件名", "Filename")} value={result.filename || "-"} />
+        <Info label={tr("格式", "Format")} value={result.img_format || "-"} />
+        <Info label={tr("分辨率", "Resolution")} value={result.resolution || "-"} />
       </div>
       <div className="result-actions">
         <button className="btn-code" type="button" onClick={() => downloadImageReport(result.itemid)}>
-          <i className="fa fa-download" /> 下载报告
+          <i className="fa fa-download" /> {tr("下载报告", "Download report")}
         </button>
       </div>
       <div className="case-block"><p>{result.explanation}</p></div>
@@ -2378,23 +3098,24 @@ function ImageResult({ result }: { result: ImageDetectionResult }) {
   );
 }
 
-function VideoResult({ result }: { result: VideoDetectionResult }) {
+function VideoResult({ result, lang }: { result: VideoDetectionResult; lang: Lang }) {
+  const tr = (zh: string, en: string) => translate(lang, zh, en);
   return (
     <div className="result-panel">
-      <div className="section-label"><i className="fa fa-bar-chart" /> 视频检测结果</div>
+      <div className="section-label"><i className="fa fa-bar-chart" /> {tr("视频检测结果", "Video detection result")}</div>
       {result.video_url && <video className="result-media" src={result.video_url} controls />}
       <div className="verdict-row">
-        <span className={result.final_label.includes("AI") ? "pill danger" : "pill ok"}>{result.final_label || "未标注"}</span>
+        <span className={result.final_label.includes("AI") ? "pill danger" : "pill ok"}>{result.final_label || tr("未标注", "Unlabeled")}</span>
         <strong>{Math.round(result.fake_percentage * 10) / 10}%</strong>
       </div>
-      <Progress label="真实概率" value={result.real_percentage} tone="green" />
-      <Progress label="AI概率" value={result.fake_percentage} tone="red" />
+      <Progress label={tr("真实概率", "Real probability")} value={result.real_percentage} tone="green" />
+      <Progress label={tr("生成概率", "Generated probability")} value={result.fake_percentage} tone="red" />
       <div className="result-actions">
         <button className="btn-code" type="button" onClick={() => downloadVideoReport(result.itemid)}>
-          <i className="fa fa-download" /> 下载报告
+          <i className="fa fa-download" /> {tr("下载报告", "Download report")}
         </button>
       </div>
-      <div className="case-block"><p>{result.explanation || "暂无详细说明"}</p></div>
+      <div className="case-block"><p>{result.explanation || tr("暂无详细说明", "No detailed explanation yet")}</p></div>
     </div>
   );
 }
@@ -2417,13 +3138,14 @@ function Info({ label, value }: { label: string; value: string }) {
   );
 }
 
-function RetrieveResults({ results, baseUrl, searchType }: { results: RetrieveItem[]; baseUrl: string; searchType: "image" | "video" }) {
+function RetrieveResults({ results, baseUrl, searchType, lang }: { results: RetrieveItem[]; baseUrl: string; searchType: "image" | "video"; lang: Lang }) {
+  const tr = (zh: string, en: string) => translate(lang, zh, en);
   return (
     <div className="results-section visible">
       <div className="card result-card-wrap">
         <div className="results-header">
-          <h2><i className="fa fa-bar-chart" /> 侵权检索结果</h2>
-          <div className="results-summary">共 {results.length} 条可疑结果</div>
+          <h2><i className="fa fa-bar-chart" /> {tr("侵权检索结果", "Retrieval results")}</h2>
+          <div className="results-summary">{tr(`共 ${results.length} 条可疑结果`, `${results.length} suspicious results`)}</div>
         </div>
         <div className="results-grid">
           {results.slice(0, 15).map((item) => {
@@ -2432,12 +3154,12 @@ function RetrieveResults({ results, baseUrl, searchType }: { results: RetrieveIt
             return (
               <div className="result-card" key={`${item.rank}-${item.id}`}>
                 <div className="result-thumb">
-                  {searchType === "image" ? <img src={src} alt={`第 ${item.rank} 名`} /> : <video src={src} />}
+                  {searchType === "image" ? <img src={src} alt={tr(`第 ${item.rank} 名`, `Rank ${item.rank}`)} /> : <video src={src} />}
                   <div className={`rank-badge ${item.rank <= 3 ? `rank-${item.rank}` : "rank-default"}`}>{item.rank}</div>
                 </div>
                 <div className="result-body">
                   <div className="result-name">{item.id}</div>
-                  <div className="result-score-row"><span className="result-score-label">相似度</span><span className="result-score-val">{Number(item.score || 0).toFixed(3)}</span></div>
+                  <div className="result-score-row"><span className="result-score-label">{tr("相似度", "Similarity")}</span><span className="result-score-val">{Number(item.score || 0).toFixed(3)}</span></div>
                   <div className="score-bar"><div className="score-bar-inner" style={{ width: `${Math.max(0, Math.min(1, item.score || 0)) * 100}%` }} /></div>
                 </div>
               </div>
@@ -2453,22 +3175,25 @@ function HistoryRecords({
   records,
   tab,
   query,
+  lang,
 }: {
   records: HistoryRecord[];
   tab: "image" | "video" | "imageRetrieve" | "videoRetrieve";
   query: string;
+  lang: Lang;
 }) {
   const isVideo = tab === "video" || tab === "videoRetrieve";
   const isRetrieval = tab === "imageRetrieve" || tab === "videoRetrieve";
+  const tr = (zh: string, en: string) => translate(lang, zh, en);
   return (
     <div className="history-grid">
       {records.map((record, index) => {
         const mediaUrl = historyMediaUrl(record);
         const previewUrl = historyPreviewUrl(record) || mediaUrl;
-        const title = String(record.filename || `历史记录 ${index + 1}`);
+        const title = String(record.filename || tr(`历史记录 ${index + 1}`, `History record ${index + 1}`));
         const resultCount = Number(record.result_count || 0);
         const verdict = isRetrieval
-          ? `${resultCount} 条结果`
+          ? tr(`${resultCount} 条结果`, `${resultCount} results`)
           : String(record.final_label || "-");
         const meta = isRetrieval
           ? String(record.top_k || "-")
@@ -2479,14 +3204,14 @@ function HistoryRecords({
         const hasIssues = Boolean(record.has_visual_issues);
         const issueCount = Number(record.visual_issue_count || 0);
         const timeText = String(record.createtime || "-");
-        const retrievalTag = tab === "imageRetrieve" ? "图像检索" : tab === "videoRetrieve" ? "视频检索" : "";
+        const retrievalTag = tab === "imageRetrieve" ? tr("图像检索", "Image retrieval") : tab === "videoRetrieve" ? tr("视频检索", "Video retrieval") : "";
         const hasHits = resultCount > 0;
         const topResultId = String(record.top_result_id || "");
         const topResultLibrary = String(record.top_result_library || "");
         const topResultScore = Number(record.top_result_score || 0);
         return (
           <article className="history-record" key={`${record.itemid || index}`}>
-            <a className="history-media" href={mediaUrl || undefined} target={mediaUrl ? "_blank" : undefined} rel="noreferrer" aria-label={mediaUrl ? `查看 ${title}` : title}>
+            <a className="history-media" href={mediaUrl || undefined} target={mediaUrl ? "_blank" : undefined} rel="noreferrer" aria-label={mediaUrl ? tr(`查看 ${title}`, `View ${title}`) : title}>
               {previewUrl ? (
                 isVideo ? (
                   <div className="history-placeholder"><i className="fa fa-film" /></div>
@@ -2496,21 +3221,21 @@ function HistoryRecords({
               ) : (
                 <div className="history-placeholder"><i className={`fa ${isVideo ? "fa-film" : "fa-image"}`} /></div>
               )}
-              {mediaUrl && <span className="history-view"><i className="fa fa-eye" /> 查看</span>}
+              {mediaUrl && <span className="history-view"><i className="fa fa-eye" /> {tr("查看", "View")}</span>}
             </a>
             <div className="history-body">
               <div className="history-title" title={title}>{renderHighlightedText(title, query)}</div>
               {guestRecord && (
                 <div className="history-tags">
-                  <span className="history-tag guest"><i className="fa fa-user-secret" /> {renderHighlightedText("访客", query)}</span>
-                  {hasMetadata && <span className="history-tag meta"><i className="fa fa-info-circle" /> {renderHighlightedText("元数据", query)}</span>}
-                  {hasIssues && <span className="history-tag issue"><i className="fa fa-exclamation-triangle" /> {renderHighlightedText(`可疑点${issueCount > 0 ? ` ${issueCount}` : ""}`, query)}</span>}
+                  <span className="history-tag guest"><i className="fa fa-user-secret" /> {renderHighlightedText(tr("访客", "Guest"), query)}</span>
+                  {hasMetadata && <span className="history-tag meta"><i className="fa fa-info-circle" /> {renderHighlightedText(tr("元数据", "Metadata"), query)}</span>}
+                  {hasIssues && <span className="history-tag issue"><i className="fa fa-exclamation-triangle" /> {renderHighlightedText(issueCount > 0 ? tr(`可疑点 ${issueCount}`, `Issues ${issueCount}`) : tr("可疑点", "Issues"), query)}</span>}
                 </div>
               )}
               {!guestRecord && (hasMetadata || hasIssues) && (
                 <div className="history-tags">
-                  {hasMetadata && <span className="history-tag meta"><i className="fa fa-info-circle" /> {renderHighlightedText("元数据", query)}</span>}
-                  {hasIssues && <span className="history-tag issue"><i className="fa fa-exclamation-triangle" /> {renderHighlightedText(`可疑点${issueCount > 0 ? ` ${issueCount}` : ""}`, query)}</span>}
+                  {hasMetadata && <span className="history-tag meta"><i className="fa fa-info-circle" /> {renderHighlightedText(tr("元数据", "Metadata"), query)}</span>}
+                  {hasIssues && <span className="history-tag issue"><i className="fa fa-exclamation-triangle" /> {renderHighlightedText(issueCount > 0 ? tr(`可疑点 ${issueCount}`, `Issues ${issueCount}`) : tr("可疑点", "Issues"), query)}</span>}
                 </div>
               )}
               {isRetrieval ? (
@@ -2518,20 +3243,20 @@ function HistoryRecords({
                   {retrievalTag && <span className="history-tag meta"><i className="fa fa-search" /> {renderHighlightedText(retrievalTag, query)}</span>}
                   <span className={`history-tag ${hasHits ? "meta" : "issue"}`}>
                     <i className={`fa ${hasHits ? "fa-check-circle" : "fa-minus-circle"}`} />
-                    {renderHighlightedText(hasHits ? "有命中" : "无命中", query)}
+                    {renderHighlightedText(hasHits ? tr("有命中", "With hits") : tr("无命中", "No hits"), query)}
                   </span>
                 </div>
               ) : null}
-              <div className="history-row"><span>时间</span><strong>{renderHighlightedText(timeText, query)}</strong></div>
-              <div className="history-row"><span>{isRetrieval ? "数量" : "结论"}</span><strong>{renderHighlightedText(verdict, query)}</strong></div>
-              <div className="history-row"><span>{isRetrieval ? "Top-K" : "置信度"}</span><strong>{renderHighlightedText(meta, query)}</strong></div>
+              <div className="history-row"><span>{tr("时间", "Time")}</span><strong>{renderHighlightedText(timeText, query)}</strong></div>
+              <div className="history-row"><span>{isRetrieval ? tr("数量", "Count") : tr("结论", "Verdict")}</span><strong>{renderHighlightedText(verdict, query)}</strong></div>
+              <div className="history-row"><span>{isRetrieval ? "Top-K" : tr("置信度", "Confidence")}</span><strong>{renderHighlightedText(meta, query)}</strong></div>
               {isRetrieval && topResultLibrary && (
-                <div className="history-row"><span>命中库</span><strong>{renderHighlightedText(topResultLibrary, query)}</strong></div>
+                <div className="history-row"><span>{tr("命中库", "Hit library")}</span><strong>{renderHighlightedText(topResultLibrary, query)}</strong></div>
               )}
               {isRetrieval && topResultId && (
                 <>
-                  <div className="history-row"><span>首个命中</span><strong>{renderHighlightedText(topResultId, query)}</strong></div>
-                  <div className="history-row"><span>最高分</span><strong>{renderHighlightedText(topResultScore.toFixed(4), query)}</strong></div>
+                  <div className="history-row"><span>{tr("首个命中", "First hit")}</span><strong>{renderHighlightedText(topResultId, query)}</strong></div>
+                  <div className="history-row"><span>{tr("最高分", "Top score")}</span><strong>{renderHighlightedText(topResultScore.toFixed(4), query)}</strong></div>
                 </>
               )}
               {!isRetrieval && reportUrl && (
@@ -2544,7 +3269,7 @@ function HistoryRecords({
                       else if (tab === "video") downloadVideoReport(Number(record.itemid));
                     }}
                   >
-                    <i className="fa fa-download" /> 报告
+                    <i className="fa fa-download" /> {tr("报告", "Report")}
                   </button>
                 </div>
               )}
@@ -2555,7 +3280,7 @@ function HistoryRecords({
                     type="button"
                     onClick={() => downloadRetrieveReport(Number(record.itemid))}
                   >
-                    <i className="fa fa-download" /> 报告
+                    <i className="fa fa-download" /> {tr("报告", "Report")}
                   </button>
                 </div>
               )}
@@ -2601,7 +3326,8 @@ function EmptyState({
   );
 }
 
-function AuthModal({ onAuthed, onClose }: { onAuthed: () => Promise<void>; onClose: () => void }) {
+function AuthModal({ onAuthed, onClose, lang }: { onAuthed: () => Promise<void>; onClose: () => void; lang: Lang }) {
+  const text = UI_TEXT[lang].auth;
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true">
       <div className="login-card modal-login-card">
@@ -2609,17 +3335,17 @@ function AuthModal({ onAuthed, onClose }: { onAuthed: () => Promise<void>; onClo
         <div className="login-header">
           <span className="login-icon"><i className="fa fa-shield" /></span>
           <div>
-            <h2>账户登录</h2>
-            <p className="sub">登录后 30 天内自动保持状态</p>
+            <h2>{text.title}</h2>
+            <p className="sub">{text.desc}</p>
           </div>
         </div>
-        <AuthForm onAuthed={onAuthed} />
+        <AuthForm onAuthed={onAuthed} lang={lang} />
       </div>
     </div>
   );
 }
 
-function AuthForm({ onAuthed }: { onAuthed: () => Promise<void> }) {
+function AuthForm({ onAuthed, lang }: { onAuthed: () => Promise<void>; lang: Lang }) {
   const [mode, setMode] = useState<AuthMode>("password");
   const [phone, setPhone] = useState("");
   const [secret, setSecret] = useState("");
@@ -2629,6 +3355,8 @@ function AuthForm({ onAuthed }: { onAuthed: () => Promise<void> }) {
   const [busy, setBusy] = useState(false);
   const [codeBusy, setCodeBusy] = useState(false);
   const [cooldown, setCooldown] = useState(0);
+  const text = UI_TEXT[lang].auth;
+  const tr = (zh: string, en: string) => translate(lang, zh, en);
 
   useEffect(() => {
     if (cooldown <= 0) return;
@@ -2639,7 +3367,7 @@ function AuthForm({ onAuthed }: { onAuthed: () => Promise<void> }) {
   async function sendCode(scene: "login" | "register") {
     setStatus(null);
     if (!/^1[3-9]\d{9}$/.test(phone.trim())) {
-      setStatus({ tone: "error", text: "请输入正确的手机号" });
+      setStatus({ tone: "error", text: tr("请输入正确的手机号", "Enter a valid phone number") });
       return;
     }
     setCodeBusy(true);
@@ -2647,9 +3375,9 @@ function AuthForm({ onAuthed }: { onAuthed: () => Promise<void> }) {
       const data = await sendSmsCode(phone, scene);
       if (data.debug_code && import.meta.env.DEV) {
         setSmsCode(data.debug_code);
-        setStatus({ tone: "ok", text: `开发模式已自动填入验证码：${data.debug_code}` });
+        setStatus({ tone: "ok", text: tr(`开发模式已自动填入验证码：${data.debug_code}`, `Development mode filled the code automatically: ${data.debug_code}`) });
       } else {
-        setStatus({ tone: "ok", text: "验证码已发送，请查看短信" });
+        setStatus({ tone: "ok", text: tr("验证码已发送，请查看短信", "Code sent. Check your SMS.") });
       }
       setCooldown(data.expires_in ? 60 : 45);
     } catch (error) {
@@ -2662,11 +3390,11 @@ function AuthForm({ onAuthed }: { onAuthed: () => Promise<void> }) {
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!/^1[3-9]\d{9}$/.test(phone.trim())) {
-      setStatus({ tone: "error", text: "请输入正确的手机号" });
+      setStatus({ tone: "error", text: tr("请输入正确的手机号", "Enter a valid phone number") });
       return;
     }
     if ((mode === "sms" || mode === "register") && !smsCode.trim()) {
-      setStatus({ tone: "error", text: "请输入短信验证码" });
+      setStatus({ tone: "error", text: tr("请输入短信验证码", "Enter the SMS code") });
       return;
     }
     setBusy(true);
@@ -2676,11 +3404,11 @@ function AuthForm({ onAuthed }: { onAuthed: () => Promise<void> }) {
       else if (mode === "sms") await loginBySms(phone, smsCode);
       else {
         if (!secret.trim()) {
-          setStatus({ tone: "error", text: "请设置登录密码" });
+          setStatus({ tone: "error", text: tr("请设置登录密码", "Set a login password") });
           return;
         }
         await registerUser({ phone, secret, username, sms_code: smsCode });
-        setStatus({ tone: "ok", text: "注册成功，请切换到登录" });
+        setStatus({ tone: "ok", text: tr("注册成功，请切换到登录", "Account created. Switch to log in.") });
         setMode("password");
         return;
       }
@@ -2695,21 +3423,21 @@ function AuthForm({ onAuthed }: { onAuthed: () => Promise<void> }) {
   return (
     <>
       <div className="login-tabs">
-        <button type="button" className={`login-tab ${mode === "password" ? "active" : ""}`} onClick={() => setMode("password")}>密码登录</button>
-        <button type="button" className={`login-tab ${mode === "sms" ? "active" : ""}`} onClick={() => setMode("sms")}>验证码登录</button>
-        <button type="button" className={`login-tab ${mode === "register" ? "active" : ""}`} onClick={() => setMode("register")}>注册</button>
+        <button type="button" className={`login-tab ${mode === "password" ? "active" : ""}`} onClick={() => setMode("password")}>{text.password}</button>
+        <button type="button" className={`login-tab ${mode === "sms" ? "active" : ""}`} onClick={() => setMode("sms")}>{text.sms}</button>
+        <button type="button" className={`login-tab ${mode === "register" ? "active" : ""}`} onClick={() => setMode("register")}>{text.register}</button>
       </div>
       <form onSubmit={submit} className="login-panel active">
-        <AuthInput icon="fa-phone" label="手机号" value={phone} onChange={setPhone} placeholder="请输入手机号" />
-        {mode === "register" && <AuthInput icon="fa-user" label="用户名" value={username} onChange={setUsername} placeholder="请输入用户名" />}
-        {(mode === "password" || mode === "register") && <AuthInput icon="fa-lock" label="密码" value={secret} onChange={setSecret} placeholder="请输入密码" type="password" />}
+        <AuthInput icon="fa-phone" label={text.phone} value={phone} onChange={setPhone} placeholder={text.phonePlaceholder} />
+        {mode === "register" && <AuthInput icon="fa-user" label={text.username} value={username} onChange={setUsername} placeholder={text.usernamePlaceholder} />}
+        {(mode === "password" || mode === "register") && <AuthInput icon="fa-lock" label={text.passwordLabel} value={secret} onChange={setSecret} placeholder={text.passwordPlaceholder} type="password" />}
         {(mode === "sms" || mode === "register") && (
           <div className="form-group">
-            <label className="form-label">短信验证码</label>
+            <label className="form-label">{text.smsCode}</label>
             <div className="code-row">
               <div className="input-wrap">
                 <i className="fa fa-shield" />
-                <input value={smsCode} onChange={(event) => setSmsCode(event.target.value)} placeholder="请输入验证码" />
+                <input value={smsCode} onChange={(event) => setSmsCode(event.target.value)} placeholder={text.smsPlaceholder} />
               </div>
               <button
                 type="button"
@@ -2717,13 +3445,13 @@ function AuthForm({ onAuthed }: { onAuthed: () => Promise<void> }) {
                 disabled={codeBusy || cooldown > 0}
                 onClick={() => sendCode(mode === "register" ? "register" : "login")}
               >
-                {codeBusy ? "发送中" : cooldown > 0 ? `${cooldown}s` : "获取验证码"}
+                {codeBusy ? text.sending : cooldown > 0 ? `${cooldown}s` : text.sendCode}
               </button>
             </div>
           </div>
         )}
         {status && <div className={`notice ${status.tone}`}>{status.text}</div>}
-        <button type="submit" className="btn-primary" disabled={busy}><i className="fa fa-sign-in" /> {mode === "register" ? "创建账号" : "登录"}</button>
+        <button type="submit" className="btn-primary" disabled={busy}><i className="fa fa-sign-in" /> {mode === "register" ? text.create : text.login}</button>
       </form>
     </>
   );
@@ -2741,11 +3469,12 @@ function AuthInput({ icon, label, value, onChange, placeholder, type = "text" }:
   );
 }
 
-function Footer() {
+function Footer({ lang }: { lang: Lang }) {
+  const text = UI_TEXT[lang].footer;
   return (
     <footer className="footer">
-      <div className="footer-logo"><i className="fa fa-eye" /> 数字内容鉴伪平台</div>
-      <p className="footer-copy">&copy; 2025 数字内容鉴伪平台</p>
+      <div className="footer-logo"><i className="fa fa-eye" /> {text.brand}</div>
+      <p className="footer-copy">{text.copy}</p>
     </footer>
   );
 }
@@ -2758,25 +3487,36 @@ function formatSize(size: number) {
 
 function validateFile(
   file: File,
-  options: { kind: string; maxBytes: number; mimePrefixes?: string[] },
+  options: { kind: string; maxBytes: number; mimePrefixes?: string[]; lang?: Lang },
 ) {
+  const lang = options.lang || "zh";
   if (file.size > options.maxBytes) {
-    return `${options.kind}不能超过 ${formatSize(options.maxBytes)}，当前文件为 ${formatSize(file.size)}。`;
+    return translate(
+      lang,
+      `${options.kind}不能超过 ${formatSize(options.maxBytes)}，当前文件为 ${formatSize(file.size)}。`,
+      `The ${options.kind} must be smaller than ${formatSize(options.maxBytes)}. Current size: ${formatSize(file.size)}.`
+    );
   }
   if (options.mimePrefixes?.length && file.type) {
     const allowed = options.mimePrefixes.some((prefix) => file.type.startsWith(prefix));
-    if (!allowed) return `请选择${options.kind}文件，当前文件类型为 ${file.type}。`;
+    if (!allowed) {
+      return translate(
+        lang,
+        `请选择${options.kind}文件，当前文件类型为 ${file.type}。`,
+        `Select a valid ${options.kind}. Current file type: ${file.type}.`
+      );
+    }
   }
   return "";
 }
 
 function colorBg(color: string) {
-  if (color === "var(--primary)") return "rgba(31,54,92,0.12)";
-  if (color === "var(--primary-light)") return "rgba(92,114,154,0.14)";
-  if (color === "var(--primary-dark)") return "rgba(17,24,39,0.12)";
-  if (color === "var(--warning)") return "rgba(183,121,31,0.14)";
-  if (color === "var(--accent)") return "rgba(201,42,42,0.13)";
-  return "rgba(17,24,39,0.08)";
+  if (color === "var(--primary)") return "rgba(11,92,255,0.12)";
+  if (color === "var(--primary-light)") return "rgba(79,156,255,0.16)";
+  if (color === "var(--primary-dark)") return "rgba(18,17,15,0.12)";
+  if (color === "var(--warning)") return "rgba(245,159,0,0.16)";
+  if (color === "var(--accent)") return "rgba(183,255,42,0.24)";
+  return "rgba(18,17,15,0.08)";
 }
 
 function errorMessage(error: unknown) {
@@ -2812,6 +3552,12 @@ function getGuestDetections() {
 
 function setGuestDetectionsStorage(value: number) {
   getStorage()?.setItem("realguard_guest_detections", String(Math.max(0, value)));
+}
+
+function getInitialLang(): Lang {
+  if (typeof window === "undefined") return "zh";
+  const value = getStorage()?.getItem("realguard_lang");
+  return value === "en" ? "en" : "zh";
 }
 
 function getInitialPage(): PageKey {
@@ -2887,27 +3633,27 @@ function getSearchableHistoryFields(record: HistoryRecord) {
   ].map((field) => String(field));
 }
 
-function getHistoryFilterOptions(tab: HistoryTabKey): Array<{ key: HistoryFilterKey; label: string }> {
+function getHistoryFilterOptions(tab: HistoryTabKey, lang: Lang = "zh"): Array<{ key: HistoryFilterKey; label: string }> {
   if (tab === "image") {
     return [
-      { key: "all", label: "全部" },
-      { key: "guest", label: "访客" },
-      { key: "metadata", label: "元数据" },
-      { key: "issues", label: "可疑点" },
+      { key: "all", label: translate(lang, "全部", "All") },
+      { key: "guest", label: translate(lang, "访客", "Guest") },
+      { key: "metadata", label: translate(lang, "元数据", "Metadata") },
+      { key: "issues", label: translate(lang, "可疑点", "Issues") },
     ];
   }
   if (tab === "video") {
     return [
-      { key: "all", label: "全部" },
-      { key: "guest", label: "访客" },
-      { key: "ai", label: "AI结论" },
-      { key: "real", label: "真实结论" },
+      { key: "all", label: translate(lang, "全部", "All") },
+      { key: "guest", label: translate(lang, "访客", "Guest") },
+      { key: "ai", label: translate(lang, "生成结论", "AI verdicts") },
+      { key: "real", label: translate(lang, "真实结论", "Real verdicts") },
     ];
   }
   return [
-    { key: "all", label: "全部" },
-    { key: "hits", label: "有命中" },
-    { key: "empty", label: "无命中" },
+    { key: "all", label: translate(lang, "全部", "All") },
+    { key: "hits", label: translate(lang, "有命中", "With hits") },
+    { key: "empty", label: translate(lang, "无命中", "No hits") },
   ];
 }
 
@@ -2934,19 +3680,19 @@ function isHistoryFilterSupported(tab: HistoryTabKey, filter: HistoryFilterKey) 
   return getHistoryFilterOptions(tab).some((option) => option.key === filter) || filter === "all";
 }
 
-function getHistoryActiveSummary(tab: HistoryTabKey, filter: HistoryFilterKey, query: string) {
+function getHistoryActiveSummary(tab: HistoryTabKey, filter: HistoryFilterKey, query: string, lang: Lang = "zh") {
   const tabLabels: Record<HistoryTabKey, string> = {
-    image: "图像鉴伪",
-    video: "视频鉴伪",
-    imageRetrieve: "图像检索",
-    videoRetrieve: "视频检索",
+    image: translate(lang, "图像鉴伪", "Image forensics"),
+    video: translate(lang, "视频鉴伪", "Video forensics"),
+    imageRetrieve: translate(lang, "图像检索", "Image retrieval"),
+    videoRetrieve: translate(lang, "视频检索", "Video retrieval"),
   };
   const filterLabel =
-    getHistoryFilterOptions(tab).find((option) => option.key === filter)?.label || "全部";
+    getHistoryFilterOptions(tab, lang).find((option) => option.key === filter)?.label || translate(lang, "全部", "All");
   return [
-    { label: "模块", value: tabLabels[tab] },
-    { label: "筛选", value: filterLabel },
-    { label: "搜索", value: query.trim() || "未设置" },
+    { label: translate(lang, "模块", "Module"), value: tabLabels[tab] },
+    { label: translate(lang, "筛选", "Filter"), value: filterLabel },
+    { label: translate(lang, "搜索", "Search"), value: query.trim() || translate(lang, "未设置", "Not set") },
   ];
 }
 
