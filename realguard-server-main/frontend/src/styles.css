@@ -773,168 +773,6 @@ a { text-decoration: none; color: inherit; }
 @keyframes progress { from { width: 0; } to { width: 100%; } }
 
 .section { padding: 4.8rem 0; transition: background 0.4s ease; }
-.agent-skills-section {
-  position: relative;
-  overflow: hidden;
-  background:
-    radial-gradient(circle at 12% 12%, rgba(11,92,255,0.18), transparent 30%),
-    radial-gradient(circle at 86% 16%, rgba(183,255,42,0.2), transparent 26%),
-    linear-gradient(180deg, var(--bg-body), var(--paper-warm));
-}
-.agent-skills-section::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background:
-    linear-gradient(90deg, rgba(18,17,15,0.045) 1px, transparent 1px),
-    linear-gradient(0deg, rgba(18,17,15,0.04) 1px, transparent 1px);
-  background-size: 34px 34px;
-  pointer-events: none;
-  mask-image: linear-gradient(180deg, transparent, #000 16%, #000 84%, transparent);
-}
-.agent-skills-head {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  grid-template-columns: minmax(0, 0.82fr) minmax(320px, 0.58fr);
-  gap: 1.5rem;
-  align-items: end;
-  margin-bottom: 1.4rem;
-}
-.agent-skills-head span {
-  color: var(--accent-dark);
-  font-family: var(--font-mono);
-  font-size: 0.74rem;
-  font-weight: 900;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-.agent-skills-head h2 {
-  margin-top: 0.55rem;
-  color: var(--text-primary);
-  font-family: var(--font-display);
-  font-size: clamp(2.05rem, 4.8vw, 4.7rem);
-  line-height: 0.94;
-  letter-spacing: -0.07em;
-  text-wrap: balance;
-}
-.agent-skills-head p {
-  color: var(--text-secondary);
-  line-height: 1.75;
-}
-.agent-skills-grid {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.85rem;
-}
-.agent-skill-card {
-  position: relative;
-  min-width: 0;
-  min-height: 188px;
-  display: grid;
-  grid-template-columns: 58px minmax(0, 1fr);
-  gap: 0.85rem;
-  align-items: start;
-  border: 1px solid rgba(18,17,15,0.15);
-  border-radius: 8px 26px 8px 26px;
-  background:
-    linear-gradient(135deg, rgba(255,255,255,0.6), transparent 42%),
-    color-mix(in srgb, var(--bg-card) 90%, var(--primary) 10%);
-  padding: 1rem;
-  box-shadow: var(--shadow-card);
-  overflow: hidden;
-  transition: transform 0.24s cubic-bezier(0.2,0.8,0.2,1), box-shadow 0.24s ease, border-color 0.24s ease;
-}
-.agent-skill-card::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background:
-    linear-gradient(110deg, transparent 0 38%, rgba(183,255,42,0.32) 48%, transparent 58%),
-    radial-gradient(circle at 12% 12%, rgba(11,92,255,0.18), transparent 28%);
-  transform: translateX(-80%);
-  transition: transform 0.42s ease;
-  pointer-events: none;
-}
-.agent-skill-card:hover {
-  transform: translateY(-6px);
-  border-color: rgba(11,92,255,0.42);
-  box-shadow: var(--shadow-lg);
-}
-.agent-skill-card:hover::before { transform: translateX(68%); }
-.agent-skill-rank {
-  position: relative;
-  z-index: 1;
-  width: 50px;
-  height: 50px;
-  border-radius: 16px 4px 16px 4px;
-  display: grid;
-  place-items: center;
-  background: var(--ink);
-  color: var(--accent);
-  font-family: var(--font-mono);
-  font-weight: 900;
-}
-.agent-skill-main {
-  position: relative;
-  z-index: 1;
-  min-width: 0;
-}
-.agent-skill-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-  align-items: center;
-  margin-bottom: 0.45rem;
-}
-.agent-skill-meta span,
-.agent-skill-meta small {
-  border-radius: 999px;
-  border: 1px solid rgba(18,17,15,0.1);
-  background: rgba(255,250,240,0.62);
-  color: var(--text-secondary);
-  padding: 0.22rem 0.52rem;
-  font-size: 0.68rem;
-  font-weight: 800;
-}
-.agent-skill-main h3 {
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: clamp(1rem, 1.6vw, 1.35rem);
-  letter-spacing: -0.04em;
-  overflow-wrap: anywhere;
-}
-.agent-skill-main p {
-  margin-top: 0.5rem;
-  color: var(--text-secondary);
-  font-size: 0.88rem;
-  line-height: 1.6;
-}
-.agent-skill-main strong {
-  display: block;
-  margin-top: 0.65rem;
-  color: var(--primary-dark);
-  font-size: 0.78rem;
-  line-height: 1.45;
-}
-.agent-skill-open {
-  position: absolute;
-  right: 0.9rem;
-  bottom: 0.85rem;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  color: var(--primary);
-  font-size: 0.76rem;
-  font-weight: 900;
-}
-.agent-skill-open i {
-  transform: rotate(45deg);
-  transition: transform 0.2s ease;
-}
-.agent-skill-card:hover .agent-skill-open i { transform: rotate(45deg) translateY(-3px); }
 .skill-entry-section {
   padding: 3rem 0 4.8rem;
   background:
@@ -2924,8 +2762,6 @@ td { color: var(--text-primary); }
   .home-hero-grid { grid-template-columns: 1fr; }
   .home-briefing-board { min-height: 560px; }
   .home-workflow-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .agent-skills-head { grid-template-columns: 1fr; }
-  .agent-skills-grid { grid-template-columns: 1fr; }
   .features-grid { grid-template-columns: repeat(2, 1fr); }
   .skill-entry-panel { grid-template-columns: 1fr; }
   .docs-shell { grid-template-columns: 220px minmax(0, 1fr); gap: 1.2rem; }
@@ -3137,7 +2973,6 @@ td { color: var(--text-primary); }
   .section-header { margin-bottom: 1.7rem; text-align: left; }
   .section-desc { margin: 0; }
   .feature-card { min-height: 0; padding: 1.15rem; border-radius: 14px; }
-  .agent-skill-card { min-height: 0; }
   .feature-card p { margin-bottom: 0.9rem; }
   .docs-hero-section { grid-template-columns: 1fr; }
   .developer-skill-console-head { flex-direction: column; }
@@ -3182,12 +3017,6 @@ td { color: var(--text-primary); }
   .example-img, .example-body { width: 100%; }
   .example-img { min-height: 180px; }
   .features-grid, .results-grid { grid-template-columns: 1fr; }
-  .agent-skills-head h2 { font-size: 2.15rem; }
-  .agent-skill-card {
-    grid-template-columns: 1fr;
-    padding-bottom: 2.8rem;
-  }
-  .agent-skill-rank { width: 46px; height: 46px; }
   .home-eyebrow { gap: 0.4rem; }
   .home-eyebrow span,
   .home-eyebrow i { width: 100%; }
@@ -3273,7 +3102,6 @@ td { color: var(--text-primary); }
     opacity: 1;
     transform: none;
   }
-  .agent-skill-card:hover,
   .copy-snippet-card:hover,
   .home-workflow-card:hover,
   .feature-card:hover,

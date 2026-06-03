@@ -40,16 +40,6 @@ type HistoryTabKey = "image" | "video" | "imageRetrieve" | "videoRetrieve";
 type HistorySummaryCard = { label: string; value: number | string; filterKey?: HistoryFilterKey };
 type DeveloperSkillMode = "v2" | "v1";
 type Lang = "zh" | "en";
-type LocalizedText = { zh: string; en: string };
-type AgentSkillRecommendation = {
-  rank: string;
-  name: string;
-  source: string;
-  category: LocalizedText;
-  fit: LocalizedText;
-  desc: LocalizedText;
-  href: string;
-};
 
 const emptyCounters: Counters = {
   image_detect: 0,
@@ -73,128 +63,6 @@ const REALGUARD_SKILL_COMMAND_V1 =
   `curl -fsS -X POST ${REALGUARD_V1_API_BASE}/detect \\
   -H "X-RealGuard-Key: <your-api-key>" \\
   -F "file=@/path/to/image.png"`;
-const FRONTEND_AGENT_SKILLS: AgentSkillRecommendation[] = [
-  {
-    rank: "01",
-    name: "frontend-skill",
-    source: "OpenAI",
-    category: { zh: "品牌页 / 营销页", en: "Landing / Brand" },
-    fit: { zh: "品牌页、营销页、演示首屏", en: "Landing pages, brand pages, demo hero sections" },
-    desc: {
-      zh: "强化视觉论点、内容节奏和首屏记忆点，适合做官网与产品展示页的第一轮风格定调。",
-      en: "Sharpens the visual thesis, content rhythm, and first-screen quality for marketing and demo pages.",
-    },
-    href: "https://github.com/openai/skills/tree/main/skills/.curated/frontend-skill",
-  },
-  {
-    rank: "02",
-    name: "frontend-design",
-    source: "Anthropic",
-    category: { zh: "视觉完成度", en: "Visual Craft" },
-    fit: { zh: "高完成度界面、强风格页面", en: "Polished interfaces with a strong point of view" },
-    desc: {
-      zh: "把页面从模板化推进到有辨识度的成品，适合处理配色、排版、动效和视觉细节。",
-      en: "Moves a page beyond template work into a distinctive product-quality interface.",
-    },
-    href: "https://github.com/anthropics/skills/tree/main/skills/frontend-design",
-  },
-  {
-    rank: "03",
-    name: "figma-implement-design",
-    source: "OpenAI",
-    category: { zh: "设计稿到代码", en: "Design to Code" },
-    fit: { zh: "设计稿还原、设计协作", en: "Figma implementation and design collaboration" },
-    desc: {
-      zh: "用于从 Figma 结构落到真实代码，减少设计稿与前端实现之间的信息损耗。",
-      en: "Turns Figma structure into working code while preserving design intent.",
-    },
-    href: "https://github.com/openai/skills/tree/main/skills/.curated/figma-implement-design",
-  },
-  {
-    rank: "04",
-    name: "web-design-guidelines",
-    source: "Vercel",
-    category: { zh: "界面审查", en: "UI Review" },
-    fit: { zh: "可访问性、表单、交互审查", en: "Accessibility, forms, motion, and interaction review" },
-    desc: {
-      zh: "适合作为上线前审查清单，系统补齐排版、状态、动效、表单和可访问性问题。",
-      en: "A strong pre-launch review checklist for accessibility, forms, states, motion, and layout.",
-    },
-    href: "https://github.com/vercel-labs/agent-skills/tree/main/skills/web-design-guidelines",
-  },
-  {
-    rank: "05",
-    name: "react-best-practices",
-    source: "Vercel",
-    category: { zh: "React 质量", en: "React Quality" },
-    fit: { zh: "React / Next.js 实现质量", en: "React / Next.js implementation quality" },
-    desc: {
-      zh: "提升组件组织、性能边界和工程实现质量，避免只好看但不可维护的页面。",
-      en: "Improves component structure, performance boundaries, and maintainability.",
-    },
-    href: "https://github.com/vercel-labs/agent-skills/tree/main/skills/react-best-practices",
-  },
-  {
-    rank: "06",
-    name: "playwright",
-    source: "OpenAI",
-    category: { zh: "浏览器验证", en: "Browser QA" },
-    fit: { zh: "真实浏览器验证、截图回归", en: "Real browser QA and screenshot regression" },
-    desc: {
-      zh: "前端改完必须验证真实交互、响应式布局和关键流程，Playwright 是通用执行层。",
-      en: "Validates real interactions, responsive layouts, and critical user flows.",
-    },
-    href: "https://github.com/openai/skills/tree/main/skills/.curated/playwright",
-  },
-  {
-    rank: "07",
-    name: "webapp-testing",
-    source: "Anthropic",
-    category: { zh: "应用验收", en: "App Testing" },
-    fit: { zh: "本地页面行为、日志和回归", en: "Local app behavior, logs, and regressions" },
-    desc: {
-      zh: "更贴近日常 Web 应用验收，适合检查页面状态、控制台错误和交互回归。",
-      en: "Useful for daily web app validation across UI state, logs, and regressions.",
-    },
-    href: "https://github.com/anthropics/skills/tree/main/skills/webapp-testing",
-  },
-  {
-    rank: "08",
-    name: "canvas-design",
-    source: "Anthropic",
-    category: { zh: "创意界面", en: "Creative UI" },
-    fit: { zh: "画布式交互、概念设计", en: "Canvas interactions and concept design" },
-    desc: {
-      zh: "适合自由视觉探索、展示型产品页和更具实验感的创意界面。",
-      en: "Good for freer visual exploration, canvas-like interactions, and concept pages.",
-    },
-    href: "https://github.com/anthropics/skills/tree/main/skills/canvas-design",
-  },
-  {
-    rank: "09",
-    name: "brand-guidelines",
-    source: "Anthropic",
-    category: { zh: "品牌体系", en: "Brand System" },
-    fit: { zh: "官网、营销页、设计系统", en: "Websites, marketing pages, and design systems" },
-    desc: {
-      zh: "把页面设计上升到品牌一致性层面，适合产品、设计和内容团队共同使用。",
-      en: "Connects interface decisions to a coherent brand system.",
-    },
-    href: "https://github.com/anthropics/skills/tree/main/skills/brand-guidelines",
-  },
-  {
-    rank: "10",
-    name: "vercel-deploy-claimable",
-    source: "Vercel",
-    category: { zh: "预览闭环", en: "Preview Loop" },
-    fit: { zh: "快速预览、反馈闭环", en: "Fast preview deployment and feedback loops" },
-    desc: {
-      zh: "严格说不是设计技能，但能让前端和产品页面快速部署预览，缩短反馈链路。",
-      en: "Not a design skill, but it shortens the build-preview-feedback loop.",
-    },
-    href: "https://github.com/vercel-labs/agent-skills/tree/main/skills/vercel-deploy-claimable",
-  },
-];
 const UI_TEXT = {
   zh: {
     boot: "正在连接系统...",
@@ -283,14 +151,6 @@ const UI_TEXT = {
       ["案例一：泳池场景人物图像", "综合判断为生成图像（53.8%），点击查看检测结果。"],
       ["案例二：几何色块人像图像", "综合判断为生成图像（73.9%），点击查看检测结果。"],
     ],
-    skillsTop: {
-      kicker: "推荐技能",
-      title: "面向前端、产品与界面设计的十个常用智能体技能",
-      desc: "这些技能按设计落地频率、视觉/交互质量提升和在 Codex、Claude Code 等工具中的复用性排序。",
-      source: "来源",
-      bestFor: "适合",
-      open: "查看来源",
-    },
     skillPanel: {
       badge1: "技能已接入",
       badge2: "外部智能体可调用",
@@ -481,14 +341,6 @@ const UI_TEXT = {
       ["Case 1: Poolside person image", "Overall verdict: likely AI-generated (53.8%). Open the detection result."],
       ["Case 2: Geometric portrait image", "Overall verdict: likely AI-generated (73.9%). Open the detection result."],
     ],
-    skillsTop: {
-      kicker: "Recommended skills",
-      title: "Top 10 Agent Skills for frontend, product, and UI work",
-      desc: "Ranked by implementation frequency, direct impact on visual and interaction quality, and reuse value in Codex, Claude Code, and similar agents.",
-      source: "Source",
-      bestFor: "Best for",
-      open: "Open source",
-    },
     skillPanel: {
       badge1: "Skill integrated",
       badge2: "Callable by external agents",
@@ -606,10 +458,6 @@ function formatUsageDate(value: string | undefined | null, lang: Lang = "zh") {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleString(localeFor(lang), { hour12: false });
-}
-
-function pickText(text: LocalizedText, lang: Lang) {
-  return text[lang];
 }
 
 function localeFor(lang: Lang) {
@@ -1064,8 +912,6 @@ function HomePage({ counters, setPage, lang }: { counters: Counters; setPage: (p
         </div>
       </section>
 
-      <AgentSkillRecommendations lang={lang} />
-
       <section className="section skill-entry-section">
         <div className="container">
           <SkillEntryPanel lang={lang} />
@@ -1104,47 +950,6 @@ function SectionHeader({ title, desc }: { title: string; desc: string }) {
       <h2 className="section-title">{title}</h2>
       <p className="section-desc">{desc}</p>
     </div>
-  );
-}
-
-function AgentSkillRecommendations({ lang }: { lang: Lang }) {
-  const text = UI_TEXT[lang].skillsTop;
-  return (
-    <section className="section agent-skills-section">
-      <div className="container">
-        <div className="agent-skills-head fade-up visible">
-          <div>
-            <span>{text.kicker}</span>
-            <h2>{text.title}</h2>
-          </div>
-          <p>{text.desc}</p>
-        </div>
-        <div className="agent-skills-grid">
-          {FRONTEND_AGENT_SKILLS.map((skill) => (
-            <a
-              className="agent-skill-card fade-up visible"
-              href={skill.href}
-              target="_blank"
-              rel="noreferrer"
-              key={skill.name}
-              style={{ "--skill-rank": `"${skill.rank}"` } as React.CSSProperties}
-            >
-              <div className="agent-skill-rank">{skill.rank}</div>
-              <div className="agent-skill-main">
-                <div className="agent-skill-meta">
-                  <span>{pickText(skill.category, lang)}</span>
-                  <small>{text.source}: {skill.source}</small>
-                </div>
-                <h3>{skill.name}</h3>
-                <p>{pickText(skill.desc, lang)}</p>
-                <strong>{text.bestFor}: {pickText(skill.fit, lang)}</strong>
-              </div>
-              <span className="agent-skill-open">{text.open} <i className="fa fa-arrow-up" /></span>
-            </a>
-          ))}
-        </div>
-      </div>
-    </section>
   );
 }
 
