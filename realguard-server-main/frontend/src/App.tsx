@@ -2771,12 +2771,12 @@ function validateFile(
 }
 
 function colorBg(color: string) {
-  if (color === "var(--primary)") return "rgba(24,82,70,0.12)";
-  if (color === "var(--primary-light)") return "rgba(79,139,120,0.14)";
-  if (color === "var(--primary-dark)") return "rgba(11,45,40,0.14)";
-  if (color === "var(--warning)") return "rgba(201,137,44,0.16)";
-  if (color === "var(--accent)") return "rgba(255,122,69,0.16)";
-  return "rgba(16,24,32,0.08)";
+  if (color === "var(--primary)") return "rgba(31,54,92,0.12)";
+  if (color === "var(--primary-light)") return "rgba(92,114,154,0.14)";
+  if (color === "var(--primary-dark)") return "rgba(17,24,39,0.12)";
+  if (color === "var(--warning)") return "rgba(183,121,31,0.14)";
+  if (color === "var(--accent)") return "rgba(201,42,42,0.13)";
+  return "rgba(17,24,39,0.08)";
 }
 
 function errorMessage(error: unknown) {
