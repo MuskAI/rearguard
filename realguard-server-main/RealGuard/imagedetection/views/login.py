@@ -25,10 +25,57 @@ SMS_SESSION_KEY = 'sms_verify_codes'
 SMS_CODE_TTL = int(os.environ.get('SMS_CODE_TTL', '300'))
 SMS_INTERVAL = int(os.environ.get('SMS_INTERVAL', '60'))
 SMS_CODE_LENGTH = int(os.environ.get('SMS_CODE_LENGTH', '6'))
+TERMS_VERSION = os.environ.get('REALGUARD_TERMS_VERSION', '2026-06-03')
+PASSWORD_MIN_LENGTH = int(os.environ.get('REALGUARD_PASSWORD_MIN_LENGTH', '8'))
+_USER_ACCOUNT_COLUMNS_READY = False
 
 
 def _is_valid_phone(phone):
     return bool(PHONE_RE.match(phone or ''))
+
+
+def _truthy(value):
+    if isinstance(value, bool):
+        return value
+    return str(value or '').strip().lower() in ('1', 'true', 'yes', 'on', 'agree', 'accepted')
+
+
+def _password_policy_error(secret):
+    value = str(secret or '')
+    if len(value) < PASSWORD_MIN_LENGTH:
+        return f'密码至少需要 {PASSWORD_MIN_LENGTH} 位'
+    if len(value) > 128:
+        return '密码不能超过 128 位'
+    if not any(ch.isalpha() for ch in value) or not any(ch.isdigit() for ch in value):
+        return '密码需同时包含字母和数字'
+    return ''
+
+
+def _ensure_column(table, column, definition):
+    rows = excute_sql(f"SHOW COLUMNS FROM `{table}` LIKE %s", (column,))
+    if rows is None:
+        return False
+    if rows:
+        return True
+    result = excute_sql(f"ALTER TABLE `{table}` ADD COLUMN `{column}` {definition}", fetch=False)
+    return result is not None
+
+
+def _ensure_user_account_columns():
+    global _USER_ACCOUNT_COLUMNS_READY
+    if _USER_ACCOUNT_COLUMNS_READY:
+        return True
+    columns = [
+        ('created_at', "DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'"),
+        ('terms_version', "VARCHAR(32) NULL COMMENT '用户协议版本'"),
+        ('terms_accepted_at', "DATETIME NULL COMMENT '用户协议同意时间'"),
+        ('password_updated_at', "DATETIME NULL COMMENT '密码更新时间'"),
+    ]
+    for column, definition in columns:
+        if not _ensure_column('user', column, definition):
+            return False
+    _USER_ACCOUNT_COLUMNS_READY = True
+    return True
 
 
 def _hash_code(code):
@@ -253,7 +300,7 @@ def send_sms_code():
     phone = (request.form.get('phone') or payload.get('phone') or '').strip()
     scene = (request.form.get('scene') or payload.get('scene') or '').strip()
 
-    if scene not in ('register', 'login'):
+    if scene not in ('register', 'login', 'reset'):
         return jsonify({'success': False, 'message': '验证码场景不正确'}), 400
     if not _is_valid_phone(phone):
         return jsonify({'success': False, 'message': '请输入正确的手机号'}), 400
@@ -263,6 +310,10 @@ def send_sms_code():
         return jsonify({'success': False, 'message': '数据库连接失败，请稍后重试'}), 500
     if scene == 'register' and existing:
         return jsonify({'success': False, 'message': '该手机号已注册，请直接登录'}), 400
+    if scene == 'login' and not existing:
+        return jsonify({'success': False, 'message': '该手机号尚未注册，请先注册'}), 400
+    if scene == 'reset' and not existing:
+        return jsonify({'success': False, 'message': '该手机号尚未注册，无法找回密码'}), 400
 
     remain = _check_sms_interval(scene, phone)
     if remain > 0:
@@ -343,6 +394,42 @@ def login_sms_verify():
     return render_template('login.html', error='登录失败', login_mode='sms')
 
 
+@login_blueprint.route('/password_reset_verify', methods=['GET', 'POST'])
+def password_reset_verify():
+    """通过 phone + 短信验证码重置密码"""
+    if request.method == 'POST':
+        phone = request.form.get('phone', '').strip()
+        secret = request.form.get('secret', '').strip()
+        sms_code = request.form.get('sms_code', '').strip()
+
+        if not _is_valid_phone(phone):
+            return render_template('login.html', error='请输入正确的手机号', login_mode='reset')
+        password_error = _password_policy_error(secret)
+        if password_error:
+            return render_template('login.html', error=password_error, login_mode='reset')
+        ok, message = _verify_sms_code('reset', phone, sms_code)
+        if not ok:
+            return render_template('login.html', error=message, login_mode='reset')
+        if not _ensure_user_account_columns():
+            return render_template('login.html', error='账号表初始化失败，请稍后重试', login_mode='reset')
+
+        user = _find_user_by_phone(phone)
+        if not user:
+            return render_template('login.html', error='该手机号尚未注册，无法找回密码', login_mode='reset')
+        result = excute_sql(
+            "UPDATE user SET secret = %s, password_updated_at = NOW() WHERE phone = %s",
+            (_hash_password(secret), phone),
+            fetch=False
+        )
+        if result and result > 0:
+            current_user = session.get('user_info') or {}
+            if str(current_user.get('phone') or '') == phone:
+                session.clear()
+            return render_template('login.html', error='密码已重置，请使用新密码登录')
+        return render_template('login.html', error='密码重置失败，请稍后重试', login_mode='reset')
+    return render_template('login.html', error='重置失败', login_mode='reset')
+
+
 @login_blueprint.route('/register_verify', methods=['GET', 'POST'])
 def register_verify():
     """注册新用户，通过 phone + secret"""
@@ -355,9 +442,16 @@ def register_verify():
 
         if not _is_valid_phone(phone) or not secret:
             return render_template('register.html', error='请输入正确的手机号和密码')
+        password_error = _password_policy_error(secret)
+        if password_error:
+            return render_template('register.html', error=password_error)
+        if not _truthy(request.form.get('accepted_terms')):
+            return render_template('register.html', error='请先阅读并同意用户协议和隐私政策')
         ok, message = _verify_sms_code('register', phone, sms_code)
         if not ok:
             return render_template('register.html', error=message)
+        if not _ensure_user_account_columns():
+            return render_template('register.html', error='账号表初始化失败，请稍后重试')
 
         # 检查手机号是否已注册
         check_sql = "SELECT Userid FROM user WHERE phone = %s"
@@ -365,8 +459,12 @@ def register_verify():
         if existing and len(existing) > 0:
             return render_template('register.html', error='该手机号已注册，请直接登录')
 
-        sql = "INSERT INTO user (phone, secret, username, openid) VALUES (%s, %s, %s, %s)"
-        result = excute_sql(sql, (phone, _hash_password(secret), username, ''), fetch=False)
+        sql = """
+        INSERT INTO user
+            (phone, secret, username, openid, terms_version, terms_accepted_at, password_updated_at)
+        VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+        """
+        result = excute_sql(sql, (phone, _hash_password(secret), username, '', TERMS_VERSION), fetch=False)
 
         if result and result > 0:
             _sync_detection_user(phone, username, phone)

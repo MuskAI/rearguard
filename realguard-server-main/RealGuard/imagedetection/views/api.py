@@ -41,8 +41,11 @@ DEVELOPER_USAGE_URL = os.environ.get(
     "REALGUARD_DEVELOPER_USAGE_URL",
     "http://127.0.0.1:8848/api/developer/token-usage",
 ).strip()
+TERMS_VERSION = os.environ.get("REALGUARD_TERMS_VERSION", "2026-06-03")
+PASSWORD_MIN_LENGTH = int(os.environ.get("REALGUARD_PASSWORD_MIN_LENGTH", "8"))
 _DEVELOPER_KEY_TABLE_READY = False
 _DEVELOPER_USAGE_TABLE_READY = False
+_USER_ACCOUNT_COLUMNS_READY = False
 
 
 def _current_user():
@@ -55,6 +58,62 @@ def _auth_required():
     if not user:
         return None, (jsonify({"status": "error", "message": "用户未登录"}), 401)
     return user, None
+
+
+def _truthy(value):
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in ("1", "true", "yes", "on", "agree", "accepted")
+
+
+def _password_policy_error(secret):
+    value = str(secret or "")
+    if len(value) < PASSWORD_MIN_LENGTH:
+        return f"密码至少需要 {PASSWORD_MIN_LENGTH} 位"
+    if len(value) > 128:
+        return "密码不能超过 128 位"
+    if not any(ch.isalpha() for ch in value) or not any(ch.isdigit() for ch in value):
+        return "密码需同时包含字母和数字"
+    return ""
+
+
+def _ensure_column(table, column, definition):
+    rows = excute_sql(f"SHOW COLUMNS FROM `{table}` LIKE %s", (column,))
+    if rows is None:
+        return False
+    if rows:
+        return True
+    result = excute_sql(f"ALTER TABLE `{table}` ADD COLUMN `{column}` {definition}", fetch=False)
+    return result is not None
+
+
+def _ensure_user_account_columns():
+    global _USER_ACCOUNT_COLUMNS_READY
+    if _USER_ACCOUNT_COLUMNS_READY:
+        return True
+    columns = [
+        ("created_at", "DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'"),
+        ("terms_version", "VARCHAR(32) NULL COMMENT '用户协议版本'"),
+        ("terms_accepted_at", "DATETIME NULL COMMENT '用户协议同意时间'"),
+        ("password_updated_at", "DATETIME NULL COMMENT '密码更新时间'"),
+    ]
+    for column, definition in columns:
+        if not _ensure_column("user", column, definition):
+            return False
+    _USER_ACCOUNT_COLUMNS_READY = True
+    return True
+
+
+def _set_session_user(user, phone):
+    _sync_detection_user(phone, user.get("username") or phone, user.get("openid", "") or phone)
+    session.permanent = True
+    session["user_info"] = {
+        "Userid": user["Userid"],
+        "username": user.get("username") or phone,
+        "phone": phone,
+        "openid": user.get("openid", ""),
+    }
+    return session["user_info"]
 
 
 def _developer_key_hash(api_key):
@@ -714,15 +773,7 @@ def login_password():
     if not user:
         return jsonify({"status": "error", "message": "手机号或密码错误"}), 401
 
-    _sync_detection_user(phone, user.get("username") or phone, user.get("openid", "") or phone)
-    session.permanent = True
-    session["user_info"] = {
-        "Userid": user["Userid"],
-        "username": user.get("username") or phone,
-        "phone": phone,
-        "openid": user.get("openid", ""),
-    }
-    return jsonify({"status": "success", "user": session["user_info"]})
+    return jsonify({"status": "success", "user": _set_session_user(user, phone)})
 
 
 @api_blueprint.route("/login/sms", methods=["POST"])
@@ -739,26 +790,9 @@ def login_sms():
 
     user = _find_user_by_phone(phone)
     if not user:
-        affected = excute_sql(
-            "INSERT INTO user (phone, secret, username, openid) VALUES (%s, %s, %s, %s)",
-            (phone, _hash_password(secrets.token_urlsafe(24)), phone, ""),
-            fetch=False,
-        )
-        if not affected:
-            return jsonify({"status": "error", "message": "自动创建账号失败，请稍后重试"}), 500
-        user = _find_user_by_phone(phone)
-        if not user:
-            return jsonify({"status": "error", "message": "自动创建账号失败，请稍后重试"}), 500
+        return jsonify({"status": "error", "message": "该手机号尚未注册，请先注册"}), 404
 
-    _sync_detection_user(phone, user.get("username") or phone, user.get("openid", "") or phone)
-    session.permanent = True
-    session["user_info"] = {
-        "Userid": user["Userid"],
-        "username": user.get("username") or phone,
-        "phone": phone,
-        "openid": user.get("openid", ""),
-    }
-    return jsonify({"status": "success", "user": session["user_info"]})
+    return jsonify({"status": "success", "user": _set_session_user(user, phone)})
 
 
 @api_blueprint.route("/register", methods=["POST"])
@@ -768,20 +802,34 @@ def register():
     secret = (payload.get("secret") or "").strip()
     username = (payload.get("username") or "").strip() or phone
     sms_code = (payload.get("sms_code") or "").strip()
+    accepted_terms = _truthy(payload.get("accepted_terms") or payload.get("acceptedTerms"))
 
     if not _is_valid_phone(phone) or not secret:
         return jsonify({"status": "error", "message": "请输入正确的手机号和密码"}), 400
+    password_error = _password_policy_error(secret)
+    if password_error:
+        return jsonify({"status": "error", "message": password_error}), 400
+    if len(username) > 128:
+        return jsonify({"status": "error", "message": "用户名不能超过 128 个字符"}), 400
+    if not accepted_terms:
+        return jsonify({"status": "error", "message": "请先阅读并同意用户协议和隐私政策"}), 400
     ok, message = _verify_sms_code("register", phone, sms_code)
     if not ok:
         return jsonify({"status": "error", "message": message}), 400
+    if not _ensure_user_account_columns():
+        return jsonify({"status": "error", "message": "账号表初始化失败，请稍后重试"}), 500
 
     rows = excute_sql("SELECT Userid FROM user WHERE phone = %s", (phone,))
     if rows:
         return jsonify({"status": "error", "message": "该手机号已注册，请直接登录"}), 409
 
     affected = excute_sql(
-        "INSERT INTO user (phone, secret, username, openid) VALUES (%s, %s, %s, %s)",
-        (phone, _hash_password(secret), username, ""),
+        """
+        INSERT INTO user
+            (phone, secret, username, openid, terms_version, terms_accepted_at, password_updated_at)
+        VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+        """,
+        (phone, _hash_password(secret), username, "", TERMS_VERSION),
         fetch=False,
     )
     if not affected:
@@ -789,6 +837,39 @@ def register():
 
     _sync_detection_user(phone, username, phone)
     return jsonify({"status": "success", "message": "注册成功，请登录"})
+
+
+@api_blueprint.route("/password/reset", methods=["POST"])
+def reset_password():
+    payload = request.get_json(silent=True) or request.form
+    phone = (payload.get("phone") or "").strip()
+    secret = (payload.get("secret") or "").strip()
+    sms_code = (payload.get("sms_code") or "").strip()
+
+    if not _is_valid_phone(phone):
+        return jsonify({"status": "error", "message": "请输入正确的手机号"}), 400
+    password_error = _password_policy_error(secret)
+    if password_error:
+        return jsonify({"status": "error", "message": password_error}), 400
+    ok, message = _verify_sms_code("reset", phone, sms_code)
+    if not ok:
+        return jsonify({"status": "error", "message": message}), 400
+    if not _ensure_user_account_columns():
+        return jsonify({"status": "error", "message": "账号表初始化失败，请稍后重试"}), 500
+
+    user = _find_user_by_phone(phone)
+    if not user:
+        return jsonify({"status": "error", "message": "该手机号尚未注册，无法找回密码"}), 404
+    affected = excute_sql(
+        "UPDATE user SET secret = %s, password_updated_at = NOW() WHERE phone = %s",
+        (_hash_password(secret), phone),
+        fetch=False,
+    )
+    if not affected:
+        return jsonify({"status": "error", "message": "密码重置失败，请稍后重试"}), 500
+    if _current_user() and str(_current_user().get("phone") or "") == phone:
+        session.clear()
+    return jsonify({"status": "success", "message": "密码已重置，请使用新密码登录"})
 
 
 @api_blueprint.route("/logout", methods=["POST"])

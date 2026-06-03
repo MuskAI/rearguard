@@ -16,6 +16,10 @@ CREATE TABLE IF NOT EXISTS `user` (
   `secret` VARCHAR(255) NOT NULL COMMENT '密码',
   `username` VARCHAR(128) NULL DEFAULT NULL,
   `openid` VARCHAR(128) NULL DEFAULT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `terms_version` VARCHAR(32) NULL DEFAULT NULL COMMENT '用户协议版本',
+  `terms_accepted_at` DATETIME NULL DEFAULT NULL COMMENT '用户协议同意时间',
+  `password_updated_at` DATETIME NULL DEFAULT NULL COMMENT '密码更新时间',
   PRIMARY KEY (`Userid`),
   UNIQUE KEY `uk_user_phone` (`phone`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户';

@@ -31,7 +31,7 @@ export async function jsonRequest<T>(path: string, init: RequestInit = {}) {
   return parseResponse<T>(response);
 }
 
-export function sendSmsCode(phone: string, scene: "login" | "register") {
+export function sendSmsCode(phone: string, scene: "login" | "register" | "reset") {
   return jsonRequest<{ success: boolean; debug_code?: string; expires_in?: number }>("/sms/send_code", {
     method: "POST",
     body: JSON.stringify({ phone, scene })
@@ -52,8 +52,15 @@ export function loginBySms(phone: string, smsCode: string) {
   });
 }
 
-export function registerUser(payload: { phone: string; secret: string; username: string; sms_code: string }) {
+export function registerUser(payload: { phone: string; secret: string; username: string; sms_code: string; accepted_terms: boolean; terms_version: string }) {
   return jsonRequest<{ message: string }>("/api/register", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function resetPassword(payload: { phone: string; secret: string; sms_code: string }) {
+  return jsonRequest<{ message: string }>("/api/password/reset", {
     method: "POST",
     body: JSON.stringify(payload)
   });

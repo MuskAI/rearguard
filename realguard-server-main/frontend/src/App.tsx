@@ -1,4 +1,4 @@
-import { FormEvent, Fragment, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, Fragment, InputHTMLAttributes, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   Counters,
   DeveloperApiKey,
@@ -26,6 +26,7 @@ import {
   loginBySms,
   logout,
   registerUser,
+  resetPassword,
   revokeDeveloperApiKey,
   retrieveSearch,
   getV2Health,
@@ -35,7 +36,7 @@ import {
 
 type PageKey = "home" | "image" | "video" | "retrieve" | "history" | "developer";
 type Status = { tone: "ok" | "error" | "info"; text: string } | null;
-type AuthMode = "password" | "sms" | "register";
+type AuthMode = "password" | "sms" | "register" | "reset";
 type HistoryTabKey = "image" | "video" | "imageRetrieve" | "videoRetrieve";
 type HistorySummaryCard = { label: string; value: number | string; filterKey?: HistoryFilterKey };
 type DeveloperSkillMode = "v2" | "v1";
@@ -53,6 +54,7 @@ const REALGUARD_API_BASE = `${REALGUARD_PUBLIC_ORIGIN}/v2-api`;
 const REALGUARD_V1_API_BASE = `${REALGUARD_PUBLIC_ORIGIN}/api/developer/v1`;
 const REALGUARD_SKILL_URL = `${REALGUARD_PUBLIC_ORIGIN}/skills/realguard-forensics/SKILL.md`;
 const REALGUARD_API_DOC_URL = `${REALGUARD_PUBLIC_ORIGIN}/developer/API.md`;
+const REALGUARD_TERMS_VERSION = "2026-06-03";
 const REALGUARD_SKILL_HANDOFF_V2 =
   `Use $realguard-forensics; read ${REALGUARD_SKILL_URL}; call POST ${REALGUARD_API_BASE}/detect with multipart field file and X-RealGuard-Key, or run python3 scripts/realguard_cli.py detect <file> --base-url ${REALGUARD_PUBLIC_ORIGIN} --api-prefix /v2-api --token <your-api-key> --pretty if the repo CLI is available; then return verdict, confidence, evidence, source, modelVersion, cacheVersion, tokenUsage, and reportId.`;
 const REALGUARD_SKILL_HANDOFF_V1 =
@@ -233,21 +235,36 @@ const UI_TEXT = {
     auth: {
       title: "账户登录",
       desc: "登录后 30 天内自动保持状态",
+      railTitle: "安全接入",
+      railDesc: "一次注册即可使用检测、历史记录、开发者平台和外部智能体接口。",
+      railPoints: ["协议可追溯", "短信校验", "密钥归属账号"],
       password: "密码登录",
       sms: "验证码登录",
       register: "注册",
+      reset: "找回密码",
       phone: "手机号",
       username: "用户名",
       passwordLabel: "密码",
+      newPasswordLabel: "新密码",
       smsCode: "短信验证码",
       phonePlaceholder: "请输入手机号",
       usernamePlaceholder: "请输入用户名",
       passwordPlaceholder: "请输入密码",
+      newPasswordPlaceholder: "至少 8 位，包含字母和数字",
       smsPlaceholder: "请输入验证码",
       sendCode: "获取验证码",
       sending: "发送中",
       create: "创建账号",
+      resetAction: "重置密码",
       login: "登录",
+      forgot: "忘记密码？",
+      backLogin: "返回登录",
+      passwordHint: "密码至少 8 位，并同时包含字母和数字。",
+      termsPrefix: "我已阅读并同意",
+      terms: "用户协议",
+      privacy: "隐私政策",
+      termsJoin: "和",
+      termsRequired: "请先阅读并同意用户协议和隐私政策",
     },
     footer: {
       brand: "数字内容鉴伪平台",
@@ -423,21 +440,36 @@ const UI_TEXT = {
     auth: {
       title: "Account login",
       desc: "Stay signed in for 30 days",
+      railTitle: "Secure access",
+      railDesc: "One account unlocks forensics, history, developer keys, and agent APIs.",
+      railPoints: ["Auditable consent", "SMS verification", "Keys tied to account"],
       password: "Password",
       sms: "SMS code",
       register: "Sign up",
+      reset: "Reset password",
       phone: "Phone",
       username: "Username",
       passwordLabel: "Password",
+      newPasswordLabel: "New password",
       smsCode: "SMS code",
       phonePlaceholder: "Enter phone number",
       usernamePlaceholder: "Enter username",
       passwordPlaceholder: "Enter password",
+      newPasswordPlaceholder: "At least 8 chars with letters and numbers",
       smsPlaceholder: "Enter code",
       sendCode: "Send code",
       sending: "Sending",
       create: "Create account",
+      resetAction: "Reset password",
       login: "Log in",
+      forgot: "Forgot password?",
+      backLogin: "Back to login",
+      passwordHint: "Use at least 8 characters with both letters and numbers.",
+      termsPrefix: "I have read and agree to the",
+      terms: "Terms",
+      privacy: "Privacy Policy",
+      termsJoin: "and",
+      termsRequired: "Please agree to the Terms and Privacy Policy first",
     },
     footer: {
       brand: "Digital Content Forensics",
@@ -3135,16 +3167,26 @@ function AuthModal({ onAuthed, onClose, lang }: { onAuthed: () => Promise<void>;
   const text = UI_TEXT[lang].auth;
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true">
-      <div className="login-card modal-login-card">
+      <div className="login-card modal-login-card auth-shell">
         <button className="case-modal-close modal-close" onClick={onClose}><i className="fa fa-times" /></button>
-        <div className="login-header">
-          <span className="login-icon"><i className="fa fa-shield" /></span>
-          <div>
-            <h2>{text.title}</h2>
-            <p className="sub">{text.desc}</p>
+        <aside className="auth-rail" aria-label={text.railTitle}>
+          <div className="auth-rail-mark"><i className="fa fa-shield" /></div>
+          <h3>{text.railTitle}</h3>
+          <p>{text.railDesc}</p>
+          <div className="auth-rail-points">
+            {text.railPoints.map((item) => <span key={item}><i className="fa fa-check" /> {item}</span>)}
           </div>
+        </aside>
+        <div className="auth-main">
+          <div className="login-header">
+            <span className="login-icon"><i className="fa fa-shield" /></span>
+            <div>
+              <h2>{text.title}</h2>
+              <p className="sub">{text.desc}</p>
+            </div>
+          </div>
+          <AuthForm onAuthed={onAuthed} lang={lang} />
         </div>
-        <AuthForm onAuthed={onAuthed} lang={lang} />
       </div>
     </div>
   );
@@ -3156,6 +3198,8 @@ function AuthForm({ onAuthed, lang }: { onAuthed: () => Promise<void>; lang: Lan
   const [secret, setSecret] = useState("");
   const [username, setUsername] = useState("");
   const [smsCode, setSmsCode] = useState("");
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [showSecret, setShowSecret] = useState(false);
   const [status, setStatus] = useState<Status>(null);
   const [busy, setBusy] = useState(false);
   const [codeBusy, setCodeBusy] = useState(false);
@@ -3169,7 +3213,21 @@ function AuthForm({ onAuthed, lang }: { onAuthed: () => Promise<void>; lang: Lan
     return () => window.clearTimeout(timer);
   }, [cooldown]);
 
-  async function sendCode(scene: "login" | "register") {
+  function switchMode(nextMode: AuthMode) {
+    setMode(nextMode);
+    setStatus(null);
+    setSmsCode("");
+    setSecret("");
+    setCooldown(0);
+  }
+
+  function passwordPolicyMessage(value: string) {
+    if (value.length < 8) return tr("密码至少需要 8 位", "Password must be at least 8 characters");
+    if (!/[A-Za-z]/.test(value) || !/\d/.test(value)) return tr("密码需同时包含字母和数字", "Password must include letters and numbers");
+    return "";
+  }
+
+  async function sendCode(scene: "login" | "register" | "reset") {
     setStatus(null);
     if (!/^1[3-9]\d{9}$/.test(phone.trim())) {
       setStatus({ tone: "error", text: tr("请输入正确的手机号", "Enter a valid phone number") });
@@ -3198,7 +3256,7 @@ function AuthForm({ onAuthed, lang }: { onAuthed: () => Promise<void>; lang: Lan
       setStatus({ tone: "error", text: tr("请输入正确的手机号", "Enter a valid phone number") });
       return;
     }
-    if ((mode === "sms" || mode === "register") && !smsCode.trim()) {
+    if ((mode === "sms" || mode === "register" || mode === "reset") && !smsCode.trim()) {
       setStatus({ tone: "error", text: tr("请输入短信验证码", "Enter the SMS code") });
       return;
     }
@@ -3207,14 +3265,34 @@ function AuthForm({ onAuthed, lang }: { onAuthed: () => Promise<void>; lang: Lan
     try {
       if (mode === "password") await loginByPassword(phone, secret);
       else if (mode === "sms") await loginBySms(phone, smsCode);
-      else {
-        if (!secret.trim()) {
-          setStatus({ tone: "error", text: tr("请设置登录密码", "Set a login password") });
+      else if (mode === "register") {
+        const passwordError = passwordPolicyMessage(secret);
+        if (passwordError) {
+          setStatus({ tone: "error", text: passwordError });
           return;
         }
-        await registerUser({ phone, secret, username, sms_code: smsCode });
+        if (!acceptedTerms) {
+          setStatus({ tone: "error", text: text.termsRequired });
+          return;
+        }
+        await registerUser({ phone, secret, username, sms_code: smsCode, accepted_terms: acceptedTerms, terms_version: REALGUARD_TERMS_VERSION });
         setStatus({ tone: "ok", text: tr("注册成功，请切换到登录", "Account created. Switch to log in.") });
         setMode("password");
+        setSmsCode("");
+        setSecret("");
+        setAcceptedTerms(false);
+        return;
+      } else {
+        const passwordError = passwordPolicyMessage(secret);
+        if (passwordError) {
+          setStatus({ tone: "error", text: passwordError });
+          return;
+        }
+        await resetPassword({ phone, secret, sms_code: smsCode });
+        setStatus({ tone: "ok", text: tr("密码已重置，请使用新密码登录", "Password reset. Log in with the new password.") });
+        setMode("password");
+        setSmsCode("");
+        setSecret("");
         return;
       }
       await onAuthed();
@@ -3225,50 +3303,112 @@ function AuthForm({ onAuthed, lang }: { onAuthed: () => Promise<void>; lang: Lan
     }
   }
 
+  const codeScene: "login" | "register" | "reset" = mode === "register" ? "register" : mode === "reset" ? "reset" : "login";
+  const needsSms = mode === "sms" || mode === "register" || mode === "reset";
+  const needsPassword = mode === "password" || mode === "register" || mode === "reset";
+  const passwordLabel = mode === "reset" ? text.newPasswordLabel : text.passwordLabel;
+  const passwordPlaceholder = mode === "password" ? text.passwordPlaceholder : text.newPasswordPlaceholder;
+  const submitText = mode === "register" ? text.create : mode === "reset" ? text.resetAction : text.login;
+  const submitIcon = mode === "register" ? "fa-user-plus" : mode === "reset" ? "fa-refresh" : "fa-sign-in";
+
   return (
     <>
       <div className="login-tabs">
-        <button type="button" className={`login-tab ${mode === "password" ? "active" : ""}`} onClick={() => setMode("password")}>{text.password}</button>
-        <button type="button" className={`login-tab ${mode === "sms" ? "active" : ""}`} onClick={() => setMode("sms")}>{text.sms}</button>
-        <button type="button" className={`login-tab ${mode === "register" ? "active" : ""}`} onClick={() => setMode("register")}>{text.register}</button>
+        <button type="button" className={`login-tab ${mode === "password" ? "active" : ""}`} onClick={() => switchMode("password")}>{text.password}</button>
+        <button type="button" className={`login-tab ${mode === "sms" ? "active" : ""}`} onClick={() => switchMode("sms")}>{text.sms}</button>
+        <button type="button" className={`login-tab ${mode === "register" ? "active" : ""}`} onClick={() => switchMode("register")}>{text.register}</button>
+        <button type="button" className={`login-tab ${mode === "reset" ? "active" : ""}`} onClick={() => switchMode("reset")}>{text.reset}</button>
       </div>
       <form onSubmit={submit} className="login-panel active">
-        <AuthInput icon="fa-phone" label={text.phone} value={phone} onChange={setPhone} placeholder={text.phonePlaceholder} />
-        {mode === "register" && <AuthInput icon="fa-user" label={text.username} value={username} onChange={setUsername} placeholder={text.usernamePlaceholder} />}
-        {(mode === "password" || mode === "register") && <AuthInput icon="fa-lock" label={text.passwordLabel} value={secret} onChange={setSecret} placeholder={text.passwordPlaceholder} type="password" />}
-        {(mode === "sms" || mode === "register") && (
+        <AuthInput icon="fa-phone" label={text.phone} value={phone} onChange={setPhone} placeholder={text.phonePlaceholder} inputMode="numeric" autoComplete="tel" maxLength={11} />
+        {mode === "register" && <AuthInput icon="fa-user" label={text.username} value={username} onChange={setUsername} placeholder={text.usernamePlaceholder} autoComplete="name" maxLength={64} />}
+        {needsPassword && (
+          <>
+            <AuthInput
+              icon="fa-lock"
+              label={passwordLabel}
+              value={secret}
+              onChange={setSecret}
+              placeholder={passwordPlaceholder}
+              type={showSecret ? "text" : "password"}
+              autoComplete={mode === "password" ? "current-password" : "new-password"}
+              rightAction={(
+                <button type="button" className="password-toggle" onClick={() => setShowSecret((value) => !value)} aria-label={showSecret ? tr("隐藏密码", "Hide password") : tr("显示密码", "Show password")}>
+                  <i className={`fa ${showSecret ? "fa-eye-slash" : "fa-eye"}`} />
+                </button>
+              )}
+            />
+            {(mode === "register" || mode === "reset") && <p className="password-hint">{text.passwordHint}</p>}
+          </>
+        )}
+        {needsSms && (
           <div className="form-group">
             <label className="form-label">{text.smsCode}</label>
             <div className="code-row">
               <div className="input-wrap">
                 <i className="fa fa-shield" />
-                <input value={smsCode} onChange={(event) => setSmsCode(event.target.value)} placeholder={text.smsPlaceholder} />
+                <input value={smsCode} onChange={(event) => setSmsCode(event.target.value)} placeholder={text.smsPlaceholder} inputMode="numeric" autoComplete="one-time-code" maxLength={8} />
               </div>
               <button
                 type="button"
                 className="btn-code"
                 disabled={codeBusy || cooldown > 0}
-                onClick={() => sendCode(mode === "register" ? "register" : "login")}
+                onClick={() => sendCode(codeScene)}
               >
                 {codeBusy ? text.sending : cooldown > 0 ? `${cooldown}s` : text.sendCode}
               </button>
             </div>
           </div>
         )}
+        {mode === "register" && (
+          <label className="terms-check">
+            <input type="checkbox" checked={acceptedTerms} onChange={(event) => setAcceptedTerms(event.target.checked)} />
+            <span>
+              {text.termsPrefix} <a href="/legal/terms.html" target="_blank" rel="noreferrer">{text.terms}</a> {text.termsJoin} <a href="/legal/privacy.html" target="_blank" rel="noreferrer">{text.privacy}</a>
+            </span>
+          </label>
+        )}
         {status && <div className={`notice ${status.tone}`}>{status.text}</div>}
-        <button type="submit" className="btn-primary" disabled={busy}><i className="fa fa-sign-in" /> {mode === "register" ? text.create : text.login}</button>
+        <button type="submit" className="btn-primary" disabled={busy}><i className={`fa ${submitIcon}`} /> {submitText}</button>
+        <div className="auth-foot-actions">
+          {mode !== "reset" && <button type="button" onClick={() => switchMode("reset")}>{text.forgot}</button>}
+          {mode === "reset" && <button type="button" onClick={() => switchMode("password")}>{text.backLogin}</button>}
+        </div>
       </form>
     </>
   );
 }
 
-function AuthInput({ icon, label, value, onChange, placeholder, type = "text" }: { icon: string; label: string; value: string; onChange: (value: string) => void; placeholder: string; type?: string }) {
+function AuthInput({
+  icon,
+  label,
+  value,
+  onChange,
+  placeholder,
+  type = "text",
+  autoComplete,
+  inputMode,
+  maxLength,
+  rightAction,
+}: {
+  icon: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  type?: string;
+  autoComplete?: string;
+  inputMode?: InputHTMLAttributes<HTMLInputElement>["inputMode"];
+  maxLength?: number;
+  rightAction?: ReactNode;
+}) {
   return (
     <div className="form-group">
       <label className="form-label">{label}</label>
-      <div className="input-wrap">
+      <div className={`input-wrap ${rightAction ? "has-action" : ""}`}>
         <i className={`fa ${icon}`} />
-        <input type={type} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />
+        <input type={type} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} autoComplete={autoComplete} inputMode={inputMode} maxLength={maxLength} />
+        {rightAction && <span className="input-action">{rightAction}</span>}
       </div>
     </div>
   );

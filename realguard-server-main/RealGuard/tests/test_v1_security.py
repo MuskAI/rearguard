@@ -123,32 +123,13 @@ def test_retrieve_history_result_uses_user_phone_and_local_proxy(client, monkeyp
     assert seen
 
 
-def test_login_sms_auto_created_user_uses_hashed_placeholder_secret(client, monkeypatch):
-    insert_params = {}
-    lookup_count = {"value": 0}
-
+def test_login_sms_unknown_user_is_rejected_without_auto_create(client, monkeypatch):
     monkeypatch.setattr(api, "_verify_sms_code", lambda scene, phone, code: (True, ""))
-    monkeypatch.setattr(api, "_sync_detection_user", lambda *args, **kwargs: None)
-
-    def fake_find_user(phone):
-        lookup_count["value"] += 1
-        if lookup_count["value"] == 1:
-            return None
-        return {
-            "Userid": 8,
-            "phone": phone,
-            "username": phone,
-            "openid": "",
-            "secret": "unused",
-        }
+    monkeypatch.setattr(api, "_find_user_by_phone", lambda phone: None)
 
     def fake_execute(sql, params=None, fetch=True):
-        if sql == "INSERT INTO user (phone, secret, username, openid) VALUES (%s, %s, %s, %s)":
-            insert_params["value"] = params
-            return 1
-        raise AssertionError(f"unexpected SQL: {sql}")
+        raise AssertionError("SMS login must not create users implicitly")
 
-    monkeypatch.setattr(api, "_find_user_by_phone", fake_find_user)
     monkeypatch.setattr(api, "excute_sql", fake_execute)
 
     response = client.post(
@@ -156,9 +137,108 @@ def test_login_sms_auto_created_user_uses_hashed_placeholder_secret(client, monk
         json={"phone": "13800000000", "sms_code": "123456"},
     )
 
+    assert response.status_code == 404
+    assert "尚未注册" in response.get_json()["message"]
+
+
+def test_register_requires_terms_acceptance(client, monkeypatch):
+    monkeypatch.setattr(api, "_verify_sms_code", lambda scene, phone, code: (True, ""))
+
+    response = client.post(
+        "/api/register",
+        json={
+            "phone": "13800000000",
+            "secret": "Password123",
+            "username": "tester",
+            "sms_code": "123456",
+            "accepted_terms": False,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "用户协议" in response.get_json()["message"]
+
+
+def test_send_login_code_requires_registered_phone(client, monkeypatch):
+    monkeypatch.setattr(login, "excute_sql", lambda sql, params=None, fetch=True: [])
+    monkeypatch.setattr(login, "_send_sms_code", lambda phone, scene: "123456")
+
+    response = client.post("/sms/send_code", json={"phone": "13800000000", "scene": "login"})
+
+    assert response.status_code == 400
+    assert "尚未注册" in response.get_json()["message"]
+
+
+def test_legal_pages_are_public(client):
+    terms = client.get("/legal/terms.html")
+    privacy = client.get("/legal/privacy.html")
+    blocked = client.get("/legal/../run.py")
+
+    assert terms.status_code == 200
+    assert "用户协议" in terms.get_data(as_text=True)
+    assert privacy.status_code == 200
+    assert "隐私政策" in privacy.get_data(as_text=True)
+    assert blocked.status_code == 404
+
+
+def test_register_persists_terms_metadata(client, monkeypatch):
+    recorded_insert = {}
+
+    monkeypatch.setattr(api, "_verify_sms_code", lambda scene, phone, code: (True, ""))
+    monkeypatch.setattr(api, "_ensure_user_account_columns", lambda: True)
+    monkeypatch.setattr(api, "_sync_detection_user", lambda *args, **kwargs: None)
+    monkeypatch.setattr(api, "TERMS_VERSION", "test-terms-v1")
+
+    def fake_execute(sql, params=None, fetch=True):
+        normalized = " ".join(sql.split())
+        if normalized.startswith("SELECT Userid FROM user WHERE phone"):
+            return []
+        if normalized.startswith("INSERT INTO user"):
+            recorded_insert["sql"] = normalized
+            recorded_insert["params"] = params
+            return 1
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+    monkeypatch.setattr(api, "excute_sql", fake_execute)
+
+    response = client.post(
+        "/api/register",
+        json={
+            "phone": "13800000000",
+            "secret": "Password123",
+            "username": "tester",
+            "sms_code": "123456",
+            "accepted_terms": True,
+        },
+    )
+
     assert response.status_code == 200
-    assert "value" in insert_params
-    _, stored_secret, _, _ = insert_params["value"]
-    assert stored_secret
-    assert stored_secret != ""
-    assert login._is_password_hash(stored_secret)
+    assert "terms_version" in recorded_insert["sql"]
+    assert recorded_insert["params"][-1] == "test-terms-v1"
+    assert login._is_password_hash(recorded_insert["params"][1])
+
+
+def test_reset_password_updates_hashed_secret(client, monkeypatch):
+    updated = {}
+
+    monkeypatch.setattr(api, "_verify_sms_code", lambda scene, phone, code: (scene == "reset", ""))
+    monkeypatch.setattr(api, "_ensure_user_account_columns", lambda: True)
+    monkeypatch.setattr(api, "_find_user_by_phone", lambda phone: {"Userid": 9, "phone": phone, "username": "tester", "openid": ""})
+
+    def fake_execute(sql, params=None, fetch=True):
+        normalized = " ".join(sql.split())
+        if normalized.startswith("UPDATE user SET secret"):
+            updated["params"] = params
+            return 1
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+    monkeypatch.setattr(api, "excute_sql", fake_execute)
+
+    response = client.post(
+        "/api/password/reset",
+        json={"phone": "13800000000", "secret": "NewPassword123", "sms_code": "123456"},
+    )
+
+    assert response.status_code == 200
+    assert updated["params"][1] == "13800000000"
+    assert login._is_password_hash(updated["params"][0])

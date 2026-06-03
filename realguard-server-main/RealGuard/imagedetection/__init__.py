@@ -1,7 +1,7 @@
 import os
 from datetime import timedelta
 
-from flask import Flask, render_template, session, redirect
+from flask import Flask, abort, render_template, send_from_directory, session, redirect
 from .views import detection
 from .views import login
 from .views import historical_record
@@ -52,5 +52,18 @@ def creat_app():
         if 'user_info' not in session or session['user_info'] is None:
             return render_template('login.html')
         return render_template('retrieve_result.html')
+
+    @app.route('/legal/<path:filename>')
+    def legal_file(filename):
+        if filename not in ('terms.html', 'privacy.html'):
+            abort(404)
+        legal_dirs = [
+            os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'frontend', 'public', 'legal')),
+            '/var/www/realguard-frontend/legal',
+        ]
+        for legal_dir in legal_dirs:
+            if os.path.exists(os.path.join(legal_dir, filename)):
+                return send_from_directory(legal_dir, filename)
+        abort(404)
 
     return app
