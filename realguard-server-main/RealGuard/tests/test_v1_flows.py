@@ -12,6 +12,7 @@ if str(ROOT) not in sys.path:
 
 from imagedetection import creat_app  # noqa: E402
 from imagedetection.views import api, detection, historical_record, retrieve  # noqa: E402
+import detector_backend  # noqa: E402
 
 
 class _FakeResponse:
@@ -364,6 +365,57 @@ def test_image_detect_falls_back_to_v2_when_v1_backend_is_down(client, monkeypat
     assert payload["result"]["final_label"] == "AI生成图像"
     assert payload["result"]["probability"] == pytest.approx(0.76)
     assert payload["result"]["image_url"] == "/static/uploads/openid-1/image/stored-demo.png"
+
+
+def test_detector_backend_image_endpoint_returns_v1_contract(monkeypatch):
+    monkeypatch.setattr(detector_backend, "V2_DETECT_API", "http://v2.local/api/detect")
+    monkeypatch.setattr(detector_backend, "V2_INTERNAL_TOKEN", "internal-token")
+    monkeypatch.setattr(
+        detector_backend,
+        "_save_upload",
+        lambda image_bytes, folder, filename: ("stored-demo.png", "/tmp/stored-demo.png"),
+    )
+    monkeypatch.setattr(detector_backend, "get_image_info", lambda path: ("PNG", "320x240"))
+    monkeypatch.setattr(detector_backend, "get_file_size_str", lambda path: "1KB")
+    monkeypatch.setattr(detector_backend, "excute_detection_sql_lastid", lambda sql, params=None: 91)
+
+    def fake_post(url, **kwargs):
+        assert url == "http://v2.local/api/detect"
+        assert kwargs["headers"]["X-Jianzhen-Token"] == "internal-token"
+        return _FakeResponse({
+            "taskId": "rj-20260604-0001",
+            "reportId": "RJ-RPT-20260604-0001",
+            "verdict": "real",
+            "confidence": 0.84,
+            "modelVersion": "qwen3-vl-flash",
+            "source": "vlm",
+            "explanation": "V2 evidence summary",
+            "dimensions": [],
+            "regions": [],
+            "fileMeta": {"size": "1KB", "resolution": "320x240"},
+        })
+
+    monkeypatch.setattr(detector_backend, "_post_internal", fake_post)
+    app = detector_backend.create_app()
+    app.config.update(TESTING=True)
+
+    response = app.test_client().post(
+        "/image",
+        data={
+            "image_file": (BytesIO(b"fake-image"), "demo.png"),
+            "openid": "openid-1",
+            "phone": "13800000000",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["code"] == 200
+    assert payload["data"]["data_itemid"] == 91
+    assert payload["data"]["fake_percentage"] == pytest.approx(16.0)
+    assert payload["data"]["final_label"] == "真实图像"
+    assert payload["data"]["image_url"].endswith("/static/uploads/openid-1/image/stored-demo.png")
 
 
 def test_video_detect_logged_in_builds_public_media_url(client, monkeypatch):
