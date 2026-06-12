@@ -269,6 +269,16 @@ def test_developer_v1_detect_uses_api_key_and_records_call(client, monkeypatch):
 
 
 def test_guest_image_detect_returns_rewritten_url_and_then_blocks(client, monkeypatch):
+    monkeypatch.setattr(
+        detection.model_registry,
+        "get_routing",
+        lambda: {"imagePrimary": "v1", "fallbackEnabled": False},
+    )
+    monkeypatch.setattr(
+        detection.model_registry,
+        "get_model",
+        lambda model_id: {"id": "v1", "enabled": True, "endpoint": detection.IMAGE_DETECT_API, "timeoutSeconds": 180},
+    )
     monkeypatch.setattr(detection, "_metadata_for_item", lambda itemid: {})
     monkeypatch.setattr(
         detection,
@@ -318,6 +328,23 @@ def test_image_detect_falls_back_to_v2_when_v1_backend_is_down(client, monkeypat
     monkeypatch.setattr(detection, "V2_DETECT_API", "http://v2.local/api/detect")
     monkeypatch.setattr(detection, "V2_INTERNAL_TOKEN", "internal-token")
     monkeypatch.setattr(detection, "IMAGE_DETECT_FALLBACK", "v2")
+    monkeypatch.setattr(
+        detection.model_registry,
+        "get_routing",
+        lambda: {
+            "imagePrimary": "v1",
+            "imageFallback": "v2",
+            "fallbackEnabled": True,
+        },
+    )
+    monkeypatch.setattr(
+        detection.model_registry,
+        "get_model",
+        lambda model_id: {
+            "v1": {"id": "v1", "enabled": True, "endpoint": detection.IMAGE_DETECT_API, "timeoutSeconds": 180},
+            "v2": {"id": "v2", "enabled": True, "endpoint": "http://v2.local/api/detect", "timeoutSeconds": 180},
+        }.get(model_id),
+    )
     monkeypatch.setattr(detection, "_metadata_for_item", lambda itemid: {})
     monkeypatch.setattr(
         detection,
@@ -367,9 +394,332 @@ def test_image_detect_falls_back_to_v2_when_v1_backend_is_down(client, monkeypat
     assert payload["result"]["image_url"] == "/static/uploads/openid-1/image/stored-demo.png"
 
 
+def test_image_detect_can_use_aliyun_primary_and_records_backend_model(client, monkeypatch, tmp_path):
+    _login_session(client)
+    monkeypatch.setattr(detection.admin_state, "STATE_PATH", tmp_path / "admin_state.json")
+    aliyun_model = {
+        "id": "aliyun-aigc-pro",
+        "name": "Aliyun AIGC Detector Pro",
+        "enabled": True,
+        "runtime": "aliyun-green",
+        "endpoint": "internal://aliyun/aigcDetector_pro",
+        "timeoutSeconds": 60,
+        "version": "aigcDetector_pro",
+    }
+    monkeypatch.setattr(
+        detection.model_registry,
+        "get_routing",
+        lambda: {
+            "imagePrimary": "aliyun-aigc-pro",
+            "imageFallback": "v2",
+            "fallbackEnabled": False,
+        },
+    )
+    monkeypatch.setattr(
+        detection.model_registry,
+        "get_model",
+        lambda model_id: aliyun_model if model_id == "aliyun-aigc-pro" else None,
+    )
+    monkeypatch.setattr(detection, "_metadata_for_item", lambda itemid: {})
+    monkeypatch.setattr(
+        detection.aliyun_green,
+        "detect_image_bytes",
+        lambda service, image_bytes, filename: {
+            "ok": True,
+            "provider": "aliyun",
+            "service": service,
+            "latencyMs": 18,
+            "normalized": {
+                "finalLabel": "疑似AI生成",
+                "riskScore": 0.82,
+                "confidence": "高",
+                "labels": ["aigc"],
+                "descriptions": ["疑似生成式内容"],
+            },
+        },
+    )
+    monkeypatch.setattr(
+        detection,
+        "_save_local_upload",
+        lambda image_bytes, folder, filename: ("stored-demo.png", "/tmp/stored-demo.png"),
+    )
+    monkeypatch.setattr(detection, "get_image_info", lambda path: ("PNG", "320x240"))
+    monkeypatch.setattr(detection, "get_file_size_str", lambda path: "1KB")
+    monkeypatch.setattr(detection, "excute_detection_sql_lastid", lambda sql, params=None: 123)
+
+    response = client.post(
+        "/image_upload/detect",
+        data={"image": (BytesIO(b"fake-image"), "demo.png")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["result"]["itemid"] == 123
+    assert payload["result"]["probability"] == pytest.approx(0.82)
+    assert payload["result"]["agent_reasoning"] == ""
+    runs = detection.admin_state.load_state()["modelRuns"]
+    assert runs[0]["itemid"] == 123
+    assert runs[0]["model"]["id"] == "aliyun-aigc-pro"
+    assert runs[0]["meta"]["service"] == "aigcDetector_pro"
+
+
+def test_public_agent_reasoning_hides_internal_model_fields():
+    sanitized = detection._public_agent_reasoning(json.dumps({
+        "fallback": "jianzhen-v2",
+        "modelVersion": "qwen3-vl-flash",
+        "source": "vlm",
+        "taskId": "task-1",
+        "reportId": "report-1",
+    }, ensure_ascii=False))
+
+    assert json.loads(sanitized) == {"taskId": "task-1", "reportId": "report-1"}
+
+
+def test_swarm_detect_async_job_returns_expert_consensus(client, monkeypatch, tmp_path):
+    _login_session(client)
+    monkeypatch.setattr(detection.admin_state, "STATE_PATH", tmp_path / "admin_state.json")
+    monkeypatch.setattr(detection, "V2_INTERNAL_TOKEN", "")
+    monkeypatch.setattr(detection.aliyun_green, "configured", lambda: False)
+    # Keep this test focused on the primary+metadata consensus path; skip the
+    # provenance-style experts so the asserted score stays stable.
+    monkeypatch.setattr(
+        detection.swarm_c2pa_expert,
+        "run_c2pa_expert",
+        lambda *a, **kw: {"status": "skipped", "score": None, "verdict": "测试跳过",
+                          "confidence": "", "evidence": [], "message": "test", "latencyMs": 0},
+    )
+    monkeypatch.setattr(
+        detection.swarm_watermark_expert,
+        "run_watermark_expert",
+        lambda *a, **kw: {"status": "skipped", "score": None, "verdict": "测试跳过",
+                          "confidence": "", "evidence": [], "message": "test", "latencyMs": 0},
+    )
+
+    class ImmediateThread:
+        def __init__(self, target, args=(), kwargs=None, daemon=None):
+            self.target = target
+            self.args = args
+            self.kwargs = kwargs or {}
+
+        def start(self):
+            self.target(*self.args, **self.kwargs)
+
+    monkeypatch.setattr(detection.threading, "Thread", ImmediateThread)
+
+    def fake_primary(image_bytes, filename, mimetype, user_info, *, is_guest=False, mark_guest=True):
+        return {
+            "status": "success",
+            "result": {
+                "itemid": 321,
+                "final_label": "AI生成图像",
+                "probability": 0.76,
+                "detector_probability": 0.76,
+                "confidence": "高",
+                "explanation": "主检测认为疑似生成。",
+                "visual_issues": ["纹理重复"],
+                "image_url": "/static/uploads/openid-1/image/demo.png",
+                "filename": "demo.png",
+                "file_size": "1KB",
+                "img_format": "PNG",
+                "resolution": "320x240",
+                "all_metadata": {},
+                "feedback": None,
+            },
+        }, 200
+
+    monkeypatch.setattr(detection, "_run_image_detection_payload", fake_primary)
+
+    created = client.post(
+        "/image_upload/detect_swarm",
+        data={"image": (BytesIO(b"fake-image"), "demo.png")},
+        content_type="multipart/form-data",
+    )
+
+    assert created.status_code == 202
+    job_id = created.get_json()["job"]["id"]
+    loaded = client.get(f"/image_upload/jobs/{job_id}")
+
+    assert loaded.status_code == 200
+    job = loaded.get_json()["job"]
+    assert job["status"] == "success"
+    assert job["mode"] == "swarm"
+    assert job["progress"] == 100
+    result = job["result"]["result"]
+    assert result["itemid"] == 321
+    assert result["probability"] == pytest.approx(0.7219)
+    assert result["swarm"]["enabled"] is True
+    assert result["swarm"]["effectiveExperts"] == 2
+    assert any(expert["publicName"] == "主鉴伪专家" and expert["status"] == "success" for expert in result["swarm"]["experts"])
+    assert any(expert["publicName"] == "元数据专家" and expert["status"] == "success" for expert in result["swarm"]["experts"])
+    public_primary = next(expert for expert in result["swarm"]["experts"] if expert["publicName"] == "主鉴伪专家")
+    assert public_primary["id"] == "expert-1"
+    assert public_primary["publicId"] == "expert-1"
+    assert public_primary["publicName"] == "主鉴伪专家"
+    assert "publicMessage" in public_primary
+    assert "name" not in public_primary
+    assert "provider" not in public_primary
+    assert "message" not in public_primary
+    assert "verdict" not in public_primary
+    assert "score" not in public_primary
+    assert "confidence" not in public_primary
+    assert "latencyMs" not in public_primary
+    assert all(not expert["id"].startswith(("primary", "v2", "aliyun")) for expert in result["swarm"]["experts"])
+    assert all("主路由" not in item for item in result["swarm"]["evidence"])
+    assert all("风险评分" not in item for item in result["swarm"]["evidence"])
+
+
+def test_swarm_detect_get_is_friendly(client):
+    browser_response = client.get("/image_upload/detect_swarm")
+    assert browser_response.status_code == 302
+    assert browser_response.headers["Location"] == "/image_upload"
+
+    api_response = client.get("/image_upload/detect_swarm", headers={"Accept": "application/json"})
+    assert api_response.status_code == 200
+    payload = api_response.get_json()
+    assert payload["status"] == "success"
+    assert "POST multipart/form-data" in payload["message"]
+
+
+def test_swarm_aggregate_rejects_metadata_only():
+    experts = detection._swarm_initial_experts()
+    detection._swarm_set_expert(
+        experts,
+        "metadata",
+        status="success",
+        score=0.56,
+        verdict="缺少元数据",
+        evidence=["无 EXIF"],
+    )
+
+    result, error = detection._swarm_aggregate(experts, None, {"filename": "demo.png"})
+
+    assert result is None
+    assert "主检测与复核专家" in error
+
+
+def test_swarm_detect_rejects_when_disabled(client, monkeypatch, tmp_path):
+    _login_session(client)
+    monkeypatch.setattr(detection.admin_state, "STATE_PATH", tmp_path / "admin_state.json")
+    monkeypatch.setattr(
+        detection.model_registry,
+        "get_swarm_config",
+        lambda: {"enabled": False, "minExperts": 2, "experts": []},
+    )
+
+    payload, status = detection._run_swarm_detection_payload(
+        b"fake-image",
+        "demo.png",
+        "image/png",
+        {"Userid": 1, "phone": "13800000000", "openid": "openid-1"},
+    )
+
+    assert status == 400
+    assert "未在后台启用" in payload["message"]
+
+
+def test_image_detect_does_not_fallback_when_admin_disables_it(client, monkeypatch):
+    _login_session(client)
+    monkeypatch.setattr(detection, "V2_INTERNAL_TOKEN", "internal-token")
+    monkeypatch.setattr(
+        detection.model_registry,
+        "get_routing",
+        lambda: {
+            "imagePrimary": "v1",
+            "imageFallback": "v2",
+            "fallbackEnabled": False,
+        },
+    )
+    monkeypatch.setattr(
+        detection.model_registry,
+        "get_model",
+        lambda model_id: {
+            "v1": {"id": "v1", "enabled": True, "endpoint": detection.IMAGE_DETECT_API, "timeoutSeconds": 180},
+            "v2": {"id": "v2", "enabled": True, "endpoint": "http://v2.local/api/detect", "timeoutSeconds": 180},
+        }.get(model_id),
+    )
+
+    def fake_backend_post(url, **kwargs):
+        assert url == detection.IMAGE_DETECT_API
+        raise detection.requests.ConnectionError("connection refused")
+
+    monkeypatch.setattr(detection, "_backend_post", fake_backend_post)
+
+    response = client.post(
+        "/image_upload/detect",
+        data={"image": (BytesIO(b"fake-image"), "demo.png")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 502
+    assert "未启用 V2 兜底" in response.get_json()["message"]
+
+
+def test_image_detect_blocks_v1_when_required_artifact_is_missing(client, monkeypatch):
+    _login_session(client)
+    monkeypatch.setattr(detection, "V2_INTERNAL_TOKEN", "")
+    monkeypatch.setattr(
+        detection.model_registry,
+        "get_routing",
+        lambda: {
+            "imagePrimary": "v1-onnx-mil",
+            "imageFallback": "v2",
+            "fallbackEnabled": False,
+        },
+    )
+    monkeypatch.setattr(
+        detection.model_registry,
+        "get_model",
+        lambda model_id: {
+            "v1-onnx-mil": {
+                "id": "v1-onnx-mil",
+                "enabled": True,
+                "endpoint": detection.IMAGE_DETECT_API,
+                "timeoutSeconds": 180,
+            },
+            "v2": {"id": "v2", "enabled": True, "endpoint": "http://v2.local/api/detect", "timeoutSeconds": 180},
+        }.get(model_id),
+    )
+    monkeypatch.setattr(
+        detection.model_registry,
+        "model_artifact_ready",
+        lambda model: (False, ["missing external ONNX weight file: model_deploy.onnx.data"], {}),
+    )
+
+    def fake_backend_post(url, **kwargs):
+        raise AssertionError("primary backend should not be called when V1 artifacts are missing")
+
+    monkeypatch.setattr(detection, "_backend_post", fake_backend_post)
+
+    response = client.post(
+        "/image_upload/detect",
+        data={"image": (BytesIO(b"fake-image"), "demo.png")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 503
+    message = response.get_json()["message"]
+    assert "V1 主检测模型文件未就绪" in message
+    assert "不会静默切换模型" in message
+
+
 def test_detector_backend_image_endpoint_returns_v1_contract(monkeypatch):
-    monkeypatch.setattr(detector_backend, "V2_DETECT_API", "http://v2.local/api/detect")
-    monkeypatch.setattr(detector_backend, "V2_INTERNAL_TOKEN", "internal-token")
+    monkeypatch.setattr(detector_backend, "_ensure_capability_ready", lambda: None)
+    monkeypatch.setattr(
+        detector_backend,
+        "_run_v1_detect",
+        lambda image_path: {
+            "final_label": "真实图像",
+            "probability": 0.16,
+            "detector_probability": 0.18,
+            "confidence": "高",
+            "explanation": "V1 evidence summary",
+            "visual_issues": ["无明显视觉可疑点。"],
+            "all_metadata": {"EXIF:Make": "Canon"},
+            "metadata_signals": {"has_ai_signal": False, "has_real_signal": True},
+            "agent_reasoning": "native-v1",
+        },
+    )
     monkeypatch.setattr(
         detector_backend,
         "_save_upload",
@@ -378,24 +728,6 @@ def test_detector_backend_image_endpoint_returns_v1_contract(monkeypatch):
     monkeypatch.setattr(detector_backend, "get_image_info", lambda path: ("PNG", "320x240"))
     monkeypatch.setattr(detector_backend, "get_file_size_str", lambda path: "1KB")
     monkeypatch.setattr(detector_backend, "excute_detection_sql_lastid", lambda sql, params=None: 91)
-
-    def fake_post(url, **kwargs):
-        assert url == "http://v2.local/api/detect"
-        assert kwargs["headers"]["X-Jianzhen-Token"] == "internal-token"
-        return _FakeResponse({
-            "taskId": "rj-20260604-0001",
-            "reportId": "RJ-RPT-20260604-0001",
-            "verdict": "real",
-            "confidence": 0.84,
-            "modelVersion": "qwen3-vl-flash",
-            "source": "vlm",
-            "explanation": "V2 evidence summary",
-            "dimensions": [],
-            "regions": [],
-            "fileMeta": {"size": "1KB", "resolution": "320x240"},
-        })
-
-    monkeypatch.setattr(detector_backend, "_post_internal", fake_post)
     app = detector_backend.create_app()
     app.config.update(TESTING=True)
 
@@ -416,6 +748,7 @@ def test_detector_backend_image_endpoint_returns_v1_contract(monkeypatch):
     assert payload["data"]["fake_percentage"] == pytest.approx(16.0)
     assert payload["data"]["final_label"] == "真实图像"
     assert payload["data"]["image_url"].endswith("/static/uploads/openid-1/image/stored-demo.png")
+    assert payload["data"]["agent_reasoning"] == "native-v1"
 
 
 def test_video_detect_logged_in_builds_public_media_url(client, monkeypatch):

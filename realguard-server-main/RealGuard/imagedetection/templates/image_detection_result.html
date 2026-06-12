@@ -45,6 +45,29 @@
         .issues-box h4 i{color:var(--warning)}
         .issues-list{margin:0;padding-left:1.05rem;color:var(--text-secondary);font-size:.82rem;line-height:1.85}
         .issues-list li{padding-left:.1rem}
+        .swarm-result{display:none;margin-top:1.2rem;padding:1rem;border-radius:12px;background:linear-gradient(180deg,rgba(37,99,235,.05),rgba(6,214,160,.05));border:1px solid var(--border)}
+        .swarm-result.visible{display:block}
+        .swarm-result-head{display:flex;align-items:center;justify-content:space-between;gap:.8rem;flex-wrap:wrap;margin-bottom:.85rem}
+        .swarm-result-head h4{font-size:.9rem;font-weight:800;color:var(--text-primary);display:flex;align-items:center;gap:7px}
+        .swarm-result-head h4 i{color:var(--primary)}
+        .swarm-badges{display:flex;gap:.5rem;flex-wrap:wrap}
+        .swarm-badge{font-size:.68rem;font-weight:800;padding:4px 9px;border-radius:999px;background:var(--bg-card);border:1px solid var(--border);color:var(--text-secondary)}
+        .swarm-badge.green{color:var(--success);border-color:rgba(16,185,129,.3)}
+        .swarm-badge.amber{color:var(--warning);border-color:rgba(245,158,11,.35)}
+        .swarm-badge.red{color:var(--danger);border-color:rgba(239,68,68,.32)}
+        .swarm-expert-list{display:grid;grid-template-columns:1fr 1fr;gap:.55rem}
+        @media(max-width:760px){.swarm-expert-list{grid-template-columns:1fr}}
+        .swarm-expert-row{display:grid;grid-template-columns:30px 1fr auto;gap:.55rem;align-items:center;min-height:56px;padding:.55rem;border-radius:10px;background:var(--bg-card);border:1px solid var(--border)}
+        .swarm-expert-row.success{border-color:rgba(16,185,129,.32)}
+        .swarm-expert-row.failed{border-color:rgba(239,68,68,.32)}
+        .swarm-expert-row.skipped{opacity:.72}
+        .swarm-row-icon{width:30px;height:30px;border-radius:9px;background:var(--bg-input);display:flex;align-items:center;justify-content:center;color:var(--text-muted)}
+        .swarm-expert-row.success .swarm-row-icon{color:var(--success)}
+        .swarm-expert-row.failed .swarm-row-icon{color:var(--danger)}
+        .swarm-row-main{min-width:0}
+        .swarm-row-name{font-size:.72rem;font-weight:800;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .swarm-row-msg{font-size:.62rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+        .swarm-row-score{font-size:.72rem;font-weight:800;color:var(--text-secondary)}
         .fb-btn{padding:9px 16px;border-radius:10px;font-size:.8rem;font-weight:600;cursor:pointer;font-family:inherit;border:1px solid var(--border);background:var(--bg-card);color:var(--text-secondary);display:inline-flex;align-items:center;gap:6px;transition:all .2s}
         .fb-btn:hover{border-color:var(--primary);color:var(--primary)}
         .fb-btn:disabled{opacity:.55;cursor:not-allowed}
@@ -143,15 +166,15 @@
                             <div class="verdict-text"><h3 id="verdictLabel">-</h3><p id="verdictSub">-</p></div>
                         </div>
                         <div class="prob-bars">
-                            <div class="prob-bar-item"><label><span>综合AI生成概率</span><span class="val" id="probVal" style="color:var(--danger)">-</span></label><div class="bar-track"><div class="bar-fill red" id="probBar" style="width:0%"></div></div></div>
-                            <div class="prob-bar-item"><label><span>检测器原始AI概率</span><span class="val" id="detProbVal" style="color:var(--primary)">-</span></label><div class="bar-track"><div class="bar-fill blue" id="detProbBar" style="width:0%"></div></div></div>
+                            <div class="prob-bar-item"><label><span id="probLabel">综合AI生成概率</span><span class="val" id="probVal" style="color:var(--danger)">-</span></label><div class="bar-track"><div class="bar-fill red" id="probBar" style="width:0%"></div></div></div>
+                            <div class="prob-bar-item"><label><span id="detProbLabel">检测器原始AI概率</span><span class="val" id="detProbVal" style="color:var(--primary)">-</span></label><div class="bar-track"><div class="bar-fill blue" id="detProbBar" style="width:0%"></div></div></div>
                         </div>
                         <div class="info-grid">
                             <div class="info-item"><div class="label">置信度</div><div class="value" id="infoConf">-</div></div>
                             <div class="info-item"><div class="label">文件大小</div><div class="value" id="infoSize">-</div></div>
                             <div class="info-item"><div class="label">格式</div><div class="value" id="infoFmt">-</div></div>
                             <div class="info-item"><div class="label">分辨率</div><div class="value" id="infoRes">-</div></div>
-                            <div class="info-item"><div class="label">检测模型</div><div class="value" id="infoModel">-</div></div>
+                            <div class="info-item"><div class="label">鉴伪方式</div><div class="value" id="infoModel">-</div></div>
                             <div class="info-item clickable" id="metaItem" onclick="openMetaModal()">
                                 <div class="label">元数据</div>
                                 <div class="value" id="infoMeta">-</div>
@@ -166,6 +189,13 @@
                             <p class="feedback-msg" id="feedbackMsg"></p>
                         </div>
                     </div>
+                </div>
+                <div class="swarm-result" id="swarmResultPanel">
+                    <div class="swarm-result-head">
+                        <h4><i class="fa fa-sitemap"></i> Swarm 专家会诊</h4>
+                        <div class="swarm-badges" id="swarmBadges"></div>
+                    </div>
+                    <div class="swarm-expert-list" id="swarmExpertList"></div>
                 </div>
                 <div class="explanation-box">
                     <div class="explanation-head">
@@ -225,9 +255,9 @@
     }
 
     var sampleData={
-        index1:{final_label:'AI生成图像',probability:0.91,detector_probability:0.91,confidence:'高',explanation:'综合检测器、视觉细节与元数据线索，图像整体更偏向 AI 生成。\n视觉层面存在一定不自然特征，支持当前判定。\n图像缺少可验证的相机元数据，增加了内容真实性风险。\n当前置信度：高。',visual_issues:['图像整体纹理过于均匀，缺乏自然拍摄的随机细节。','光影过渡略显生硬，局部边缘融合不够自然。'],image_url:'/static/system/index1.jpg',filename:'index1.jpg',file_size:'示例',img_format:'JPEG',resolution:'示例',all_metadata:{},_model:'aigc'},
-        index2:{final_label:'真实图像',probability:0.02,detector_probability:0.02,confidence:'高',explanation:'综合检测器、视觉细节与元数据线索，图像整体更偏向真实拍摄。\n视觉层面整体较自然，未发现明显 AI 生成痕迹。\n已提取元数据，为真实性判断提供辅助线索。\n当前置信度：高。',visual_issues:['无明显视觉可疑点。'],image_url:'/static/system/index2.jpg',filename:'index2.jpg',file_size:'示例',img_format:'JPEG',resolution:'示例',all_metadata:{'EXIF:Model':'Camera','EXIF:Make':'Manufacturer'},_model:'aigc'},
-        index3:{final_label:'AI生成图像',probability:0.87,detector_probability:0.87,confidence:'高',explanation:'综合检测器、视觉细节与元数据线索，图像整体更偏向 AI 生成。\n视觉层面存在一定不自然特征，支持当前判定。\n图像缺少可验证的相机元数据，增加了内容真实性风险。\n当前置信度：高。',visual_issues:['背景元素透视关系略有偏差。','部分边缘融合不自然，纹理缺乏自然拍摄的随机性。'],image_url:'/static/system/index3.jpg',filename:'index3.jpg',file_size:'示例',img_format:'JPEG',resolution:'示例',all_metadata:{},_model:'aigc'}
+        index1:{final_label:'AI生成图像',probability:0.91,detector_probability:0.91,confidence:'高',explanation:'综合检测器、视觉细节与元数据线索，图像整体更偏向 AI 生成。\n视觉层面存在一定不自然特征，支持当前判定。\n图像缺少可验证的相机元数据，增加了内容真实性风险。\n当前置信度：高。',visual_issues:['图像整体纹理过于均匀，缺乏自然拍摄的随机细节。','光影过渡略显生硬，局部边缘融合不够自然。'],image_url:'/static/system/index1.jpg',filename:'index1.jpg',file_size:'示例',img_format:'JPEG',resolution:'示例',all_metadata:{}},
+        index2:{final_label:'真实图像',probability:0.02,detector_probability:0.02,confidence:'高',explanation:'综合检测器、视觉细节与元数据线索，图像整体更偏向真实拍摄。\n视觉层面整体较自然，未发现明显 AI 生成痕迹。\n已提取元数据，为真实性判断提供辅助线索。\n当前置信度：高。',visual_issues:['无明显视觉可疑点。'],image_url:'/static/system/index2.jpg',filename:'index2.jpg',file_size:'示例',img_format:'JPEG',resolution:'示例',all_metadata:{'EXIF:Model':'Camera','EXIF:Make':'Manufacturer'}},
+        index3:{final_label:'AI生成图像',probability:0.87,detector_probability:0.87,confidence:'高',explanation:'综合检测器、视觉细节与元数据线索，图像整体更偏向 AI 生成。\n视觉层面存在一定不自然特征，支持当前判定。\n图像缺少可验证的相机元数据，增加了内容真实性风险。\n当前置信度：高。',visual_issues:['背景元素透视关系略有偏差。','部分边缘融合不自然，纹理缺乏自然拍摄的随机性。'],image_url:'/static/system/index3.jpg',filename:'index3.jpg',file_size:'示例',img_format:'JPEG',resolution:'示例',all_metadata:{}}
     };
 
     var params=new URLSearchParams(window.location.search);
@@ -247,10 +277,9 @@
     } else if(itemid){
         var st=tryParseStored();
         if(st&&String(st.itemid)===String(itemid)){
-            st._model=sessionStorage.getItem('detect_model')||'aigc';
             renderResult(st);showResult();
             sessionStorage.removeItem('detect_result');
-            sessionStorage.removeItem('detect_model');
+            sessionStorage.removeItem('detect_task');
         } else {
             fetch('/image_upload/result?itemid='+encodeURIComponent(itemid))
             .then(function(r){return r.json();})
@@ -262,10 +291,9 @@
     } else {
         var stored=tryParseStored();
         if(stored){
-            stored._model=sessionStorage.getItem('detect_model')||'aigc';
             renderResult(stored);showResult();
             sessionStorage.removeItem('detect_result');
-            sessionStorage.removeItem('detect_model');
+            sessionStorage.removeItem('detect_task');
         } else { showError(null); }
     }
 
@@ -277,9 +305,10 @@
     function renderResult(r){
         var pNum = Number(r.probability);
         if (isNaN(pNum)) pNum = 0;
-        /* 裁决与综合 AI 概率一致：≥50% 视为 AI 生成，避免与 LLM 文案矛盾 */
-        var isFake = pNum >= 0.5;
-        var verdictLabel = isFake ? 'AI生成图像' : '真实图像';
+        var hasSwarm = !!(r && r.swarm && r.swarm.enabled);
+        var verdictFromResult = String((r && r.final_label) || '').trim();
+        var isFake = hasSwarm ? (verdictFromResult !== '真实图像') : (pNum >= 0.5);
+        var verdictLabel = hasSwarm && verdictFromResult ? verdictFromResult : (isFake ? 'AI生成图像' : '真实图像');
         var prob=(pNum*100).toFixed(1);
         var detectorNum = Number(r.detector_probability);
         if (isNaN(detectorNum)) detectorNum = pNum;
@@ -296,8 +325,10 @@
         var v=document.getElementById('verdict');v.className='verdict '+(isFake?'fake':'real');
         document.getElementById('verdictIcon').innerHTML='<i class="fa '+(isFake?'fa-times':'fa-check')+'"></i>';
         document.getElementById('verdictLabel').textContent=verdictLabel;
-        document.getElementById('verdictSub').textContent='置信度: '+(r.confidence||'-')+'  |  综合 AI 生成概率: '+prob+'%';
+        document.getElementById('verdictSub').textContent='置信度: '+(r.confidence||'-')+'  |  '+(hasSwarm?'综合伪造风险: ':'综合 AI 生成概率: ')+prob+'%';
 
+        document.getElementById('probLabel').textContent=hasSwarm?'Swarm综合伪造风险':'综合AI生成概率';
+        document.getElementById('detProbLabel').textContent=hasSwarm?'主检测器原始概率':'检测器原始AI概率';
         document.getElementById('probVal').textContent=prob+'%';
         document.getElementById('probVal').style.color=isFake?'var(--danger)':'var(--success)';
         document.getElementById('detProbVal').textContent=detProb+'%';
@@ -311,7 +342,7 @@
         document.getElementById('infoSize').textContent=r.file_size||'-';
         document.getElementById('infoFmt').textContent=r.img_format||'-';
         document.getElementById('infoRes').textContent=r.resolution||'-';
-        document.getElementById('infoModel').textContent=(r._model==='ps'?'PS篡改检测':'AIGC检测');
+        document.getElementById('infoModel').textContent=hasSwarm?'Swarm 专家会诊':'综合鉴伪分析';
 
         // Metadata
         currentMetadata = r.all_metadata || {};
@@ -329,8 +360,77 @@
         document.getElementById('explanationText').textContent=cleanExplanation(r)||'暂无说明';
         renderVisualIssues(r);
         renderAgentReasoning(r);
+        renderSwarmResult(r);
 
         setupFeedbackUI(r);
+    }
+
+    function swarmStatusIcon(status) {
+        if (status === 'success') return 'fa-check';
+        if (status === 'failed') return 'fa-exclamation-triangle';
+        if (status === 'skipped') return 'fa-minus';
+        if (status === 'running') return 'fa-circle-o-notch';
+        return 'fa-circle-o';
+    }
+
+    function publicSwarmText(value) {
+        var text = String(value || '')
+            .replace(/^[^:：]{0,32}[:：]\s*/, '')
+            .replace(/阿里云|Aliyun|V2|Qwen|ONNX|RealGuard\s*V?\d*|AIGC\s*专业版|隐式标识专家|局部编辑专家|主路由鉴伪专家|视觉语言复核专家|专家复核完成|专家/g, '')
+            .replace(/\s{2,}/g, ' ')
+            .trim();
+        return text || '证据项已脱敏';
+    }
+
+    function publicExpertName(expert, index) {
+        var id = String(expert.id || '').toLowerCase();
+        var role = String(expert.role || '').toLowerCase();
+        if (id === 'primary' || role.indexOf('primary') >= 0) return '主鉴伪专家';
+        if (id === 'metadata' || role.indexOf('metadata') >= 0) return '元数据专家';
+        if (id === 'v2' || role.indexOf('multimodal') >= 0) return '语义复核专家';
+        if (id.indexOf('ps') >= 0 || role.indexOf('tamper') >= 0) return '篡改痕迹专家';
+        if (id.indexOf('recap') >= 0 || role.indexOf('recapture') >= 0) return '翻拍风险专家';
+        if (id === 'c2pa' || role.indexOf('凭证') >= 0 || role.indexOf('c2pa') >= 0) return 'C2PA 凭证专家';
+        if (id === 'wam' || role.indexOf('通用水印') >= 0 || role.indexOf('wam') >= 0) return 'WAM 通用水印专家';
+        if (id === 'watermark' || role.indexOf('水印') >= 0 || role.indexOf('watermark') >= 0) return '隐式水印专家';
+        return '复核专家 ' + (index + 1);
+    }
+
+    function publicExpertMessage(expert) {
+        var status = expert.status || 'queued';
+        if (status === 'running') return '正在复核';
+        if (status === 'failed') return '该专家暂不可用';
+        if (status === 'skipped') return '已跳过';
+        if (status === 'success') return expert.verdict ? publicSwarmText(expert.verdict) : '复核完成';
+        return '等待调度';
+    }
+
+    function renderSwarmResult(r) {
+        var panel = document.getElementById('swarmResultPanel');
+        var badges = document.getElementById('swarmBadges');
+        var list = document.getElementById('swarmExpertList');
+        var swarm = r && r.swarm;
+        if (!swarm || !swarm.enabled) {
+            panel.classList.remove('visible');
+            badges.innerHTML = '';
+            list.innerHTML = '';
+            return;
+        }
+        panel.classList.add('visible');
+        var scorePct = Math.round(Number(swarm.score || r.probability || 0) * 1000) / 10;
+        var level = swarm.consensusLevel || '-';
+        var levelClass = level === '高' ? 'green' : (level === '低' ? 'red' : 'amber');
+        badges.innerHTML =
+            '<span class="swarm-badge '+levelClass+'">一致性 '+esc(level)+'</span>' +
+            '<span class="swarm-badge">有效专家 '+esc(swarm.effectiveExperts || 0)+'/'+esc(swarm.totalExperts || 0)+'</span>' +
+            '<span class="swarm-badge '+(Number(swarm.score || 0) >= .5 ? 'red' : 'green')+'">风险 '+scorePct+'%</span>';
+        var experts = Array.isArray(swarm.experts) ? swarm.experts : [];
+        list.innerHTML = experts.map(function (expert, index) {
+            var status = expert.status || 'queued';
+            var score = expert.score === 0 || expert.score ? Math.round(Number(expert.score) * 100) + '%' : '-';
+            var msg = publicExpertMessage(expert);
+            return '<div class="swarm-expert-row '+esc(status)+'"><div class="swarm-row-icon"><i class="fa '+swarmStatusIcon(status)+'"></i></div><div class="swarm-row-main"><div class="swarm-row-name">'+esc(publicExpertName(expert, index))+'</div><div class="swarm-row-msg">'+esc(msg)+'</div></div><div class="swarm-row-score">'+esc(score)+'</div></div>';
+        }).join('');
     }
 
     function cleanExplanation(r) {

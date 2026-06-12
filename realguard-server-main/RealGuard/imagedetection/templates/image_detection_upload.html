@@ -30,6 +30,7 @@
         .model-tab{flex:1;padding:7px;text-align:center;border-radius:7px;font-size:.78rem;font-weight:600;cursor:pointer;transition:all .25s;color:var(--text-muted);background:transparent;border:none;font-family:inherit}
         .model-tab.active{background:var(--primary);color:#fff;box-shadow:var(--shadow-sm)}
         .model-tab:hover:not(.active){color:var(--text-primary);background:rgba(37,99,235,.06)}
+        @media(max-width:640px){.model-tabs{flex-direction:column}.model-tab{text-align:left;padding:9px 10px}}
         .model-desc{font-size:.7rem;color:var(--text-muted);padding:.35rem .6rem;background:var(--bg-input);border-radius:7px;margin-bottom:0;line-height:1.4}
         .upload-area{border:2px dashed var(--border);border-radius:10px;padding:1.2rem 1rem;text-align:center;cursor:pointer;transition:all .3s;margin-bottom:.8rem;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:120px}
         .upload-area:hover,.upload-area.drag-over{border-color:var(--primary);background:rgba(37,99,235,.04)}
@@ -61,6 +62,43 @@
         .status-row{display:flex;align-items:center;gap:8px;padding:.5rem .65rem;background:var(--bg-input);border-radius:8px}
         .status-dot{width:7px;height:7px;border-radius:50%;background:var(--text-muted);flex-shrink:0}.status-dot.ready{background:var(--accent)}
         .status-text{font-size:.75rem;color:var(--text-muted)}
+        .swarm-console{display:none;margin-top:.8rem;border:1px solid var(--border);border-radius:12px;background:linear-gradient(180deg,rgba(37,99,235,.04),rgba(6,214,160,.04));overflow:hidden}
+        .swarm-console.visible{display:block}
+        .swarm-stage{position:relative;min-height:168px;padding:1rem;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 50%,rgba(37,99,235,.10),transparent 56%)}
+        .swarm-stage::before,.swarm-stage::after{content:'';position:absolute;inset:22px;border:1px solid rgba(37,99,235,.22);border-radius:50%;animation:swarm-ring 5.4s linear infinite}
+        .swarm-stage::after{inset:44px;border-color:rgba(6,214,160,.26);animation-duration:3.8s;animation-direction:reverse}
+        .swarm-core{position:relative;z-index:2;width:116px;height:116px;border-radius:18px;background:var(--bg-card);border:1px solid var(--border);box-shadow:var(--shadow-md);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;overflow:hidden}
+        .swarm-core img{width:100%;height:100%;object-fit:cover;display:none}
+        .swarm-core.has-image img{display:block}
+        .swarm-core.has-image .swarm-core-icon,.swarm-core.has-image .swarm-core-label{display:none}
+        .swarm-core-icon{width:44px;height:44px;border-radius:12px;background:rgba(37,99,235,.1);display:flex;align-items:center;justify-content:center;color:var(--primary);font-size:1.2rem;animation:swarm-pulse 1.8s ease-in-out infinite}
+        .swarm-core-label{font-size:.68rem;color:var(--text-muted);font-weight:600}
+        .swarm-beam{position:absolute;z-index:1;width:72%;height:2px;background:linear-gradient(90deg,transparent,rgba(37,99,235,.55),rgba(6,214,160,.45),transparent);transform-origin:center;opacity:.55;animation:swarm-beam 2.4s ease-in-out infinite}
+        .swarm-beam.b2{transform:rotate(58deg);animation-delay:.35s}.swarm-beam.b3{transform:rotate(-58deg);animation-delay:.7s}
+        .swarm-progress{display:grid;grid-template-columns:44px 1fr;gap:10px;align-items:center;padding:.75rem 1rem;border-top:1px solid var(--border);background:var(--bg-card)}
+        .swarm-progress-num{font-size:.78rem;font-weight:800;color:var(--primary);text-align:right}
+        .swarm-progress-track{height:8px;border-radius:99px;background:var(--bg-input);overflow:hidden}
+        .swarm-progress-track span{display:block;height:100%;width:0;border-radius:99px;background:linear-gradient(90deg,var(--primary),var(--accent));transition:width .45s cubic-bezier(.22,1,.36,1)}
+        .swarm-experts{display:grid;grid-template-columns:1fr 1fr;gap:.5rem;padding:0 1rem 1rem;background:var(--bg-card)}
+        @media(max-width:520px){.swarm-experts{grid-template-columns:1fr}}
+        .swarm-expert{min-height:62px;border:1px solid var(--border);border-radius:10px;background:var(--bg-card-alt);padding:.55rem;display:grid;grid-template-columns:28px 1fr auto;gap:.45rem;align-items:center;transition:transform .25s,border-color .25s,background .25s;overflow:hidden}
+        .swarm-expert.running{border-color:rgba(37,99,235,.55);background:rgba(37,99,235,.06);transform:translateY(-1px)}
+        .swarm-expert.success{border-color:rgba(16,185,129,.38);background:rgba(16,185,129,.06)}
+        .swarm-expert.failed{border-color:rgba(239,68,68,.38);background:rgba(239,68,68,.06)}
+        .swarm-expert.skipped{opacity:.72}
+        .expert-state{width:28px;height:28px;border-radius:9px;display:flex;align-items:center;justify-content:center;background:var(--bg-card);color:var(--text-muted);border:1px solid var(--border);font-size:.8rem;flex-shrink:0}
+        .swarm-expert.running .expert-state{color:var(--primary);border-color:rgba(37,99,235,.35);animation:detect-spin .95s linear infinite}
+        .swarm-expert.success .expert-state{color:var(--success);border-color:rgba(16,185,129,.35)}
+        .swarm-expert.failed .expert-state{color:var(--danger);border-color:rgba(239,68,68,.35)}
+        .expert-main{min-width:0}
+        .expert-name{font-size:.68rem;font-weight:800;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .expert-msg{font-size:.58rem;color:var(--text-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .expert-score{font-size:.64rem;font-weight:800;color:var(--text-secondary);min-width:34px;text-align:right}
+        .swarm-log{border-top:1px solid var(--border);padding:.7rem 1rem;background:var(--bg-input);min-height:38px;font-size:.68rem;color:var(--text-secondary);display:flex;align-items:center;gap:7px}
+        .swarm-log i{color:var(--accent)}
+        @keyframes swarm-ring{to{transform:rotate(360deg)}}
+        @keyframes swarm-pulse{0%,100%{transform:scale(1);box-shadow:0 0 0 0 rgba(37,99,235,.28)}50%{transform:scale(1.04);box-shadow:0 0 0 10px rgba(37,99,235,0)}}
+        @keyframes swarm-beam{0%,100%{opacity:.18;filter:saturate(.7)}50%{opacity:.72;filter:saturate(1.3)}}
         /* SAMPLES */
         .sample-list{display:flex;flex-direction:column;gap:.5rem}
         .sample-item{display:flex;gap:.6rem;padding:.45rem;border-radius:9px;border:1px solid var(--border);cursor:pointer;transition:all .2s;background:var(--bg-card)}
@@ -97,13 +135,13 @@
 <body>
 <header class="nav"><div class="nav-inner"><a href="/index" class="nav-logo"><i class="fa fa-eye"></i><span>数字内容鉴伪平台</span></a><nav class="nav-links"><a href="/index">首页</a><div class="dropdown"><button class="dropdown-trigger"><span>功能</span><i class="fa fa-chevron-down"></i></button><div class="dropdown-menu"><div class="dropdown-label">检测</div><a href="/image_upload" class="dropdown-item active-item"><i class="fa fa-image"></i> 图像检测</a><a href="/video_upload" class="dropdown-item"><i class="fa fa-film"></i> 视频检测</a><div class="dropdown-divider"></div><div class="dropdown-label">检索</div><a href="/image_retrieve" class="dropdown-item"><i class="fa fa-search"></i> 图像检索</a><a href="/video_retrieve" class="dropdown-item"><i class="fa fa-play-circle"></i> 视频检索</a></div></div><a href="/history_photo">历史记录</a><a href="/introduce">关于我们</a><button class="theme-btn" id="themeToggle" title="切换主题"><i class="fa fa-moon-o"></i></button></nav></div></header>
 <main class="main"><div class="container">
-    <div class="page-header"><h1><i class="fa fa-image"></i> 图像鉴伪</h1><p>上传图片或选择示例图片，使用AI模型检测疑似侵权内容</p></div>
+    <div class="page-header"><h1><i class="fa fa-image"></i> 图像鉴伪</h1><p>上传图片或选择示例图片，进行综合真实性分析</p></div>
     <div class="layout">
         <!-- LEFT CARD -->
         <div class="card">
-            <div class="section-label"><i class="fa fa-cogs"></i> 选择检测模型</div>
-            <div class="model-tabs"><button class="model-tab active" data-model="aigc" onclick="switchModel('aigc')"><i class="fa fa-magic"></i> AIGC检测</button><button class="model-tab" data-model="ps" onclick="switchModel('ps')"><i class="fa fa-paint-brush"></i> PS篡改检测</button></div>
-            <div class="model-desc" id="modelDesc"><strong>AIGC检测：</strong>基于检测器快速判定AI生成概率，并结合元数据做辅助展示。</div>
+            <div class="section-label"><i class="fa fa-cogs"></i> 选择鉴伪任务</div>
+            <div class="model-tabs"><button class="model-tab active" data-model="aigc" onclick="switchModel('aigc')"><i class="fa fa-magic"></i> 生成内容鉴伪</button><button class="model-tab" data-model="ps" onclick="switchModel('ps')"><i class="fa fa-paint-brush"></i> 篡改痕迹鉴伪</button><button class="model-tab" data-model="swarm" onclick="switchModel('swarm')"><i class="fa fa-sitemap"></i> Swarm 专家会诊</button></div>
+            <div class="model-desc" id="modelDesc"><strong>生成内容鉴伪：</strong>分析图像是否存在生成式内容风险，并结合元数据做辅助展示。</div>
             <div class="card-divider"></div>
             <div class="section-label"><i class="fa fa-upload"></i> 上传图片</div>
             <div class="upload-area" id="dropArea"><input type="file" id="fileInput" accept="image/*"><label for="fileInput" id="uploadPlaceholder" style="cursor:pointer;display:flex;flex-direction:column;align-items:center;"><div class="upload-icon"><i class="fa fa-cloud-upload"></i></div><div class="upload-text">拖放图片到此处，或点击上传</div><div class="upload-hint">支持 JPG、PNG、WEBP，最大 50MB</div></label><div class="file-preview" id="filePreview"><img id="previewImg" src="" alt="预览"><div class="file-meta"><span id="fileName"></span><span>·</span><span id="fileSize"></span><span class="file-badge">图片</span></div><button class="clear-btn" id="clearBtn"><i class="fa fa-times"></i> 清除</button></div></div>
@@ -113,6 +151,15 @@
         <div class="card">
             <div class="section-label"><i class="fa fa-info-circle"></i> 当前状态</div>
             <div class="status-row"><div class="status-dot" id="statusDot"></div><div class="status-text" id="statusText">等待上传图片...</div></div>
+            <div class="swarm-console" id="swarmConsole">
+                <div class="swarm-stage">
+                    <div class="swarm-beam b1"></div><div class="swarm-beam b2"></div><div class="swarm-beam b3"></div>
+                    <div class="swarm-core" id="swarmCore"><img id="swarmPreviewImg" src="" alt="Swarm预览"><div class="swarm-core-icon"><i class="fa fa-image"></i></div><div class="swarm-core-label">等待图像</div></div>
+                </div>
+                <div class="swarm-progress"><div class="swarm-progress-num" id="swarmProgressText">0%</div><div class="swarm-progress-track"><span id="swarmProgressBar"></span></div></div>
+                <div class="swarm-experts" id="swarmExperts"></div>
+                <div class="swarm-log" id="swarmLog"><i class="fa fa-circle-o"></i><span>Swarm 待命</span></div>
+            </div>
             <div class="card-divider"></div>
             <div class="section-label"><i class="fa fa-th-large" style="color:var(--warning)"></i> 示例图片 <span style="font-size:.65rem;font-weight:400;color:var(--text-muted);margin-left:5px;">点击查看效果</span></div>
             <div class="sample-list">
@@ -123,8 +170,8 @@
             <div class="card-divider"></div>
             <div class="section-label"><i class="fa fa-lightbulb-o" style="color:var(--warning)"></i> 使用说明</div>
             <ul class="tips-list">
-                <li><i class="fa fa-check-circle"></i><span><strong>AIGC检测：</strong>识别SD、DALL-E、Midjourney等AI生成图像</span></li>
-                <li><i class="fa fa-check-circle"></i><span><strong>PS篡改检测：</strong>识别拼接、修补、克隆等篡改痕迹</span></li>
+                <li><i class="fa fa-check-circle"></i><span><strong>生成内容鉴伪：</strong>识别疑似生成、合成或编辑的内容风险</span></li>
+                <li><i class="fa fa-check-circle"></i><span><strong>篡改痕迹鉴伪：</strong>识别拼接、修补、克隆等后处理痕迹</span></li>
                 <li><i class="fa fa-check-circle"></i><span>点击示例图片可预览检测效果</span></li>
                 <li><i class="fa fa-check-circle"></i><span>结果包含概率、置信度与简洁结论</span></li>
             </ul>
@@ -150,26 +197,106 @@
     t.addEventListener('click',function(){var d=b.hasAttribute('data-theme');setTheme(!d);localStorage.setItem('theme',d?'light':'dark');});
     window.addEventListener('scroll',function(){document.querySelector('.nav').style.boxShadow=window.scrollY>50?'var(--shadow-md)':'none';});
     var currentModel='aigc';
-    var modelDescs={aigc:'<strong>AIGC检测：</strong>基于检测器快速判定AI生成概率，并结合元数据做辅助展示。',ps:'<strong>PS篡改检测：</strong>针对Photoshop等工具，分析拼接、修补、克隆等后处理痕迹。'};
-    window.switchModel=function(m){currentModel=m;document.querySelectorAll('.model-tab').forEach(function(tab){tab.classList.toggle('active',tab.getAttribute('data-model')===m);});document.getElementById('modelDesc').innerHTML=modelDescs[m];};
+    var modelDescs={aigc:'<strong>生成内容鉴伪：</strong>分析图像是否存在生成式内容风险，并结合元数据做辅助展示。',ps:'<strong>篡改痕迹鉴伪：</strong>分析拼接、修补、克隆等后处理痕迹。',swarm:'<strong>Swarm 专家会诊：</strong>调度多类鉴伪专家进行投票复核，输出综合结论、共识度和分歧提示。'};
+    window.switchModel=function(m){currentModel=m;document.querySelectorAll('.model-tab').forEach(function(tab){tab.classList.toggle('active',tab.getAttribute('data-model')===m);});document.getElementById('modelDesc').innerHTML=modelDescs[m];setSwarmVisible(m==='swarm');};
     var dropArea=document.getElementById('dropArea'),fileInput=document.getElementById('fileInput'),placeholder=document.getElementById('uploadPlaceholder'),filePreview=document.getElementById('filePreview'),previewImg=document.getElementById('previewImg'),detectBtn=document.getElementById('detectBtn'),clearBtn=document.getElementById('clearBtn'),statusText=document.getElementById('statusText'),statusDot=document.getElementById('statusDot');
-    var currentFile=null,analysisOverlay=document.getElementById('analysisOverlay');
+    var currentFile=null,analysisOverlay=document.getElementById('analysisOverlay'),swarmPollTimer=null;
+    var swarmConsole=document.getElementById('swarmConsole'),swarmExpertsEl=document.getElementById('swarmExperts'),swarmProgressText=document.getElementById('swarmProgressText'),swarmProgressBar=document.getElementById('swarmProgressBar'),swarmLog=document.getElementById('swarmLog'),swarmCore=document.getElementById('swarmCore'),swarmPreviewImg=document.getElementById('swarmPreviewImg');
+    var swarmExpertDefaults=[
+        {id:'primary',name:'主鉴伪专家',role:'主检测',status:'queued',message:'等待调度'},
+        {id:'metadata',name:'元数据取证专家',role:'元数据',status:'queued',message:'等待调度'},
+        {id:'v2',name:'语义复核专家',role:'语义复核',status:'queued',message:'等待调度'},
+        {id:'aliyun_pro',name:'生成内容复核专家',role:'生成检测',status:'queued',message:'等待调度'},
+        {id:'aliyun_full',name:'内容标识复核专家',role:'标识复核',status:'queued',message:'等待调度'},
+        {id:'aliyun_ultra',name:'局部编辑专家',role:'局部伪造',status:'queued',message:'等待调度'},
+        {id:'aliyun_ps',name:'篡改痕迹专家',role:'PS篡改',status:'queued',message:'等待调度'},
+        {id:'aliyun_recap',name:'翻拍风险专家',role:'翻拍检测',status:'queued',message:'等待调度'},
+        {id:'c2pa',name:'C2PA 凭证专家',role:'内容凭证',status:'queued',message:'等待调度'},
+        {id:'watermark',name:'隐式水印专家',role:'生成水印',status:'queued',message:'等待调度'},
+        {id:'wam',name:'WAM 通用水印专家',role:'通用水印',status:'queued',message:'等待调度'}
+    ];
+    function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function publicExpertName(expert,index){
+        var id=String(expert.id||'').toLowerCase(),role=String(expert.role||'').toLowerCase();
+        if(id==='primary'||role.indexOf('primary')>=0)return'主鉴伪专家';
+        if(id==='metadata'||role.indexOf('metadata')>=0)return'元数据专家';
+        if(id==='v2'||role.indexOf('multimodal')>=0)return'语义复核专家';
+        if(id.indexOf('ps')>=0||role.indexOf('tamper')>=0)return'篡改痕迹专家';
+        if(id.indexOf('recap')>=0||role.indexOf('recapture')>=0)return'翻拍风险专家';
+        if(id==='c2pa'||role.indexOf('凭证')>=0||role.indexOf('c2pa')>=0)return'C2PA 凭证专家';
+        if(id==='wam'||role.indexOf('通用水印')>=0||role.indexOf('wam')>=0)return'WAM 通用水印专家';
+        if(id==='watermark'||role.indexOf('水印')>=0||role.indexOf('watermark')>=0)return'隐式水印专家';
+        return'复核专家 '+(index+1);
+    }
+    function publicExpertMessage(expert,includeVerdict){
+        var status=expert.status||'queued';
+        if(status==='running')return'正在复核';
+        if(status==='failed')return'该专家暂不可用';
+        if(status==='skipped')return'已跳过';
+        if(status==='success')return includeVerdict&&expert.verdict?publicSwarmText(expert.verdict):'复核完成';
+        return'等待调度';
+    }
+    function publicSwarmText(value){
+        var text=String(value||'').replace(/^[^:：]{0,32}[:：]\s*/,'').replace(/阿里云|Aliyun|V2|Qwen|ONNX|RealGuard\s*V?\d*|AIGC\s*专业版|隐式标识专家|局部编辑专家|主路由鉴伪专家|视觉语言复核专家|专家复核完成|专家/g,'').replace(/\s{2,}/g,' ').trim();
+        return text||'证据项已脱敏';
+    }
+    function publicJobSummary(job){
+        if(!job)return'等待专家队列启动';
+        if(job.status==='success')return'Swarm 专家会诊完成';
+        if(job.status==='failed')return'Swarm 专家会诊失败';
+        if(job.status==='running')return'多名鉴伪专家正在复核';
+        return'等待专家队列启动';
+    }
+    function setSwarmVisible(on){swarmConsole.classList.toggle('visible',!!on);if(on&&!swarmExpertsEl.children.length)renderSwarmExperts(swarmExpertDefaults);}
+    function resetSwarmPanel(){setSwarmProgress(0);renderSwarmExperts(swarmExpertDefaults);setSwarmLog('Swarm 待命','fa-circle-o');}
+    function setSwarmProgress(value){var n=Math.max(0,Math.min(100,parseInt(value||0,10)));swarmProgressText.textContent=n+'%';swarmProgressBar.style.width=n+'%';}
+    function setSwarmLog(text,icon){swarmLog.innerHTML='<i class="fa '+(icon||'fa-circle-o')+'"></i><span>'+esc(text||'Swarm 待命')+'</span>';}
+    function statusIcon(status){if(status==='running')return'fa-circle-o-notch';if(status==='success')return'fa-check';if(status==='failed')return'fa-exclamation-triangle';if(status==='skipped')return'fa-minus';return'fa-circle-o';}
+    function renderSwarmExperts(experts){
+        var list=Array.isArray(experts)&&experts.length?experts:swarmExpertDefaults;
+        swarmExpertsEl.innerHTML=list.map(function(expert,idx){
+            var status=expert.status||'queued';
+            var score=expert.score===0||expert.score?Math.round(Number(expert.score)*100)+'%':'-';
+            var msg=publicExpertMessage(expert,false);
+            return '<div class="swarm-expert '+esc(status)+'"><div class="expert-state"><i class="fa '+statusIcon(status)+'"></i></div><div class="expert-main"><div class="expert-name">'+esc(publicExpertName(expert,idx))+'</div><div class="expert-msg">'+esc(msg)+'</div></div><div class="expert-score">'+esc(score)+'</div></div>';
+        }).join('');
+    }
+    function updateSwarmPreview(src){if(src){swarmPreviewImg.src=src;swarmCore.classList.add('has-image');}else{swarmPreviewImg.src='';swarmCore.classList.remove('has-image');}}
+    function renderSwarmJob(job){
+        if(!job)return;
+        setSwarmVisible(true);
+        setSwarmProgress(job.progress||0);
+        if(Array.isArray(job.experts))renderSwarmExperts(job.experts);
+        var summary=publicJobSummary(job);
+        setSwarmLog(summary,job.status==='success'?'fa-check-circle':(job.status==='failed'?'fa-exclamation-triangle':'fa-circle-o-notch'));
+        if(job.status==='success')statusText.textContent='Swarm 专家会诊完成';
+        else if(job.status==='failed')statusText.textContent='Swarm 任务失败';
+        else statusText.textContent=summary;
+    }
+    function readJsonResponse(r){return r.json().catch(function(){return{};}).then(function(d){if(!r.ok)throw new Error(d.message||'请求失败');return d;});}
     ['dragenter','dragover','dragleave','drop'].forEach(function(e){dropArea.addEventListener(e,function(ev){ev.preventDefault();ev.stopPropagation();});});
     ['dragenter','dragover'].forEach(function(e){dropArea.addEventListener(e,function(){dropArea.classList.add('drag-over');});});
     ['dragleave','drop'].forEach(function(e){dropArea.addEventListener(e,function(){dropArea.classList.remove('drag-over');});});
     dropArea.addEventListener('drop',function(e){var f=e.dataTransfer.files;if(f&&f.length>0){handleFile(f[0]);var dt=new DataTransfer();dt.items.add(f[0]);fileInput.files=dt.files;}});
     fileInput.addEventListener('change',function(){if(this.files.length>0)handleFile(this.files[0]);});
-    function handleFile(file){if(file.size>50*1024*1024){alert('文件不能超过50MB');return;}if(!file.type.startsWith('image/')){alert('请上传图片文件');return;}currentFile=file;placeholder.style.display='none';filePreview.classList.add('visible');var r=new FileReader();r.onload=function(e){previewImg.src=e.target.result;};r.readAsDataURL(file);document.getElementById('fileName').textContent=file.name;document.getElementById('fileSize').textContent=fmtSize(file.size);detectBtn.disabled=false;statusText.textContent='已选择: '+file.name;statusDot.classList.add('ready');}
+    function handleFile(file){if(file.size>50*1024*1024){alert('文件不能超过50MB');return;}if(!file.type.startsWith('image/')){alert('请上传图片文件');return;}currentFile=file;placeholder.style.display='none';filePreview.classList.add('visible');var r=new FileReader();r.onload=function(e){previewImg.src=e.target.result;updateSwarmPreview(e.target.result);};r.readAsDataURL(file);document.getElementById('fileName').textContent=file.name;document.getElementById('fileSize').textContent=fmtSize(file.size);detectBtn.disabled=false;statusText.textContent='已选择: '+file.name;statusDot.classList.add('ready');if(currentModel==='swarm')resetSwarmPanel();}
     function fmtSize(b){if(b<1024)return b+'B';if(b<1048576)return(b/1024).toFixed(1)+'KB';return(b/1048576).toFixed(1)+'MB';}
-    clearBtn.addEventListener('click',function(){currentFile=null;fileInput.value='';filePreview.classList.remove('visible');placeholder.style.display='flex';previewImg.src='';detectBtn.disabled=true;statusText.textContent='等待上传图片...';statusDot.classList.remove('ready');});
+    clearBtn.addEventListener('click',function(){currentFile=null;fileInput.value='';filePreview.classList.remove('visible');placeholder.style.display='flex';previewImg.src='';updateSwarmPreview('');resetSwarmPanel();detectBtn.disabled=true;statusText.textContent='等待上传图片...';statusDot.classList.remove('ready');});
     function setDetecting(on){
         detectBtn.classList.toggle('detecting',!!on);
         statusDot.classList.toggle('busy',!!on);
         dropArea.classList.toggle('detecting-zone',!!on);
         if(on){
-            statusText.textContent='正在分析图像……';
-            detectBtn.innerHTML='<i class="fa fa-circle-o-notch detect-spin"></i> Agent正在分析';
-            analysisOverlay.classList.add('show');
+            if(currentModel==='swarm'){
+                statusText.textContent='Swarm 专家会诊中…';
+                detectBtn.innerHTML='<i class="fa fa-circle-o-notch detect-spin"></i> Swarm 会诊中';
+                analysisOverlay.classList.remove('show');
+                setSwarmVisible(true);
+            }else{
+                statusText.textContent='正在分析图像……';
+                detectBtn.innerHTML='<i class="fa fa-circle-o-notch detect-spin"></i> Agent正在分析';
+                analysisOverlay.classList.add('show');
+            }
         }else{
             if(currentFile) statusText.textContent='已选择: '+currentFile.name;
             else{statusText.textContent='等待上传图片...';statusDot.classList.remove('ready');}
@@ -177,30 +304,71 @@
             analysisOverlay.classList.remove('show');
         }
     }
+    function redirectResult(result){
+        sessionStorage.setItem('detect_result',JSON.stringify(result));
+        sessionStorage.setItem('detect_task',currentModel);
+        var id=result&&result.itemid;
+        if(id!==undefined&&id!==null&&id!==''){window.location.href='/image_result?itemid='+encodeURIComponent(id);}
+        else{window.location.href='/image_result';}
+    }
+    function handleDetectError(err){
+        if(swarmPollTimer){clearTimeout(swarmPollTimer);swarmPollTimer=null;}
+        setDetecting(false);
+        detectBtn.disabled=false;
+        if(currentFile){statusText.textContent='已选择: '+currentFile.name;statusDot.classList.add('ready');}
+        statusText.textContent='失败: '+err.message;
+        setSwarmLog('失败: '+err.message,'fa-exclamation-triangle');
+        alert('检测失败: '+err.message);
+    }
+    function pollSwarmJob(jobId){
+        fetch('/image_upload/jobs/'+encodeURIComponent(jobId)).then(readJsonResponse).then(function(data){
+            if(data.status!=='success')throw new Error(data.message||'任务查询失败');
+            var job=data.job||{};
+            renderSwarmJob(job);
+            if(job.status==='success'){
+                setDetecting(false);
+                detectBtn.disabled=false;
+                var payload=job.result||{};
+                var result=payload.result||payload;
+                if(!result||!result.probability&&result.probability!==0)throw new Error('Swarm 未返回有效结果');
+                setTimeout(function(){redirectResult(result);},520);
+                return;
+            }
+            if(job.status==='failed'){
+                throw new Error(job.error||'Swarm 任务失败');
+            }
+            swarmPollTimer=setTimeout(function(){pollSwarmJob(jobId);},760);
+        }).catch(handleDetectError);
+    }
+    function runSwarmDetection(formData){
+        resetSwarmPanel();
+        setSwarmProgress(3);
+        setSwarmLog('Swarm 任务提交中','fa-circle-o-notch');
+        fetch('/image_upload/detect_swarm',{method:'POST',body:formData}).then(readJsonResponse).then(function(data){
+            if(data.status!=='success')throw new Error(data.message||'创建任务失败');
+            renderSwarmJob(data.job);
+            pollSwarmJob(data.job.id);
+        }).catch(handleDetectError);
+    }
     detectBtn.addEventListener('click',function(){
         if(!currentFile)return;
         var formData=new FormData();
         formData.append('image',currentFile);
-        formData.append('model',currentModel);
+        formData.append('analysis_type',currentModel);
         detectBtn.disabled=true;
         setDetecting(true);
+        if(currentModel==='swarm'){
+            runSwarmDetection(formData);
+            return;
+        }
         fetch('/image_upload/detect',{method:'POST',body:formData}).then(function(r){if(!r.ok)return r.json().then(function(d){throw new Error(d.message||'请求失败');});return r.json();}).then(function(data){
             setDetecting(false);
             detectBtn.disabled=false;
             if(data.status!=='success')throw new Error(data.message||'检测失败');
-            sessionStorage.setItem('detect_result',JSON.stringify(data.result));
-            sessionStorage.setItem('detect_model',currentModel);
-            var id=data.result&&data.result.itemid;
-            if(id!==undefined&&id!==null&&id!==''){window.location.href='/image_result?itemid='+encodeURIComponent(id);}
-            else{window.location.href='/image_result';}
-        }).catch(function(err){
-            setDetecting(false);
-            detectBtn.disabled=false;
-            if(currentFile){statusText.textContent='已选择: '+currentFile.name;statusDot.classList.add('ready');}
-            statusText.textContent='失败: '+err.message;
-            alert('检测失败: '+err.message);
-        });
+            redirectResult(data.result);
+        }).catch(handleDetectError);
     });
+    resetSwarmPanel();
     window.viewSample=function(key,el){
         var row=el&&el.closest?el.closest('.sample-item'):null;
         document.querySelectorAll('.sample-item').forEach(function(n){if(n!==row)n.style.opacity='0.55';});
