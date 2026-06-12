@@ -20,13 +20,11 @@ function formatClockTime(value: Date) {
 
 export default function AdminDashboard({
   onBack,
-  onConfigureAccess,
-  accessProtectionEnabled,
+  onHome,
   reloadKey = 0,
 }: {
   onBack: () => void;
-  onConfigureAccess: () => void | Promise<void>;
-  accessProtectionEnabled: boolean;
+  onHome: () => void;
   reloadKey?: number;
 }) {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
@@ -113,14 +111,12 @@ export default function AdminDashboard({
             >
               {refreshing ? "加载中" : "重试"}
             </button>
-            {accessProtectionEnabled && (
-              <button
-                onClick={onConfigureAccess}
-                className="h-9 px-3 rounded-lg border border-ink-600 bg-ink-800 text-xs text-ink-950 hover:border-brand-cyan/50"
-              >
-                配置访问令牌
-              </button>
-            )}
+            <button
+              onClick={onHome}
+              className="h-9 px-3 rounded-lg border border-ink-600 bg-ink-800 text-xs text-ink-950 hover:border-brand-cyan/50"
+            >
+              返回首页
+            </button>
             <button
               onClick={onBack}
               className="h-9 px-3 rounded-lg bg-cinnabar text-xs text-white"
@@ -194,14 +190,12 @@ export default function AdminDashboard({
               </button>
             ))}
           </div>
-          {accessProtectionEnabled && (
-            <button
-              onClick={onConfigureAccess}
-              className="h-9 px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950 hover:border-brand-cyan/50"
-            >
-              访问令牌
-            </button>
-          )}
+          <button
+            onClick={onHome}
+            className="h-9 px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950 hover:border-brand-cyan/50"
+          >
+            首页
+          </button>
           <button
             onClick={copyCurrentView}
             className={`h-9 px-3 rounded-lg border text-xs ${

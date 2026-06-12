@@ -1,10 +1,10 @@
-import io
+import importlib
 import json
 import os
 import uuid
 from datetime import datetime
+from pathlib import Path
 
-import requests
 from flask import Flask, jsonify, request
 from werkzeug.utils import secure_filename
 
@@ -17,37 +17,112 @@ from imagedetection.views.utils import (
 )
 
 
-ALLOWED_EXTENSIONS = {'jpg', 'jpeg', 'png', 'webp', 'bmp', 'gif'}
-STATIC_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), 'imagedetection', 'static'))
-V2_DETECT_API = os.environ.get(
-    'REALGUARD_V2_INTERNAL_DETECT_URL',
-    'http://127.0.0.1:8848/api/detect',
-).strip()
-V2_INTERNAL_TOKEN = (
-    os.environ.get('REALGUARD_V2_INTERNAL_TOKEN')
-    or os.environ.get('JIANZHEN_ACCESS_TOKEN')
-    or ''
-).strip()
-V2_DETECT_TIMEOUT = int(os.environ.get('REALGUARD_V2_DETECT_TIMEOUT', '180'))
+ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "bmp", "gif"}
+PROJECT_ROOT = Path(__file__).resolve().parent
+STATIC_ROOT = PROJECT_ROOT / "imagedetection" / "static"
+V1_ARTIFACT_DIR = PROJECT_ROOT / "imagedetection" / "Agent" / "tools" / "AIGC_Detection"
+V1_ONNX_PATH = V1_ARTIFACT_DIR / "model_deploy.onnx"
+V1_EXTERNAL_DATA_PATH = V1_ARTIFACT_DIR / "model_deploy.onnx.data"
+V1_EXTERNAL_MIN_BYTES = int(os.environ.get("REALGUARD_V1_EXTERNAL_MIN_BYTES", str(100 * 1024 * 1024)))
+REQUIRED_MODULES = ("onnxruntime", "numpy", "PIL", "openai")
 
 
-def _load_env_file(path='.env'):
+def _load_env_file(path=".env"):
     if not os.path.exists(path):
         return
-    with open(path, 'r', encoding='utf-8') as f:
+    with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if not line or line.startswith('#') or '=' not in line:
+            if not line or line.startswith("#") or "=" not in line:
                 continue
-            key, value = line.split('=', 1)
+            key, value = line.split("=", 1)
             key = key.strip()
             value = value.strip().strip('"').strip("'")
             if key and key not in os.environ:
                 os.environ[key] = value
 
 
+def _human_size(size):
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            return f"{value:.1f}{unit}" if unit != "B" else f"{int(value)}B"
+        value /= 1024
+    return f"{value:.1f}GB"
+
+
+def _describe_path(path):
+    path = Path(path)
+    if not path.exists():
+        return {"path": str(path), "exists": False, "sizeBytes": 0, "size": "missing"}
+    size = path.stat().st_size
+    return {"path": str(path), "exists": True, "sizeBytes": size, "size": _human_size(size)}
+
+
+def _dependency_status():
+    missing = []
+    for module_name in REQUIRED_MODULES:
+        try:
+            importlib.import_module(module_name)
+        except Exception as exc:
+            missing.append(f"{module_name}: {exc}")
+    return {
+        "ready": not missing,
+        "missing": missing,
+    }
+
+
+def _artifact_status():
+    artifact = _describe_path(V1_ONNX_PATH)
+    external = _describe_path(V1_EXTERNAL_DATA_PATH)
+    warnings = []
+
+    if artifact["exists"] is False:
+        warnings.append("missing ONNX graph file: model_deploy.onnx")
+    if external["exists"] is False:
+        warnings.append("missing external ONNX weight file: model_deploy.onnx.data")
+    elif external["sizeBytes"] < V1_EXTERNAL_MIN_BYTES:
+        warnings.append(
+            "external ONNX weight file is too small: "
+            f"{external['size']} < {_human_size(V1_EXTERNAL_MIN_BYTES)}"
+        )
+
+    return {
+        "ready": not warnings,
+        "warnings": warnings,
+        "artifact": artifact,
+        "externalData": external,
+    }
+
+
+def _capability_status():
+    artifacts = _artifact_status()
+    dependencies = _dependency_status()
+    warnings = list(artifacts["warnings"])
+    warnings.extend(f"missing runtime dependency: {item}" for item in dependencies["missing"])
+    return {
+        "serviceOk": True,
+        "artifactReady": artifacts["ready"],
+        "dependencyReady": dependencies["ready"],
+        "capabilityReady": artifacts["ready"] and dependencies["ready"],
+        "artifacts": {
+            "artifact": artifacts["artifact"],
+            "externalData": artifacts["externalData"],
+        },
+        "dependencies": dependencies,
+        "warnings": warnings,
+    }
+
+
+def _ensure_capability_ready():
+    status = _capability_status()
+    if status["capabilityReady"]:
+        return
+    raise RuntimeError("V1 原生检测模型未就绪：" + "；".join(status["warnings"]))
+
+
 def _allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
 def _to_float(value, default=0.0):
@@ -55,7 +130,7 @@ def _to_float(value, default=0.0):
         return float(default)
     if isinstance(value, (int, float)):
         return float(value)
-    text = str(value).strip().replace('%', '')
+    text = str(value).strip().replace("%", "")
     if not text:
         return float(default)
     try:
@@ -65,100 +140,71 @@ def _to_float(value, default=0.0):
 
 
 def _confidence_level(score):
+    if str(score or "") in ("高", "中", "低"):
+        return str(score)
     score = max(0.0, min(1.0, _to_float(score, 0.5)))
     delta = abs(score - 0.5)
     if delta >= 0.35:
-        return '高'
+        return "高"
     if delta >= 0.18:
-        return '中'
-    return '低'
-
-
-def _fake_percentage_from_v2(payload):
-    verdict = str(payload.get('verdict') or '').strip().lower()
-    confidence = _to_float(payload.get('confidence'), 0.5)
-    if confidence > 1:
-        confidence = confidence / 100.0
-    confidence = max(0.0, min(1.0, confidence))
-    if verdict == 'real':
-        return round((1.0 - confidence) * 100, 1)
-    if verdict in ('suspected_fake', 'highly_suspected_fake', 'fake', 'ai', 'likely_ai_generated'):
-        return round(confidence * 100, 1)
-    return 50.0
+        return "中"
+    return "低"
 
 
 def _save_upload(image_bytes, folder, filename):
-    upload_dir = os.path.join(STATIC_ROOT, 'uploads', folder, 'image')
-    create_folder(upload_dir)
-    safe_name = secure_filename(filename) or f'{uuid.uuid4().hex}.png'
-    stored_name = f'{uuid.uuid4().hex[:12]}-{safe_name}'
-    file_path = os.path.join(upload_dir, stored_name)
-    with open(file_path, 'wb') as out:
-        out.write(image_bytes)
-    return stored_name, file_path
+    upload_dir = STATIC_ROOT / "uploads" / folder / "image"
+    create_folder(str(upload_dir))
+    safe_name = secure_filename(filename) or f"{uuid.uuid4().hex}.png"
+    stored_name = f"{uuid.uuid4().hex[:12]}-{safe_name}"
+    file_path = upload_dir / stored_name
+    file_path.write_bytes(image_bytes)
+    return stored_name, str(file_path)
 
 
-def _post_internal(url, **kwargs):
-    with requests.Session() as sess:
-        sess.trust_env = False
-        return sess.post(url, **kwargs)
+def _extract_metadata_field(metadata, *names):
+    for name in names:
+        for key, value in (metadata or {}).items():
+            if str(key).lower().endswith(name.lower()) and value not in (None, ""):
+                return str(value)
+    return None
 
 
-def _visual_issues(payload):
-    issues = []
-    for region in payload.get('regions') or []:
-        label = str(region.get('label') or '').strip()
-        score = _to_float(region.get('score'), 0.0)
-        if label:
-            issues.append(f'{label}（{round(score * 100, 1)}%）' if score else label)
-    for dim in payload.get('dimensions') or []:
-        label = str(dim.get('label') or dim.get('key') or '').strip()
-        result = str(dim.get('result') or '').strip()
-        score = _to_float(dim.get('score'), 0.0)
-        if label and result:
-            suffix = f'（{round(score * 100, 1)}%）' if score else ''
-            issues.append(f'{label}: {result}{suffix}')
-    return issues[:6]
+def _run_v1_detect(image_path):
+    from imagedetection.Agent.main import detect
 
-
-def _detect_via_v2(image_bytes, filename, mimetype):
-    if not V2_DETECT_API or not V2_INTERNAL_TOKEN:
-        raise RuntimeError('未配置 V2 内部检测地址或令牌')
-    response = _post_internal(
-        V2_DETECT_API,
-        headers={'X-Jianzhen-Token': V2_INTERNAL_TOKEN},
-        files={'file': (filename, io.BytesIO(image_bytes), mimetype or 'application/octet-stream')},
-        data={'fileType': 'image'},
-        timeout=V2_DETECT_TIMEOUT,
-    )
-    response.raise_for_status()
-    return response.json()
+    return detect(image_path)
 
 
 def _persist_result(payload, image_bytes, filename, openid, phone):
-    folder = openid or phone or 'guest'
+    folder = openid or phone or "guest"
     stored_name, file_path = _save_upload(image_bytes, folder, filename)
     img_format, resolution = get_image_info(file_path)
-    file_size = (payload.get('fileMeta') or {}).get('size') or get_file_size_str(file_path)
-    fake_pct = _fake_percentage_from_v2(payload)
-    final_label = 'AI生成图像' if fake_pct >= 50 else '真实图像'
-    confidence = _confidence_level(payload.get('confidence'))
-    explanation = str(payload.get('explanation') or '').strip()
-    issues = _visual_issues(payload)
-    if issues:
-        explanation = f"{explanation}\n视觉可疑点\n" + "\n".join(f"- {item}" for item in issues)
+    file_size = get_file_size_str(file_path)
+    probability = max(0.0, min(1.0, _to_float(payload.get("probability"), 0.5)))
+    detector_probability = max(0.0, min(1.0, _to_float(payload.get("detector_probability"), probability)))
+    fake_pct = round(probability * 100, 2)
+    final_label = payload.get("final_label") or ("AI生成图像" if probability >= 0.5 else "真实图像")
+    confidence = _confidence_level(payload.get("confidence") or probability)
+    explanation = str(payload.get("explanation") or "").strip()
+    visual_issues = payload.get("visual_issues") or []
+    all_metadata = payload.get("all_metadata") or {}
+    metadata_signals = payload.get("metadata_signals") or {}
+
+    if visual_issues and "视觉可疑点" not in explanation:
+        explanation = f"{explanation}\n视觉可疑点\n" + "\n".join(f"- {item}" for item in visual_issues)
 
     itemid = excute_detection_sql_lastid(
         """
         INSERT INTO data
-            (createtime, filename, fake, openid, phone, aigc,
+            (createtime, filename, fake, detector_probability, openid, phone, aigc,
              file_size, img_format, resolution, clarity, explantation)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
-            datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             stored_name,
             fake_pct,
+            detector_probability,
             openid,
             phone,
             final_label,
@@ -170,72 +216,128 @@ def _persist_result(payload, image_bytes, filename, openid, phone):
         ),
     )
     if not itemid:
-        raise RuntimeError('检测结果写入失败')
+        raise RuntimeError("检测结果写入失败")
+
+    if all_metadata:
+        excute_detection_sql_lastid(
+            """
+            INSERT INTO exif
+                (data_itemid, createtime, filename, openid, phone, metadata_count,
+                 has_ai_signal, has_real_signal, all_metadata, software, user_comment,
+                 camera_make, camera_model, lens_model, lens_info, gps_position,
+                 datetime_original, exposure_time, fnumber, iso, focal_length)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                itemid,
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                stored_name,
+                openid,
+                phone,
+                len(all_metadata),
+                1 if metadata_signals.get("has_ai_signal") else 0,
+                1 if metadata_signals.get("has_real_signal") else 0,
+                json.dumps(all_metadata, ensure_ascii=False),
+                _extract_metadata_field(all_metadata, "Software"),
+                _extract_metadata_field(all_metadata, "UserComment", "User Comment"),
+                _extract_metadata_field(all_metadata, "Make"),
+                _extract_metadata_field(all_metadata, "Model"),
+                _extract_metadata_field(all_metadata, "LensModel", "Lens Model"),
+                _extract_metadata_field(all_metadata, "LensInfo", "Lens Info"),
+                _extract_metadata_field(all_metadata, "GPSPosition", "GPS Position"),
+                _extract_metadata_field(all_metadata, "DateTimeOriginal", "Date/Time Original"),
+                _extract_metadata_field(all_metadata, "ExposureTime", "Exposure Time"),
+                _extract_metadata_field(all_metadata, "FNumber", "F Number"),
+                _extract_metadata_field(all_metadata, "ISO"),
+                _extract_metadata_field(all_metadata, "FocalLength", "Focal Length"),
+            ),
+        )
 
     return {
-        'data_itemid': itemid,
-        'fake_percentage': fake_pct,
-        'final_label': final_label,
-        'confidence': confidence,
-        'image_url': f"{request.host_url.rstrip('/')}/static/uploads/{folder}/image/{stored_name}",
-        'filename': stored_name,
-        'file_size': file_size,
-        'img_format': img_format,
-        'resolution': resolution,
-        'explanation': explanation,
-        'visual_issues': issues,
-        'agent_reasoning': json.dumps({
-            'backend': 'realguard-detector-backend',
-            'upstream': 'jianzhen-v2',
-            'taskId': payload.get('taskId'),
-            'reportId': payload.get('reportId'),
-            'modelVersion': payload.get('modelVersion'),
-            'source': payload.get('source'),
-            'tokenUsage': payload.get('tokenUsage'),
-        }, ensure_ascii=False),
-        'full_exif_info': {},
-        'meta': {
-            'file_size': file_size,
-            'img_format': img_format,
-            'resolution': resolution,
+        "data_itemid": itemid,
+        "fake_percentage": fake_pct,
+        "final_label": final_label,
+        "confidence": confidence,
+        "image_url": f"{request.host_url.rstrip('/')}/static/uploads/{folder}/image/{stored_name}",
+        "filename": stored_name,
+        "file_size": file_size,
+        "img_format": img_format,
+        "resolution": resolution,
+        "explanation": explanation,
+        "visual_issues": visual_issues,
+        "agent_reasoning": payload.get("agent_reasoning") or payload.get("raw_response") or "",
+        "full_exif_info": all_metadata,
+        "meta": {
+            "file_size": file_size,
+            "img_format": img_format,
+            "resolution": resolution,
+            "model": "realguard-v1-onnx-mil",
+            "detector_probability": detector_probability,
         },
     }
 
 
 def create_app():
-    app = Flask(__name__, static_folder=STATIC_ROOT, static_url_path='/static')
+    app = Flask(__name__, static_folder=str(STATIC_ROOT), static_url_path="/static")
 
-    @app.get('/health')
+    @app.get("/health")
     def health():
-        return jsonify({'status': 'ok', 'service': 'realguard-detector-backend'})
+        capability = _capability_status()
+        status = "ok" if capability["capabilityReady"] else "degraded"
+        return jsonify({
+            "status": status,
+            "service": "realguard-v1-detector",
+            "model": "v1-onnx-mil",
+            **capability,
+        })
 
-    @app.post('/image')
+    @app.get("/ready")
+    def ready():
+        capability = _capability_status()
+        http_status = 200 if capability["capabilityReady"] else 503
+        return jsonify({
+            "status": "ok" if capability["capabilityReady"] else "error",
+            "service": "realguard-v1-detector",
+            "model": "v1-onnx-mil",
+            **capability,
+        }), http_status
+
+    @app.post("/image")
     def image():
-        file = request.files.get('image_file') or request.files.get('image') or request.files.get('file')
+        file = request.files.get("image_file") or request.files.get("image") or request.files.get("file")
         if not file or not file.filename:
-            return jsonify({'code': 400, 'msg': '请上传图片文件'}), 400
+            return jsonify({"code": 400, "msg": "请上传图片文件"}), 400
         if not _allowed_file(file.filename):
-            return jsonify({'code': 400, 'msg': '不支持的文件格式'}), 400
+            return jsonify({"code": 400, "msg": "不支持的文件格式"}), 400
 
         safe_name = secure_filename(file.filename) or file.filename
         image_bytes = file.read()
         if not image_bytes:
-            return jsonify({'code': 400, 'msg': '请上传非空图片文件'}), 400
+            return jsonify({"code": 400, "msg": "请上传非空图片文件"}), 400
 
-        openid = str(request.form.get('openid') or '').strip()[:64]
-        phone = str(request.form.get('phone') or '').strip()[:20]
+        openid = str(request.form.get("openid") or "").strip()[:64]
+        phone = str(request.form.get("phone") or "").strip()[:20]
+        temp_path = None
         try:
-            payload = _detect_via_v2(image_bytes, safe_name, file.mimetype)
+            _ensure_capability_ready()
+            _, temp_path = _save_upload(image_bytes, openid or phone or "guest", safe_name)
+            payload = _run_v1_detect(temp_path)
             data = _persist_result(payload, image_bytes, safe_name, openid, phone)
-            return jsonify({'code': 200, 'msg': 'success', 'data': data})
-        except requests.RequestException as exc:
-            return jsonify({'code': 502, 'msg': f'上游 V2 检测服务调用失败: {exc}'}), 502
+            return jsonify({"code": 200, "msg": "success", "data": data})
+        except RuntimeError as exc:
+            return jsonify({"code": 503, "msg": str(exc)}), 503
         except Exception as exc:
-            return jsonify({'code': 500, 'msg': str(exc)}), 500
+            return jsonify({"code": 500, "msg": f"V1 原生检测失败: {exc}"}), 500
+        finally:
+            if temp_path:
+                try:
+                    Path(temp_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
 
-    @app.post('/video')
+    @app.post("/video")
     def video():
-        return jsonify({'code': 501, 'msg': 'V1 视频检测后端暂未启用'}), 501
+        return jsonify({"code": 501, "msg": "V1 视频检测后端暂未启用"}), 501
 
     return app
 
@@ -244,7 +346,7 @@ _load_env_file()
 app = create_app()
 
 
-if __name__ == '__main__':
-    host = os.environ.get('REALGUARD_DETECTOR_HOST', '127.0.0.1')
-    port = int(os.environ.get('REALGUARD_DETECTOR_PORT', '15000'))
+if __name__ == "__main__":
+    host = os.environ.get("REALGUARD_DETECTOR_HOST", "127.0.0.1")
+    port = int(os.environ.get("REALGUARD_DETECTOR_PORT", "15000"))
     app.run(host=host, port=port)

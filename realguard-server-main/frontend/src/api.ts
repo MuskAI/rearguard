@@ -95,10 +95,20 @@ export function revokeDeveloperApiKey(keyId: number) {
   });
 }
 
-export function detectImage(file: File) {
+export function detectImage(file: File, signal?: AbortSignal) {
   const body = new FormData();
   body.append("image", file);
-  return jsonRequest<{ result: ImageDetectionResult }>("/image_upload/detect", { method: "POST", body });
+  return jsonRequest<{ result: ImageDetectionResult }>("/image_upload/detect", { method: "POST", body, signal });
+}
+
+export function startSwarmImageDetection(file: File, signal?: AbortSignal) {
+  const body = new FormData();
+  body.append("image", file);
+  return jsonRequest<{ job: DetectionJob }>("/image_upload/detect_swarm", { method: "POST", body, signal });
+}
+
+export function getImageDetectionJob(jobId: string, signal?: AbortSignal) {
+  return jsonRequest<{ job: DetectionJob }>(`/image_upload/jobs/${encodeURIComponent(jobId)}`, { signal });
 }
 
 function triggerDownload(path: string) {
@@ -303,6 +313,49 @@ export type ImageDetectionResult = {
   resolution?: string;
   img_format?: string;
   visual_issues?: string[];
+  swarm?: SwarmResult;
+};
+
+export type PublicSwarmExpert = {
+  id: string;
+  publicId?: string;
+  status?: "queued" | "running" | "success" | "failed" | "skipped" | string;
+  publicName?: string;
+  publicMessage?: string;
+  publicVerdict?: string;
+};
+
+export type SwarmResult = {
+  enabled?: boolean;
+  score?: number;
+  finalLabel?: string;
+  confidence?: string;
+  consensusLevel?: string;
+  consensusScore?: number;
+  disagreement?: boolean;
+  effectiveExperts?: number;
+  totalExperts?: number;
+  experts?: PublicSwarmExpert[];
+  evidence?: string[];
+};
+
+export type DetectionJob = {
+  id: string;
+  kind?: string;
+  filename?: string;
+  mode?: string;
+  status: "queued" | "running" | "success" | "failed" | string;
+  createdAt?: string;
+  updatedAt?: string;
+  progress?: number;
+  experts?: PublicSwarmExpert[];
+  summary?: string;
+  error?: string;
+  result?: {
+    status?: string;
+    result?: ImageDetectionResult;
+    message?: string;
+  } | null;
 };
 
 export type VideoDetectionResult = {

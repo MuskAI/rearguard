@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RealGuard 运营大屏</title>
+  <style>
+    :root{--bg:#10130f;--panel:#181d17;--panel-2:#20261d;--ink:#f4f7ef;--muted:#a8b3a2;--line:#323b2f;--green:#66d37e;--cyan:#3fd5c0;--amber:#f1bf5a;--red:#f76f6f;--radius:8px}
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;background:
+      linear-gradient(110deg,rgba(63,213,192,.12),transparent 34rem),
+      linear-gradient(180deg,#11150f,#0c0f0b 70%);color:var(--ink);font-family:"IBM Plex Sans","Noto Sans SC",system-ui,sans-serif;letter-spacing:0}
+    .screen{min-height:100vh;padding:20px;display:grid;grid-template-rows:auto auto minmax(0,1fr);gap:14px}
+    .top{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;border-bottom:1px solid var(--line);padding-bottom:14px}
+    .brand{display:flex;align-items:center;gap:14px}
+    .mark{width:44px;height:44px;border-radius:8px;background:linear-gradient(135deg,var(--green),var(--cyan));color:#071008;display:grid;place-items:center;font-weight:1000}
+    h1{font-size:30px;margin:0 0 4px}
+    .sub{color:var(--muted);font-size:13px}
+    .clock{font-family:"IBM Plex Mono",ui-monospace,monospace;text-align:right}
+    .clock strong{display:block;font-size:24px;color:var(--green)}
+    .metrics{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}
+    .metric,.panel{background:linear-gradient(180deg,var(--panel),var(--panel-2));border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 18px 60px rgba(0,0,0,.24)}
+    .metric{padding:14px 15px;min-height:96px;display:flex;flex-direction:column;justify-content:space-between}
+    .metric span{color:var(--muted);font-size:12px}
+    .metric strong{font-size:32px;line-height:1;font-family:"IBM Plex Mono",ui-monospace,monospace}
+    .metric small{color:var(--green)}
+    .grid{min-height:0;display:grid;grid-template-columns:minmax(0,1.4fr) minmax(360px,.6fr);grid-template-rows:minmax(300px,1fr) minmax(260px,.78fr);gap:12px}
+    .panel{padding:14px;min-width:0;min-height:0;overflow:hidden}
+    .panel-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}
+    .panel h2{font-size:16px;margin:0}
+    .badge{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:5px 9px;color:var(--muted);font-size:12px}
+    .badge:before{content:"";width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 14px var(--green)}
+    .canvas-wrap{height:calc(100% - 36px);min-height:220px}
+    canvas{width:100%;height:100%;display:block}
+    .side{display:grid;grid-template-rows:minmax(0,1fr) minmax(0,1fr);gap:12px;min-height:0}
+    .models{display:grid;gap:9px;overflow:auto;max-height:100%}
+    .model,.recent-row{border:1px solid var(--line);border-radius:8px;background:rgba(255,255,255,.03);padding:10px;min-width:0}
+    .model{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center}
+    .model strong,.recent-row strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .model span,.recent-row span{color:var(--muted);font-size:12px;overflow-wrap:anywhere}
+    .state{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:11px;color:var(--red)}
+    .state.ok{color:var(--green)}
+    .state.warn{color:var(--amber)}
+    .recent{display:grid;gap:8px;overflow:auto;max-height:100%}
+    .recent-row{display:grid;grid-template-columns:78px 1fr auto;gap:10px;align-items:center}
+    .label{font-size:12px;border-radius:999px;padding:5px 8px;background:rgba(102,211,126,.12);color:var(--green);white-space:nowrap}
+    .anomalies{display:grid;gap:8px;overflow:auto;max-height:100%}
+    .anomaly{border:1px solid var(--line);border-radius:8px;background:rgba(255,255,255,.03);padding:10px}
+    .anomaly strong{display:block;margin-bottom:4px}
+    .anomaly span{color:var(--muted);font-size:12px;line-height:1.45}
+    .anomaly.critical{border-color:rgba(247,111,111,.5);background:rgba(247,111,111,.08)}
+    .anomaly.warning{border-color:rgba(241,191,90,.5);background:rgba(241,191,90,.08)}
+    .foot{display:flex;justify-content:space-between;gap:12px;color:var(--muted);font-size:12px;margin-top:8px}
+    @media(max-width:1200px){.metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.grid{grid-template-columns:1fr;grid-template-rows:auto}.side{grid-template-rows:auto}.canvas-wrap{height:320px}}
+    @media(max-width:720px){.screen{padding:12px}.top{display:grid}.clock{text-align:left}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.recent-row{grid-template-columns:1fr}.metric strong{font-size:26px}}
+  </style>
+</head>
+<body>
+  <main class="screen">
+    <header class="top">
+      <div class="brand">
+        <div class="mark">R</div>
+        <div>
+          <h1>RealGuard 运营态势大屏</h1>
+          <div class="sub">检测增长、模型路由、反馈分布和服务保障集中展示</div>
+        </div>
+      </div>
+      <div class="clock"><strong id="clock">--:--:--</strong><span id="generated">等待数据</span></div>
+    </header>
+    <section class="metrics" id="metrics"></section>
+    <section class="grid">
+      <article class="panel">
+        <div class="panel-head"><h2>24 小时检测趋势</h2><span class="badge">live</span></div>
+        <div class="canvas-wrap"><canvas id="trend"></canvas></div>
+      </article>
+      <div class="side">
+        <article class="panel">
+          <div class="panel-head"><h2>模型服务状态</h2><span class="badge">routing</span></div>
+          <div class="models" id="models"></div>
+        </article>
+        <article class="panel">
+          <div class="panel-head"><h2>路由占比</h2><span class="badge">model runs</span></div>
+          <div class="canvas-wrap"><canvas id="routes"></canvas></div>
+        </article>
+      </div>
+      <article class="panel">
+        <div class="panel-head"><h2>异常与风险</h2><span class="badge">anomaly</span></div>
+        <div class="anomalies" id="anomalies"></div>
+      </article>
+      <article class="panel">
+        <div class="panel-head"><h2>标签与反馈分布</h2><span class="badge">quality</span></div>
+        <div class="canvas-wrap"><canvas id="distribution"></canvas></div>
+      </article>
+      <article class="panel">
+        <div class="panel-head"><h2>最新检测流水</h2><span class="badge">recent</span></div>
+        <div class="recent" id="recent"></div>
+      </article>
+    </section>
+    <div class="foot"><span>管理员：{{ admin_user.username or admin_user.phone or "admin" }}</span><span><a href="/admin" style="color:inherit">返回后台</a></span></div>
+  </main>
+  <script>
+    const SCREEN_TOKEN = {{ screen_token|default("", true)|tojson }};
+    const esc = (v) => String(v ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+    const $ = (id) => document.getElementById(id);
+    let state = null;
+    function tick(){
+      const now = new Date();
+      $('clock').textContent = now.toLocaleTimeString('zh-CN', {hour12:false});
+    }
+    setInterval(tick, 1000); tick();
+    async function api(){
+      const headers = SCREEN_TOKEN ? {'X-RealGuard-Screen-Token': SCREEN_TOKEN} : {};
+      const res = await fetch('/api/admin/big-screen', {headers});
+      const data = await res.json();
+      if(!res.ok || data.status === 'error') throw new Error(data.message || '大屏数据加载失败');
+      return data;
+    }
+    function drawCanvas(id, draw){
+      const canvas = $(id);
+      const rect = canvas.getBoundingClientRect();
+      const ratio = window.devicePixelRatio || 1;
+      canvas.width = Math.max(1, Math.floor(rect.width * ratio));
+      canvas.height = Math.max(1, Math.floor(rect.height * ratio));
+      const ctx = canvas.getContext('2d');
+      ctx.scale(ratio, ratio);
+      draw(ctx, rect.width, rect.height);
+    }
+    function lineChart(ctx, w, h, series){
+      const pad = {l:42,r:18,t:18,b:34};
+      const labels = series.labels || [];
+      const images = series.images || [];
+      const videos = series.videos || [];
+      const max = Math.max(1, ...images, ...videos);
+      ctx.clearRect(0,0,w,h);
+      ctx.strokeStyle = '#323b2f'; ctx.lineWidth = 1;
+      for(let i=0;i<5;i++){const y=pad.t+(h-pad.t-pad.b)*i/4;ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(w-pad.r,y);ctx.stroke();}
+      function path(values,color){
+        ctx.beginPath();
+        values.forEach((value,i)=>{
+          const x = pad.l + (w-pad.l-pad.r) * (labels.length <= 1 ? 0 : i/(labels.length-1));
+          const y = h-pad.b - (h-pad.t-pad.b) * value/max;
+          if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+        });
+        ctx.strokeStyle=color;ctx.lineWidth=3;ctx.stroke();
+      }
+      path(images,'#66d37e'); path(videos,'#3fd5c0');
+      ctx.fillStyle='#a8b3a2';ctx.font='12px ui-monospace';
+      labels.forEach((label,i)=>{if(i%4===0||i===labels.length-1){const x=pad.l+(w-pad.l-pad.r)*(labels.length<=1?0:i/(labels.length-1));ctx.fillText(label,x-16,h-12);}});
+      ctx.fillStyle='#66d37e';ctx.fillText('图像',pad.l,16);
+      ctx.fillStyle='#3fd5c0';ctx.fillText('视频',pad.l+48,16);
+    }
+    function barChart(ctx,w,h,items,colors){
+      const pad = {l:92,r:18,t:12,b:18};
+      const max = Math.max(1, ...items.map(i=>Number(i.count)||0));
+      ctx.clearRect(0,0,w,h);
+      ctx.font='12px ui-monospace';
+      items.slice(0,8).forEach((item,i)=>{
+        const y = pad.t + i * Math.max(24,(h-pad.t-pad.b)/Math.max(8,items.length));
+        const barW = (w-pad.l-pad.r) * (Number(item.count)||0) / max;
+        ctx.fillStyle='#a8b3a2';ctx.fillText(String(item.label || item.model || '-').slice(0,10),8,y+14);
+        ctx.fillStyle=colors[i%colors.length];ctx.fillRect(pad.l,y,Math.max(2,barW),14);
+        ctx.fillStyle='#f4f7ef';ctx.fillText(String(item.count||0),pad.l+barW+8,y+13);
+      });
+    }
+    function renderMetrics(metrics){
+      const rows = [
+        ['今日新增检测', metrics?.detections?.today, `图像 ${metrics?.detections?.todayImages ?? 0} / 视频 ${metrics?.detections?.todayVideos ?? 0}`],
+        ['累计图像检测', metrics?.detections?.images, 'image records'],
+        ['累计视频检测', metrics?.detections?.videos, 'video records'],
+        ['用户总数', metrics?.users?.total, `今日新增 ${metrics?.users?.todayNew ?? 0}`],
+        ['Active Keys', metrics?.users?.apiKeys, 'developer access'],
+        ['负反馈', metrics?.detections?.feedbackNegative, `正反馈 ${metrics?.detections?.feedbackPositive ?? 0}`],
+      ];
+      $('metrics').innerHTML = rows.map(([label,value,sub])=>`<article class="metric"><span>${esc(label)}</span><strong>${esc(value ?? '--')}</strong><small>${esc(sub)}</small></article>`).join('');
+    }
+    function healthState(model){
+      const h = model.health || {};
+      if(h.ok) return ['ok','online'];
+      if(h.serviceOk) return ['warn','degraded'];
+      return ['','fault'];
+    }
+    function renderModels(models,routing){
+      $('models').innerHTML = (models || []).map(m => {
+        const [cls,text] = healthState(m);
+        const role = routing?.imagePrimary === m.id ? '主路由' : (routing?.imageFallback === m.id ? '兜底' : '');
+        return `<div class="model"><div><strong>${esc(m.name || m.id)}</strong><span>${esc(m.id)} ${role ? '· '+role : ''}</span></div><div class="state ${cls}">${text}</div></div>`;
+      }).join('') || '<div class="model"><strong>暂无模型</strong><span>等待配置</span></div>';
+    }
+    function renderRecent(items){
+      $('recent').innerHTML = (items || []).map(item => `<div class="recent-row"><strong>#${esc(item.id)}</strong><span>${esc(item.createdAt)} · ${esc(item.filename || item.phone || '-')}</span><b class="label">${esc(item.label || '-')}</b></div>`).join('') || '<div class="recent-row"><span>暂无检测记录</span></div>';
+    }
+    function renderAnomalies(items){
+      $('anomalies').innerHTML = (items || []).map(item => `<div class="anomaly ${esc(item.level || '')}"><strong>${esc(item.title || '异常')}</strong><span>${esc(item.message || '')}</span></div>`).join('') || '<div class="anomaly"><strong>当前未发现异常</strong><span>模型、路由和反馈处于可观测范围。</span></div>';
+    }
+    function renderCharts(){
+      if(!state) return;
+      drawCanvas('trend',(ctx,w,h)=>lineChart(ctx,w,h,state.series || {}));
+      const distribution = [...(state.labels || []), ...(state.feedback || []).map(item=>({label:`反馈 ${item.label}`,count:item.count}))];
+      drawCanvas('distribution',(ctx,w,h)=>barChart(ctx,w,h,distribution,['#66d37e','#3fd5c0','#f1bf5a','#f76f6f']));
+      drawCanvas('routes',(ctx,w,h)=>barChart(ctx,w,h,state.routes || [],['#3fd5c0','#66d37e','#f1bf5a']));
+    }
+    async function load(){
+      try{
+        state = await api();
+        $('generated').textContent = `数据时间 ${state.generatedAt || '--'}`;
+        renderMetrics(state.metrics);
+        renderModels(state.models, state.routing);
+        renderRecent(state.recent);
+        renderAnomalies(state.anomalies);
+        renderCharts();
+      }catch(err){
+        $('generated').textContent = err.message;
+      }
+    }
+    window.addEventListener('resize', renderCharts);
+    load(); setInterval(load, 30000);
+  </script>
+</body>
+</html>

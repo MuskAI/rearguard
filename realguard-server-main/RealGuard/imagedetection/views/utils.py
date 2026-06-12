@@ -28,6 +28,11 @@ DETECTION_DB_CONFIG = {
 }
 
 
+def _should_fetch(sql):
+    first_token = (sql.strip().split(None, 1) or [''])[0].upper()
+    return first_token in {'SELECT', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN', 'WITH'}
+
+
 def get_db_connection():
     """获取数据库连接"""
     return pymysql.connect(**DB_CONFIG)
@@ -41,7 +46,7 @@ def get_detection_db_connection():
 def excute_sql(sql, params=None, fetch=True):
     """
     执行 SQL 语句
-    - SELECT 类语句返回结果列表 (list of dict)
+    - SELECT/SHOW/DESCRIBE/EXPLAIN 类语句返回结果列表 (list of dict)
     - INSERT/UPDATE/DELETE 返回受影响行数 (int)
     - 出错返回 None
     """
@@ -50,7 +55,7 @@ def excute_sql(sql, params=None, fetch=True):
         conn = get_db_connection()
         with conn.cursor() as cursor:
             cursor.execute(sql, params)
-            if fetch and sql.strip().upper().startswith('SELECT'):
+            if fetch and _should_fetch(sql):
                 result = cursor.fetchall()
             else:
                 conn.commit()
@@ -97,7 +102,7 @@ def excute_detection_sql(sql, params=None, fetch=True):
         conn = get_detection_db_connection()
         with conn.cursor() as cursor:
             cursor.execute(sql, params)
-            if fetch and sql.strip().upper().startswith('SELECT'):
+            if fetch and _should_fetch(sql):
                 result = cursor.fetchall()
             else:
                 conn.commit()
@@ -146,7 +151,10 @@ def format_createtime(raw):
     try:
         if isinstance(raw, datetime):
             return raw.strftime('%Y-%m-%d %H:%M:%S')
-        return str(raw)
+        text = str(raw)
+        if len(text) == 14 and text.isdigit():
+            return datetime.strptime(text, '%Y%m%d%H%M%S').strftime('%Y-%m-%d %H:%M:%S')
+        return text
     except Exception:
         return str(raw)
 

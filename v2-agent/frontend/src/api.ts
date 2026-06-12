@@ -19,6 +19,14 @@ function withAuthHeaders(init?: HeadersInit): Headers {
   return headers;
 }
 
+function withSession(init: RequestInit = {}): RequestInit {
+  return {
+    ...init,
+    credentials: "include",
+    headers: withAuthHeaders(init.headers),
+  };
+}
+
 async function parseJson<T>(res: Response, fallback: string): Promise<T> {
   if (!res.ok) {
     try {
@@ -170,6 +178,8 @@ export interface HealthStatus {
   vlmEnabled: boolean;
   analysisCacheVersion: string;
   accessProtectionEnabled: boolean;
+  unifiedLoginEnabled?: boolean;
+  sessionAuthEnabled?: boolean;
   protectedEndpoints: string[];
   developerKeyAuthEnabled?: boolean;
   developerKeyAuthConfigured?: boolean;
@@ -180,7 +190,7 @@ export async function detect(file: File, fileType?: FileType): Promise<DetectRes
   const fd = new FormData();
   fd.append("file", file);
   if (fileType) fd.append("fileType", fileType);
-  const res = await fetch("/v2-api/detect", { method: "POST", body: fd, headers: withAuthHeaders() });
+  const res = await fetch("/v2-api/detect", withSession({ method: "POST", body: fd }));
   return parseJson(res, `检测失败 (${res.status})`);
 }
 
@@ -210,7 +220,7 @@ export interface ForensicReport {
 export async function runForensics(file: File): Promise<ForensicReport> {
   const fd = new FormData();
   fd.append("file", file);
-  const res = await fetch("/v2-api/forensics", { method: "POST", body: fd, headers: withAuthHeaders() });
+  const res = await fetch("/v2-api/forensics", withSession({ method: "POST", body: fd }));
   return parseJson(res, `取证分析失败 (${res.status})`);
 }
 
@@ -239,7 +249,7 @@ export interface ProvenanceReport {
 export async function runProvenance(file: File): Promise<ProvenanceReport> {
   const fd = new FormData();
   fd.append("file", file);
-  const res = await fetch("/v2-api/provenance", { method: "POST", body: fd, headers: withAuthHeaders() });
+  const res = await fetch("/v2-api/provenance", withSession({ method: "POST", body: fd }));
   return parseJson(res, `内容凭证验证失败 (${res.status})`);
 }
 
@@ -275,17 +285,17 @@ export async function fetchHistory(params?: {
     search.set("hasWatermark", "true");
   }
   const qs = search.toString();
-  const res = await fetch(`/v2-api/history${qs ? `?${qs}` : ""}`, { headers: withAuthHeaders() });
+  const res = await fetch(`/v2-api/history${qs ? `?${qs}` : ""}`, withSession());
   return parseJson(res, "加载历史失败");
 }
 
 export async function fetchHistoryItem(taskId: string): Promise<DetectResult> {
-  const res = await fetch(`/v2-api/history/${taskId}`, { headers: withAuthHeaders() });
+  const res = await fetch(`/v2-api/history/${taskId}`, withSession());
   return parseJson(res, "加载历史详情失败");
 }
 
 export async function deleteHistory(taskId: string): Promise<void> {
-  const res = await fetch(`/v2-api/history/${taskId}`, { method: "DELETE", headers: withAuthHeaders() });
+  const res = await fetch(`/v2-api/history/${taskId}`, withSession({ method: "DELETE" }));
   await parseJson<Record<string, string>>(res, "删除历史失败");
 }
 
@@ -294,6 +304,7 @@ export async function persistArtifacts(
   extras: { forensics?: ForensicReport | null; provenance?: ProvenanceReport | null },
 ): Promise<void> {
   const res = await fetch(`/v2-api/history/${encodeURIComponent(taskId)}/artifacts`, {
+    credentials: "include",
     method: "POST",
     headers: withAuthHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
@@ -343,7 +354,7 @@ export interface Metrics {
 }
 
 export async function fetchMetrics(days = 14): Promise<Metrics> {
-  const res = await fetch(`/v2-api/metrics?days=${encodeURIComponent(String(days))}`, { headers: withAuthHeaders() });
+  const res = await fetch(`/v2-api/metrics?days=${encodeURIComponent(String(days))}`, withSession());
   return parseJson(res, "加载监控指标失败");
 }
 
@@ -357,6 +368,7 @@ export async function downloadReport(
     `/v2-api/report/${encodeURIComponent(reportId)}${hasExtras ? "/export" : "/download"}`,
     hasExtras
       ? {
+          credentials: "include",
           method: "POST",
           headers: withAuthHeaders({ "Content-Type": "application/json" }),
           body: JSON.stringify({
@@ -365,6 +377,7 @@ export async function downloadReport(
           }),
         }
       : {
+          credentials: "include",
           headers: withAuthHeaders(),
         },
   );
@@ -385,7 +398,7 @@ export async function downloadReport(
 }
 
 export async function fetchHealth(): Promise<HealthStatus> {
-  const res = await fetch("/v2-api/health", { headers: withAuthHeaders() });
+  const res = await fetch("/v2-api/health", withSession());
   return parseJson(res, "加载系统状态失败");
 }
 

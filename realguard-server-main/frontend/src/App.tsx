@@ -1,12 +1,14 @@
-import { FormEvent, Fragment, InputHTMLAttributes, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { DragEvent, FormEvent, Fragment, InputHTMLAttributes, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   Counters,
   DeveloperApiKey,
   DeveloperTokenUsage,
+  DetectionJob,
   HistoryFilterKey,
   HistoryListResponse,
   HistoryRecord,
   ImageDetectionResult,
+  PublicSwarmExpert,
   RetrieveItem,
   User,
   VideoDetectionResult,
@@ -19,6 +21,7 @@ import {
   getHistory,
   getDeveloperApiKeys,
   getDeveloperTokenUsage,
+  getImageDetectionJob,
   getLibraries,
   getMe,
   getRetrievalHistory,
@@ -31,8 +34,17 @@ import {
   retrieveSearch,
   getV2Health,
   runV2Detect,
-  sendSmsCode
+  sendSmsCode,
+  startSwarmImageDetection
 } from "./api";
+import {
+  normalizeSwarmStatus,
+  publicSwarmExpertMessage,
+  publicSwarmExpertName,
+  publicSwarmExpertStatusLabel,
+  publicSwarmEvidence,
+  publicSwarmJobSummary,
+} from "./swarmPublic";
 
 type PageKey = "home" | "image" | "video" | "retrieve" | "history" | "developer";
 type Status = { tone: "ok" | "error" | "info"; text: string } | null;
@@ -41,6 +53,7 @@ type HistoryTabKey = "image" | "video" | "imageRetrieve" | "videoRetrieve";
 type HistorySummaryCard = { label: string; value: number | string; filterKey?: HistoryFilterKey };
 type DeveloperSkillMode = "v2" | "v1";
 type Lang = "zh" | "en";
+type ImageDetectMode = "standard" | "swarm";
 
 const emptyCounters: Counters = {
   image_detect: 0,
@@ -65,6 +78,12 @@ const REALGUARD_SKILL_COMMAND_V1 =
   `curl -fsS -X POST ${REALGUARD_V1_API_BASE}/detect \\
   -H "X-RealGuard-Key: <your-api-key>" \\
   -F "file=@/path/to/image.png"`;
+const SWARM_CANCELLED_ERROR = "__REALGUARD_SWARM_CANCELLED__";
+const SWARM_RAIN_DROPS = Array.from({ length: 28 }, (_, index) => index);
+const SWARM_PLACEHOLDER_EXPERTS: PublicSwarmExpert[] = Array.from({ length: 8 }, (_, index) => ({
+  id: `placeholder-${index}`,
+  status: "queued"
+}));
 const UI_TEXT = {
   zh: {
     boot: "正在连接系统...",
@@ -148,6 +167,7 @@ const UI_TEXT = {
       ["图像侵权检索", "检索疑似侵权的图像，在图像数据库中快速定位可疑内容。"],
       ["视频侵权检索", "检索疑似侵权的视频，在数据库中快速定位相似可疑视频内容。"],
       ["新版鉴伪智能体", "独立新版系统，融合误差图、噪声残差等取证证据。"],
+      ["Swarm 专家会诊", "调度多类鉴伪专家投票复核，输出综合结论、共识度和分歧提示。"],
     ],
     examples: [
       ["案例一：泳池场景人物图像", "综合判断为生成图像（53.8%），点击查看检测结果。"],
@@ -353,6 +373,7 @@ const UI_TEXT = {
       ["Image Retrieval", "Find visually similar images and suspicious matches in image databases."],
       ["Video Retrieval", "Search suspicious videos and locate visually similar video content."],
       ["V2 Forensic Agent", "A newer standalone pipeline combining ELA, noise residuals, and other forensic evidence."],
+      ["Swarm Expert Review", "Runs multiple forensic experts as a voting panel with consensus and disagreement signals."],
     ],
     examples: [
       ["Case 1: Poolside person image", "Overall verdict: likely AI-generated (53.8%). Open the detection result."],
@@ -505,6 +526,7 @@ function App() {
   const [counters, setCounters] = useState<Counters>(emptyCounters);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState<PageKey>(() => getInitialPage());
+  const [imageModeIntent, setImageModeIntent] = useState<ImageDetectMode>(() => getInitialImageMode());
   const [authOpen, setAuthOpen] = useState(false);
   const [guestDetections, setGuestDetections] = useState(() => getGuestDetections());
   const [dark, setDark] = useState(() => getStorage()?.getItem("theme") === "dark");
@@ -564,9 +586,11 @@ function App() {
     const params = new URLSearchParams(window.location.search);
     if (page === "home") params.delete("page");
     else params.set("page", page);
+    if (page === "image" && imageModeIntent === "swarm") params.set("imageMode", "swarm");
+    else params.delete("imageMode");
     const next = params.toString();
     window.history.replaceState({}, "", `${window.location.pathname}${next ? `?${next}` : ""}`);
-  }, [page]);
+  }, [page, imageModeIntent]);
 
   useEffect(() => {
     if (isDemoMode()) {
@@ -609,6 +633,11 @@ function App() {
     setAuthOpen(true);
   }
 
+  function openImage(mode: ImageDetectMode = "standard") {
+    setImageModeIntent(mode);
+    setPage("image");
+  }
+
   if (loading) {
     return (
       <div className="boot-screen">
@@ -623,6 +652,7 @@ function App() {
       <Nav
         page={page}
         setPage={setPage}
+        openImage={openImage}
         user={user}
         dark={dark}
         setDark={setDark}
@@ -645,10 +675,11 @@ function App() {
         </div>
       )}
 
-      {page === "home" && <HomePage counters={counters} setPage={setPage} lang={lang} />}
+      {page === "home" && <HomePage counters={counters} setPage={setPage} openImage={openImage} lang={lang} />}
       {page === "image" && (
         <ImageDetectionPage
           lang={lang}
+          initialMode={imageModeIntent}
           isGuest={!user}
           guestDetections={guestDetections}
           onNeedAuth={requireAuth}
@@ -687,6 +718,7 @@ function App() {
 function Nav({
   page,
   setPage,
+  openImage,
   user,
   dark,
   setDark,
@@ -697,6 +729,7 @@ function Nav({
 }: {
   page: PageKey;
   setPage: (page: PageKey) => void;
+  openImage: (mode?: ImageDetectMode) => void;
   user: User | null;
   dark: boolean;
   setDark: (value: boolean) => void;
@@ -737,7 +770,7 @@ function Nav({
               </button>
               <div className="dropdown-menu">
                 <div className="dropdown-label">{text.detection}</div>
-                <button className={`dropdown-item ${page === "image" ? "active-item" : ""}`} onClick={() => go("image")}>
+                <button className={`dropdown-item ${page === "image" ? "active-item" : ""}`} onClick={() => { openImage("standard"); setMobileOpen(false); }}>
                   <i className="fa fa-image" /> {text.imageDetect}
                 </button>
                 <button className={`dropdown-item ${page === "video" ? "active-item" : ""}`} onClick={() => go("video")}>
@@ -793,7 +826,7 @@ function Nav({
         </div>
         <div className={`mobile-panel ${mobileOpen ? "open" : ""}`}>
           <button className={page === "home" ? "active" : ""} onClick={() => go("home")}><i className="fa fa-home" /> {text.home}</button>
-          <button className={page === "image" ? "active" : ""} onClick={() => go("image")}><i className="fa fa-image" /> {text.imageDetect}</button>
+          <button className={page === "image" ? "active" : ""} onClick={() => { openImage("standard"); setMobileOpen(false); }}><i className="fa fa-image" /> {text.imageDetect}</button>
           <button className={page === "video" ? "active" : ""} onClick={() => go("video")}><i className="fa fa-film" /> {text.videoDetect}</button>
           <button className={page === "retrieve" ? "active" : ""} onClick={() => go("retrieve")}><i className="fa fa-search" /> {text.imageRetrieve}</button>
           <button onClick={() => { window.location.href = "/v2/"; }}><i className="fa fa-bolt" /> {text.v2}</button>
@@ -804,7 +837,7 @@ function Nav({
       </header>
       <nav className="mobile-bottom-nav">
         <button className={page === "home" ? "active" : ""} onClick={() => go("home")}><i className="fa fa-home" /><span>{text.mobileShort.home}</span></button>
-        <button className={page === "image" ? "active" : ""} onClick={() => go("image")}><i className="fa fa-image" /><span>{text.mobileShort.image}</span></button>
+        <button className={page === "image" ? "active" : ""} onClick={() => openImage("standard")}><i className="fa fa-image" /><span>{text.mobileShort.image}</span></button>
         <button className={page === "video" ? "active" : ""} onClick={() => go("video")}><i className="fa fa-film" /><span>{text.mobileShort.video}</span></button>
         <button className={page === "retrieve" ? "active" : ""} onClick={() => go("retrieve")}><i className="fa fa-search" /><span>{text.mobileShort.retrieve}</span></button>
         <button className={page === "history" ? "active" : ""} onClick={() => go("history")}><i className="fa fa-clock-o" /><span>{text.mobileShort.history}</span></button>
@@ -814,7 +847,17 @@ function Nav({
   );
 }
 
-function HomePage({ counters, setPage, lang }: { counters: Counters; setPage: (page: PageKey) => void; lang: Lang }) {
+function HomePage({
+  counters,
+  setPage,
+  openImage,
+  lang
+}: {
+  counters: Counters;
+  setPage: (page: PageKey) => void;
+  openImage: (mode?: ImageDetectMode) => void;
+  lang: Lang;
+}) {
   const text = UI_TEXT[lang];
   const totalDetect = counters.image_detect + counters.video_detect || 10000;
   const totalRetrieve = counters.image_retrieve + counters.video_retrieve || 5000000;
@@ -825,7 +868,7 @@ function HomePage({ counters, setPage, lang }: { counters: Counters; setPage: (p
       desc: text.workflow[0][1],
       action: text.workflow[0][2],
       icon: "fa-shield",
-      onClick: () => setPage("image"),
+      onClick: () => openImage("standard"),
     },
     {
       step: "02",
@@ -868,7 +911,7 @@ function HomePage({ counters, setPage, lang }: { counters: Counters; setPage: (p
             </h1>
             <p>{text.home.desc}</p>
             <div className="home-hero-actions">
-              <button className="home-primary-action" onClick={() => setPage("image")}>
+              <button className="home-primary-action" onClick={() => openImage("standard")}>
                 {text.home.primaryAction} <i className="fa fa-arrow-right" />
               </button>
               <button className="home-secondary-action" onClick={() => setPage("developer")}>
@@ -954,11 +997,12 @@ function HomePage({ counters, setPage, lang }: { counters: Counters; setPage: (p
         <div className="container">
           <SectionHeader title={text.home.capabilitiesTitle} desc={text.home.capabilitiesDesc} />
           <div className="features-grid">
-            <FeatureCard accent="var(--primary)" icon="fa-image" title={text.features[0][0]} desc={text.features[0][1]} action={lang === "zh" ? "进入功能" : "Open tool"} onClick={() => setPage("image")} />
+            <FeatureCard accent="var(--primary)" icon="fa-image" title={text.features[0][0]} desc={text.features[0][1]} action={lang === "zh" ? "进入功能" : "Open tool"} onClick={() => openImage("standard")} />
             <FeatureCard accent="var(--warning)" icon="fa-film" title={text.features[1][0]} desc={text.features[1][1]} action={lang === "zh" ? "进入功能" : "Open tool"} onClick={() => setPage("video")} />
             <FeatureCard accent="var(--accent)" icon="fa-search" title={text.features[2][0]} desc={text.features[2][1]} action={lang === "zh" ? "进入功能" : "Open tool"} onClick={() => setPage("retrieve")} />
             <FeatureCard accent="var(--primary-light)" icon="fa-play-circle" title={text.features[3][0]} desc={text.features[3][1]} action={lang === "zh" ? "进入功能" : "Open tool"} onClick={() => setPage("retrieve")} />
             <FeatureCard accent="var(--primary-dark)" icon="fa-bolt" title={text.features[4][0]} desc={text.features[4][1]} action={lang === "zh" ? "进入新版" : "Open V2"} onClick={() => { window.location.href = "/v2/"; }} />
+            <FeatureCard accent="var(--danger)" icon="fa-sitemap" title={text.features[5][0]} desc={text.features[5][1]} action={lang === "zh" ? "进入会诊" : "Open Swarm"} onClick={() => openImage("swarm")} />
           </div>
         </div>
       </section>
@@ -2091,12 +2135,14 @@ function ExampleCard({ image, title, desc, real, fake, lang }: { image: string; 
 
 function ImageDetectionPage({
   lang,
+  initialMode,
   isGuest,
   guestDetections,
   onNeedAuth,
   onDone
 }: {
   lang: Lang;
+  initialMode: ImageDetectMode;
   isGuest: boolean;
   guestDetections: number;
   onNeedAuth: () => void;
@@ -2110,8 +2156,34 @@ function ImageDetectionPage({
   const [result, setResult] = useState<ImageDetectionResult | null>(null);
   const [status, setStatus] = useState<Status>({ tone: "info", text: tr("等待上传图片...", "Waiting for image upload...") });
   const [busy, setBusy] = useState(false);
+  const [detectMode, setDetectMode] = useState<ImageDetectMode>(initialMode);
+  const [swarmJob, setSwarmJob] = useState<DetectionJob | null>(null);
+  const swarmRunTokenRef = useRef(0);
+  const swarmAbortRef = useRef<AbortController | null>(null);
+
+  function cancelSwarmRun() {
+    swarmRunTokenRef.current += 1;
+    swarmAbortRef.current?.abort();
+    swarmAbortRef.current = null;
+  }
+
+  useEffect(() => {
+    cancelSwarmRun();
+    setDetectMode(initialMode);
+    setResult(null);
+    setSwarmJob(null);
+  }, [initialMode]);
+
+  useEffect(() => () => {
+    cancelSwarmRun();
+  }, []);
+
+  useEffect(() => () => {
+    if (preview.startsWith("blob:")) URL.revokeObjectURL(preview);
+  }, [preview]);
 
   function selectFile(next: File | null) {
+    cancelSwarmRun();
     if (next) {
       const message = validateFile(next, { kind: imageKind, maxBytes: IMAGE_MAX_BYTES, mimePrefixes: ["image/"], lang });
       if (message) {
@@ -2121,8 +2193,76 @@ function ImageDetectionPage({
     }
     setFile(next);
     setResult(null);
+    setSwarmJob(null);
     setPreview(next ? URL.createObjectURL(next) : "");
     setStatus({ tone: "info", text: next ? tr(`已选择: ${next.name}`, `Selected: ${next.name}`) : tr("等待上传图片...", "Waiting for image upload...") });
+  }
+
+  async function runSwarm(nextFile: File) {
+    cancelSwarmRun();
+    const controller = new AbortController();
+    swarmAbortRef.current = controller;
+    const runToken = swarmRunTokenRef.current;
+    const assertActive = () => {
+      if (controller.signal.aborted || swarmRunTokenRef.current !== runToken) throw new Error(SWARM_CANCELLED_ERROR);
+    };
+    setSwarmJob(null);
+    setStatus({ tone: "info", text: tr("Swarm 专家会诊启动中……", "Starting Swarm expert review...") });
+    const started = await startSwarmImageDetection(nextFile, controller.signal);
+    assertActive();
+    let current = started.job;
+    setSwarmJob(current);
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 120000) {
+      if (current.status === "success") {
+        const nextResult = current.result?.result;
+        if (!nextResult) throw new Error(tr("Swarm 已完成，但没有返回检测结果", "Swarm finished without a detection result"));
+        assertActive();
+        setResult(nextResult);
+        setStatus({ tone: "ok", text: tr("Swarm 专家会诊完成", "Swarm expert review complete") });
+        await onDone();
+        assertActive();
+        swarmAbortRef.current = null;
+        return;
+      }
+      if (current.status === "failed") {
+        swarmAbortRef.current = null;
+        throw new Error(tr("Swarm 专家会诊暂不可用，请稍后重试", "Swarm expert review is temporarily unavailable. Please try again later."));
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 760));
+      assertActive();
+      const polled = await getImageDetectionJob(current.id, controller.signal);
+      assertActive();
+      current = polled.job;
+      setSwarmJob(current);
+      setStatus({ tone: "info", text: publicSwarmJobSummary(current, lang) });
+    }
+    swarmAbortRef.current = null;
+    throw new Error(tr("Swarm 专家会诊超时，请稍后在历史记录查看结果", "Swarm review timed out. Check history later."));
+  }
+
+  async function runDetection(nextFile: File) {
+    setResult(null);
+    if (detectMode === "swarm") {
+      await runSwarm(nextFile);
+      return;
+    }
+    cancelSwarmRun();
+    const controller = new AbortController();
+    swarmAbortRef.current = controller;
+    const runToken = swarmRunTokenRef.current;
+    const assertActive = () => {
+      if (controller.signal.aborted || swarmRunTokenRef.current !== runToken) throw new Error(SWARM_CANCELLED_ERROR);
+    };
+    setSwarmJob(null);
+    setStatus({ tone: "info", text: tr("正在分析图像……", "Analyzing image...") });
+    const data = await detectImage(nextFile, controller.signal);
+    assertActive();
+    setResult(data.result);
+    setStatus({ tone: "ok", text: tr("检测完成", "Detection complete") });
+    await onDone();
+    assertActive();
+    swarmAbortRef.current = null;
   }
 
   async function submit() {
@@ -2136,14 +2276,14 @@ function ImageDetectionPage({
       return;
     }
     setBusy(true);
-    setStatus({ tone: "info", text: tr("正在分析图像……", "Analyzing image...") });
+    const requestedMode = detectMode;
     try {
-      const data = await detectImage(file);
-      setResult(data.result);
-      setStatus({ tone: "ok", text: tr("检测完成", "Detection complete") });
-      await onDone();
+      await runDetection(file);
     } catch (error) {
-      setStatus({ tone: "error", text: errorMessage(error) });
+      if (!isSwarmCancelledError(error)) {
+        if (requestedMode === "swarm") console.warn("Swarm detection failed", error);
+        setStatus({ tone: "error", text: publicDetectionErrorMessage(error, requestedMode, lang) });
+      }
     } finally {
       setBusy(false);
     }
@@ -2157,26 +2297,35 @@ function ImageDetectionPage({
     }
     setBusy(true);
     setResult(null);
+    const requestedMode = detectMode;
+    cancelSwarmRun();
+    const sampleController = new AbortController();
+    swarmAbortRef.current = sampleController;
+    const sampleToken = swarmRunTokenRef.current;
+    const assertSampleActive = () => {
+      if (sampleController.signal.aborted || swarmRunTokenRef.current !== sampleToken) throw new Error(SWARM_CANCELLED_ERROR);
+    };
     setStatus({ tone: "info", text: tr(`正在加载示例图片：${sample.title}`, `Loading sample image: ${sample.title}`) });
     try {
-      const response = await fetch(sample.image);
+      const response = await fetch(sample.image, { signal: sampleController.signal });
+      assertSampleActive();
       if (!response.ok) {
         throw new Error(tr(`示例图片加载失败：${response.status}`, `Sample image failed to load: ${response.status}`));
       }
       const blob = await response.blob();
+      assertSampleActive();
       const ext = sample.image.split(".").pop()?.split("?")[0] || "jpg";
       const sampleFile = new File([blob], `${sample.title}.${ext}`, {
         type: blob.type || "image/jpeg"
       });
       setFile(sampleFile);
       setPreview(URL.createObjectURL(sampleFile));
-      setStatus({ tone: "info", text: tr("正在分析示例图片……", "Analyzing sample image...") });
-      const data = await detectImage(sampleFile);
-      setResult(data.result);
-      setStatus({ tone: "ok", text: tr("示例图片检测完成", "Sample image detection complete") });
-      await onDone();
+      await runDetection(sampleFile);
     } catch (error) {
-      setStatus({ tone: "error", text: errorMessage(error) });
+      if (!isSwarmCancelledError(error)) {
+        if (requestedMode === "swarm") console.warn("Swarm sample detection failed", error);
+        setStatus({ tone: "error", text: publicDetectionErrorMessage(error, requestedMode, lang) });
+      }
     } finally {
       setBusy(false);
     }
@@ -2186,14 +2335,19 @@ function ImageDetectionPage({
     <main className="main">
       <div className="container">
         <PageHeader icon="fa-image" title={pageText.imageTitle} desc={pageText.imageDesc} />
-        <div className="layout">
-          <div className="card">
-            <div className="section-label"><i className="fa fa-cogs" /> {tr("选择检测模型", "Select detection model")}</div>
-            <div className="model-tabs">
-              <button className="model-tab active"><i className="fa fa-magic" /> {tr("生成内容检测", "AIGC detection")}</button>
-              <button className="model-tab"><i className="fa fa-paint-brush" /> {tr("篡改检测", "Tamper detection")}</button>
+        <div className={`layout ${detectMode === "swarm" ? "swarm-layout" : ""}`}>
+          <div className={`card ${detectMode === "swarm" ? "swarm-control-card" : ""}`}>
+            <div className="section-label"><i className="fa fa-cogs" /> {tr("选择鉴伪任务", "Select forensic task")}</div>
+            <div className="model-tabs" aria-label={tr("鉴伪任务模式", "Forensic task mode")}>
+              <button className={`model-tab ${detectMode === "standard" ? "active" : ""}`} type="button" aria-pressed={detectMode === "standard"} disabled={busy} onClick={() => setDetectMode("standard")}><i className="fa fa-magic" aria-hidden="true" /> {tr("标准检测", "Standard")}</button>
+              <button className={`model-tab ${detectMode === "swarm" ? "active" : ""}`} type="button" aria-pressed={detectMode === "swarm"} disabled={busy} onClick={() => setDetectMode("swarm")}><i className="fa fa-sitemap" aria-hidden="true" /> {tr("Swarm 会诊", "Swarm")}</button>
             </div>
-            <div className="model-desc"><strong>{tr("生成内容检测：", "AIGC detection: ")}</strong>{tr("基于检测器快速判定生成概率，并结合元数据做辅助展示。", "Quickly estimates generation probability and uses metadata as supporting context.")}</div>
+            <div className="model-desc">
+              <strong>{detectMode === "swarm" ? tr("Swarm 专家会诊：", "Swarm expert review: ") : tr("标准检测：", "Standard detection: ")}</strong>
+              {detectMode === "swarm"
+                ? tr("调度多类鉴伪专家进行投票复核，前端只展示综合意见，后台保留完整路由记录。", "Runs multiple forensic experts for a voted review; the frontend shows only the combined opinion while routing details stay in admin logs.")
+                : tr("分析图像是否存在生成式内容风险，并结合元数据做辅助展示。", "Analyzes generated-content risk and uses metadata as supporting context.")}
+            </div>
             <div className="card-divider" />
             <div className="section-label"><i className="fa fa-upload" /> {tr("上传图片", "Upload image")}</div>
             {isGuest && <TrialHint used={guestDetections} lang={lang} />}
@@ -2202,12 +2356,26 @@ function ImageDetectionPage({
               <i className={`fa ${busy ? "fa-circle-o-notch detect-spin" : "fa-search"}`} /> {busy ? tr("正在分析", "Analyzing") : tr("开始检测", "Start detection")}
             </button>
           </div>
-          <div className="card">
-            <div className="section-label"><i className="fa fa-info-circle" /> {tr("当前状态", "Current status")}</div>
-            <StatusRow status={status} busy={busy} />
-            <div className="card-divider" />
-            {result ? <ImageResult result={result} lang={lang} /> : <ImageSamples onSelect={detectSample} busy={busy} lang={lang} />}
-          </div>
+          {detectMode === "swarm" ? (
+            <>
+              <div className="card swarm-status-card">
+                <div className="section-label"><i className="fa fa-info-circle" /> {tr("当前状态", "Current status")}</div>
+                <StatusRow status={status} busy={busy} />
+                <div className="card-divider" />
+                {result ? <ImageResult result={result} lang={lang} /> : <ImageSamples onSelect={detectSample} busy={busy} lang={lang} />}
+              </div>
+              <div className="card swarm-stage-card">
+                <SwarmJobPanel job={swarmJob} busy={busy} lang={lang} />
+              </div>
+            </>
+          ) : (
+            <div className="card">
+              <div className="section-label"><i className="fa fa-info-circle" /> {tr("当前状态", "Current status")}</div>
+              <StatusRow status={status} busy={busy} />
+              <div className="card-divider" />
+              {result ? <ImageResult result={result} lang={lang} /> : <ImageSamples onSelect={detectSample} busy={busy} lang={lang} />}
+            </div>
+          )}
         </div>
       </div>
     </main>
@@ -2777,8 +2945,23 @@ function UploadBox({
   lang: Lang;
 }) {
   const tr = (zh: string, en: string) => translate(lang, zh, en);
+  const [dragging, setDragging] = useState(false);
+  function handleDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setDragging(false);
+    const dropped = event.dataTransfer.files?.[0];
+    if (dropped) onFile(dropped);
+  }
   return (
-    <div className="upload-area">
+    <div
+      className={`upload-area ${dragging ? "drag-over" : ""}`}
+      onDragOver={(event) => {
+        event.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={handleDrop}
+    >
       <input accept={accept} type="file" id={`file-${kind}`} onChange={(event) => onFile(event.target.files?.[0] || null)} />
       {!file ? (
         <label htmlFor={`file-${kind}`} className="upload-placeholder">
@@ -2792,7 +2975,7 @@ function UploadBox({
           <div className="file-meta">
             <span>{file.name}</span><span>·</span><span>{formatSize(file.size)}</span><span className="file-badge">{kind}</span>
           </div>
-          <button className="clear-btn" onClick={() => onFile(null)}><i className="fa fa-times" /> {tr("清除", "Clear")}</button>
+          <button className="clear-btn" type="button" onClick={() => onFile(null)}><i className="fa fa-times" /> {tr("清除", "Clear")}</button>
         </div>
       )}
     </div>
@@ -2828,8 +3011,8 @@ function ImageSamples({
       </div>
       <div className="card-divider" />
       <Tips lang={lang} items={[
-        tr("生成内容检测：识别 SD、DALL-E、Midjourney 等模型生成图像", "AIGC detection: identifies images generated by SD, DALL-E, Midjourney, and similar models"),
-        tr("篡改检测：识别拼接、修补、克隆等篡改痕迹", "Tamper detection: identifies splicing, inpainting, cloning, and related traces"),
+        tr("生成内容鉴伪：识别疑似生成、合成或编辑的内容风险", "Generated-content forensics: identifies suspected generated, synthetic, or edited content risk"),
+        tr("篡改痕迹鉴伪：识别拼接、修补、克隆等后处理痕迹", "Tamper-trace forensics: identifies splicing, inpainting, cloning, and related traces"),
         tr("结果包含概率、置信度与简洁结论", "Results include probability, confidence, and a concise verdict"),
       ]} />
     </>
@@ -2908,8 +3091,106 @@ function Tips({ items, lang }: { items: string[]; lang: Lang }) {
   );
 }
 
+function SwarmJobPanel({ job, busy, lang }: { job: DetectionJob | null; busy: boolean; lang: Lang }) {
+  const tr = (zh: string, en: string) => translate(lang, zh, en);
+  const progress = Math.max(0, Math.min(100, Math.round(Number(job?.progress || 0))));
+  const experts = job?.experts || [];
+  const activeExperts = experts.filter((expert) => expert.status === "running").length;
+  const finishedExperts = experts.filter((expert) => ["success", "failed", "skipped"].includes(String(expert.status || ""))).length;
+  const visualExperts = experts.length ? experts : SWARM_PLACEHOLDER_EXPERTS;
+  const summary = publicSwarmJobSummary(job, lang);
+  const consensusScore = job?.result?.result?.swarm?.consensusScore;
+  const hasConsensus = typeof consensusScore === "number" && Number.isFinite(consensusScore);
+  const consensusPercent = hasConsensus ? Math.round(Math.max(0, Math.min(1, Number(consensusScore))) * 100) : progress;
+  const consensusLabel = hasConsensus ? tr("共识度", "Consensus") : tr("检测进度", "Progress");
+  const visualState = busy || job?.status === "running" ? "active" : "calm";
+  const liveProgress = job?.status === "success" || job?.status === "failed" ? progress : Math.floor(progress / 25) * 25;
+  const liveText = `${summary}，${tr("进度", "progress")} ${liveProgress}%`;
+  return (
+    <div
+      className="swarm-job-panel"
+      aria-busy={busy}
+      aria-label={`${summary}，${tr("进度", "progress")} ${progress}%`}
+    >
+      <span className="sr-only" aria-live="polite">{liveText}</span>
+      <div className="swarm-job-head">
+        <span><i className="fa fa-sitemap" aria-hidden="true" /> {tr("Swarm 专家会诊", "Swarm expert review")}</span>
+        <strong>{progress}%</strong>
+      </div>
+      <div className="swarm-command-grid">
+        <div className={`swarm-stage-viz ${job?.status || "queued"} ${visualState}`}>
+          <div className="swarm-rain" aria-hidden="true">
+            {SWARM_RAIN_DROPS.map((index) => <span key={index} style={{ "--rain-index": index } as React.CSSProperties} />)}
+          </div>
+          <div className="swarm-orbit-field" aria-hidden="true">
+            <div className="swarm-orbit orbit-a" />
+            <div className="swarm-orbit orbit-b" />
+            <div className="swarm-orbit orbit-c" />
+            <div className="swarm-constellation-lines" />
+            <div className="swarm-core-viz">
+              <span className="swarm-core-pulse" />
+              <span className="swarm-core-ring" />
+              <i className="fa fa-fingerprint" />
+              <b>{tr("会诊中", "Reviewing")}</b>
+            </div>
+            <div className="swarm-scanline" />
+            {visualExperts.slice(0, 8).map((expert, index) => (
+              <span
+                className={`swarm-node ${normalizeSwarmStatus(expert.status)}`}
+                style={{ "--node-index": index } as React.CSSProperties}
+                key={`${expert.publicId || expert.id || index}-viz`}
+              >
+                <i>{String(index + 1).padStart(2, "0")}</i>
+              </span>
+            ))}
+          </div>
+        </div>
+        <aside className="swarm-briefing-side">
+          <div className="swarm-job-summary">
+            <strong>{summary}</strong>
+            {!job && <span>{tr("上传图片并点击开始检测后，系统会组织多名鉴伪专家进行并行复核。", "Upload an image and start detection to run a parallel expert review.")}</span>}
+            {job && <span>{tr("前端仅展示综合进度与共识信号，详细专家路由记录保留在后台审计。", "This page shows aggregate progress and consensus only; detailed routing stays in admin audit logs.")}</span>}
+          </div>
+          <div className="swarm-viz-stats">
+            <span>{tr("活跃专家", "Active experts")} <b>{activeExperts}</b></span>
+            <span>{tr("已完成", "Completed")} <b>{finishedExperts}</b></span>
+            <span>{consensusLabel} <b>{consensusPercent}%</b></span>
+          </div>
+          <div
+            className="swarm-progress-track"
+            role="progressbar"
+            aria-label={tr("Swarm 会诊进度", "Swarm review progress")}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={progress}
+          >
+            <span style={{ width: `${progress}%` }} />
+          </div>
+          <div className="swarm-expert-grid" aria-label={tr("匿名专家队列", "Anonymous expert queue")}>
+            {visualExperts.slice(0, 8).map((expert, index) => {
+              const status = normalizeSwarmStatus(expert.status);
+              return (
+                <div className={`swarm-expert-card ${status}`} key={`${expert.publicId || expert.id || index}-card`}>
+                  <span className="swarm-expert-icon"><i className="fa fa-user-secret" aria-hidden="true" /></span>
+                  <span className="swarm-expert-body">
+                    <strong>{publicSwarmExpertName(expert, index, lang)}</strong>
+                    <em>{publicSwarmExpertMessage(expert, lang)}</em>
+                  </span>
+                  <b>{publicSwarmExpertStatusLabel(expert.status, lang)}</b>
+                </div>
+              );
+            })}
+          </div>
+        </aside>
+      </div>
+    </div>
+  );
+}
+
 function ImageResult({ result, lang }: { result: ImageDetectionResult; lang: Lang }) {
   const probability = Math.round((result.probability || 0) * 1000) / 10;
+  const swarm = result.swarm;
+  const swarmExperts = swarm?.experts || [];
   const tr = (zh: string, en: string) => translate(lang, zh, en);
   return (
     <div className="result-panel">
@@ -2930,6 +3211,23 @@ function ImageResult({ result, lang }: { result: ImageDetectionResult; lang: Lan
           <i className="fa fa-download" /> {tr("下载报告", "Download report")}
         </button>
       </div>
+      {swarm?.enabled && (
+        <div className="swarm-result-panel">
+          <div className="swarm-result-head">
+            <h4><i className="fa fa-sitemap" /> {tr("Swarm 投票意见", "Swarm voting opinion")}</h4>
+            <div className="swarm-result-badges">
+              <span>{tr("有效专家", "Effective experts")} {swarm.effectiveExperts || 0}/{swarm.totalExperts || swarmExperts.length}</span>
+              <span>{tr("共识", "Consensus")} {Math.round(Number(swarm.consensusScore || 0) * 100)}%</span>
+              {swarm.disagreement && <span className="warning">{tr("存在分歧", "Disagreement")}</span>}
+            </div>
+          </div>
+          {swarm.evidence && swarm.evidence.length > 0 && (
+            <ul className="swarm-evidence-list">
+              {swarm.evidence.slice(0, 4).map((item, index) => <li key={`${index}-${item}`}>{publicSwarmEvidence(item, lang)}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
       <div className="case-block"><p>{result.explanation}</p></div>
     </div>
   );
@@ -3469,6 +3767,17 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "操作失败";
 }
 
+function isSwarmCancelledError(error: unknown) {
+  return errorMessage(error) === SWARM_CANCELLED_ERROR || (error instanceof DOMException && error.name === "AbortError");
+}
+
+function publicDetectionErrorMessage(error: unknown, mode: ImageDetectMode, lang: Lang) {
+  if (mode === "swarm") {
+    return translate(lang, "Swarm 专家会诊暂不可用，请稍后重试", "Swarm expert review is temporarily unavailable. Please try again later.");
+  }
+  return errorMessage(error);
+}
+
 function isDemoMode() {
   return new URLSearchParams(window.location.search).get("demo") === "1";
 }
@@ -3510,6 +3819,12 @@ function getInitialPage(): PageKey {
   if (typeof window === "undefined") return "home";
   const value = new URLSearchParams(window.location.search).get("page") as PageKey | null;
   return value && ["home", "image", "video", "retrieve", "history", "developer"].includes(value) ? value : "home";
+}
+
+function getInitialImageMode(): ImageDetectMode {
+  if (typeof window === "undefined") return "standard";
+  const value = new URLSearchParams(window.location.search).get("imageMode");
+  return value === "swarm" ? "swarm" : "standard";
 }
 
 function getInitialHistoryTab(): HistoryTabKey {

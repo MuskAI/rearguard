@@ -50,6 +50,25 @@ CREATE TABLE IF NOT EXISTS `developer_api_keys` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='开发者 API Key';
 
 -- ---------------------------------------------------------------------------
+-- 后台管理员账号（独立于普通用户登录）
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `admin_accounts` (
+  `id` INT NOT NULL AUTO_INCREMENT,
+  `username` VARCHAR(64) NOT NULL,
+  `phone` VARCHAR(20) NULL DEFAULT NULL,
+  `password_hash` VARCHAR(255) NOT NULL,
+  `role` VARCHAR(32) NOT NULL DEFAULT 'admin',
+  `status` VARCHAR(16) NOT NULL DEFAULT 'active',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `last_login_at` DATETIME NULL DEFAULT NULL,
+  `last_login_ip` VARCHAR(64) NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_admin_accounts_username` (`username`),
+  UNIQUE KEY `uk_admin_accounts_phone` (`phone`),
+  KEY `idx_admin_accounts_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='后台管理员账号';
+
+-- ---------------------------------------------------------------------------
 -- 图像检测记录（含 detector_probability、feedback，等价于执行过 patch_data_feedback_and_detector.sql）
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `data` (

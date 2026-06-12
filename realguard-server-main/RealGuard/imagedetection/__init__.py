@@ -1,6 +1,7 @@
 import os
 from datetime import timedelta
 
+import click
 from flask import Flask, abort, render_template, send_from_directory, session, redirect
 from .views import detection
 from .views import login
@@ -8,6 +9,7 @@ from .views import historical_record
 from .views import retrieve
 from .views import profile
 from .views import api
+from .views import admin
 
 
 def creat_app():
@@ -27,6 +29,41 @@ def creat_app():
     app.register_blueprint(retrieve.retrieve_blueprint)
     app.register_blueprint(profile.profile_blueprint)
     app.register_blueprint(api.api_blueprint)
+    app.register_blueprint(admin.admin_blueprint)
+
+    @app.cli.command("admin-db-upgrade")
+    def admin_db_upgrade():
+        """Create or update RealGuard admin tables."""
+        ok, messages = admin.apply_admin_schema()
+        for message in messages:
+            click.echo(message)
+        if not ok:
+            raise click.ClickException("admin schema upgrade failed")
+        click.echo("admin schema ready")
+
+    @app.cli.command("create-admin")
+    @click.option("--username", prompt=True, help="Admin username.")
+    @click.option("--password", prompt=True, hide_input=True, confirmation_prompt=True, help="Admin password.")
+    @click.option("--phone", default="", help="Optional phone number.")
+    @click.option(
+        "--role",
+        default="super_admin",
+        type=click.Choice(["super_admin", "admin", "operator", "reviewer", "readonly"]),
+        help="Admin role.",
+    )
+    @click.option("--migrate/--no-migrate", default=False, help="Run admin-db-upgrade before creating the account.")
+    def create_admin(username, password, phone, role, migrate):
+        """Create an administrator account from the server CLI."""
+        if migrate:
+            ok, messages = admin.apply_admin_schema()
+            for message in messages:
+                click.echo(message)
+            if not ok:
+                raise click.ClickException("admin schema upgrade failed")
+        ok, message = admin._create_admin_account(username, phone, password, role=role)
+        if not ok:
+            raise click.ClickException(message)
+        click.echo(f"created admin {username} ({role})")
 
     @app.route('/')
     def root():

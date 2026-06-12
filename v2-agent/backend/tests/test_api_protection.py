@@ -58,12 +58,32 @@ def test_metrics_requires_token(client):
     assert auth.status_code == 200
 
 
+def test_v1_session_unlocks_protected_v2_endpoints(client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    def fake_session_user(request):
+        if "session=valid" in request.headers.get("cookie", ""):
+            return {"mode": "session", "userId": 7, "phone": "13800000000"}
+        return None
+
+    monkeypatch.setattr(main, "_verify_session_user_sync", fake_session_user)
+
+    unauth = client.get("/api/metrics")
+    client.cookies.set("session", "valid")
+    auth = client.get("/api/metrics")
+
+    assert unauth.status_code == 401
+    assert auth.status_code == 200
+
+
 def test_health_exposes_access_protection(client):
     response = client.get("/api/health")
     payload = response.json()
 
     assert response.status_code == 200
     assert payload["accessProtectionEnabled"] is True
+    assert payload["unifiedLoginEnabled"] is True
+    assert payload["sessionAuthEnabled"] is True
     assert payload["analysisCacheVersion"] == "v6-low-ela-weight"
     assert "model" not in payload
     assert "calibration" not in payload
@@ -109,6 +129,31 @@ def test_developer_key_required_for_detect_when_enabled(developer_key_client):
     assert health.json()["developerKeyAuthEnabled"] is True
     assert health.json()["developerKeyAuthConfigured"] is True
     assert "/api/detect" in health.json()["developerProtectedEndpoints"]
+    assert valid.json()["reportId"].startswith("RJ-RPT-")
+
+
+def test_v1_session_can_detect_when_developer_api_key_is_required(developer_key_client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    def fake_session_user(request):
+        if "session=valid" in request.headers.get("cookie", ""):
+            return {"mode": "session", "userId": 8, "phone": "13900000000"}
+        return None
+
+    monkeypatch.setattr(main, "_verify_session_user_sync", fake_session_user)
+
+    missing = developer_key_client.post(
+        "/api/detect",
+        files={"file": ("sample.txt", b"session detect pytest", "text/plain")},
+    )
+    developer_key_client.cookies.set("session", "valid")
+    valid = developer_key_client.post(
+        "/api/detect",
+        files={"file": ("sample.txt", b"session detect pytest", "text/plain")},
+    )
+
+    assert missing.status_code == 401
+    assert valid.status_code == 200
     assert valid.json()["reportId"].startswith("RJ-RPT-")
 
 

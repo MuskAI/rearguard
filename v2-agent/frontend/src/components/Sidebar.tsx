@@ -26,7 +26,6 @@ interface Props {
   totalCount?: number;
   filterCounts?: Partial<HistoryFilterCounts>;
   message?: string;
-  accessProtectionEnabled?: boolean;
   query: string;
   filter: SidebarFilterKey;
   activeId?: string;
@@ -37,7 +36,6 @@ interface Props {
   onNew: () => void;
   onDelete: (taskId: string) => void;
   onClearSelection?: () => void;
-  onConfigureAccess?: () => void;
   onRetryHistory?: () => void;
   onRefreshHistory?: () => void;
   onLoadMore?: () => void;
@@ -51,7 +49,6 @@ export default function Sidebar({
   totalCount,
   filterCounts,
   message,
-  accessProtectionEnabled = false,
   query,
   filter,
   activeId,
@@ -62,7 +59,6 @@ export default function Sidebar({
   onNew,
   onDelete,
   onClearSelection,
-  onConfigureAccess,
   onRetryHistory,
   onRefreshHistory,
   onLoadMore,
@@ -250,20 +246,11 @@ export default function Sidebar({
                   {historyBusy ? "加载中" : "重试加载"}
                 </button>
               )}
-              {accessProtectionEnabled && onConfigureAccess && (
-                <button
-                  type="button"
-                  onClick={onConfigureAccess}
-                  className="rounded-md border border-ink-600 bg-ink-900 px-2 py-1 text-[10px]"
-                >
-                  配置令牌
-                </button>
-              )}
             </div>
           </div>
         )}
         {history.length === 0 && (
-          <div className="px-2 py-4 text-xs text-ink-500">{message ? "配置完成后会显示历史记录" : "暂无记录"}</div>
+          <div className="px-2 py-4 text-xs text-ink-500">{message ? "登录后会显示历史记录" : "暂无记录"}</div>
         )}
         {totalCount !== 0 && history.length === 0 && (
           <div className="px-2 py-4 space-y-2">

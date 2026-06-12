@@ -26,6 +26,11 @@ from . import detector, provenance, reporting, storage, synthid_detector, visibl
 app = FastAPI(title="鉴真 AI 鉴伪智能体", version="0.2.0")
 ACCESS_TOKEN = os.getenv("JIANZHEN_ACCESS_TOKEN", "").strip()
 MAX_UPLOAD_BYTES = int(os.getenv("JIANZHEN_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+SESSION_AUTH_URL = (
+    os.getenv("JIANZHEN_SESSION_AUTH_URL")
+    or os.getenv("REALGUARD_SESSION_AUTH_URL")
+    or "http://127.0.0.1:5000/api/me"
+).strip()
 DEVELOPER_AUTH_URL = os.getenv("JIANZHEN_DEVELOPER_AUTH_URL", "http://127.0.0.1:5000/api/developer/keys/verify").strip()
 DEVELOPER_AUTH_SECRET = (
     os.getenv("REALGUARD_DEVELOPER_AUTH_SECRET")
@@ -65,6 +70,7 @@ def _allowed_origins() -> list[str]:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins(),
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -104,12 +110,57 @@ def _admin_access_granted(request: Request) -> bool:
     return bool(ACCESS_TOKEN) and secrets.compare_digest(_request_token(request), ACCESS_TOKEN)
 
 
-def _require_protected_access(request: Request) -> None:
+def _verify_session_user_sync(request: Request) -> dict | None:
+    cookie = request.headers.get("cookie", "").strip()
+    if not SESSION_AUTH_URL or not cookie:
+        return None
+    headers = {
+        "Accept": "application/json",
+        "Cookie": cookie,
+        "User-Agent": request.headers.get("user-agent", ""),
+        "X-Forwarded-For": _client_ip(request) or "",
+    }
+    session_request = urlrequest.Request(SESSION_AUTH_URL, headers=headers, method="GET")
+    try:
+        with urlrequest.urlopen(session_request, timeout=3) as response:
+            data = json.loads(response.read().decode("utf-8") or "{}")
+    except urlerror.HTTPError as exc:
+        if exc.code in {401, 403}:
+            return None
+        return None
+    except (urlerror.URLError, TimeoutError, json.JSONDecodeError):
+        return None
+
+    if not isinstance(data, dict):
+        return None
+    user = data.get("user")
+    if data.get("status") != "success" or not isinstance(user, dict):
+        return None
+    user_id = user.get("Userid") or user.get("userId") or user.get("id") or user.get("phone") or user.get("openid")
+    if not user_id:
+        return None
+    return {
+        "mode": "session",
+        "userId": user_id,
+        "phone": user.get("phone"),
+        "openid": user.get("openid"),
+        "username": user.get("username"),
+    }
+
+
+def _session_access_granted(request: Request) -> dict | None:
+    return _verify_session_user_sync(request)
+
+
+def _require_protected_access(request: Request) -> dict:
     if not ACCESS_TOKEN:
-        return
+        return {"mode": "public"}
     if _admin_access_granted(request):
-        return
-    raise HTTPException(status_code=401, detail="访问令牌缺失或无效")
+        return {"mode": "admin"}
+    actor = _session_access_granted(request)
+    if actor:
+        return actor
+    raise HTTPException(status_code=401, detail="请先登录 RealGuard 后继续使用 V2")
 
 
 def _request_developer_key(request: Request) -> str:
@@ -166,6 +217,9 @@ def _verify_developer_key_sync(api_key: str, request: Request) -> dict:
 async def _require_developer_access(request: Request) -> dict:
     if _admin_access_granted(request):
         return {"mode": "admin"}
+    actor = await run_in_threadpool(_session_access_granted, request)
+    if actor:
+        return actor
     if not DEVELOPER_API_KEY_REQUIRED:
         return {"mode": "public"}
     if not DEVELOPER_AUTH_CONFIGURED:
@@ -187,6 +241,9 @@ def _require_internal_developer_auth(request: Request) -> None:
 def _require_report_access(request: Request, item: dict) -> dict:
     if _admin_access_granted(request):
         return {"mode": "admin"}
+    session_actor = _session_access_granted(request)
+    if session_actor:
+        return session_actor
     if not DEVELOPER_API_KEY_REQUIRED:
         return {"mode": "public"}
     if not DEVELOPER_AUTH_CONFIGURED:
@@ -216,6 +273,8 @@ def _public_capabilities() -> dict:
         "version": app.version,
         "vlmEnabled": bool(detector.API_KEY),
         "accessProtectionEnabled": bool(ACCESS_TOKEN),
+        "unifiedLoginEnabled": bool(SESSION_AUTH_URL),
+        "sessionAuthEnabled": bool(SESSION_AUTH_URL),
         "developerKeyAuthEnabled": DEVELOPER_API_KEY_REQUIRED,
         "developerKeyAuthConfigured": DEVELOPER_AUTH_CONFIGURED,
         "protectedEndpoints": PROTECTED_ENDPOINTS if ACCESS_TOKEN else [],

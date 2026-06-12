@@ -15,9 +15,7 @@ import {
   fetchHistory,
   fetchHistoryItem,
   deleteHistory,
-  getAccessToken,
   persistArtifacts,
-  setAccessToken,
   TYPE_LABEL,
 } from "./api";
 import Sidebar, { getInitialHistoryFilter, getInitialHistoryQuery } from "./components/Sidebar";
@@ -89,7 +87,7 @@ export default function App() {
   const [historyMessage, setHistoryMessage] = useState("");
   const [historyBusy, setHistoryBusy] = useState(false);
   const [health, setHealth] = useState<HealthStatus | null>(null);
-  const [monitorReloadKey, setMonitorReloadKey] = useState(0);
+  const [monitorReloadKey] = useState(0);
   const [forensicsByTask, setForensicsByTask] = useState<Record<string, ForensicReport>>({});
   const [provenanceByTask, setProvenanceByTask] = useState<Record<string, ProvenanceReport>>({});
   const [messages, setMessages] = useState<Message[]>([]);
@@ -213,14 +211,6 @@ export default function App() {
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages]);
-
-  const configureAccessToken = async () => {
-    const next = window.prompt("输入运维访问令牌或 rg_sk_ API Key。留空可清除本地保存的值。", getAccessToken());
-    if (next === null) return;
-    setAccessToken(next);
-    setMonitorReloadKey((value) => value + 1);
-    await Promise.allSettled([loadHealth(), loadHistory({ preserveOnError: true })]);
-  };
 
   const copySkillText = async (kind: "handoff" | "command", text: string) => {
     try {
@@ -421,12 +411,13 @@ export default function App() {
     return (
       <div className="h-full flex">
         <AdminDashboard
-          accessProtectionEnabled={Boolean(health?.accessProtectionEnabled)}
           onBack={() => {
             window.location.hash = "";
             setView("detect");
           }}
-          onConfigureAccess={configureAccessToken}
+          onHome={() => {
+            window.location.href = "/";
+          }}
           reloadKey={monitorReloadKey}
         />
       </div>
@@ -441,7 +432,6 @@ export default function App() {
         totalCount={historyTotal}
         filterCounts={historyFilterCounts}
         message={historyMessage}
-        accessProtectionEnabled={Boolean(health?.accessProtectionEnabled)}
         query={historyQuery}
         filter={historyFilter}
         activeId={activeId}
@@ -452,7 +442,6 @@ export default function App() {
         onNew={newChat}
         onDelete={onDelete}
         onClearSelection={newChat}
-        onConfigureAccess={configureAccessToken}
         onRetryHistory={() => loadHistory({ preserveOnError: false })}
         onRefreshHistory={() => loadHistory({ preserveOnError: true })}
         onLoadMore={history.length < historyTotal ? () => {
@@ -475,7 +464,6 @@ export default function App() {
             totalCount={historyTotal}
             filterCounts={historyFilterCounts}
             message={historyMessage}
-            accessProtectionEnabled={Boolean(health?.accessProtectionEnabled)}
             query={historyQuery}
             filter={historyFilter}
             activeId={activeId}
@@ -486,7 +474,6 @@ export default function App() {
             onNew={newChat}
             onDelete={onDelete}
             onClearSelection={newChat}
-            onConfigureAccess={configureAccessToken}
             onRetryHistory={() => loadHistory({ preserveOnError: false })}
             onRefreshHistory={() => loadHistory({ preserveOnError: true })}
             onLoadMore={history.length < historyTotal ? () => {
@@ -523,14 +510,14 @@ export default function App() {
             >
               ● {health == null ? "状态未知" : health.vlmEnabled ? "VLM 在线" : "Mock 回退"}
             </span>
-            {health?.accessProtectionEnabled && (
-              <button
-                onClick={configureAccessToken}
-                className="h-9 px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950 hover:border-brand-cyan/50"
-              >
-                令牌
-              </button>
-            )}
+            <button
+              onClick={() => {
+                window.location.href = "/";
+              }}
+              className="h-9 px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950 hover:border-brand-cyan/50"
+            >
+              首页
+            </button>
             <button
               onClick={() => {
                 window.location.href = "/?page=developer";
@@ -707,7 +694,7 @@ function AgentAvatar() {
 }
 
 function CapabilityBanner({ health }: { health: HealthStatus | null }) {
-  const tokenProtected = Boolean(health?.accessProtectionEnabled);
+  const unifiedLoginEnabled = Boolean(health?.unifiedLoginEnabled || health?.sessionAuthEnabled);
   const developerKeyProtected = Boolean(health?.developerKeyAuthEnabled);
   const capabilityText =
     health == null
@@ -721,8 +708,8 @@ function CapabilityBanner({ health }: { health: HealthStatus | null }) {
       <span className="text-ink-950 font-medium">当前能力：</span>
       {capabilityText}
       {cacheVersion && ` 分析缓存版本：${cacheVersion}。`}
-      {developerKeyProtected && " 检测、取证和凭证接口需要开发者 API Key。"}
-      {tokenProtected && " 历史记录、报告与监控指标需要运维访问令牌。"}
+      {unifiedLoginEnabled && " V2 已接入 RealGuard 统一登录，登录后可直接使用检测、历史、报告和监控能力。"}
+      {developerKeyProtected && " 外部程序调用仍可使用开发者 API Key。"}
     </div>
   );
 }
