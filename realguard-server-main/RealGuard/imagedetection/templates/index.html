@@ -556,14 +556,6 @@
                     <a href="/video_upload" class="dropdown-item">
                         <i class="fa fa-film"></i> 视频鉴伪
                     </a>
-                    <div class="dropdown-divider"></div>
-                    <div class="dropdown-label">检索</div>
-                    <a href="/image_retrieve" class="dropdown-item">
-                        <i class="fa fa-search"></i> 图像侵权检索
-                    </a>
-                    <a href="/video_retrieve" class="dropdown-item">
-                        <i class="fa fa-play-circle"></i> 视频侵权检索
-                    </a>
                 </div>
             </div>
             <a href="/profile">我的</a>
@@ -585,7 +577,7 @@
                         <div class="hero-content">
                             <div class="hero-tag"><span class="dot"></span> 多模态AI检测平台</div>
                             <h2 class="hero-title">RealGuard<br>智能内容检测</h2>
-                            <p class="hero-desc">覆盖图像、视频多模态内容检测与检索，从源头发现疑似侵权内容，保障数字内容安全。</p>
+                            <p class="hero-desc">覆盖图像、视频多模态内容检测，从源头识别生成与篡改风险，保障数字内容安全。</p>
                             <a href="/image_upload" class="hero-btn">
                                 <i class="fa fa-rocket"></i> 开始检测
                             </a>
@@ -597,8 +589,8 @@
                     <div class="carousel-overlay">
                         <div class="hero-content">
                             <div class="hero-tag"><span class="dot"></span> 深度学习驱动</div>
-                            <h2 class="hero-title">图像侵权<br>智能检测</h2>
-                            <p class="hero-desc">基于前沿深度学习算法，精准识别AI生成图像、PS篡改等疑似侵权内容。</p>
+                            <h2 class="hero-title">图像内容<br>智能鉴伪</h2>
+                            <p class="hero-desc">基于前沿深度学习算法，识别 AI 生成图像、PS 篡改等可疑内容。</p>
                             <a href="/image_upload" class="hero-btn">
                                 <i class="fa fa-image"></i> 图像鉴伪
                             </a>
@@ -606,14 +598,14 @@
                     </div>
                 </div>
                 <div class="carousel-slide slide-3">
-                    <img src="../static/system/index3.jpg" alt="内容检索">
+                    <img src="../static/system/index3.jpg" alt="深度分析">
                     <div class="carousel-overlay">
                         <div class="hero-content">
-                            <div class="hero-tag"><span class="dot"></span> 海量数据检索</div>
-                            <h2 class="hero-title">多模态<br>侵权检索</h2>
-                            <p class="hero-desc">检索疑似侵权的图像，检索疑似侵权的视频，在海量数据库中快速定位相似可疑内容。</p>
-                            <a href="/image_retrieve" class="hero-btn">
-                                <i class="fa fa-search"></i> 开始检索
+                            <div class="hero-tag"><span class="dot"></span> 深度复核</div>
+                            <h2 class="hero-title">多模态证据<br>复核闭环</h2>
+                            <p class="hero-desc">通过报告编号、证据摘要和历史记录，把检测结果沉淀为可复核的内容安全流程。</p>
+                            <a href="/v2/" class="hero-btn">
+                                <i class="fa fa-search-plus"></i> 深度分析
                             </a>
                         </div>
                     </div>
@@ -632,7 +624,7 @@
     <div class="container">
         <div class="section-header fade-up">
             <h2 class="section-title">核心功能</h2>
-            <p class="section-desc">图像鉴伪、视频侵权检测、图像侵权检索、视频侵权检索，全方位覆盖多模态内容安全场景</p>
+            <p class="section-desc">图像鉴伪、视频鉴伪、报告下载与开发者接入，全方位覆盖多模态内容安全场景</p>
         </div>
         <div class="features-grid">
             <a href="/image_upload" class="feature-card fade-up" style="--card-accent: var(--primary);">
@@ -651,21 +643,21 @@
                 <p>针对视频内容的 AI 生成检测与篡改识别，帧级分析定位可疑片段。</p>
                 <span class="feature-link">进入功能 <i class="fa fa-arrow-right"></i></span>
             </a>
-            <a href="/image_retrieve" class="feature-card fade-up" style="--card-accent: var(--accent);">
+            <a href="/history_photo" class="feature-card fade-up" style="--card-accent: var(--accent);">
                 <div class="feature-icon" style="background: rgba(6,214,160,0.1); color: var(--accent-dark);">
-                    <i class="fa fa-search"></i>
+                    <i class="fa fa-history"></i>
                 </div>
-                <h3>图像侵权检索</h3>
-                <p>检索疑似侵权的图像，在图像数据库中快速定位可疑图像内容。</p>
-                <span class="feature-link">进入功能 <i class="fa fa-arrow-right"></i></span>
+                <h3>检测历史</h3>
+                <p>集中查看检测记录、结论、置信度与报告入口，便于复核和归档。</p>
+                <span class="feature-link">查看记录 <i class="fa fa-arrow-right"></i></span>
             </a>
-            <a href="/video_retrieve" class="feature-card fade-up" style="--card-accent: #8b5cf6;">
+            <a href="/v2/" class="feature-card fade-up" style="--card-accent: #8b5cf6;">
                 <div class="feature-icon" style="background: rgba(139,92,246,0.1); color: #8b5cf6;">
-                    <i class="fa fa-play-circle"></i>
+                    <i class="fa fa-search-plus"></i>
                 </div>
-                <h3>视频侵权检索</h3>
-                <p>检索疑似侵权的视频，在数据库中快速定位相似可疑视频内容。</p>
-                <span class="feature-link">进入功能 <i class="fa fa-arrow-right"></i></span>
+                <h3>深度分析</h3>
+                <p>结合取证证据、报告编号和历史追踪，辅助完成进一步复核。</p>
+                <span class="feature-link">进入工作台 <i class="fa fa-arrow-right"></i></span>
             </a>
         </div>
     </div>

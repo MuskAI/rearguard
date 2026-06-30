@@ -82,10 +82,6 @@ def video_report_filename(itemid: int | str) -> str:
     return f"realguard-video-report-{itemid}.html"
 
 
-def retrieval_report_filename(itemid: int | str) -> str:
-    return f"realguard-retrieval-report-{itemid}.html"
-
-
 def image_report_content(item: dict, result: dict) -> str:
     final_label = result.get("final_label") or ("AI生成图像" if float(item.get("fake", 0) or 0) >= 50 else "真实图像")
     accent = "#d64242" if "AI" in str(final_label) else "#239c73"
@@ -180,67 +176,6 @@ def video_report_content(item: dict, result: dict) -> str:
         </section>
         """,
     )
-
-
-def retrieval_report_content(item: dict, query_file_url: str, base_url: str, results: list[dict]) -> str:
-    search_type = _safe_text(item.get("search_type"))
-    title = "图像检索报告" if search_type == "image" else "视频检索报告"
-    accent = "#2563eb"
-    rows = []
-    for idx, record in enumerate(results[:20], start=1):
-        media_path = _safe_text((record.get("product") or {}).get("product_images") or record.get("id"), "")
-        media_url = f"{base_url}{media_path}" if media_path else ""
-        rows.append(
-            f"""
-            <tr>
-              <td>{idx}</td>
-              <td>{escape(_safe_text(record.get("id")))}</td>
-              <td class="right">{round(float(record.get("score", 0) or 0), 4)}</td>
-              <td>{escape(media_url)}</td>
-            </tr>
-            """
-        )
-    if not rows:
-        rows.append('<tr><td colspan="4">无命中结果</td></tr>')
-    preview = (
-        f'<img class="preview" src="{escape(query_file_url)}" alt="query" />'
-        if search_type == "image"
-        else f'<video class="preview" src="{escape(query_file_url)}" controls></video>'
-    )
-    return _html_page(
-        f"RealGuard 检索报告 {item.get('itemid')}",
-        accent,
-        f"""
-        <section class="hero">
-          <div class="eyebrow">RealGuard Retrieval Report</div>
-          <h1>{title}</h1>
-          <p>报告编号：RET-{item.get('itemid')}。该报告用于留存检索查询信息与 Top-K 命中结果。</p>
-          <div class="pill">{escape(search_type)} · {int(item.get('result_count', 0) or 0)} 条结果</div>
-          <div class="grid" style="margin-top:18px;">
-            <div>
-              <div class="meta-grid">
-                <div><span>查询文件</span><strong>{escape(_safe_text(item.get("filename")))}</strong></div>
-                <div><span>时间</span><strong>{escape(_fmt_time(item.get("createtime")))}</strong></div>
-                <div><span>Top-K</span><strong>{escape(_safe_text(item.get("top_k")))}</strong></div>
-                <div><span>结果数量</span><strong>{escape(_safe_text(item.get("result_count")))}</strong></div>
-                <div><span>文件大小</span><strong>{escape(_safe_text(item.get("file_size")))}</strong></div>
-                <div><span>检索类型</span><strong>{escape(search_type)}</strong></div>
-              </div>
-            </div>
-            <div>{preview}</div>
-          </div>
-        </section>
-        <section class="card">
-          <h2>Top-K 检索结果</h2>
-          <table>
-            <thead><tr><th>排名</th><th>ID</th><th class="right">相似度</th><th>媒体路径</th></tr></thead>
-            <tbody>{''.join(rows)}</tbody>
-          </table>
-          <div class="footnote">说明：本报告用于业务留档与人工复核，不构成法律意义上的侵权认定结论。</div>
-        </section>
-        """,
-    )
-
 
 def attachment_header(filename: str) -> str:
     return f"attachment; filename*=UTF-8''{quote(filename)}"

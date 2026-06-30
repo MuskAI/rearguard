@@ -8,6 +8,10 @@ const apiTarget = runtime.process?.env?.VITE_API_TARGET || 'http://127.0.0.1:884
 export default defineConfig({
   plugins: [react()],
   base: "/v2/",
+  build: {
+    target: ["es2018", "safari12"],
+    cssTarget: "safari12",
+  },
   server: {
     port: 5173,
     proxy: {

@@ -125,25 +125,6 @@ CREATE TABLE IF NOT EXISTS `exif` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='图像 EXIF 元数据';
 
 -- ---------------------------------------------------------------------------
--- 以图搜图 / 以视频搜视频 历史
--- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS `retrieve_data` (
-  `itemid` INT NOT NULL AUTO_INCREMENT,
-  `createtime` DATETIME NULL,
-  `filename` VARCHAR(255) NULL,
-  `search_type` VARCHAR(16) NULL COMMENT 'image / video',
-  `result_count` INT NULL,
-  `top_k` INT NULL,
-  `openid` VARCHAR(128) NULL,
-  `phone` VARCHAR(32) NULL,
-  `file_size` VARCHAR(64) NULL,
-  `results_json` LONGTEXT NULL COMMENT '检索结果 JSON',
-  `Userid` INT NULL,
-  PRIMARY KEY (`itemid`),
-  KEY `idx_retrieve_phone_ct_type` (`phone`, `createtime`, `search_type`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='侵权检索历史';
-
--- ---------------------------------------------------------------------------
 -- 视频鉴伪检测记录（与 sql/patch_video_data.sql 一致）
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `video_data` (

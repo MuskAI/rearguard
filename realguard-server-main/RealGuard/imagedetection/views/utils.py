@@ -95,7 +95,7 @@ def excute_sql_lastid(sql, params=None):
 def excute_detection_sql(sql, params=None, fetch=True):
     """
     执行鉴伪后端数据库 SQL。
-    检索业务仍使用 excute_sql(system)，图像/视频鉴伪历史使用本函数(image_detection)。
+    图像/视频鉴伪历史使用本函数(image_detection)。
     """
     conn = None
     try:

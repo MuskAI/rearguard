@@ -4,25 +4,25 @@ export default {
   theme: {
     extend: {
       colors: {
-        // 墨 — 浅色宣纸工作台层级
+        // 墨 — 冷静取证工作台层级
         ink: {
-          950: "#172334",
-          900: "#fbf7ef",
+          950: "#15211e",
+          900: "#f3f7f4",
           800: "#ffffff",
-          700: "#efe4d4",
-          600: "#d9c8b0",
-          500: "#7d6f5e",
+          700: "#dce6e0",
+          600: "#b9c8c0",
+          500: "#60716a",
         },
-        // 朱砂（印章主调）/ 青玉 / 鎏金
+        // 朱砂 / 青玉 / 证据金
         cinnabar: { DEFAULT: "#c43d2f", light: "#d85a48", dark: "#933026" },
         jade: { DEFAULT: "#238f82", light: "#2fa99b", dark: "#19675e" },
-        gold: { DEFAULT: "#a7833e", light: "#c29b52", dark: "#80652f" },
+        gold: { DEFAULT: "#9a7337", light: "#b88c44", dark: "#705328" },
         rice: "#172334", // 标题正文
         // 兼容旧 token 名 → 映射到新主色，配色一改即全局生效
         brand: {
           cyan: "#238f82", // 青玉
-          blue: "#c43d2f", // 朱砂（主操作）
-          magenta: "#a7833e", // 鎏金（次强调）
+          blue: "#255f85", // 深湖蓝
+          magenta: "#9a7337", // 证据金（次强调）
         },
         verdict: {
           real: "#238f82", // 真 → 青玉

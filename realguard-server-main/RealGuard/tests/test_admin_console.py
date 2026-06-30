@@ -140,7 +140,6 @@ def test_admin_page_renders_workspace_for_allowed_user(client, monkeypatch):
     assert "RealGuard Admin Console" in html
     assert "模型管理" in html
     assert "线上主模型快速切换" in html
-    assert "API Key" in html
     assert "运营大屏" in html
 
 

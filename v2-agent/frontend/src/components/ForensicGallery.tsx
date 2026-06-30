@@ -4,16 +4,16 @@ import { ForensicReport, ForensicItem, STATUS_META, VERDICT_META } from "../api"
 export default function ForensicGallery({ report }: { report: ForensicReport }) {
   const meta = VERDICT_META[report.verdict];
   const [zoom, setZoom] = useState<ForensicItem | null>(null);
+  const fileName = report.fileMeta?.name || "未知文件";
 
   return (
-    <div className="rounded-2xl border border-ink-600 bg-ink-800 overflow-hidden shadow-sm">
+    <div className="rounded-lg border border-ink-700 bg-ink-800 overflow-hidden shadow-sm">
       <div
-        className="px-4 sm:px-5 py-3 border-b border-ink-600 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
-        style={{ background: `linear-gradient(90deg, ${meta.color}22, transparent)` }}
+        className="px-4 sm:px-5 py-3 border-b border-ink-700 bg-ink-900 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
       >
         <div className="flex items-center gap-2 min-w-0">
-          <span className="text-lg">🧬</span>
-          <span className="font-serif text-base sm:text-lg font-semibold text-rice">可解释性取证分析</span>
+          <span className="h-2.5 w-2.5 rounded-full" style={{ background: meta.color }} />
+          <span className="text-base sm:text-lg font-semibold text-rice">鉴伪线索可视化</span>
           <span className="text-xs text-ink-500">（共 {report.items.length} 项）</span>
         </div>
         <span className="text-xs font-medium" style={{ color: meta.color }}>
@@ -26,7 +26,7 @@ export default function ForensicGallery({ report }: { report: ForensicReport }) 
           {report.items.map((it) => {
             const s = STATUS_META[it.status];
             return (
-              <div key={it.key} className="rounded-xl border border-ink-600 bg-ink-900 overflow-hidden flex flex-col">
+              <div key={it.key} className="rounded-lg border border-ink-700 bg-ink-900 overflow-hidden flex flex-col">
                 <button
                   onClick={() => setZoom(it)}
                   className="block aspect-[4/3] bg-ink-700 overflow-hidden"
@@ -36,14 +36,14 @@ export default function ForensicGallery({ report }: { report: ForensicReport }) 
                 </button>
                 <div className="p-3 flex-1 flex flex-col gap-1.5">
                   <div className="flex items-center gap-1.5">
-                    <span>{s.dot}</span>
+                    <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: s.color }} />
                     <span className="text-sm font-medium text-ink-950">{it.title}</span>
                   </div>
                   <p className="text-xs leading-relaxed" style={{ color: s.color }}>
                     {it.finding}
                   </p>
                   <p className="text-[11px] text-ink-500 leading-relaxed mt-auto pt-1 border-t border-ink-700">
-                    💡 {it.explanation}
+                    {it.explanation}
                   </p>
                 </div>
               </div>
@@ -51,13 +51,13 @@ export default function ForensicGallery({ report }: { report: ForensicReport }) 
           })}
         </div>
 
-        <div className="mt-5 rounded-xl bg-ink-900 border border-ink-600 p-4">
-          <div className="text-sm font-semibold text-brand-cyan mb-1">📊 综合判定</div>
+        <div className="mt-5 rounded-lg bg-ink-900 border border-ink-700 p-4">
+          <div className="text-sm font-semibold text-brand-cyan mb-1">综合判定</div>
           <p className="text-sm text-ink-950 leading-relaxed whitespace-pre-wrap">{report.summary}</p>
           <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-ink-500">
-            <span>来源：{report.source === "vlm" ? `模型判读 (${report.modelVersion})` : "仅可视化证据"}</span>
-            <span>耗时：{report.elapsedMs}ms</span>
-            <span>文件：{report.fileMeta.name}</span>
+            <span>线索：{report.source === "vlm" ? "自动判读完成" : "证据图已生成，建议复核"}</span>
+            <span>用时：{report.elapsedMs}ms</span>
+            <span>文件：{fileName}</span>
           </div>
         </div>
       </div>
@@ -71,7 +71,7 @@ export default function ForensicGallery({ report }: { report: ForensicReport }) 
             <img src={zoom.image} alt={zoom.title} className="max-h-[80vh] object-contain rounded-lg" />
             <div className="text-center">
               <div className="text-slate-100 font-medium">
-                {STATUS_META[zoom.status].dot} {zoom.title}
+                {zoom.title}
               </div>
               <p className="text-sm text-slate-400 mt-1 max-w-2xl">{zoom.finding}</p>
             </div>

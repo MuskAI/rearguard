@@ -10,7 +10,7 @@ usage() {
 Usage: DEPLOY_SSH_KEY=/path/to/key ./scripts/deploy_v1.sh
 
 Optional environment variables:
-  DEPLOY_HOST   Default: 124.222.3.205
+  DEPLOY_HOST   Default: 124.221.92.85
   DEPLOY_USER   Default: ubuntu
   REALGUARD_DETECTOR_PORT
                 Default: 15001

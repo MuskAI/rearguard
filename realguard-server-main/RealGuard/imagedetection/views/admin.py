@@ -1455,16 +1455,26 @@ def admin_user_detail(user_id):
     row = rows[0]
     phone = row.get("phone") or ""
     openid = row.get("openid") or ""
+    history_clauses = ["Userid = %s"]
+    history_params = [user_id]
+    if phone:
+        history_clauses.append("phone = %s")
+        history_params.append(phone)
+    if openid:
+        history_clauses.append("openid = %s")
+        history_params.append(openid)
+    history_where = " OR ".join(history_clauses)
+    history_params = tuple(history_params)
     select_clause = _detection_data_select_clause()
     detection_rows = excute_detection_sql(
         f"""
         SELECT {select_clause}
         FROM data
-        WHERE phone = %s OR openid = %s
+        WHERE {history_where}
         ORDER BY itemid DESC
         LIMIT 20
         """,
-        (phone, openid),
+        history_params,
     ) or []
     key_rows = excute_sql(
         """
@@ -1476,8 +1486,8 @@ def admin_user_detail(user_id):
         """,
         (user_id,),
     ) or []
-    image_count = _scalar("SELECT COUNT(*) AS count FROM data WHERE phone = %s OR openid = %s", (phone, openid), detection=True)
-    video_count = _scalar("SELECT COUNT(*) AS count FROM video_data WHERE phone = %s OR openid = %s", (phone, openid), detection=True)
+    image_count = _scalar(f"SELECT COUNT(*) AS count FROM data WHERE {history_where}", history_params, detection=True)
+    video_count = _scalar(f"SELECT COUNT(*) AS count FROM video_data WHERE {history_where}", history_params, detection=True)
     route_runs = admin_state.model_runs_by_itemids([item.get("itemid") for item in detection_rows])
     user = {
         "id": row.get("Userid"),

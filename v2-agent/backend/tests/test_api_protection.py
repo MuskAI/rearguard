@@ -1,6 +1,11 @@
 from pathlib import Path
+import binascii
 import importlib
+import json
 import sys
+import struct
+import zlib
+from urllib.parse import urlsplit
 
 from fastapi.testclient import TestClient
 import pytest
@@ -9,6 +14,18 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+
+def _png_chunk(kind: bytes, payload: bytes) -> bytes:
+    return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", binascii.crc32(kind + payload) & 0xFFFFFFFF)
+
+
+def _png_with_itxt(keyword: str, text: str) -> bytes:
+    signature = b"\x89PNG\r\n\x1a\n"
+    ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
+    itxt = keyword.encode("utf-8") + b"\x00\x00\x00\x00\x00" + text.encode("utf-8")
+    idat = zlib.compress(b"\x00\xff\xff\xff")
+    return signature + _png_chunk(b"IHDR", ihdr) + _png_chunk(b"iTXt", itxt) + _png_chunk(b"IDAT", idat) + _png_chunk(b"IEND", b"")
 
 
 @pytest.fixture
@@ -84,13 +101,20 @@ def test_health_exposes_access_protection(client):
     assert payload["accessProtectionEnabled"] is True
     assert payload["unifiedLoginEnabled"] is True
     assert payload["sessionAuthEnabled"] is True
-    assert payload["analysisCacheVersion"] == "v6-low-ela-weight"
+    assert payload["capabilities"]["image"] == "available"
+    assert payload["capabilities"]["video"] == "limited"
+    assert payload["capabilities"]["audio"] == "limited"
     assert "model" not in payload
+    assert "version" not in payload
     assert "calibration" not in payload
     assert "storage" not in payload
     assert "repoPath" not in payload["synthid"]
-    assert "/api/report/{report_id}/download" in payload["protectedEndpoints"]
-    assert "/api/report/{report_id}/export" in payload["protectedEndpoints"]
+    assert "developerKeyAuthEnabled" not in payload
+    assert "developerKeyAuthConfigured" not in payload
+    assert "analysisCacheVersion" not in payload
+    assert "researchInterfaceVersion" not in payload
+    assert "protectedEndpoints" not in payload
+    assert "developerProtectedEndpoints" not in payload
 
 
 def test_admin_health_requires_token_and_exposes_diagnostics(client):
@@ -126,10 +150,20 @@ def test_developer_key_required_for_detect_when_enabled(developer_key_client):
     assert missing.status_code == 401
     assert invalid.status_code == 401
     assert valid.status_code == 200
-    assert health.json()["developerKeyAuthEnabled"] is True
-    assert health.json()["developerKeyAuthConfigured"] is True
-    assert "/api/detect" in health.json()["developerProtectedEndpoints"]
+    assert "developerKeyAuthEnabled" not in health.json()
+    assert "developerKeyAuthConfigured" not in health.json()
+    assert "developerProtectedEndpoints" not in health.json()
     assert valid.json()["reportId"].startswith("RJ-RPT-")
+    unified = valid.json()["unifiedForensics"]
+    assert unified["interface_version"] == "aigc-forensics-unified-v0.1"
+    assert unified["verdict"] == valid.json()["verdict"]
+    assert unified["confidence"] == valid.json()["confidence"]
+    assert "generator_attribution" in unified
+    assert "open_set_score" in unified
+    assert "evidence_regions" in unified
+    assert "temporal_segments" in unified
+    assert "provenance_signals" in unified
+    assert unified["compute_cost"]["cache_hit"] is False
 
 
 def test_v1_session_can_detect_when_developer_api_key_is_required(developer_key_client, monkeypatch):
@@ -238,6 +272,40 @@ def test_developer_key_report_access_is_scoped_to_owner(developer_key_client):
     assert admin.status_code == 200
 
 
+def test_developer_key_report_share_is_scoped_to_owner(developer_key_client):
+    detect = developer_key_client.post(
+        "/api/detect",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+        files={"file": ("sample.txt", b"owner scoped public share", "text/plain")},
+    )
+    report_id = detect.json()["reportId"]
+
+    owner = developer_key_client.post(
+        f"/api/report/{report_id}/share",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+        json={"expiresInSeconds": 3600},
+    )
+    other_user = developer_key_client.post(
+        f"/api/report/{report_id}/share",
+        headers={"X-RealGuard-Key": "rg_sk_user2"},
+        json={"expiresInSeconds": 3600},
+    )
+    parsed = urlsplit(owner.json()["url"])
+    public = developer_key_client.get(owner.json()["apiPath"])
+    tampered = developer_key_client.get(owner.json()["apiPath"].replace("sig=", "sig=bad"))
+
+    assert detect.status_code == 200
+    assert owner.status_code == 200
+    assert owner.json()["publicPath"].startswith("/api/report/")
+    assert parsed.path == owner.json()["publicPath"].split("?", 1)[0]
+    assert other_user.status_code == 403
+    assert public.status_code == 200
+    assert "text/html" in public.headers["content-type"]
+    assert "content-disposition" not in public.headers
+    assert "鉴真 AI 鉴伪鉴定报告" in public.text
+    assert tampered.status_code == 403
+
+
 def test_report_download_returns_attachment_html(client):
     detect = client.post(
         "/api/detect",
@@ -253,8 +321,124 @@ def test_report_download_returns_attachment_html(client):
     assert detect.status_code == 200
     assert response.status_code == 200
     assert "attachment;" in response.headers["content-disposition"]
+    assert len(response.text.strip()) > 1000
+    assert '<main class="page">' in response.text
+    assert "</html>" in response.text
+    assert "color-mix" not in response.text
     assert report_id in response.text
     assert "鉴真 AI 鉴伪鉴定报告" in response.text
+
+
+def test_provenance_reads_tc260_aigc_metadata_without_c2pa(client):
+    xmp = """
+    <x:xmpmeta xmlns:x="adobe:ns:meta/">
+      <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+        <rdf:Description xmlns:TC260="http://www.tc260.org.cn/ns/AIGC/1.0/">
+          <TC260:AIGC>{"Label":"1","ContentProducer":"001191110102MACQD9K64010000","ProduceID":"9ce377b782374e359a10b4f4c38bc557"}</TC260:AIGC>
+        </rdf:Description>
+      </rdf:RDF>
+    </x:xmpmeta>
+    """
+    response = client.post(
+        "/api/provenance",
+        files={"file": ("tc260-aigc.png", _png_with_itxt("XML:com.adobe.xmp", xmp), "image/png")},
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["hasCredentials"] is False
+    assert payload["metadataAiGenerated"] is True
+    assert payload["aiMetadata"]["score"] >= 70
+    assert payload["metadataSummary"]["embeddedSectionCount"] >= 1
+    assert any(signal["id"] == "tc260-aigc" for signal in payload["aiMetadata"]["signals"])
+    assert any(chunk["keyword"] == "XML:com.adobe.xmp" for chunk in payload["metadata"]["png"]["textChunks"])
+
+
+def test_detect_auto_persists_image_provenance_metadata(client):
+    xmp = """
+    <x:xmpmeta xmlns:x="adobe:ns:meta/">
+      <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+        <rdf:Description xmlns:TC260="http://www.tc260.org.cn/ns/AIGC/1.0/">
+          <TC260:AIGC>{"Label":"1","ContentProducer":"001191110102MACQD9K64010000","ProduceID":"9ce377b782374e359a10b4f4c38bc557"}</TC260:AIGC>
+        </rdf:Description>
+      </rdf:RDF>
+    </x:xmpmeta>
+    """
+    detect = client.post(
+        "/api/detect",
+        files={"file": ("tc260-detect.png", _png_with_itxt("XML:com.adobe.xmp", xmp), "image/png")},
+    )
+    payload = detect.json()
+    history = client.get(
+        f"/api/history/{payload['taskId']}",
+        headers={"X-Jianzhen-Token": "test-token"},
+    )
+    listing = client.get(
+        "/api/history?hasProvenance=true",
+        headers={"X-Jianzhen-Token": "test-token"},
+    )
+
+    assert detect.status_code == 200
+    assert payload["provenance"]["metadataAiGenerated"] is True
+    assert payload["unifiedForensics"]["provenance_signals"]["c2pa"]["status"] == "no_manifest"
+    assert payload["unifiedForensics"]["provenance_signals"]["metadata_ai"]["detected"] is True
+    assert payload["unifiedForensics"]["generator_attribution"]["status"] == "known_signal"
+    assert history.status_code == 200
+    assert history.json()["provenance"]["aiMetadata"]["score"] >= 70
+    assert listing.status_code == 200
+    assert any(item["taskId"] == payload["taskId"] for item in listing.json()["items"])
+
+
+def test_history_detail_backfills_file_meta_for_legacy_rows(client):
+    import app.storage as storage  # noqa: WPS433
+
+    legacy_result = {
+        "taskId": "legacy-task",
+        "reportId": "RJ-RPT-LEGACY",
+        "createdAt": "2026-06-19T00:00:00+00:00",
+        "verdict": "unknown",
+        "confidence": 0,
+        "modelVersion": "legacy",
+        "source": "legacy",
+        "cacheVersion": "legacy",
+        "elapsedMs": 0,
+        "dimensions": [],
+        "regions": [],
+        "explanation": "legacy row without fileMeta",
+        "disclaimer": "legacy",
+    }
+    with storage._connect() as conn:  # noqa: SLF001
+        conn.execute(
+            """
+            INSERT INTO history
+                (task_id, report_id, created_at, sha256, file_type, file_name, file_size,
+                 resolution, result_json, thumbnail)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "legacy-task",
+                "RJ-RPT-LEGACY",
+                "2026-06-19T00:00:00+00:00",
+                "abc123",
+                "image",
+                "legacy.png",
+                2048,
+                "1x1",
+                json.dumps(legacy_result),
+                "data:image/png;base64,abc",
+            ),
+        )
+        conn.commit()
+
+    response = client.get("/api/history/legacy-task", headers={"X-Jianzhen-Token": "test-token"})
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["fileMeta"]["name"] == "legacy.png"
+    assert payload["fileMeta"]["type"] == "image"
+    assert payload["fileMeta"]["size"] == "2.0KB"
+    assert payload["fileMeta"]["resolution"] == "1x1"
+    assert payload["fileMeta"]["thumbnail"] == "data:image/png;base64,abc"
 
 
 def test_report_export_includes_forensics_and_provenance_sections(client):
@@ -293,6 +477,10 @@ def test_report_export_includes_forensics_and_provenance_sections(client):
     )
 
     assert response.status_code == 200
+    assert len(response.text.strip()) > 1000
+    assert '<main class="page">' in response.text
+    assert "</html>" in response.text
+    assert "color-mix" not in response.text
     assert "可解释性取证分析" in response.text
     assert "频域与光照存在可疑矛盾" in response.text
     assert "内容凭证验证（C2PA）" in response.text

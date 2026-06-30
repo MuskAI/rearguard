@@ -74,34 +74,13 @@ export function logout() {
   return jsonRequest<Record<string, never>>("/api/logout", { method: "POST" });
 }
 
-export function getDeveloperApiKeys() {
-  return jsonRequest<{ keys: DeveloperApiKey[] }>("/api/developer/keys");
-}
-
-export function getDeveloperTokenUsage(days = 30) {
-  return jsonRequest<{ usage: DeveloperTokenUsage }>(`/api/developer/usage?days=${encodeURIComponent(String(days))}`);
-}
-
-export function createDeveloperApiKey(name: string) {
-  return jsonRequest<{ apiKey: string; key: DeveloperApiKey }>("/api/developer/keys", {
-    method: "POST",
-    body: JSON.stringify({ name })
-  });
-}
-
-export function revokeDeveloperApiKey(keyId: number) {
-  return jsonRequest<{ revoked: number }>(`/api/developer/keys/${encodeURIComponent(String(keyId))}`, {
-    method: "DELETE"
-  });
-}
-
 export function detectImage(file: File, signal?: AbortSignal) {
   const body = new FormData();
   body.append("image", file);
   return jsonRequest<{ result: ImageDetectionResult }>("/image_upload/detect", { method: "POST", body, signal });
 }
 
-export function startSwarmImageDetection(file: File, signal?: AbortSignal) {
+export function startExpertReviewImageDetection(file: File, signal?: AbortSignal) {
   const body = new FormData();
   body.append("image", file);
   return jsonRequest<{ job: DetectionJob }>("/image_upload/detect_swarm", { method: "POST", body, signal });
@@ -136,39 +115,12 @@ export function downloadVideoReport(itemid: number) {
   triggerDownload(`/video_upload/report?itemid=${encodeURIComponent(String(itemid))}`);
 }
 
-export function downloadRetrieveReport(itemid: number) {
-  triggerDownload(`/history_retrieve/report?itemid=${encodeURIComponent(String(itemid))}`);
-}
-
-export function getLibraries(searchType: "image" | "video") {
-  return jsonRequest<{ libraries: string[]; selected: string; root_path: string }>(
-    `/retrieve/libraries?search_type=${searchType}`
-  );
-}
-
-export type HistoryFilterKey = "all" | "guest" | "metadata" | "issues" | "ai" | "real" | "hits" | "empty";
+export type HistoryFilterKey = "all" | "guest" | "metadata" | "issues" | "ai" | "real";
 
 export interface HistoryListResponse {
   records: HistoryRecord[];
   total?: number;
   filter_counts?: Partial<Record<HistoryFilterKey, number>>;
-}
-
-export function retrieveSearch(payload: {
-  file: File;
-  searchType: "image" | "video";
-  dataset: string;
-  topK: number;
-}) {
-  const body = new FormData();
-  body.append("image", payload.file);
-  body.append("search_type", payload.searchType);
-  body.append("dataset", payload.dataset);
-  body.append("top_k", String(payload.topK));
-  return jsonRequest<{ results: RetrieveItem[]; base_url: string; query_file_url: string; dataset: string }>(
-    "/retrieve/search",
-    { method: "POST", body }
-  );
 }
 
 export function getHistory(
@@ -184,61 +136,6 @@ export function getHistory(
   return jsonRequest<HistoryListResponse>(`/api/history/${kind}${qs ? `?${qs}` : ""}`);
 }
 
-export function getRetrievalHistory(
-  searchType: "image" | "video",
-  params?: { query?: string; filter?: HistoryFilterKey; limit?: number; offset?: number },
-) {
-  const search = new URLSearchParams({ search_type: searchType });
-  if (params?.query?.trim()) search.set("query", params.query.trim());
-  if (params?.filter && params.filter !== "all") search.set("filter", params.filter);
-  if (params?.limit) search.set("limit", String(params.limit));
-  if (params?.offset) search.set("offset", String(params.offset));
-  return jsonRequest<HistoryListResponse>(`/api/history/retrievals?${search.toString()}`);
-}
-
-const REALGUARD_V2_API_BASE = (import.meta.env.VITE_V2_API_BASE_URL || "/v2-api").replace(/\/$/, "");
-
-async function parseV2Response<T>(response: Response): Promise<T> {
-  const contentType = response.headers.get("content-type") || "";
-  const payload = contentType.includes("application/json")
-    ? await response.json()
-    : await response.text();
-  if (!response.ok) {
-    const message = typeof payload === "string"
-      ? payload
-      : payload?.detail || payload?.message || `请求失败：${response.status}`;
-    throw new Error(message);
-  }
-  return payload as T;
-}
-
-function v2Headers(token?: string) {
-  const headers = new Headers({ Accept: "application/json" });
-  const normalized = (token || "").trim();
-  if (normalized.startsWith("rg_sk_")) headers.set("X-RealGuard-Key", normalized);
-  else if (normalized) headers.set("X-Jianzhen-Token", normalized);
-  return headers;
-}
-
-export async function getV2Health(token = "") {
-  const response = await fetch(`${REALGUARD_V2_API_BASE}/health`, {
-    headers: v2Headers(token),
-  });
-  return parseV2Response<V2HealthStatus>(response);
-}
-
-export async function runV2Detect(payload: { file: File; fileType?: string; token?: string }) {
-  const body = new FormData();
-  body.append("file", payload.file);
-  if (payload.fileType) body.append("fileType", payload.fileType);
-  const response = await fetch(`${REALGUARD_V2_API_BASE}/detect`, {
-    method: "POST",
-    headers: v2Headers(payload.token || ""),
-    body,
-  });
-  return parseV2Response<V2DetectResult>(response);
-}
-
 export type User = {
   Userid: number;
   username: string;
@@ -249,56 +146,6 @@ export type User = {
 export type Counters = {
   image_detect: number;
   video_detect: number;
-  image_retrieve: number;
-  video_retrieve: number;
-};
-
-export type DeveloperApiKey = {
-  id: number;
-  name: string;
-  preview: string;
-  scopes: string[];
-  status: "active" | "revoked" | string;
-  createdAt: string;
-  lastUsedAt?: string;
-  revokedAt?: string;
-};
-
-export type DeveloperTokenUsageBucket = {
-  date?: string;
-  endpoint?: string;
-  modelVersion?: string;
-  keyId?: string;
-  pipeline?: "v1" | "v2" | string;
-  requests: number;
-  v1Calls?: number;
-  v2Calls?: number;
-  billableRequests?: number;
-  cacheHits?: number;
-  promptTokens: number;
-  completionTokens: number;
-  totalTokens: number;
-};
-
-export type DeveloperTokenUsage = {
-  days: number;
-  summary: {
-    totalCalls?: number;
-    totalRequests: number;
-    v1Calls?: number;
-    v2Calls?: number;
-    billableRequests: number;
-    cacheHits: number;
-    promptTokens: number;
-    completionTokens: number;
-    totalTokens: number;
-    lastEventAt?: string | null;
-  };
-  byDay: DeveloperTokenUsageBucket[];
-  byEndpoint: DeveloperTokenUsageBucket[];
-  byModel: DeveloperTokenUsageBucket[];
-  byKey: DeveloperTokenUsageBucket[];
-  byPipeline?: DeveloperTokenUsageBucket[];
 };
 
 export type ImageDetectionResult = {
@@ -313,10 +160,10 @@ export type ImageDetectionResult = {
   resolution?: string;
   img_format?: string;
   visual_issues?: string[];
-  swarm?: SwarmResult;
+  swarm?: ExpertReviewResult;
 };
 
-export type PublicSwarmExpert = {
+export type PublicExpertReviewExpert = {
   id: string;
   publicId?: string;
   status?: "queued" | "running" | "success" | "failed" | "skipped" | string;
@@ -325,7 +172,7 @@ export type PublicSwarmExpert = {
   publicVerdict?: string;
 };
 
-export type SwarmResult = {
+export type ExpertReviewResult = {
   enabled?: boolean;
   score?: number;
   finalLabel?: string;
@@ -335,7 +182,7 @@ export type SwarmResult = {
   disagreement?: boolean;
   effectiveExperts?: number;
   totalExperts?: number;
-  experts?: PublicSwarmExpert[];
+  experts?: PublicExpertReviewExpert[];
   evidence?: string[];
 };
 
@@ -348,7 +195,7 @@ export type DetectionJob = {
   createdAt?: string;
   updatedAt?: string;
   progress?: number;
-  experts?: PublicSwarmExpert[];
+  experts?: PublicExpertReviewExpert[];
   summary?: string;
   error?: string;
   result?: {
@@ -373,46 +220,4 @@ export type VideoDetectionResult = {
   meta?: Record<string, string>;
 };
 
-export type RetrieveItem = {
-  id: string;
-  rank: number;
-  score: number;
-  product?: {
-    product_name?: string;
-    illegal_type?: string;
-    illegal_basis?: string;
-    product_images?: string;
-  };
-};
-
 export type HistoryRecord = Record<string, unknown>;
-
-export type V2HealthStatus = {
-  ok?: boolean;
-  status?: string;
-  service?: string;
-  vlmEnabled?: boolean;
-  accessProtectionEnabled?: boolean;
-  modelVersion?: string;
-  analysisCacheVersion?: string;
-  protectedEndpoints?: string[];
-  [key: string]: unknown;
-};
-
-export type V2DetectResult = {
-  taskId?: string;
-  reportId?: string;
-  verdict?: string;
-  confidence?: number;
-  source?: string;
-  modelVersion?: string;
-  cacheVersion?: string;
-  cacheHit?: boolean;
-  elapsedMs?: number;
-  agentSummary?: Record<string, unknown>;
-  explanation?: unknown;
-  synthid?: unknown;
-  visibleWatermark?: unknown;
-  disclaimer?: string;
-  [key: string]: unknown;
-};

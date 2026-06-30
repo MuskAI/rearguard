@@ -9,7 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from imagedetection import creat_app  # noqa: E402
-from imagedetection.views import api, detection, historical_record, login  # noqa: E402
+from imagedetection.views import api, detection, login  # noqa: E402
 
 
 @pytest.fixture
@@ -64,8 +64,8 @@ def test_image_result_api_queries_with_user_phone(client, monkeypatch):
 
     def fake_detection_sql(sql, params=None, fetch=True):
         calls.append((sql, params))
-        if sql == "SELECT * FROM data WHERE itemid = %s AND (phone = %s OR openid = %s) LIMIT 1":
-            assert params == ("7", "13800000000", "openid-1")
+        if sql == "SELECT * FROM data WHERE itemid = %s AND (Userid = %s OR phone = %s OR openid = %s) LIMIT 1":
+            assert params == ("7", 1, "13800000000", "openid-1")
             return [{
                 "itemid": 7,
                 "filename": "sample.png",
@@ -89,38 +89,7 @@ def test_image_result_api_queries_with_user_phone(client, monkeypatch):
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["result"]["itemid"] == 7
-    assert any(params == ("7", "13800000000", "openid-1") for _, params in calls)
-
-
-def test_retrieve_history_result_uses_user_phone_and_local_proxy(client, monkeypatch):
-    seen = []
-
-    def fake_execute(sql, params=None, fetch=True):
-        seen.append((sql, params))
-        assert sql == "SELECT * FROM retrieve_data WHERE itemid = %s AND phone = %s"
-        assert params == ("9", "13800000000")
-        return [{
-            "itemid": 9,
-            "phone": "13800000000",
-            "filename": "query.png",
-            "search_type": "image",
-            "results_json": "[]",
-            "result_count": 0,
-            "top_k": 10,
-            "file_size": "3KB",
-            "createtime": "2026-05-27 12:00:00",
-        }]
-
-    monkeypatch.setattr(historical_record, "excute_sql", fake_execute)
-    _login_session(client)
-
-    response = client.get("/history_retrieve/result?itemid=9")
-
-    assert response.status_code == 200
-    payload = response.get_json()
-    assert payload["base_url"] == "/retrieve/library-file/image/"
-    assert payload["query_file_url"] == "/static/uploads/13800000000/retrieve/query.png"
-    assert seen
+    assert any(params == ("7", 1, "13800000000", "openid-1") for _, params in calls)
 
 
 def test_login_password_requires_terms_acceptance(client, monkeypatch):

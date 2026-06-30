@@ -250,23 +250,42 @@ def _backend_identity(user_info):
 def _detection_owner():
     user_info = session.get('user_info')
     if isinstance(user_info, dict) and user_info:
+        user_id = user_info.get('Userid') or user_info.get('userId') or user_info.get('id')
         phone = str(user_info.get('phone') or '').strip()
         openid = str(user_info.get('openid') or '').strip()
-        return phone, openid, False
+        return user_id, phone, openid, False
     guest_openid = str(session.get('guest_openid') or '').strip()
-    return '', guest_openid, True
+    return None, '', guest_openid, True
+
+
+def _detection_owner_where(user_id, phone, openid):
+    clauses = []
+    params = []
+    if user_id not in (None, ''):
+        clauses.append("Userid = %s")
+        params.append(user_id)
+    if phone:
+        clauses.append("phone = %s")
+        params.append(phone)
+    if openid:
+        clauses.append("openid = %s")
+        params.append(openid)
+    if not clauses:
+        return "1 = 0", ()
+    return " OR ".join(clauses), tuple(params)
 
 
 def _load_detection_record(table, itemid):
-    phone, openid, is_guest = _detection_owner()
+    user_id, phone, openid, is_guest = _detection_owner()
     if is_guest:
         if not openid:
             return None
         sql = f"SELECT * FROM {table} WHERE itemid = %s AND openid = %s LIMIT 1"
         rows = excute_detection_sql(sql, (itemid, openid))
     else:
-        sql = f"SELECT * FROM {table} WHERE itemid = %s AND (phone = %s OR openid = %s) LIMIT 1"
-        rows = excute_detection_sql(sql, (itemid, phone, openid))
+        owner_where, owner_params = _detection_owner_where(user_id, phone, openid)
+        sql = f"SELECT * FROM {table} WHERE itemid = %s AND ({owner_where}) LIMIT 1"
+        rows = excute_detection_sql(sql, (itemid, *owner_params))
     return rows[0] if rows else None
 
 
@@ -1799,11 +1818,15 @@ def image_detection_job(job_id):
     if not job:
         return jsonify({'status': 'error', 'message': '任务不存在'}), 404
     owner = job.get('actor') or {}
-    phone, openid, is_guest = _detection_owner()
+    user_id, phone, openid, is_guest = _detection_owner()
     if is_guest:
         allowed = bool(openid and owner.get('openid') == openid)
     else:
-        allowed = bool((phone and owner.get('phone') == phone) or (openid and owner.get('openid') == openid))
+        allowed = bool(
+            (user_id not in (None, '') and owner.get('Userid') == user_id)
+            or (phone and owner.get('phone') == phone)
+            or (openid and owner.get('openid') == openid)
+        )
     if not allowed:
         return jsonify({'status': 'error', 'message': '无权查看该任务'}), 403
     return jsonify({'status': 'success', 'job': _public_detection_job(job)})
@@ -1834,14 +1857,18 @@ def image_detection_feedback():
         return jsonify({'status': 'error', 'message': 'feedback 须为 1（满意）、-1（不满意）或 0（取消）'}), 400
     db_feedback = None if feedback in (0, None) else feedback
 
-    phone = session['user_info'].get('phone', '')
+    user_info = session['user_info']
+    user_id = user_info.get('Userid') or user_info.get('userId') or user_info.get('id')
+    phone = str(user_info.get('phone') or '').strip()
+    openid = str(user_info.get('openid') or '').strip()
     db_text = None
     if db_feedback == 1:
         db_text = '满意'
     elif db_feedback == -1:
         db_text = '不满意'
-    sql = "UPDATE data SET feedback = %s WHERE itemid = %s AND phone = %s"
-    n = excute_detection_sql(sql, (db_text, itemid, phone), fetch=False)
+    owner_where, owner_params = _detection_owner_where(user_id, phone, openid)
+    sql = f"UPDATE data SET feedback = %s WHERE itemid = %s AND ({owner_where})"
+    n = excute_detection_sql(sql, (db_text, itemid, *owner_params), fetch=False)
     if n is None:
         return jsonify({'status': 'error', 'message': '数据库更新失败，请确认已执行 feedback 字段迁移'}), 500
     if n == 0:

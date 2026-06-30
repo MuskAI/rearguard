@@ -93,7 +93,7 @@
     </style>
 </head>
 <body>
-<header class="nav"><div class="nav-inner"><a href="/index" class="nav-logo"><i class="fa fa-eye"></i><span>数字内容鉴伪平台</span></a><nav class="nav-links"><a href="/index">首页</a><div class="dropdown"><button class="dropdown-trigger"><span>功能</span><i class="fa fa-chevron-down arrow"></i></button><div class="dropdown-menu"><div class="dropdown-label">检测</div><a href="/image_upload" class="dropdown-item"><i class="fa fa-image"></i> 图像检测</a><a href="/video_upload" class="dropdown-item"><i class="fa fa-film"></i> 视频检测</a><div class="dropdown-divider"></div><div class="dropdown-label">检索</div><a href="/image_retrieve" class="dropdown-item"><i class="fa fa-search"></i> 图像检索</a><a href="/video_retrieve" class="dropdown-item"><i class="fa fa-play-circle"></i> 视频检索</a></div></div><a href="/introduce">关于我们</a><a href="/profile" class="active">我的</a><button class="theme-btn" id="themeToggle" title="切换主题"><i class="fa fa-moon-o"></i></button></nav></div></header>
+<header class="nav"><div class="nav-inner"><a href="/index" class="nav-logo"><i class="fa fa-eye"></i><span>数字内容鉴伪平台</span></a><nav class="nav-links"><a href="/index">首页</a><div class="dropdown"><button class="dropdown-trigger"><span>功能</span><i class="fa fa-chevron-down arrow"></i></button><div class="dropdown-menu"><div class="dropdown-label">检测</div><a href="/image_upload" class="dropdown-item"><i class="fa fa-image"></i> 图像检测</a><a href="/video_upload" class="dropdown-item"><i class="fa fa-film"></i> 视频检测</a></div></div><a href="/introduce">关于我们</a><a href="/profile" class="active">我的</a><button class="theme-btn" id="themeToggle" title="切换主题"><i class="fa fa-moon-o"></i></button></nav></div></header>
 
 <!-- Modals -->
 <div class="modal-overlay" id="pwdModal"><div class="modal"><h3><i class="fa fa-lock"></i> 修改密码</h3><div class="form-group"><label class="form-label">当前密码</label><input type="password" class="form-input" id="oldPwd" placeholder="请输入当前密码"></div><div class="form-group"><label class="form-label">新密码</label><input type="password" class="form-input" id="newPwd" placeholder="请输入新密码"></div><div class="form-group"><label class="form-label">确认新密码</label><input type="password" class="form-input" id="confirmPwd" placeholder="请再次输入新密码"></div><div class="msg" id="pwdMsg"></div><div class="modal-actions"><button class="btn btn-primary-s" onclick="submitPwd()"><i class="fa fa-check"></i> 确认修改</button><button class="btn btn-secondary" onclick="closeModal('pwdModal')">取消</button></div></div></div>
@@ -109,8 +109,7 @@
                 <div class="banner-phone"><i class="fa fa-phone"></i> {{ user.phone or '-' }}</div>
                 <div class="banner-stats">
                     <div class="b-stat"><div class="num">{{ detect_count }}</div><div class="label">图像鉴伪</div></div>
-                    <div class="b-stat"><div class="num">{{ image_retrieve_count }}</div><div class="label">图像侵权检索</div></div>
-                    <div class="b-stat"><div class="num">{{ video_retrieve_count }}</div><div class="label">视频侵权检索</div></div>
+                    <div class="b-stat"><div class="num">{{ video_detect_count }}</div><div class="label">视频鉴伪</div></div>
                 </div>
             </div>
         </div>
@@ -127,16 +126,6 @@
         <div class="history-card" onclick="location.href='/history_video_detect'">
             <div class="h-icon orange"><i class="fa fa-film"></i></div>
             <div class="h-body"><div class="title">视频检测记录</div><div class="count">{{ video_detect_count }} 条记录</div></div>
-            <i class="fa fa-chevron-right h-arrow"></i>
-        </div>
-        <div class="history-card" onclick="location.href='/history_image_retrieve'">
-            <div class="h-icon green"><i class="fa fa-search"></i></div>
-            <div class="h-body"><div class="title">图像侵权检索</div><div class="count">{{ image_retrieve_count }} 条记录</div></div>
-            <i class="fa fa-chevron-right h-arrow"></i>
-        </div>
-        <div class="history-card" onclick="location.href='/history_video_retrieve'">
-            <div class="h-icon purple"><i class="fa fa-play-circle"></i></div>
-            <div class="h-body"><div class="title">视频侵权检索</div><div class="count">{{ video_retrieve_count }} 条记录</div></div>
             <i class="fa fa-chevron-right h-arrow"></i>
         </div>
     </div>

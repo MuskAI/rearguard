@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-DEPLOY_HOST="${DEPLOY_HOST:-124.222.3.205}"
+DEPLOY_HOST="${DEPLOY_HOST:-124.221.92.85}"
 DEPLOY_USER="${DEPLOY_USER:-ubuntu}"
 DEPLOY_SSH_KEY="${DEPLOY_SSH_KEY:-}"
 DRY_RUN="${DRY_RUN:-0}"

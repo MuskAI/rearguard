@@ -1,4 +1,4 @@
-"""鉴真 AI 鉴伪智能体后端。
+"""鉴真 AI 鉴伪工作台后端。
 
 图像/文本检测调用真实视觉语言模型（qwen3-vl-flash via DashScope），
 视频/音频及任何模型调用失败时回退到确定性 Mock。检测逻辑见 detector.py。
@@ -10,6 +10,7 @@ import os
 import secrets
 import time
 import hashlib
+import hmac
 import io
 from datetime import datetime, timezone
 from urllib import error as urlerror
@@ -21,9 +22,9 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import Response
 
-from . import detector, provenance, reporting, storage, synthid_detector, visible_watermark_detector
+from . import detector, provenance, reporting, storage, synthid_detector, unified_forensics, visible_watermark_detector
 
-app = FastAPI(title="鉴真 AI 鉴伪智能体", version="0.2.0")
+app = FastAPI(title="鉴真 AI 鉴伪工作台", version="0.2.0")
 ACCESS_TOKEN = os.getenv("JIANZHEN_ACCESS_TOKEN", "").strip()
 MAX_UPLOAD_BYTES = int(os.getenv("JIANZHEN_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
 SESSION_AUTH_URL = (
@@ -40,6 +41,9 @@ DEVELOPER_AUTH_SECRET = (
 REQUIRE_DEVELOPER_API_KEY = str(os.getenv("JIANZHEN_REQUIRE_DEVELOPER_API_KEY", "0")).lower() in {"1", "true", "yes"}
 DEVELOPER_AUTH_CONFIGURED = bool(DEVELOPER_AUTH_URL and DEVELOPER_AUTH_SECRET)
 DEVELOPER_API_KEY_REQUIRED = REQUIRE_DEVELOPER_API_KEY
+REPORT_SHARE_SECRET = os.getenv("JIANZHEN_REPORT_SHARE_SECRET", "").strip()
+REPORT_SHARE_DEFAULT_SECONDS = int(os.getenv("JIANZHEN_REPORT_SHARE_DEFAULT_SECONDS", str(7 * 24 * 60 * 60)))
+REPORT_SHARE_MAX_SECONDS = int(os.getenv("JIANZHEN_REPORT_SHARE_MAX_SECONDS", str(30 * 24 * 60 * 60)))
 PROTECTED_ENDPOINTS = [
     "/api/admin/health",
     "/api/history",
@@ -48,6 +52,7 @@ PROTECTED_ENDPOINTS = [
     "/api/report/{report_id}",
     "/api/report/{report_id}/download",
     "/api/report/{report_id}/export",
+    "/api/report/{report_id}/share",
     "/api/metrics",
 ]
 DEVELOPER_PROTECTED_ENDPOINTS = [
@@ -62,7 +67,7 @@ def _allowed_origins() -> list[str]:
     if raw:
         return [origin.strip() for origin in raw.split(",") if origin.strip()]
     return [
-        "http://124.222.3.205",
+        "http://124.221.92.85",
         "https://realguard.cn",
         "https://www.realguard.cn",
     ]
@@ -258,6 +263,68 @@ def _require_report_access(request: Request, item: dict) -> dict:
     raise HTTPException(status_code=403, detail="当前 API Key 无权访问该报告")
 
 
+def _require_report_share_access(request: Request, item: dict) -> dict:
+    if _admin_access_granted(request):
+        return {"mode": "admin"}
+    session_actor = _session_access_granted(request)
+    if session_actor:
+        return session_actor
+    if DEVELOPER_API_KEY_REQUIRED:
+        return _require_report_access(request, item)
+    if ACCESS_TOKEN:
+        raise HTTPException(status_code=401, detail="请先登录 RealGuard 后继续使用 V2")
+    return {"mode": "public"}
+
+
+def _report_share_secret() -> str:
+    secret = REPORT_SHARE_SECRET or DEVELOPER_AUTH_SECRET or ACCESS_TOKEN
+    if not secret:
+        raise HTTPException(status_code=503, detail="报告分享签名密钥未配置")
+    return secret
+
+
+def _sign_report_share(report_id: str, expires: int) -> str:
+    message = f"v1:{report_id}:{expires}".encode("utf-8")
+    return hmac.new(_report_share_secret().encode("utf-8"), message, hashlib.sha256).hexdigest()
+
+
+def _verify_report_share(report_id: str, expires: int, signature: str) -> None:
+    if expires < int(time.time()):
+        raise HTTPException(status_code=410, detail="报告分享链接已过期")
+    expected = _sign_report_share(report_id, expires)
+    if not signature or not hmac.compare_digest(signature, expected):
+        raise HTTPException(status_code=403, detail="报告分享链接签名无效")
+
+
+def _request_origin(request: Request) -> str:
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip()
+    forwarded_host = request.headers.get("x-forwarded-host", "").split(",", 1)[0].strip()
+    proto = forwarded_proto or request.url.scheme
+    host = forwarded_host or request.headers.get("host") or request.url.netloc
+    return f"{proto}://{host}".rstrip("/")
+
+
+def _public_api_prefix(request: Request) -> str:
+    forwarded_prefix = request.headers.get("x-forwarded-prefix", "").strip()
+    if forwarded_prefix:
+        return "/" + forwarded_prefix.strip("/")
+    host = (request.headers.get("host") or request.url.netloc or "").lower()
+    if host.startswith("testserver") or host.startswith("127.0.0.1:8848") or host.startswith("localhost:8848"):
+        return "/api"
+    return os.getenv("JIANZHEN_PUBLIC_API_PREFIX", "/v2-api").strip() or "/v2-api"
+
+
+def _build_public_report_link(request: Request, report_id: str, expires: int, signature: str) -> dict:
+    query = f"expires={expires}&sig={signature}"
+    api_path = f"/api/report/{quote(report_id, safe='')}/public?{query}"
+    public_path = f"{_public_api_prefix(request).rstrip('/')}/report/{quote(report_id, safe='')}/public?{query}"
+    return {
+        "url": f"{_request_origin(request)}{public_path}",
+        "publicPath": public_path,
+        "apiPath": api_path,
+    }
+
+
 async def _read_upload(file: UploadFile) -> bytes:
     data = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(data) > MAX_UPLOAD_BYTES:
@@ -270,21 +337,15 @@ def _public_capabilities() -> dict:
     watermark_status = visible_watermark_detector.status()
     return {
         "status": "ok",
-        "version": app.version,
         "vlmEnabled": bool(detector.API_KEY),
         "accessProtectionEnabled": bool(ACCESS_TOKEN),
         "unifiedLoginEnabled": bool(SESSION_AUTH_URL),
         "sessionAuthEnabled": bool(SESSION_AUTH_URL),
-        "developerKeyAuthEnabled": DEVELOPER_API_KEY_REQUIRED,
-        "developerKeyAuthConfigured": DEVELOPER_AUTH_CONFIGURED,
-        "protectedEndpoints": PROTECTED_ENDPOINTS if ACCESS_TOKEN else [],
-        "developerProtectedEndpoints": DEVELOPER_PROTECTED_ENDPOINTS if DEVELOPER_API_KEY_REQUIRED else [],
-        "analysisCacheVersion": storage.ANALYSIS_CACHE_VERSION,
         "capabilities": {
-            "image": "vlm",
-            "document": "vlm-text",
-            "video": "demo-fallback",
-            "audio": "demo-fallback",
+            "image": "available",
+            "document": "available",
+            "video": "limited",
+            "audio": "limited",
         },
         "synthid": {
             "enabled": bool(synthid_status.get("enabled")),
@@ -374,6 +435,7 @@ def _build_result(
     preview: str | None,
     actor: dict | None = None,
     token_usage: dict | None = None,
+    provenance_report: dict | None = None,
 ) -> dict:
     now = datetime.now(timezone.utc)
     day = now.strftime("%Y%m%d")
@@ -413,6 +475,9 @@ def _build_result(
             else "本结果由视觉语言模型分析生成，仅供参考，不构成权威鉴定结论。"
         ),
     }
+    if provenance_report is not None:
+        result["provenance"] = provenance_report
+    result["unifiedForensics"] = unified_forensics.build(result)
     storage.put_history(result, sha256=sha256, file_size=len(data), thumbnail=thumbnail, actor=actor)
     return result
 
@@ -464,6 +529,9 @@ async def detect(request: Request, file: UploadFile = File(...), fileType: str |
         storage.put_cached_analysis(ftype, sha256, analysis)
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     token_usage = _token_usage_from_payload(analysis, cache_hit=cache_hit)
+    provenance_report = None
+    if ftype == "image":
+        provenance_report = await run_in_threadpool(provenance.read_provenance, data, provenance.mime_for(filename), filename)
 
     result = _build_result(
         filename=filename,
@@ -477,6 +545,7 @@ async def detect(request: Request, file: UploadFile = File(...), fileType: str |
         preview=preview,
         actor=actor,
         token_usage=token_usage,
+        provenance_report=provenance_report,
     )
     storage.record_token_usage(
         actor=actor,
@@ -536,7 +605,7 @@ async def provenance_check(request: Request, file: UploadFile = File(...)) -> di
         raise HTTPException(status_code=400, detail="空文件")
     filename = file.filename or "unknown"
     started = time.perf_counter()
-    report = await run_in_threadpool(provenance.read_provenance, data, provenance.mime_for(filename))
+    report = await run_in_threadpool(provenance.read_provenance, data, provenance.mime_for(filename), filename)
     report["elapsedMs"] = int((time.perf_counter() - started) * 1000)
     report["fileMeta"] = {"name": filename, "size": f"{len(data) / 1024:.1f}KB"}
     return report
@@ -674,6 +743,55 @@ def report_export(report_id: str, request: Request, payload: dict | None = Body(
         media_type="text/html; charset=utf-8",
         headers={
             "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+        },
+    )
+
+
+@app.post("/api/report/{report_id}/share")
+def report_share(report_id: str, request: Request, payload: dict | None = Body(default=None)) -> dict:
+    item = storage.get_history(report_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="报告不存在")
+    _require_report_share_access(request, item)
+    body = payload or {}
+    try:
+        requested_seconds = int(body.get("expiresInSeconds") or REPORT_SHARE_DEFAULT_SECONDS)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="expiresInSeconds 必须是整数秒")
+    ttl_seconds = max(60, min(requested_seconds, REPORT_SHARE_MAX_SECONDS))
+    expires = int(time.time()) + ttl_seconds
+    signature = _sign_report_share(report_id, expires)
+    links = _build_public_report_link(request, report_id, expires, signature)
+    return {
+        **links,
+        "expiresAt": datetime.fromtimestamp(expires, tz=timezone.utc).isoformat(),
+        "expiresInSeconds": ttl_seconds,
+    }
+
+
+@app.get("/api/report/{report_id}/public")
+def report_public(report_id: str, request: Request) -> Response:
+    try:
+        expires = int(request.query_params.get("expires", ""))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="expires 必须是整数秒时间戳")
+    signature = request.query_params.get("sig", "")
+    _verify_report_share(report_id, expires, signature)
+    item = storage.get_history(report_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="报告不存在")
+    clean_item = _strip_internal_history_fields(item)
+    html = reporting.build_report_html(
+        clean_item,
+        forensics=clean_item.get("forensics"),
+        provenance=clean_item.get("provenance"),
+    )
+    return Response(
+        content=html,
+        media_type="text/html; charset=utf-8",
+        headers={
+            "Cache-Control": "private, max-age=60",
+            "X-Robots-Tag": "noindex",
         },
     )
 

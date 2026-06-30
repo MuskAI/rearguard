@@ -1,16 +1,16 @@
 # RealGuard
 
-RealGuard 是一个面向数字内容鉴伪、侵权检索和运营监控的 Web 系统。仓库包含两套彼此独立的鉴伪入口：
+RealGuard 是一个面向数字内容鉴伪和运营监控的 Web 系统。仓库包含两套彼此独立的鉴伪入口：
 
-- **V1 RealGuard**：保留原系统功能，包括短信登录、图像/视频鉴伪、侵权检索、历史记录和用户信息。
+- **V1 RealGuard**：保留原系统功能，包括短信登录、图像/视频鉴伪、历史记录和用户信息。
 - **V2 鉴伪 Agent**：独立新版 Agent，支持 `qwen3-vl-flash` 视觉语言模型检测、可解释性取证分析和 C2PA 内容凭证验证。
 - **Analytics**：基于开源 Umami 的访问监控后台，用于 PV、访客数、DAU、设备、来源和 IP 地区统计大屏。
 
 生产环境示例：
 
-- 主站：`http://124.222.3.205/`
-- V2：`http://124.222.3.205/v2/`
-- V2 API：`http://124.222.3.205/v2-api/`
+- 主站：`http://124.221.92.85/`
+- V2：`http://124.221.92.85/v2/`
+- V2 API：`http://124.221.92.85/v2-api/`
 - 监控后台：`http://analytics.realguard.cn/`
 
 ## 目录结构
@@ -35,7 +35,7 @@ RealGuard 是一个面向数字内容鉴伪、侵权检索和运营监控的 Web
 V1 RealGuard：
 
 - 短信验证码登录，登录态可持久化。
-- 图像检测、视频检测、侵权检索。
+- 图像检测、视频检测。
 - 历史记录查看，图片历史支持缩略图。
 - 图像/视频检测结果支持下载自包含 HTML 报告，访客图像检测结果也可立即导出。
 - 手机端适配，保留原页面风格。
@@ -51,11 +51,11 @@ V2 鉴伪 Agent：
 - ELA、噪声残差、频域、光照梯度等可解释性取证可视化。
 - C2PA 内容凭证读取与验证。
 - 浅色工作台风格，独立路径 `/v2/`。
-- 提供面向 agent 的 CLI：`python3 scripts/realguard_cli.py detect <file> --base-url http://124.222.3.205 --api-prefix /v2-api --pretty`，可输出机器可读的鉴伪结论、模型版本、缓存版本、证据摘要和报告号。
+- 提供面向 agent 的 CLI：`python3 scripts/realguard_cli.py detect <file> --base-url http://124.221.92.85 --api-prefix /v2-api --pretty`，可输出机器可读的鉴伪结论、模型版本、缓存版本、证据摘要和报告号。
 
 Agent skill：
 
-- 仓库内置 `skills/realguard-forensics/`。给其他 agent（如 OpenClaw）的一句话交接：`Use $realguard-forensics and run python3 scripts/realguard_cli.py detect <file> --base-url http://124.222.3.205 --api-prefix /v2-api --pretty, then return a concise verdict with confidence, evidence, model version, cache version, and report id.`
+- 仓库内置 `skills/realguard-forensics/`。给授权流程的一句话交接：`Use $realguard-forensics and run python3 scripts/realguard_cli.py detect <file> --base-url http://124.221.92.85 --api-prefix /v2-api --pretty, then return a concise verdict with confidence, evidence, model version, cache version, and report id.`
 
 监控后台：
 
@@ -211,7 +211,7 @@ DEPLOY_SSH_KEY=/path/to/key ./scripts/deploy_converge.sh
 它会先检查状态，`repo_state=match` 的目标会直接跳过，只有未对齐的目标才会调用对应发布脚本。
 在 `DRY_RUN=1` 下，状态脚本和统一入口会明确返回 `dry-run` 占位值，表示只做命令预演、不读取真实远端状态。
 
-默认会发布到 `ubuntu@124.222.3.205`，也可以覆盖：
+默认会发布到 `ubuntu@124.221.92.85`，也可以覆盖：
 
 ```bash
 DEPLOY_HOST=example.com DEPLOY_USER=deploy DEPLOY_SSH_KEY=/path/to/key ./scripts/deploy_v2.sh

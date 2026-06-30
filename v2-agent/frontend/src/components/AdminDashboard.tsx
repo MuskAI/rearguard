@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Metrics, TYPE_LABEL, VERDICT_META, fetchMetrics } from "../api";
 
 function pct(value: number) {
@@ -35,7 +35,7 @@ export default function AdminDashboard({
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string>("");
   const requestIdRef = useRef(0);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
     setRefreshing(true);
@@ -53,13 +53,13 @@ export default function AdminDashboard({
         setRefreshing(false);
       }
     }
-  };
+  }, [days]);
 
   useEffect(() => {
     void load();
     const timer = window.setInterval(load, 30000);
     return () => window.clearInterval(timer);
-  }, [days, reloadKey]);
+  }, [load, reloadKey]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -98,7 +98,7 @@ export default function AdminDashboard({
       <main className="flex-1 min-w-0 bg-grid p-4 sm:p-6 overflow-y-auto">
         <div className="mx-auto max-w-xl rounded-2xl border border-ink-600 bg-ink-900 p-5 sm:p-6 space-y-4">
           <div>
-            <h1 className="font-serif text-lg sm:text-xl font-semibold text-rice tracking-wide">监控大屏</h1>
+            <h1 className="text-lg sm:text-xl font-semibold text-rice">监控大屏</h1>
             <p className="mt-1 text-xs sm:text-sm text-ink-500">
               {error || "正在加载监控数据…"}
             </p>
@@ -136,7 +136,7 @@ export default function AdminDashboard({
     { label: "平均耗时", value: `${metrics.summary.avgLatencyMs}ms` },
     { label: "缓存命中率", value: pct(metrics.summary.cacheHitRate) },
     { label: "缓存样本", value: metrics.summary.cacheEntries },
-    { label: "缓存版本", value: metrics.summary.analysisCacheVersion || "unknown" },
+    { label: "缓存条目", value: String(metrics.summary.cacheEntries ?? 0) },
   ];
   const recentBase = Math.max(1, metrics.summary.recentDetections || metrics.summary.totalDetections || 1);
   const vlmRate = (metrics.bySource.vlm ?? 0) / recentBase;
@@ -158,7 +158,7 @@ export default function AdminDashboard({
     <main className="flex-1 min-w-0 bg-grid overflow-y-auto">
       <header className="sticky top-0 z-10 px-4 sm:px-6 py-3 border-b border-ink-700 bg-ink-800/95 flex items-center justify-between gap-3">
         <div>
-          <h1 className="font-serif text-lg sm:text-xl font-semibold text-rice tracking-wide">监控大屏</h1>
+          <h1 className="text-lg sm:text-xl font-semibold text-rice">监控大屏</h1>
           <p className="text-[11px] sm:text-xs text-ink-500">检测流量、缓存效率与接口健康状态</p>
         </div>
         <div className="flex items-center gap-2">
@@ -244,7 +244,7 @@ export default function AdminDashboard({
 
         <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           {[
-            { label: "VLM覆盖率", value: pct(vlmRate) },
+            { label: "模型判定覆盖率", value: pct(vlmRate) },
             { label: "水印命中率", value: pct(watermarkRate) },
             { label: "取证完成率", value: pct(forensicsRate) },
             { label: "凭证完成率", value: pct(provenanceRate) },
@@ -299,10 +299,10 @@ export default function AdminDashboard({
           <div className="flex items-center justify-between gap-3 mb-4">
             <h2 className="font-serif text-base font-semibold text-rice">按来源日趋势</h2>
             <div className="flex flex-wrap gap-3 text-[11px] text-ink-500">
-              <span><span style={{ color: sourceColors.vlm }}>■</span> VLM</span>
-              <span><span style={{ color: sourceColors.mock }}>■</span> Mock</span>
+              <span><span style={{ color: sourceColors.vlm }}>■</span> 模型判定</span>
+              <span><span style={{ color: sourceColors.mock }}>■</span> 备用线索</span>
               <span><span style={{ color: sourceColors["maps-only"] }}>■</span> 仅证据图</span>
-              <span><span style={{ color: sourceColors.unknown }}>■</span> 未知来源</span>
+              <span><span style={{ color: sourceColors.unknown }}>■</span> 来源待确认</span>
             </div>
           </div>
           <div className="h-56 flex items-end gap-1.5 sm:gap-2">
@@ -369,17 +369,17 @@ export default function AdminDashboard({
             <h2 className="font-serif text-base font-semibold text-rice">按证据日趋势</h2>
             <div className="flex flex-wrap gap-3 text-[11px] text-ink-500">
               <span><span style={{ color: evidenceColors.visibleWatermarkHits }}>■</span> 可见水印</span>
-              <span><span style={{ color: evidenceColors.synthidHits }}>■</span> SynthID</span>
-              <span><span style={{ color: evidenceColors.forensicsCompleted }}>■</span> 取证</span>
-              <span><span style={{ color: evidenceColors.provenanceCompleted }}>■</span> 凭证</span>
+              <span><span style={{ color: evidenceColors.synthidHits }}>■</span> 隐式水印</span>
+              <span><span style={{ color: evidenceColors.forensicsCompleted }}>■</span> 深度取证</span>
+              <span><span style={{ color: evidenceColors.provenanceCompleted }}>■</span> 来源凭证</span>
             </div>
           </div>
           <div className="space-y-3">
             {[
               { key: "visibleWatermarkHits", label: "可见水印" },
-              { key: "synthidHits", label: "SynthID" },
-              { key: "forensicsCompleted", label: "取证完成" },
-              { key: "provenanceCompleted", label: "凭证完成" },
+              { key: "synthidHits", label: "隐式水印" },
+              { key: "forensicsCompleted", label: "深度取证完成" },
+              { key: "provenanceCompleted", label: "来源凭证完成" },
             ].map((item) => {
               const maxValue = Math.max(1, ...metrics.byDay.map((day) => day.evidence[item.key as keyof typeof day.evidence]));
               return (
@@ -450,9 +450,9 @@ export default function AdminDashboard({
             <div className="grid grid-cols-2 gap-2">
               {[
                 { key: "vlm", label: "真实模型" },
-                { key: "mock", label: "Mock 回退" },
+                { key: "mock", label: "备用线索" },
                 { key: "maps-only", label: "仅证据图" },
-                { key: "unknown", label: "未知来源" },
+                { key: "unknown", label: "来源待确认" },
               ].map((item) => (
                 <div key={item.key} className="rounded-lg bg-ink-900 border border-ink-600 p-3">
                   <div className="text-xs text-ink-500">{item.label}</div>
@@ -472,15 +472,15 @@ export default function AdminDashboard({
                 <div className="mt-1 text-lg font-semibold text-rice">{metrics.evidence.visibleWatermarkHits}</div>
               </div>
               <div className="rounded-lg bg-ink-900 border border-ink-600 p-3">
-                <div className="text-xs text-ink-500">SynthID 命中</div>
+                <div className="text-xs text-ink-500">隐式水印命中</div>
                 <div className="mt-1 text-lg font-semibold text-rice">{metrics.evidence.synthidHits}</div>
               </div>
               <div className="rounded-lg bg-ink-900 border border-ink-600 p-3">
-                <div className="text-xs text-ink-500">已做取证分析</div>
+                <div className="text-xs text-ink-500">已做深度取证</div>
                 <div className="mt-1 text-lg font-semibold text-rice">{metrics.evidence.forensicsCompleted}</div>
               </div>
               <div className="rounded-lg bg-ink-900 border border-ink-600 p-3">
-                <div className="text-xs text-ink-500">已验内容凭证</div>
+                <div className="text-xs text-ink-500">已验来源凭证</div>
                 <div className="mt-1 text-lg font-semibold text-rice">{metrics.evidence.provenanceCompleted}</div>
               </div>
             </div>
@@ -503,9 +503,9 @@ export default function AdminDashboard({
               <tbody>
                 {[
                   { key: "vlm", label: "真实模型" },
-                  { key: "mock", label: "Mock 回退" },
+                  { key: "mock", label: "备用线索" },
                   { key: "maps-only", label: "仅证据图" },
-                  { key: "unknown", label: "未知来源" },
+                  { key: "unknown", label: "来源待确认" },
                 ].map((item) => {
                   const row = metrics.sourceVerdict[item.key as keyof typeof metrics.sourceVerdict] ?? {};
                   return (
@@ -531,17 +531,17 @@ export default function AdminDashboard({
                 <tr className="border-b border-ink-600 text-ink-500">
                   <th className="text-left py-2 pr-3 font-medium">来源</th>
                   <th className="text-right py-2 px-3 font-medium">可见水印</th>
-                  <th className="text-right py-2 px-3 font-medium">SynthID</th>
-                  <th className="text-right py-2 px-3 font-medium">已做取证</th>
-                  <th className="text-right py-2 pl-3 font-medium">已验凭证</th>
+                  <th className="text-right py-2 px-3 font-medium">隐式水印</th>
+                  <th className="text-right py-2 px-3 font-medium">已做深度取证</th>
+                  <th className="text-right py-2 pl-3 font-medium">已验来源凭证</th>
                 </tr>
               </thead>
               <tbody>
                 {[
                   { key: "vlm", label: "真实模型" },
-                  { key: "mock", label: "Mock 回退" },
+                  { key: "mock", label: "备用线索" },
                   { key: "maps-only", label: "仅证据图" },
-                  { key: "unknown", label: "未知来源" },
+                  { key: "unknown", label: "来源待确认" },
                 ].map((item) => {
                   const row = metrics.sourceEvidence[item.key as keyof typeof metrics.sourceEvidence] ?? {};
                   return (

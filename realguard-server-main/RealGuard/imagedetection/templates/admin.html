@@ -232,7 +232,7 @@
         <a class="nav-item active" href="#dashboard" data-route="dashboard"><span class="nav-icon">▦</span><span class="nav-text">控制台</span></a>
         <a class="nav-item" href="#assurance" data-route="assurance"><span class="nav-icon">◇</span><span class="nav-text">在线保障</span></a>
         <a class="nav-item" href="#models" data-route="models"><span class="nav-icon">◈</span><span class="nav-text">模型管理</span></a>
-        <a class="nav-item" href="#swarm" data-route="swarm"><span class="nav-icon">✣</span><span class="nav-text">Swarm 模式</span></a>
+        <a class="nav-item" href="#swarm" data-route="swarm"><span class="nav-icon">✣</span><span class="nav-text">专家会诊模式</span></a>
         <a class="nav-item" href="#system" data-route="system"><span class="nav-icon">●</span><span class="nav-text">服务健康</span></a>
         <a class="nav-item" href="#governance" data-route="governance"><span class="nav-icon">⌬</span><span class="nav-text">审计告警</span></a>
         {% if can_manage_admins %}<a class="nav-item" href="#admins" data-route="admins"><span class="nav-icon">◍</span><span class="nav-text">管理员</span></a>{% endif %}
@@ -240,7 +240,7 @@
         <div class="nav-label">Data</div>
         <a class="nav-item" href="#users" data-route="users"><span class="nav-icon">◎</span><span class="nav-text">用户管理</span></a>
         <a class="nav-item" href="#detections" data-route="detections"><span class="nav-icon">▤</span><span class="nav-text">检测记录</span></a>
-        <a class="nav-item" href="#keys" data-route="keys"><span class="nav-icon">⌁</span><span class="nav-text">API Key</span></a>
+        <a class="nav-item" href="#keys" data-route="keys"><span class="nav-icon">⌁</span><span class="nav-text">访问凭证</span></a>
       </nav>
     </aside>
 
@@ -265,7 +265,7 @@
             <div class="hero-card">
               <div class="eyebrow">Vue Element Admin inspired · RealGuard native</div>
               <h1>鉴伪系统管理工作台</h1>
-              <p class="subtitle">面向运维和业务管理员的单页控制台：模型健康、路由策略、用户、检测记录和 API Key 集中管理，保留权限白名单和真实服务状态。</p>
+              <p class="subtitle">面向运维和业务管理员的单页控制台：模型健康、路由策略、用户、检测记录和 访问凭证 集中管理，保留权限白名单和真实服务状态。</p>
             </div>
             <div class="quick" id="quickHealth"></div>
           </div>
@@ -346,21 +346,21 @@
           </div>
         </section>
 
-        <section class="view" id="view-swarm" data-title="Swarm 模式">
+        <section class="view" id="view-swarm" data-title="专家会诊模式">
           <div class="assurance-grid">
             <section class="panel">
               <div class="panel-head">
                 <div><h2>蜂群专家投票</h2><p>配置哪些鉴伪专家参与会诊、投票权重、最少有效专家数和风险阈值。</p></div>
-                <button class="btn secondary" onclick="loadSwarm()">刷新</button>
+                <button class="btn secondary" onclick="loadExpertReview()">刷新</button>
               </div>
               <div class="compact-form">
-                <label>启用 Swarm<select class="select" id="swarmEnabled"><option value="true">开启</option><option value="false">关闭</option></select></label>
+                <label>启用专家会诊<select class="select" id="swarmEnabled"><option value="true">开启</option><option value="false">关闭</option></select></label>
                 <label>最少有效专家数<input class="input" id="swarmMinExperts" type="number" min="1" max="20"></label>
                 <label>高风险判定阈值<input class="input" id="swarmConsensusThreshold" type="number" min="0" max="1" step="0.01"></label>
                 <label>分歧提示阈值<input class="input" id="swarmDisagreementThreshold" type="number" min="0" max="1" step="0.01"></label>
                 <label>备注<textarea id="swarmNotes"></textarea></label>
                 <div class="warning-band">前台只展示抽象专家角色；后台会保留真实模型/API、权重、状态和耗时，便于审计。</div>
-                <button class="btn" {% if "routing.manage" not in admin_permissions %}disabled{% endif %} onclick="saveSwarm()">保存 Swarm 配置</button>
+                <button class="btn" {% if "routing.manage" not in admin_permissions %}disabled{% endif %} onclick="saveExpertReview()">保存专家会诊配置</button>
               </div>
             </section>
             <section class="panel">
@@ -462,9 +462,9 @@
           </section>
         </section>
 
-        <section class="view" id="view-keys" data-title="API Key">
+        <section class="view" id="view-keys" data-title="访问凭证">
           <section class="panel">
-            <div class="panel-head"><div><h2>API Key</h2><p>查看开发者 Key 的归属、状态和最后调用。</p></div></div>
+            <div class="panel-head"><div><h2>访问凭证</h2><p>查看开发者 Key 的归属、状态和最后调用。</p></div></div>
             <div class="toolbar">
               <input class="input" id="keyQuery" placeholder="搜索 Key 名称 / 用户 / 后四位">
               <select class="select" id="keyLimit"><option>60</option><option>100</option><option>160</option><option>200</option></select>
@@ -483,7 +483,7 @@
     const PERMISSIONS = new Set({{ admin_permissions|tojson }});
     const CAN_MANAGE_ADMINS = {{ can_manage_admins|tojson }};
     const ADMIN_ROLE_LABELS = {{ role_options|default({}, true)|tojson }};
-    const titles = {dashboard:'控制台',assurance:'在线保障',models:'模型管理',swarm:'Swarm 模式',system:'服务健康',governance:'审计告警',admins:'管理员',users:'用户管理',detections:'检测记录',keys:'API Key'};
+    const titles = {dashboard:'控制台',assurance:'在线保障',models:'模型管理',swarm:'专家会诊模式',system:'服务健康',governance:'审计告警',admins:'管理员',users:'用户管理',detections:'检测记录',keys:'访问凭证'};
     let state = {metrics:null, models:[], routing:{}, routingHistory:[], detections:[], users:[], admins:[], keys:[], services:[], assurance:null, swarm:null, alerts:null, audit:[], selectedUser:null, selectedDetection:null};
     const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
     const can = (permission) => PERMISSIONS.has(permission);
@@ -537,7 +537,7 @@
       history.replaceState(null, '', `#${route}`);
       renderTags(route);
       if(route === 'assurance') loadAssurance();
-      if(route === 'swarm') loadSwarm();
+      if(route === 'swarm') loadExpertReview();
       if(route === 'system') loadSystem();
       if(route === 'governance') { loadAlerts(); loadAudit(); }
       if(route === 'admins' && CAN_MANAGE_ADMINS) loadAdmins();
@@ -651,7 +651,7 @@
           <div class="metrics">
             <article class="metric"><small>图像检测</small><strong>${esc(data.stats?.imageDetections ?? 0)}</strong></article>
             <article class="metric"><small>视频检测</small><strong>${esc(data.stats?.videoDetections ?? 0)}</strong></article>
-            <article class="metric"><small>API Keys</small><strong>${esc(data.stats?.apiKeys ?? 0)}</strong></article>
+            <article class="metric"><small>访问凭证</small><strong>${esc(data.stats?.apiKeys ?? 0)}</strong></article>
             <article class="metric"><small>注册时间</small><strong style="font-size:18px">${esc(user.createdAt || '-')}</strong></article>
           </div>
           <h3>最近检测</h3>${table(['ID','时间','文件','结果','概率','后台模型','反馈'], (data.detections || []).map(d => `<tr><td class="mono">${esc(d.id)}</td><td>${esc(d.createdAt)}</td><td>${esc(d.filename)}</td><td>${esc(d.label)}</td><td>${esc(d.probability ?? '')}</td><td class="mono">${esc(routeModelLabel(d.modelRoute))}</td><td>${esc(d.feedback ?? '')}</td></tr>`), '暂无检测')}
@@ -796,7 +796,7 @@
       renderRoutingSummary();
       renderSwitchboard();
     }
-    function renderSwarm(){
+    function renderExpertReview(){
       const swarm = state.swarm || {};
       $('swarmEnabled').value = swarm.enabled === false ? 'false' : 'true';
       $('swarmMinExperts').value = swarm.minExperts ?? 2;
@@ -867,7 +867,7 @@
       renderMetrics(data.metrics); renderQuick(); renderRouteStrip(); renderModelCards('dashboardModels', state.models, 'summary'); renderModelCards('models', state.models, 'editor'); renderRouting();
     }
     async function loadAssurance(){ const data = await api('/api/admin/assurance'); state.assurance = data.assurance; renderAssurance(); }
-    async function loadSwarm(){ const data = await api('/api/admin/swarm'); state.swarm = data.swarm; renderSwarm(); }
+    async function loadExpertReview(){ const data = await api('/api/admin/swarm'); state.swarm = data.swarm; renderExpertReview(); }
     async function loadSystem(){ const data = await api('/api/admin/system'); state.services = data.services; renderServices(); }
     async function loadAlerts(){ const data = await api('/api/admin/alerts'); state.alerts = data.alerts; renderAlerts(); }
     async function loadAudit(){ const data = await api('/api/admin/audit?limit=120'); state.audit = data.audit; renderAudit(); }
@@ -931,8 +931,8 @@
       const data = await api('/api/admin/routing', {method:'POST', body:JSON.stringify(payload)});
       state.routing = data.routing; toast('路由策略已保存'); await loadOverview(); await loadAssurance(); await loadAudit();
     }
-    async function saveSwarm(){
-      if(!can('routing.manage')){ toast('当前角色无 Swarm 配置权限'); return; }
+    async function saveExpertReview(){
+      if(!can('routing.manage')){ toast('当前角色无 专家会诊配置权限'); return; }
       const experts = [];
       document.querySelectorAll('[data-swarm-expert]').forEach((card) => {
         const id = card.getAttribute('data-swarm-expert');
@@ -951,8 +951,8 @@
       };
       const data = await api('/api/admin/swarm', {method:'POST', body:JSON.stringify(payload)});
       state.swarm = data.swarm;
-      renderSwarm();
-      toast('Swarm 配置已保存');
+      renderExpertReview();
+      toast('专家会诊配置已保存');
       await loadAudit();
     }
     async function rollbackRouting(snapshotId){
@@ -1033,7 +1033,7 @@
       toast(`记录 ${id}: ${data.review.feedback || '已清除'}`); await loadDetections(); await loadAudit();
     }
     async function editQuota(id){
-      if(!can('api_key.manage')){ toast('当前角色无 API Key 管理权限'); return; }
+      if(!can('api_key.manage')){ toast('当前角色无 访问凭证 管理权限'); return; }
       const key = state.keys.find(k => Number(k.id) === Number(id)) || {};
       const daily = prompt('每日调用上限，留空表示不限', key.quota?.dailyLimit ?? '');
       if(daily === null) return;
@@ -1045,7 +1045,7 @@
     async function loadAll(){
       try{
         await loadOverview();
-        const tasks = [loadAssurance(), loadSwarm(), loadUsers(), loadDetections(), loadApiKeys(), loadSystem(), loadAlerts(), loadAudit()];
+        const tasks = [loadAssurance(), loadExpertReview(), loadUsers(), loadDetections(), loadApiKeys(), loadSystem(), loadAlerts(), loadAudit()];
         if(CAN_MANAGE_ADMINS) tasks.push(loadAdmins());
         await Promise.all(tasks);
       }

@@ -1,9 +1,7 @@
 import os
-import json
-from flask import Blueprint, render_template, request, session, jsonify, Response
+from flask import Blueprint, render_template, session
 
-from imagedetection.views import reporting
-from imagedetection.views.utils import excute_sql, excute_detection_sql, format_createtime
+from imagedetection.views.utils import excute_detection_sql, format_createtime
 
 historical_record_blueprint = Blueprint('historical_record_blueprint', __name__)
 
@@ -16,6 +14,26 @@ DETECTION_PUBLIC_STATIC_PREFIX = os.environ.get(
     '/detection-static'
 ).rstrip('/')
 STATIC_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'static'))
+
+
+def _session_history_where(user_info):
+    clauses = []
+    params = []
+    user_id = (user_info or {}).get('Userid') or (user_info or {}).get('userId') or (user_info or {}).get('id')
+    phone = str((user_info or {}).get('phone') or '').strip()
+    openid = str((user_info or {}).get('openid') or '').strip()
+    if user_id not in (None, ''):
+        clauses.append('Userid = %s')
+        params.append(user_id)
+    if phone:
+        clauses.append('phone = %s')
+        params.append(phone)
+    if openid:
+        clauses.append('openid = %s')
+        params.append(openid)
+    if not clauses:
+        return '1 = 0', ()
+    return ' OR '.join(clauses), tuple(params)
 
 
 def _detection_static_url(kind, item):
@@ -37,7 +55,8 @@ def history_photo():
     if 'user_info' not in session or session['user_info'] is None:
         return render_template('login.html')
     phone = session['user_info'].get('phone', '')
-    result = excute_detection_sql("SELECT * FROM data WHERE phone = %s ORDER BY createtime DESC", (phone,))
+    history_where, history_params = _session_history_where(session['user_info'])
+    result = excute_detection_sql(f"SELECT * FROM data WHERE {history_where} ORDER BY createtime DESC", history_params)
     records = []
     if result:
         for item in result:
@@ -62,9 +81,10 @@ def history_video_detect():
     if 'user_info' not in session or session['user_info'] is None:
         return render_template('login.html')
     phone = session['user_info'].get('phone', '')
+    history_where, history_params = _session_history_where(session['user_info'])
     result = excute_detection_sql(
-        "SELECT * FROM video_data WHERE phone = %s ORDER BY createtime DESC",
-        (phone,)
+        f"SELECT * FROM video_data WHERE {history_where} ORDER BY createtime DESC",
+        history_params
     )
     records = []
     ai_count = 0
@@ -92,130 +112,4 @@ def history_video_detect():
         username=phone,
         ai_count=ai_count,
         real_count=real_count
-    )
-
-
-@historical_record_blueprint.route('/history_image_retrieve')
-def history_image_retrieve():
-    """图像检索历史"""
-    if 'user_info' not in session or session['user_info'] is None:
-        return render_template('login.html')
-    phone = session['user_info'].get('phone', '')
-    result = excute_sql(
-        "SELECT * FROM retrieve_data WHERE phone = %s AND search_type = 'image' ORDER BY createtime DESC",
-        (phone,)
-    )
-    records = []
-    if result:
-        for item in result:
-            records.append({
-                "itemid": item['itemid'],
-                "filename": item['filename'],
-                "file_url": f"/static/uploads/{phone}/retrieve/{item['filename']}",
-                "result_count": item.get('result_count', 0),
-                "top_k": item.get('top_k', 10),
-                "file_size": item.get('file_size', ''),
-                "createtime": format_createtime(item['createtime']),
-                "report_url": f"/history_retrieve/report?itemid={item['itemid']}",
-            })
-    return render_template('history_image_retrieve.html', records=records, username=phone)
-
-
-@historical_record_blueprint.route('/history_video_retrieve')
-def history_video_retrieve():
-    """视频检索历史"""
-    if 'user_info' not in session or session['user_info'] is None:
-        return render_template('login.html')
-    phone = session['user_info'].get('phone', '')
-    result = excute_sql(
-        "SELECT * FROM retrieve_data WHERE phone = %s AND search_type = 'video' ORDER BY createtime DESC",
-        (phone,)
-    )
-    records = []
-    if result:
-        for item in result:
-            records.append({
-                "itemid": item['itemid'],
-                "filename": item['filename'],
-                "file_url": f"/static/uploads/{phone}/retrieve/{item['filename']}",
-                "result_count": item.get('result_count', 0),
-                "top_k": item.get('top_k', 10),
-                "file_size": item.get('file_size', ''),
-                "createtime": format_createtime(item['createtime']),
-                "report_url": f"/history_retrieve/report?itemid={item['itemid']}",
-            })
-    return render_template('history_video_retrieve.html', records=records, username=phone)
-
-
-@historical_record_blueprint.route('/history_retrieve/result')
-def retrieve_result_api():
-    """根据 itemid 获取检索历史结果"""
-    if 'user_info' not in session or session['user_info'] is None:
-        return jsonify({'status': 'error', 'message': '用户未登录'}), 401
-
-    itemid = request.args.get('itemid')
-    phone = session['user_info'].get('phone', '')
-    if not itemid:
-        return jsonify({'status': 'error', 'message': '缺少参数'}), 400
-
-    result = excute_sql("SELECT * FROM retrieve_data WHERE itemid = %s AND phone = %s", (itemid, phone))
-    if not result or len(result) == 0:
-        return jsonify({'status': 'error', 'message': '未找到记录'}), 404
-
-    item = result[0]
-    filename = item.get('filename', '')
-    search_type = item.get('search_type', 'image')
-
-    # Parse stored results
-    results_data = []
-    if item.get('results_json'):
-        try:
-            results_data = json.loads(item['results_json'])
-        except Exception:
-            pass
-
-    base_url = '/retrieve/library-file/image/' if search_type == 'image' else '/retrieve/library-file/video/'
-
-    return jsonify({
-        'status': 'success',
-        'search_type': search_type,
-        'query_file_url': f"/static/uploads/{phone}/retrieve/{filename}",
-        'base_url': base_url,
-        'results': results_data,
-        'result_count': item.get('result_count', 0),
-        'top_k': item.get('top_k', 10),
-        'file_size': item.get('file_size', ''),
-        'createtime': format_createtime(item.get('createtime', '')),
-    })
-
-
-@historical_record_blueprint.route('/history_retrieve/report')
-def retrieve_report_api():
-    if 'user_info' not in session or session['user_info'] is None:
-        return jsonify({'status': 'error', 'message': '用户未登录'}), 401
-
-    itemid = request.args.get('itemid')
-    phone = session['user_info'].get('phone', '')
-    if not itemid:
-        return jsonify({'status': 'error', 'message': '缺少参数'}), 400
-
-    rows = excute_sql("SELECT * FROM retrieve_data WHERE itemid = %s AND phone = %s", (itemid, phone))
-    if not rows:
-        return jsonify({'status': 'error', 'message': '未找到记录'}), 404
-
-    item = rows[0]
-    filename = item.get('filename', '')
-    search_type = item.get('search_type', 'image')
-    query_file_url = f"/static/uploads/{phone}/retrieve/{filename}"
-    base_url = '/retrieve/library-file/image/' if search_type == 'image' else '/retrieve/library-file/video/'
-    try:
-        results_data = json.loads(item.get('results_json') or '[]')
-    except Exception:
-        results_data = []
-
-    html = reporting.retrieval_report_content(item, query_file_url, base_url, results_data)
-    return Response(
-        html,
-        mimetype='text/html',
-        headers={'Content-Disposition': reporting.attachment_header(reporting.retrieval_report_filename(itemid))},
     )

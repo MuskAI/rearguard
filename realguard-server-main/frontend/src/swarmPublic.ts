@@ -1,6 +1,6 @@
-import { DetectionJob, PublicSwarmExpert } from "./api";
+import { DetectionJob, PublicExpertReviewExpert } from "./api";
 
-export type PublicSwarmStatus = "queued" | "running" | "success" | "failed" | "skipped";
+export type PublicExpertReviewStatus = "queued" | "running" | "success" | "failed" | "skipped";
 export type PublicLang = "zh" | "en";
 
 function tr(lang: PublicLang, zh: string, en: string) {
@@ -15,17 +15,17 @@ export function swarmStatusIcon(status?: string) {
   return "fa-circle-o";
 }
 
-export function normalizeSwarmStatus(status?: string): PublicSwarmStatus {
+export function normalizeExpertReviewStatus(status?: string): PublicExpertReviewStatus {
   if (status === "running" || status === "success" || status === "failed" || status === "skipped") return status;
   return "queued";
 }
 
-export function publicSwarmExpertName(expert: PublicSwarmExpert, index: number, lang: PublicLang) {
+export function publicExpertReviewExpertName(expert: PublicExpertReviewExpert, index: number, lang: PublicLang) {
   return expert.publicName || tr(lang, `复核专家 ${index + 1}`, `Review expert ${index + 1}`);
 }
 
-export function publicSwarmExpertStatusLabel(status: string | undefined, lang: PublicLang) {
-  const normalized = normalizeSwarmStatus(status);
+export function publicExpertReviewExpertStatusLabel(status: string | undefined, lang: PublicLang) {
+  const normalized = normalizeExpertReviewStatus(status);
   if (normalized === "running") return tr(lang, "复核中", "Reviewing");
   if (normalized === "success") return tr(lang, "已完成", "Completed");
   if (normalized === "failed") return tr(lang, "暂不可用", "Unavailable");
@@ -33,10 +33,10 @@ export function publicSwarmExpertStatusLabel(status: string | undefined, lang: P
   return tr(lang, "等待中", "Queued");
 }
 
-export function publicSwarmExpertMessage(expert: PublicSwarmExpert, lang: PublicLang, includeVerdict = false) {
+export function publicExpertReviewExpertMessage(expert: PublicExpertReviewExpert, lang: PublicLang, includeVerdict = false) {
   if (includeVerdict && expert.publicVerdict) return expert.publicVerdict;
   if (expert.publicMessage) return expert.publicMessage;
-  const status = normalizeSwarmStatus(expert.status);
+  const status = normalizeExpertReviewStatus(expert.status);
   if (status === "running") return tr(lang, "正在复核", "Reviewing");
   if (status === "failed") return tr(lang, "该专家暂不可用", "Temporarily unavailable");
   if (status === "skipped") return tr(lang, "已跳过", "Skipped");
@@ -44,15 +44,15 @@ export function publicSwarmExpertMessage(expert: PublicSwarmExpert, lang: Public
   return tr(lang, "等待调度", "Queued");
 }
 
-export function publicSwarmJobSummary(job: DetectionJob | null, lang: PublicLang) {
+export function publicExpertReviewJobSummary(job: DetectionJob | null, lang: PublicLang) {
   if (!job) return tr(lang, "等待专家队列启动", "Waiting for expert queue");
-  if (job.status === "success") return tr(lang, "Swarm 专家会诊完成", "Swarm expert review complete");
-  if (job.status === "failed") return tr(lang, "Swarm 专家会诊失败", "Swarm expert review failed");
+  if (job.status === "success") return tr(lang, "专家会诊复核完成", "Expert review complete");
+  if (job.status === "failed") return tr(lang, "专家会诊复核失败", "Expert review failed");
   if (job.status === "running") return tr(lang, "多名鉴伪专家正在复核", "Forensic experts are reviewing");
   return tr(lang, "等待专家队列启动", "Waiting for expert queue");
 }
 
-export function publicSwarmText(value: string, lang: PublicLang) {
+export function publicExpertReviewText(value: string, lang: PublicLang) {
   const fallback = tr(lang, "证据项已脱敏", "Evidence redacted");
   const cleaned = String(value || "")
     .replace(/^[^:：]{0,32}[:：]\s*/, "")
@@ -62,7 +62,7 @@ export function publicSwarmText(value: string, lang: PublicLang) {
   return cleaned || fallback;
 }
 
-export function publicSwarmEvidence(item: string | PublicSwarmExpert, lang: PublicLang) {
-  if (typeof item === "string") return publicSwarmText(item, lang);
+export function publicExpertReviewEvidence(item: string | PublicExpertReviewExpert, lang: PublicLang) {
+  if (typeof item === "string") return publicExpertReviewText(item, lang);
   return item.publicVerdict || item.publicMessage || tr(lang, "证据项已脱敏", "Evidence redacted");
 }

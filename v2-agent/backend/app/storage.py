@@ -224,10 +224,36 @@ def _history_summary_from_row(row: sqlite3.Row) -> dict[str, Any]:
         "cacheVersion": result.get("cacheVersion"),
         "cacheHit": bool(result.get("cacheHit")),
         "hasForensics": bool(row["forensics_json"]),
-        "hasProvenance": bool(row["provenance_json"]),
+        "hasProvenance": bool(row["provenance_json"] or result.get("provenance")),
         "hasVisibleWatermark": bool(visible.get("detected")),
         "visibleWatermarkProvider": visible.get("provider"),
         "hasSynthid": bool(synthid.get("detected")),
+    }
+
+
+def _ensure_result_file_meta(result: dict[str, Any], row: sqlite3.Row) -> None:
+    meta = result.get("fileMeta")
+    if not isinstance(meta, dict):
+        meta = {}
+    name = meta.get("name") or result.get("name") or result.get("fileName") or row["file_name"] or "未知文件"
+    file_type = meta.get("type") or result.get("type") or result.get("fileType") or row["file_type"] or "document"
+    if file_type not in {"image", "video", "audio", "document"}:
+        file_type = "document"
+    size = meta.get("size") or result.get("size") or result.get("fileSize")
+    if not size:
+        try:
+            size = f"{int(row['file_size']) / 1024:.1f}KB"
+        except (TypeError, ValueError):
+            size = "未知"
+    result["fileMeta"] = {
+        **meta,
+        "name": name,
+        "type": file_type,
+        "size": str(size),
+        "resolution": meta.get("resolution") or result.get("resolution") or row["resolution"],
+        "sha256": meta.get("sha256") or result.get("sha256"),
+        "thumbnail": meta.get("thumbnail") or row["thumbnail"],
+        "preview": meta.get("preview") or result.get("preview"),
     }
 
 
@@ -381,7 +407,8 @@ def get_history(item_id: str) -> dict[str, Any] | None:
     with _connect() as conn:
         row = conn.execute(
             """
-            SELECT h.result_json, h.thumbnail, h.developer_user_id, h.developer_key_id,
+            SELECT h.result_json, h.thumbnail, h.file_name, h.file_type, h.file_size, h.resolution,
+                   h.developer_user_id, h.developer_key_id,
                    a.forensics_json, a.provenance_json
             FROM history h
             LEFT JOIN history_artifacts a ON a.task_id = h.task_id
@@ -394,8 +421,7 @@ def get_history(item_id: str) -> dict[str, Any] | None:
     result = json.loads(row["result_json"])
     result["_developerUserId"] = row["developer_user_id"]
     result["_developerKeyId"] = row["developer_key_id"]
-    if row["thumbnail"]:
-        result.setdefault("fileMeta", {})["thumbnail"] = row["thumbnail"]
+    _ensure_result_file_meta(result, row)
     if row["forensics_json"]:
         result["forensics"] = json.loads(row["forensics_json"])
     if row["provenance_json"]:

@@ -1,22 +1,8 @@
 export type Verdict = "real" | "suspected_fake" | "highly_suspected_fake" | "unknown";
 export type FileType = "image" | "video" | "audio" | "document";
-const ACCESS_TOKEN_KEY = "jianzhen_access_token";
-
-function tokenStorage(): Storage | null {
-  if (typeof window === "undefined") return null;
-  return window.sessionStorage;
-}
-
-function getStoredToken(): string {
-  return tokenStorage()?.getItem(ACCESS_TOKEN_KEY)?.trim() || "";
-}
 
 function withAuthHeaders(init?: HeadersInit): Headers {
-  const headers = new Headers(init);
-  const token = getStoredToken();
-  if (token.startsWith("rg_sk_")) headers.set("X-RealGuard-Key", token);
-  else if (token) headers.set("X-Jianzhen-Token", token);
-  return headers;
+  return new Headers(init);
 }
 
 function withSession(init: RequestInit = {}): RequestInit {
@@ -29,15 +15,20 @@ function withSession(init: RequestInit = {}): RequestInit {
 
 async function parseJson<T>(res: Response, fallback: string): Promise<T> {
   if (!res.ok) {
+    let message = fallback;
     try {
       const data = await res.json();
-      throw new Error(data.detail || data.message || fallback);
-    } catch (error) {
-      if (error instanceof Error) throw error;
-      throw new Error(fallback);
+      message = data.detail || data.message || fallback;
+    } catch {
+      // Keep the user-facing fallback when the server returns HTML, empty text, or a proxy error.
     }
+    throw new Error(message);
   }
-  return res.json();
+  try {
+    return await res.json();
+  } catch {
+    throw new Error(fallback);
+  }
 }
 
 function filenameFromDisposition(disposition: string | null, fallback: string): string {
@@ -65,6 +56,58 @@ export interface Region {
   score: number;
 }
 
+export interface UnifiedForensicsRegion {
+  modality: "image" | "video" | string;
+  source: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  label: string;
+  confidence: number;
+  frame?: number;
+}
+
+export interface UnifiedForensicsTemporalSegment {
+  source: string;
+  start_frame: number;
+  end_frame: number;
+  label: string;
+  confidence: number;
+}
+
+export interface UnifiedForensicsOutput {
+  interface_version: string;
+  verdict: Verdict;
+  confidence: number;
+  generator_attribution: {
+    status: "known_signal" | "unknown" | string;
+    family: string | null;
+    model: string | null;
+    confidence: number;
+    evidence: string[];
+  };
+  open_set_score: number;
+  evidence_regions: UnifiedForensicsRegion[];
+  temporal_segments: UnifiedForensicsTemporalSegment[];
+  provenance_signals: Record<string, unknown>;
+  explanation: string;
+  uncertainty: {
+    score: number;
+    factors: string[];
+  };
+  compute_cost: {
+    elapsed_ms: number;
+    cache_hit: boolean;
+    source: string;
+    model_version: string;
+    cache_version: string;
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
+}
+
 export interface DetectResult {
   taskId: string;
   reportId: string;
@@ -90,6 +133,7 @@ export interface DetectResult {
   explanation: string;
   synthid?: SynthIDResult;
   visibleWatermark?: VisibleWatermarkResult;
+  unifiedForensics?: UnifiedForensicsOutput;
   forensics?: ForensicReport | null;
   provenance?: ProvenanceReport | null;
   disclaimer: string;
@@ -174,16 +218,123 @@ export interface HistoryFilterCounts {
 
 export interface HealthStatus {
   status: string;
-  model: string;
+  model?: string;
   vlmEnabled: boolean;
-  analysisCacheVersion: string;
   accessProtectionEnabled: boolean;
   unifiedLoginEnabled?: boolean;
   sessionAuthEnabled?: boolean;
-  protectedEndpoints: string[];
-  developerKeyAuthEnabled?: boolean;
-  developerKeyAuthConfigured?: boolean;
-  developerProtectedEndpoints?: string[];
+  capabilities?: Partial<Record<FileType, string>>;
+  limits?: {
+    maxUploadBytes?: number;
+  };
+}
+
+type ApiRecord = Record<string, unknown>;
+
+const FILE_TYPES: FileType[] = ["image", "video", "audio", "document"];
+const VERDICTS: Verdict[] = ["real", "suspected_fake", "highly_suspected_fake", "unknown"];
+
+function asRecord(value: unknown): ApiRecord {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as ApiRecord) : {};
+}
+
+function textValue(value: unknown, fallback = ""): string {
+  if (typeof value === "string" && value.trim()) return value;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return fallback;
+}
+
+function numberValue(value: unknown, fallback = 0): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+}
+
+function nullableText(value: unknown): string | null {
+  const text = textValue(value);
+  return text || null;
+}
+
+function inferFileType(name: string): FileType {
+  const ext = name.split(".").pop()?.toLowerCase() || "";
+  if (["jpg", "jpeg", "png", "webp", "gif", "bmp", "tif", "tiff", "heic", "heif"].includes(ext)) return "image";
+  if (["mp4", "mov", "m4v", "webm", "avi", "mkv"].includes(ext)) return "video";
+  if (["mp3", "wav", "m4a", "flac", "aac", "ogg"].includes(ext)) return "audio";
+  return "document";
+}
+
+function fileTypeValue(value: unknown, name: string): FileType {
+  const normalized = typeof value === "string" ? value.toLowerCase() : "";
+  return FILE_TYPES.includes(normalized as FileType) ? (normalized as FileType) : inferFileType(name);
+}
+
+function verdictValue(value: unknown): Verdict {
+  return VERDICTS.includes(value as Verdict) ? (value as Verdict) : "unknown";
+}
+
+function normalizeDetectResult(raw: unknown): DetectResult {
+  const source = asRecord(raw);
+  const originalFileMeta = asRecord(source.fileMeta);
+  const fallbackName = textValue(source.name, textValue(source.fileName, textValue(source.filename, "未知文件")));
+  const fileName = textValue(originalFileMeta.name, fallbackName);
+  const fileType = fileTypeValue(originalFileMeta.type ?? source.type ?? source.fileType, fileName);
+  const thumbnail = nullableText(originalFileMeta.thumbnail ?? source.thumbnail);
+  const preview = nullableText(originalFileMeta.preview ?? source.preview) || thumbnail;
+
+  return {
+    ...(source as Partial<DetectResult>),
+    taskId: textValue(source.taskId, textValue(source.id)),
+    reportId: textValue(source.reportId, textValue(source.id, "未返回")),
+    createdAt: textValue(source.createdAt),
+    fileMeta: {
+      name: fileName,
+      type: fileType,
+      size: textValue(originalFileMeta.size, textValue(source.size, textValue(source.fileSize, "未知"))),
+      resolution: nullableText(originalFileMeta.resolution ?? source.resolution),
+      sha256: textValue(originalFileMeta.sha256, textValue(source.sha256)),
+      thumbnail,
+      preview,
+    },
+    verdict: verdictValue(source.verdict),
+    confidence: numberValue(source.confidence),
+    modelVersion: textValue(source.modelVersion),
+    source: textValue(source.source, "unknown"),
+    cacheVersion: textValue(source.cacheVersion),
+    elapsedMs: numberValue(source.elapsedMs),
+    dimensions: Array.isArray(source.dimensions) ? (source.dimensions as Dimension[]) : [],
+    regions: Array.isArray(source.regions) ? (source.regions as Region[]) : [],
+    explanation: textValue(source.explanation, "历史记录缺少模型说明。"),
+    disclaimer: textValue(source.disclaimer, "本结果仅供参考，不构成权威鉴定结论。"),
+  } as DetectResult;
+}
+
+function normalizeHistoryItem(raw: unknown): HistoryItem {
+  const source = asRecord(raw);
+  const name = textValue(source.name, textValue(source.fileName, textValue(source.filename, "未知文件")));
+  return {
+    ...(source as Partial<HistoryItem>),
+    taskId: textValue(source.taskId, textValue(source.id)),
+    reportId: textValue(source.reportId, textValue(source.id, "未返回")),
+    name,
+    type: fileTypeValue(source.type ?? source.fileType, name),
+    verdict: verdictValue(source.verdict),
+    confidence: numberValue(source.confidence),
+    createdAt: textValue(source.createdAt),
+    thumbnail: nullableText(source.thumbnail),
+  } as HistoryItem;
+}
+
+function normalizeHistoryPayload(raw: unknown): { items: HistoryItem[]; total: number; filterCounts: HistoryFilterCounts } {
+  const source = asRecord(raw);
+  const items = Array.isArray(source.items) ? source.items.map(normalizeHistoryItem) : [];
+  return {
+    items,
+    total: numberValue(source.total, items.length),
+    filterCounts: asRecord(source.filterCounts) as unknown as HistoryFilterCounts,
+  };
 }
 
 export async function detect(file: File, fileType?: FileType): Promise<DetectResult> {
@@ -191,7 +342,7 @@ export async function detect(file: File, fileType?: FileType): Promise<DetectRes
   fd.append("file", file);
   if (fileType) fd.append("fileType", fileType);
   const res = await fetch("/v2-api/detect", withSession({ method: "POST", body: fd }));
-  return parseJson(res, `检测失败 (${res.status})`);
+  return normalizeDetectResult(await parseJson(res, `检测失败 (${res.status})`));
 }
 
 export type ForensicStatus = "ok" | "warn" | "danger";
@@ -240,6 +391,32 @@ export interface ProvenanceReport {
   isAiGenerated: boolean | null;
   actions: { action: string; softwareAgent?: string; digitalSourceType?: string | null }[];
   ingredients: { title?: string; relationship?: string }[];
+  metadataAiGenerated?: boolean;
+  aiMetadata?: {
+    score: number;
+    confidence: "high" | "medium" | "low" | "none" | string;
+    confidenceText: string;
+    isAiLikely: boolean;
+    signalCount: number;
+    matchedTools: string[];
+    signals: {
+      id: string;
+      label: string;
+      weight: number;
+      path: string;
+      reason: string;
+      value: string;
+    }[];
+  };
+  metadataSummary?: {
+    sectionCount: number;
+    embeddedSectionCount: number;
+    fieldCount: number;
+    sections: { name: string; fieldCount: number }[];
+    preview: { path: string; value: string }[];
+    errors: { section: string; message: string }[];
+  };
+  metadata?: Record<string, unknown>;
   synthid: { supported: boolean; detected: boolean | null; note: string };
   error: string | null;
   elapsedMs: number;
@@ -286,12 +463,12 @@ export async function fetchHistory(params?: {
   }
   const qs = search.toString();
   const res = await fetch(`/v2-api/history${qs ? `?${qs}` : ""}`, withSession());
-  return parseJson(res, "加载历史失败");
+  return normalizeHistoryPayload(await parseJson(res, "历史记录暂不可用"));
 }
 
 export async function fetchHistoryItem(taskId: string): Promise<DetectResult> {
   const res = await fetch(`/v2-api/history/${taskId}`, withSession());
-  return parseJson(res, "加载历史详情失败");
+  return normalizeDetectResult(await parseJson(res, "历史详情暂不可用"));
 }
 
 export async function deleteHistory(taskId: string): Promise<void> {
@@ -325,7 +502,6 @@ export interface Metrics {
     avgLatencyMs: number;
     cacheEntries: number;
     cacheHitRate: number;
-    analysisCacheVersion: string;
   };
   byDay: {
     date: string;
@@ -384,34 +560,52 @@ export async function downloadReport(
   if (!res.ok) {
     await parseJson<Record<string, never>>(res, "下载报告失败");
   }
-  const blob = await res.blob();
+  const html = await res.text();
+  if (!html.trim()) {
+    throw new Error("下载报告失败：服务端返回了空报告");
+  }
   const filename = filenameFromDisposition(res.headers.get("content-disposition"), fallbackName);
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
   const url = window.URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
   link.download = filename;
+  link.rel = "noopener";
   document.body.appendChild(link);
   link.click();
   link.remove();
-  window.setTimeout(() => window.URL.revokeObjectURL(url), 0);
+  window.setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
   return filename;
+}
+
+export interface ReportShareLink {
+  url: string;
+  publicPath?: string;
+  apiPath?: string;
+  expiresAt: string;
+  expiresInSeconds: number;
+}
+
+export async function createReportShareLink(reportId: string, expiresInSeconds = 7 * 24 * 60 * 60): Promise<ReportShareLink> {
+  const res = await fetch(`/v2-api/report/${encodeURIComponent(reportId)}/share`, {
+    credentials: "include",
+    method: "POST",
+    headers: withAuthHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ expiresInSeconds }),
+  });
+  const link = await parseJson<ReportShareLink>(res, "生成分享链接失败");
+  if (link.publicPath && typeof window !== "undefined") {
+    return {
+      ...link,
+      url: new URL(link.publicPath, window.location.origin).toString(),
+    };
+  }
+  return link;
 }
 
 export async function fetchHealth(): Promise<HealthStatus> {
   const res = await fetch("/v2-api/health", withSession());
   return parseJson(res, "加载系统状态失败");
-}
-
-export function getAccessToken(): string {
-  return getStoredToken();
-}
-
-export function setAccessToken(token: string): void {
-  if (typeof window === "undefined") return;
-  const normalized = token.trim();
-  window.localStorage.removeItem(ACCESS_TOKEN_KEY);
-  if (normalized) tokenStorage()?.setItem(ACCESS_TOKEN_KEY, normalized);
-  else tokenStorage()?.removeItem(ACCESS_TOKEN_KEY);
 }
 
 export const VERDICT_META: Record<Verdict, { label: string; color: string; ring: string }> = {

@@ -490,7 +490,6 @@ def register_verify():
             # 创建用户文件夹
             user_dir = os.path.join(current_dir, '..', 'static', 'uploads', phone)
             create_folder(os.path.join(user_dir, 'image'))
-            create_folder(os.path.join(user_dir, 'retrieve'))
             return render_template('login.html', error='注册成功，请登录')
         return render_template('register.html', error='注册失败，请重试')
     return render_template('register.html', error='注册失败，请重试')

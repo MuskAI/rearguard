@@ -10,6 +10,8 @@ from __future__ import annotations
 import io
 import json
 
+from . import metadata as metadata_reader
+
 try:
     from c2pa import Reader
 except Exception:
@@ -43,7 +45,9 @@ def _classify_source(dst: str | None) -> bool | None:
     return None
 
 
-def read_provenance(data: bytes, mime: str) -> dict:
+def read_provenance(data: bytes, mime: str, filename: str = "") -> dict:
+    metadata_report = metadata_reader.inspect_metadata(data, filename=filename, mime=mime)
+    ai_metadata = metadata_report.get("aiDetection") or {}
     report: dict = {
         "hasCredentials": False,
         "validationState": None,
@@ -54,6 +58,10 @@ def read_provenance(data: bytes, mime: str) -> dict:
         "isAiGenerated": None,
         "actions": [],
         "ingredients": [],
+        "metadataAiGenerated": bool(ai_metadata.get("isAiLikely")),
+        "aiMetadata": ai_metadata,
+        "metadata": metadata_report.get("metadata"),
+        "metadataSummary": metadata_report.get("metadataSummary"),
         "synthid": {"supported": False, "detected": None, "note": SYNTHID_NOTE},
         "error": None,
     }

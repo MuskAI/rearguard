@@ -10,7 +10,7 @@ usage() {
 Usage: DEPLOY_SSH_KEY=/path/to/key ./scripts/deploy_v2.sh
 
 Optional environment variables:
-  DEPLOY_HOST   Default: 124.222.3.205
+  DEPLOY_HOST   Default: 124.221.92.85
   DEPLOY_USER   Default: ubuntu
   DRY_RUN=1     Print commands without executing them
 
@@ -56,6 +56,6 @@ run_scp "$MARKER_PATH" "$REMOTE:/tmp/jianzhen-v2.DEPLOYED_COMMIT"
 run_scp -r "$FRONTEND_DIR/dist/." "$REMOTE:/var/www/v2/"
 
 log_step 5 "Activate V2 release"
-run_remote "sudo tar -xzf /tmp/jianzhen-v2-backend.tgz -C /opt/jianzhen-v2 && sudo install -m 644 /tmp/jianzhen-v2.DEPLOYED_COMMIT /opt/jianzhen-v2/DEPLOYED_COMMIT && rm -f /tmp/jianzhen-v2-backend.tgz /tmp/jianzhen-v2.DEPLOYED_COMMIT && sudo systemctl restart jianzhen-v2-backend.service && for _ in 1 2 3 4 5 6 7 8 9 10; do if curl -fsS http://127.0.0.1:8848/api/health >/dev/null; then break; fi; sleep 1; done && systemctl is-active jianzhen-v2-backend.service && curl -fsS http://127.0.0.1:8848/api/health >/dev/null && curl -fsS -o /dev/null http://127.0.0.1/v2/ && curl -fsS http://127.0.0.1/v2-api/health >/dev/null && cat /opt/jianzhen-v2/DEPLOYED_COMMIT"
+run_remote "sudo tar -xzf /tmp/jianzhen-v2-backend.tgz -C /opt/jianzhen-v2 && sudo install -m 644 /tmp/jianzhen-v2.DEPLOYED_COMMIT /opt/jianzhen-v2/DEPLOYED_COMMIT && rm -f /tmp/jianzhen-v2-backend.tgz /tmp/jianzhen-v2.DEPLOYED_COMMIT && sudo -u ubuntu /opt/jianzhen-v2/.venv/bin/python -m pip install --no-cache-dir --quiet --upgrade 'c2pa-python>=0.32.6' && sudo systemctl restart jianzhen-v2-backend.service && for _ in 1 2 3 4 5 6 7 8 9 10; do if curl -fsS http://127.0.0.1:8848/api/health >/dev/null; then break; fi; sleep 1; done && systemctl is-active jianzhen-v2-backend.service && curl -fsS http://127.0.0.1:8848/api/health >/dev/null && curl -fsS -o /dev/null http://127.0.0.1/v2/ && curl -fsS http://127.0.0.1/v2-api/health >/dev/null && cat /opt/jianzhen-v2/DEPLOYED_COMMIT"
 
 printf '\nV2 deployed from commit %s to %s\n' "$COMMIT_SHA" "$REMOTE"

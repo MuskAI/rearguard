@@ -4,21 +4,33 @@ import Logo from "./Logo";
 
 const FILTER_OPTIONS = [
   { key: "all", label: "全部" },
-  { key: "vlm", label: "VLM" },
-  { key: "mock", label: "Mock" },
-  { key: "maps-only", label: "仅证据图" },
-  { key: "unknown", label: "未知来源" },
-  { key: "real", label: "真实" },
-  { key: "suspected", label: "疑似" },
-  { key: "highly", label: "高疑" },
-  { key: "unknownVerdict", label: "未知判定" },
-  { key: "cache", label: "缓存" },
-  { key: "forensics", label: "取证" },
-  { key: "provenance", label: "凭证" },
-  { key: "synthid", label: "SynthID" },
-  { key: "watermark", label: "水印" },
+  { key: "highly", label: "高风险" },
+  { key: "suspected", label: "疑似风险" },
+  { key: "real", label: "未见异常" },
+  { key: "unknownVerdict", label: "待复核" },
+  { key: "forensics", label: "含鉴伪线索" },
+  { key: "provenance", label: "含内容凭证" },
+  { key: "watermark", label: "含可见水印" },
+  { key: "synthid", label: "含隐式水印" },
 ] as const;
 type SidebarFilterKey = HistorySidebarFilter;
+const PRIMARY_FILTER_KEYS = new Set<SidebarFilterKey>(["all", "highly", "suspected", "real", "unknownVerdict"]);
+const PRIMARY_FILTER_OPTIONS = FILTER_OPTIONS.filter((item) => PRIMARY_FILTER_KEYS.has(item.key as SidebarFilterKey));
+const MORE_FILTER_OPTIONS = FILTER_OPTIONS.filter((item) => !PRIMARY_FILTER_KEYS.has(item.key as SidebarFilterKey));
+
+function isHistoryNoticeMessage(value?: string) {
+  if (!value) return false;
+  const text = value.toLowerCase();
+  return (
+    value.includes("请登录") ||
+    value.includes("请先登录") ||
+    value.includes("认证") ||
+    value.includes("权限") ||
+    value.includes("历史记录暂不可用") ||
+    text.includes("unauthorized") ||
+    text.includes("forbidden")
+  );
+}
 
 interface Props {
   history: HistoryItem[];
@@ -66,6 +78,7 @@ export default function Sidebar({
   onClose,
 }: Props) {
   const [copied, setCopied] = useState(false);
+  const [showMoreFilters, setShowMoreFilters] = useState(false);
   useEffect(() => {
     if (!copied) return;
     const timer = window.setTimeout(() => setCopied(false), 1800);
@@ -76,6 +89,8 @@ export default function Sidebar({
     { label: "筛选", value: activeFilterLabel },
     { label: "搜索", value: query.trim() || "未设置" },
   ];
+  const activeFilterInMore = MORE_FILTER_OPTIONS.some((item) => item.key === filter);
+  const showHistoryNotice = isHistoryNoticeMessage(message) && history.length === 0;
 
   async function copyCurrentView() {
     const url = window.location.href;
@@ -92,16 +107,16 @@ export default function Sidebar({
       <div className="p-4 flex items-center gap-2.5">
         <Logo size={36} idSuffix="side" />
         <div className="flex-1 min-w-0">
-          <div className="font-serif text-xl font-semibold text-rice leading-tight tracking-[0.15em]">鉴真</div>
-          <div className="text-[10px] text-cinnabar-light tracking-[0.2em]">AI 鉴伪智能体</div>
+          <div className="text-xl font-semibold text-rice leading-tight">鉴真</div>
+          <div className="text-[10px] text-cinnabar-light">AI 鉴伪工作台</div>
         </div>
         {onClose && (
           <button
             onClick={onClose}
-            className="md:hidden h-8 w-8 rounded-lg border border-ink-600 text-ink-500"
+            className="md:hidden h-8 px-2 rounded-lg border border-ink-600 text-xs text-ink-500"
             aria-label="关闭历史记录"
           >
-            ✕
+            关闭
           </button>
         )}
       </div>
@@ -116,124 +131,178 @@ export default function Sidebar({
         + 新建检测
       </button>
 
-      <div className="px-4 pb-1 text-[11px] text-ink-500 uppercase tracking-wider">历史记录</div>
+      <div className="px-4 pb-1 text-[11px] text-ink-500 uppercase">历史记录</div>
       <div className="flex-1 overflow-y-auto px-2 space-y-1">
-        <div className="mx-2 mb-2 space-y-2">
-          <div className="rounded-lg border border-ink-600 bg-ink-800 px-2.5 py-2 flex items-center gap-2">
-            <input
-              value={query}
-              onChange={(event) => onQueryChange(event.target.value)}
-              placeholder="搜索名称 / 报告号 / 判定 / 来源 / 模型 / 证据"
-              className="min-w-0 flex-1 bg-transparent text-xs text-ink-950 placeholder:text-ink-500 outline-none"
-            />
-            {query.trim() && (
-              <button
-                type="button"
-                onClick={() => onQueryChange("")}
-                className="shrink-0 rounded-md border border-ink-600 bg-ink-900 px-2 py-1 text-[10px] text-ink-500"
-              >
-                清空
-              </button>
-            )}
+        {showHistoryNotice ? (
+          <div className="mx-2 mb-2 rounded-lg border border-ink-600 bg-ink-800 px-3 py-3">
+            <div className="text-sm font-medium text-ink-950">登录后查看历史</div>
+            <p className="mt-1 text-xs leading-relaxed text-ink-500">
+              登录后可查看检测记录、继续打开报告并归档结果。
+            </p>
+            <a
+              href="/"
+              className="mt-3 flex w-full items-center justify-center rounded-lg bg-brand-blue px-3 py-2 text-xs font-medium text-white"
+            >
+              前往登录
+            </a>
           </div>
-          <div className="flex flex-wrap gap-1">
-            {FILTER_OPTIONS.map((item) => (
+        ) : (
+          <div className="mx-2 mb-2 space-y-2">
+            <div className="rounded-lg border border-ink-600 bg-ink-800 px-2.5 py-2 flex items-center gap-2">
+              <input
+                value={query}
+                onChange={(event) => onQueryChange(event.target.value)}
+                placeholder="搜索名称 / 报告号 / 判定 / 证据"
+                className="min-w-0 flex-1 bg-transparent text-xs text-ink-950 placeholder:text-ink-500 outline-none"
+              />
+              {query.trim() && (
+                <button
+                  type="button"
+                  onClick={() => onQueryChange("")}
+                  className="shrink-0 rounded-md border border-ink-600 bg-ink-900 px-2 py-1 text-[10px] text-ink-500"
+                >
+                  清空
+                </button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {PRIMARY_FILTER_OPTIONS.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => onFilterChange(item.key as SidebarFilterKey)}
+                  className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] border ${
+                    filter === item.key
+                      ? "border-cinnabar/40 bg-cinnabar/10 text-cinnabar"
+                      : "border-ink-600 bg-ink-800 text-ink-500"
+                  }`}
+                >
+                  <span>{item.label}</span>
+                  <span
+                    className={`rounded-full px-1.5 py-0.5 text-[9px] ${
+                      filter === item.key
+                        ? "bg-cinnabar/15 text-cinnabar"
+                        : "bg-ink-900 text-ink-500"
+                    }`}
+                  >
+                    {filterCounts?.[item.key] ?? 0}
+                  </span>
+                </button>
+              ))}
               <button
-                key={item.key}
                 type="button"
-                onClick={() => onFilterChange(item.key as SidebarFilterKey)}
+                onClick={() => setShowMoreFilters((value) => !value)}
                 className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] border ${
-                  filter === item.key
-                    ? "border-cinnabar/40 bg-cinnabar/10 text-cinnabar"
+                  activeFilterInMore || showMoreFilters
+                    ? "border-brand-cyan/40 bg-brand-cyan/10 text-brand-cyan"
                     : "border-ink-600 bg-ink-800 text-ink-500"
                 }`}
               >
-                <span>{item.label}</span>
-                <span
-                  className={`rounded-full px-1.5 py-0.5 text-[9px] ${
-                    filter === item.key
-                      ? "bg-cinnabar/15 text-cinnabar"
-                      : "bg-ink-900 text-ink-500"
-                  }`}
-                >
-                  {filterCounts?.[item.key] ?? 0}
-                </span>
+                更多筛选
+                {activeFilterInMore && <span className="rounded-full bg-brand-cyan/15 px-1.5 py-0.5 text-[9px]">{activeFilterLabel}</span>}
               </button>
-            ))}
-          </div>
-          <button
-            type="button"
-            onClick={copyCurrentView}
-            className={`w-full px-2 py-1.5 rounded-md text-[10px] border ${
-              copied
-                ? "border-jade/40 bg-jade/10 text-jade"
-                : "border-ink-600 bg-ink-800 text-ink-500"
-            }`}
-          >
-            {copied ? "已复制当前视图链接" : "复制当前视图链接"}
-          </button>
-          {onRefreshHistory && (
-            <button
-              type="button"
-              onClick={onRefreshHistory}
-              disabled={historyBusy}
-              className="w-full px-2 py-1.5 rounded-md text-[10px] border border-ink-600 bg-ink-800 text-ink-500"
-            >
-              {historyBusy ? "刷新中" : "刷新历史"}
-            </button>
-          )}
-          <div className="flex flex-wrap gap-1">
-            {activeSummary.map((item) => (
-              <span key={item.label} className="px-2 py-1 rounded-md text-[10px] border border-ink-600 bg-ink-800 text-ink-500">
-                <strong className="text-ink-950">{item.label}</strong>
-                <span className="ml-1">{item.value}</span>
-              </span>
-            ))}
-          </div>
-          {(filter !== "all" || query.trim()) && (
-            <button
-              type="button"
-              onClick={() => {
-                onFilterChange("all");
-                onQueryChange("");
-              }}
-              className="w-full px-2 py-1.5 rounded-md text-[10px] border border-ink-600 bg-ink-800 text-ink-500"
-            >
-              重置条件
-            </button>
-          )}
-          <div className="text-[10px] text-ink-500">
-            当前显示 {history.length} / {totalCount ?? history.length}
-          </div>
-          {onLoadMore && (
-            <button
-              type="button"
-              onClick={onLoadMore}
-              disabled={historyBusy}
-              className="w-full px-2 py-1.5 rounded-md text-[10px] border border-ink-600 bg-ink-800 text-ink-500"
-            >
-              {historyBusy ? "加载中" : "加载更多"}
-            </button>
-          )}
-          {activeItem && (
-            <div className="rounded-lg border border-ink-600 bg-ink-800 px-2.5 py-2 text-[10px] text-ink-500">
-              <div className="font-medium text-ink-950 truncate">{activeItem.name}</div>
-              <div className="mt-1 flex items-center justify-between gap-2">
-                <span className="truncate">{activeItem.reportId}</span>
-                {onClearSelection && (
-                  <button
-                    type="button"
-                    onClick={onClearSelection}
-                    className="px-2 py-1 rounded-md border border-ink-600 bg-ink-900 text-[10px]"
-                  >
-                    清除选中
-                  </button>
-                )}
-              </div>
             </div>
-          )}
-        </div>
-        {message && (
+            {(showMoreFilters || activeFilterInMore) && (
+              <div className="flex flex-wrap gap-1 rounded-lg border border-ink-600 bg-ink-800 p-1.5">
+                {MORE_FILTER_OPTIONS.map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => onFilterChange(item.key as SidebarFilterKey)}
+                    className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] border ${
+                      filter === item.key
+                        ? "border-cinnabar/40 bg-cinnabar/10 text-cinnabar"
+                        : "border-ink-600 bg-ink-900 text-ink-500"
+                    }`}
+                  >
+                    <span>{item.label}</span>
+                    <span
+                      className={`rounded-full px-1.5 py-0.5 text-[9px] ${
+                        filter === item.key
+                          ? "bg-cinnabar/15 text-cinnabar"
+                          : "bg-ink-800 text-ink-500"
+                      }`}
+                    >
+                      {filterCounts?.[item.key] ?? 0}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={copyCurrentView}
+              className={`w-full px-2 py-1.5 rounded-md text-[10px] border ${
+                copied
+                  ? "border-jade/40 bg-jade/10 text-jade"
+                  : "border-ink-600 bg-ink-800 text-ink-500"
+              }`}
+            >
+              {copied ? "已复制当前视图链接" : "复制当前视图链接"}
+            </button>
+            {onRefreshHistory && (
+              <button
+                type="button"
+                onClick={onRefreshHistory}
+                disabled={historyBusy}
+                className="w-full px-2 py-1.5 rounded-md text-[10px] border border-ink-600 bg-ink-800 text-ink-500"
+              >
+                {historyBusy ? "刷新中" : "刷新历史"}
+              </button>
+            )}
+            <div className="flex flex-wrap gap-1">
+              {activeSummary.map((item) => (
+                <span key={item.label} className="px-2 py-1 rounded-md text-[10px] border border-ink-600 bg-ink-800 text-ink-500">
+                  <strong className="text-ink-950">{item.label}</strong>
+                  <span className="ml-1">{item.value}</span>
+                </span>
+              ))}
+            </div>
+            {(filter !== "all" || query.trim()) && (
+              <button
+                type="button"
+                onClick={() => {
+                  onFilterChange("all");
+                  onQueryChange("");
+                }}
+                className="w-full px-2 py-1.5 rounded-md text-[10px] border border-ink-600 bg-ink-800 text-ink-500"
+              >
+                重置条件
+              </button>
+            )}
+            <div className="text-[10px] text-ink-500">
+              当前显示 {history.length} / {totalCount ?? history.length}
+            </div>
+            {onLoadMore && (
+              <button
+                type="button"
+                onClick={onLoadMore}
+                disabled={historyBusy}
+                className="w-full px-2 py-1.5 rounded-md text-[10px] border border-ink-600 bg-ink-800 text-ink-500"
+              >
+                {historyBusy ? "加载中" : "加载更多"}
+              </button>
+            )}
+            {activeItem && (
+              <div className="rounded-lg border border-ink-600 bg-ink-800 px-2.5 py-2 text-[10px] text-ink-500">
+                <div className="font-medium text-ink-950 truncate">{activeItem.name}</div>
+                <div className="mt-1 flex items-center justify-between gap-2">
+                  <span className="truncate">{activeItem.reportId}</span>
+                  {onClearSelection && (
+                    <button
+                      type="button"
+                      onClick={onClearSelection}
+                      className="px-2 py-1 rounded-md border border-ink-600 bg-ink-900 text-[10px]"
+                    >
+                      清除选中
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        {!showHistoryNotice && message && (
           <div className="mx-2 mb-2 rounded-lg border border-ink-600 bg-ink-800 px-2.5 py-2 text-[11px] text-ink-500">
             <div>{message}</div>
             <div className="mt-2 flex flex-wrap gap-2">
@@ -249,10 +318,10 @@ export default function Sidebar({
             </div>
           </div>
         )}
-        {history.length === 0 && (
+        {!showHistoryNotice && history.length === 0 && (
           <div className="px-2 py-4 text-xs text-ink-500">{message ? "登录后会显示历史记录" : "暂无记录"}</div>
         )}
-        {totalCount !== 0 && history.length === 0 && (
+        {!showHistoryNotice && totalCount !== 0 && history.length === 0 && (
           <div className="px-2 py-4 space-y-2">
             <div className="text-xs text-ink-500">当前搜索/筛选条件下暂无记录</div>
             <div className="flex flex-wrap gap-2">
@@ -282,8 +351,7 @@ export default function Sidebar({
         )}
         {history.map((h) => {
           const meta = VERDICT_META[h.verdict];
-          const modelVersion = String(h.modelVersion || "").trim();
-          const cacheVersion = String(h.cacheVersion || "").trim();
+          const confidence = `${Math.round((h.confidence ?? 0) * 100)}%`;
           return (
             <div
               key={h.taskId}
@@ -317,23 +385,18 @@ export default function Sidebar({
                 <div className="text-[10px] flex items-center gap-1.5">
                   <span style={{ color: meta.color }}>{renderHighlightedText(meta.label, query)}</span>
                   <span className="text-ink-500">· {TYPE_LABEL[h.type]}</span>
-                  {h.source === "vlm" && <span className="text-brand-cyan">{renderHighlightedText("VLM", query)}</span>}
-                  {h.source === "mock" && <span className="text-cinnabar">{renderHighlightedText("Mock", query)}</span>}
-                  {h.source === "maps-only" && <span className="text-amber-300">{renderHighlightedText("仅证据图", query)}</span>}
-                  {h.source === "unknown" && <span className="text-ink-500">{renderHighlightedText("未知来源", query)}</span>}
-                  {modelVersion && <span className="text-ink-500 truncate">{renderHighlightedText(modelVersion, query)}</span>}
-                  {h.cacheHit && <span className="text-jade">{renderHighlightedText(cacheVersion ? `缓存 ${cacheVersion}` : "缓存", query)}</span>}
+                  <span className="text-ink-500">· 置信度 {renderHighlightedText(confidence, query)}</span>
                 </div>
                 {(h.hasForensics || h.hasProvenance || h.hasVisibleWatermark || h.hasSynthid) && (
                   <div className="mt-1 flex items-center gap-1.5 text-[10px]">
                     {h.hasForensics && (
                       <span className="px-1.5 py-0.5 rounded-full bg-brand-magenta/10 text-brand-magenta border border-brand-magenta/30">
-                        {renderHighlightedText("取证", query)}
+                        {renderHighlightedText("深度取证", query)}
                       </span>
                     )}
                     {h.hasProvenance && (
                       <span className="px-1.5 py-0.5 rounded-full bg-jade/10 text-jade border border-jade/30">
-                        {renderHighlightedText("凭证", query)}
+                        {renderHighlightedText("内容凭证", query)}
                       </span>
                     )}
                     {h.hasVisibleWatermark && (
@@ -343,7 +406,7 @@ export default function Sidebar({
                     )}
                     {h.hasSynthid && (
                       <span className="px-1.5 py-0.5 rounded-full bg-sky-500/10 text-sky-300 border border-sky-400/30">
-                        {renderHighlightedText("SynthID", query)}
+                        {renderHighlightedText("隐式水印", query)}
                       </span>
                     )}
                   </div>
@@ -356,7 +419,7 @@ export default function Sidebar({
                 }}
                 className="opacity-0 group-hover:opacity-100 text-ink-500 hover:text-verdict-fake text-xs px-1"
               >
-                ✕
+                删除
               </button>
             </div>
           );
@@ -368,19 +431,6 @@ export default function Sidebar({
       </div>
     </aside>
   );
-}
-
-export function getInitialHistoryQuery() {
-  if (typeof window === "undefined") return "";
-  return new URLSearchParams(window.location.search).get("historyQuery") || "";
-}
-
-export function getInitialHistoryFilter(): SidebarFilterKey {
-  if (typeof window === "undefined") return "all";
-  const value = new URLSearchParams(window.location.search).get("historyFilter");
-  return value === "vlm" || value === "mock" || value === "maps-only" || value === "unknown" || value === "real" || value === "suspected" || value === "highly" || value === "unknownVerdict" || value === "cache" || value === "forensics" || value === "provenance" || value === "synthid" || value === "watermark"
-    ? value
-    : "all";
 }
 
 function formatHistoryTime(value: string) {

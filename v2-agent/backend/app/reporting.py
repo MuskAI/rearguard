@@ -181,6 +181,8 @@ def _render_provenance_block(provenance: dict | None) -> str:
         return ""
     actions = provenance.get("actions", []) or []
     ingredients = provenance.get("ingredients", []) or []
+    metadata_summary = provenance.get("metadataSummary") or {}
+    ai_metadata = provenance.get("aiMetadata") or metadata_summary.get("aiDetection") or {}
     action_parts = []
     for item in actions:
         label = escape(_safe_text(item.get("action")))
@@ -195,13 +197,37 @@ def _render_provenance_block(provenance: dict | None) -> str:
         relationship = escape(_safe_text(item.get("relationship")))
         ingredient_parts.append(f"<li>{title} / {relationship}</li>")
     ingredient_items = "".join(ingredient_parts) or "<li class='muted'>未记录素材来源</li>"
+
+    signal_items = []
+    for item in (ai_metadata.get("signals") or [])[:8]:
+        signal_items.append(
+            "<li>"
+            f"{escape(_safe_text(item.get('label')))}"
+            f" / {escape(_safe_text(item.get('path')))}"
+            f" / {escape(_safe_text(item.get('value')))}"
+            "</li>"
+        )
+    signal_block = "".join(signal_items) or "<li class='muted'>未命中 AI 元数据线索</li>"
+
+    preview_items = []
+    for item in (metadata_summary.get("preview") or [])[:20]:
+        preview_items.append(
+            "<li>"
+            f"{escape(_safe_text(item.get('path')))}：{escape(_safe_text(item.get('value')))}"
+            "</li>"
+        )
+    preview_block = "".join(preview_items) or "<li class='muted'>未读取到可展示元数据</li>"
+
     return f"""
     <section class="card">
-      <h2>内容凭证验证（C2PA）</h2>
+      <h2>内容凭证验证（C2PA）与元数据检测</h2>
       <div class="meta-grid compact">
         <div><span>凭证</span><strong>{'检测到' if provenance.get('hasCredentials') else '未检测到'}</strong></div>
         <div><span>签名校验</span><strong>{escape(_safe_text(provenance.get('validationState')))}</strong></div>
         <div><span>AI 声明</span><strong>{escape(_safe_text(provenance.get('isAiGenerated')))}</strong></div>
+        <div><span>元数据 AI 线索</span><strong>{escape(_safe_text(provenance.get('metadataAiGenerated')))}</strong></div>
+        <div><span>元数据评分</span><strong>{escape(_safe_text(ai_metadata.get('score'), '0'))}/100</strong></div>
+        <div><span>元数据字段</span><strong>{escape(_safe_text(metadata_summary.get('fieldCount'), '0'))}</strong></div>
         <div><span>生成工具</span><strong>{escape(_safe_text(provenance.get('generator')))}</strong></div>
         <div><span>签发者</span><strong>{escape(_safe_text(provenance.get('issuer')))}</strong></div>
         <div><span>签名算法</span><strong>{escape(_safe_text(provenance.get('signatureAlg')))}</strong></div>
@@ -214,6 +240,16 @@ def _render_provenance_block(provenance: dict | None) -> str:
         <div>
           <h3>素材来源</h3>
           <ul>{ingredient_items}</ul>
+        </div>
+      </div>
+      <div class="grid single-gap">
+        <div>
+          <h3>AI 元数据线索</h3>
+          <ul>{signal_block}</ul>
+        </div>
+        <div>
+          <h3>元数据预览</h3>
+          <ul>{preview_block}</ul>
         </div>
       </div>
       <p class="footnote">SynthID 说明：{escape(_safe_text((provenance.get('synthid') or {}).get('note')))}</p>
@@ -333,7 +369,8 @@ def build_report_html(result: dict, *, forensics: dict | None = None, provenance
       gap: 8px;
       border-radius: 999px;
       padding: 8px 14px;
-      background: color-mix(in srgb, var(--accent) 12%, white);
+      background: #fff7f4;
+      border: 1px solid var(--line);
       color: var(--accent);
       font-weight: 700;
       margin-top: 8px;
@@ -489,7 +526,7 @@ def build_report_html(result: dict, *, forensics: dict | None = None, provenance
       <div class="footnote">
         1. 本报告用于工程留档和人工复核辅助，不构成司法或监管意义上的最终鉴定结论。<br />
         2. 无水印、无凭证或未标注区域，不足以单独证明内容真实。<br />
-        3. 若结果来源为 Mock，说明当前环境未调用真实模型，本报告仅表示流程演示结果。
+        3. 若结果来源为备用链路，说明当前环境未调用真实模型，本报告仅表示备用分析结果。
       </div>
     </section>
   </main>

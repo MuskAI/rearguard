@@ -120,7 +120,7 @@
             <div class="dropdown">
                 <button class="dropdown-trigger"><span>功能</span><i class="fa fa-chevron-down"></i></button>
                 <div class="dropdown-menu">
-                    <div class="dropdown-label">检测</div><a href="/image_upload" class="dropdown-item active-item"><i class="fa fa-image"></i> 图像鉴伪</a><a href="/video_upload" class="dropdown-item"><i class="fa fa-film"></i> 视频侵权检测</a><div class="dropdown-divider"></div><div class="dropdown-label">检索</div><a href="/image_retrieve" class="dropdown-item"><i class="fa fa-search"></i> 图像侵权检索</a><a href="/video_retrieve" class="dropdown-item"><i class="fa fa-play-circle"></i> 视频侵权检索</a>
+                    <div class="dropdown-label">检测</div><a href="/image_upload" class="dropdown-item active-item"><i class="fa fa-image"></i> 图像鉴伪</a><a href="/video_upload" class="dropdown-item"><i class="fa fa-film"></i> 视频鉴伪</a>
                 </div>
             </div>
             <a href="/introduce">关于我们</a><a href="/profile">我的</a>
@@ -157,7 +157,7 @@
                 <div class="card-title">
                     <div class="title-main"><i class="fa fa-bar-chart"></i> 检测结果</div>
                 </div>
-                <div id="sampleBadge" style="display:none;"><div class="sample-badge"><i class="fa fa-star"></i> 示例演示结果</div></div>
+                <div id="sampleBadge" style="display:none;"><div class="sample-badge"><i class="fa fa-star"></i> 示例检测结果</div></div>
                 <div class="result-grid">
                     <div class="result-image"><img id="resultImg" src="" alt="检测图片"></div>
                     <div class="result-details">
@@ -192,7 +192,7 @@
                 </div>
                 <div class="swarm-result" id="swarmResultPanel">
                     <div class="swarm-result-head">
-                        <h4><i class="fa fa-sitemap"></i> Swarm 专家会诊</h4>
+                        <h4><i class="fa fa-sitemap"></i> 专家会诊</h4>
                         <div class="swarm-badges" id="swarmBadges"></div>
                     </div>
                     <div class="swarm-expert-list" id="swarmExpertList"></div>
@@ -305,10 +305,10 @@
     function renderResult(r){
         var pNum = Number(r.probability);
         if (isNaN(pNum)) pNum = 0;
-        var hasSwarm = !!(r && r.swarm && r.swarm.enabled);
+        var hasExpertReview = !!(r && r.swarm && r.swarm.enabled);
         var verdictFromResult = String((r && r.final_label) || '').trim();
-        var isFake = hasSwarm ? (verdictFromResult !== '真实图像') : (pNum >= 0.5);
-        var verdictLabel = hasSwarm && verdictFromResult ? verdictFromResult : (isFake ? 'AI生成图像' : '真实图像');
+        var isFake = hasExpertReview ? (verdictFromResult !== '真实图像') : (pNum >= 0.5);
+        var verdictLabel = hasExpertReview && verdictFromResult ? verdictFromResult : (isFake ? 'AI生成图像' : '真实图像');
         var prob=(pNum*100).toFixed(1);
         var detectorNum = Number(r.detector_probability);
         if (isNaN(detectorNum)) detectorNum = pNum;
@@ -325,10 +325,10 @@
         var v=document.getElementById('verdict');v.className='verdict '+(isFake?'fake':'real');
         document.getElementById('verdictIcon').innerHTML='<i class="fa '+(isFake?'fa-times':'fa-check')+'"></i>';
         document.getElementById('verdictLabel').textContent=verdictLabel;
-        document.getElementById('verdictSub').textContent='置信度: '+(r.confidence||'-')+'  |  '+(hasSwarm?'综合伪造风险: ':'综合 AI 生成概率: ')+prob+'%';
+        document.getElementById('verdictSub').textContent='置信度: '+(r.confidence||'-')+'  |  '+(hasExpertReview?'综合伪造风险: ':'综合 AI 生成概率: ')+prob+'%';
 
-        document.getElementById('probLabel').textContent=hasSwarm?'Swarm综合伪造风险':'综合AI生成概率';
-        document.getElementById('detProbLabel').textContent=hasSwarm?'主检测器原始概率':'检测器原始AI概率';
+        document.getElementById('probLabel').textContent=hasExpertReview?'专家会诊综合伪造风险':'综合AI生成概率';
+        document.getElementById('detProbLabel').textContent=hasExpertReview?'主检测器原始概率':'检测器原始AI概率';
         document.getElementById('probVal').textContent=prob+'%';
         document.getElementById('probVal').style.color=isFake?'var(--danger)':'var(--success)';
         document.getElementById('detProbVal').textContent=detProb+'%';
@@ -342,7 +342,7 @@
         document.getElementById('infoSize').textContent=r.file_size||'-';
         document.getElementById('infoFmt').textContent=r.img_format||'-';
         document.getElementById('infoRes').textContent=r.resolution||'-';
-        document.getElementById('infoModel').textContent=hasSwarm?'Swarm 专家会诊':'综合鉴伪分析';
+        document.getElementById('infoModel').textContent=hasExpertReview?'专家会诊':'综合鉴伪分析';
 
         // Metadata
         currentMetadata = r.all_metadata || {};
@@ -360,7 +360,7 @@
         document.getElementById('explanationText').textContent=cleanExplanation(r)||'暂无说明';
         renderVisualIssues(r);
         renderAgentReasoning(r);
-        renderSwarmResult(r);
+        renderExpertReviewResult(r);
 
         setupFeedbackUI(r);
     }
@@ -373,7 +373,7 @@
         return 'fa-circle-o';
     }
 
-    function publicSwarmText(value) {
+    function publicExpertReviewText(value) {
         var text = String(value || '')
             .replace(/^[^:：]{0,32}[:：]\s*/, '')
             .replace(/阿里云|Aliyun|V2|Qwen|ONNX|RealGuard\s*V?\d*|AIGC\s*专业版|隐式标识专家|局部编辑专家|主路由鉴伪专家|视觉语言复核专家|专家复核完成|专家/g, '')
@@ -401,11 +401,11 @@
         if (status === 'running') return '正在复核';
         if (status === 'failed') return '该专家暂不可用';
         if (status === 'skipped') return '已跳过';
-        if (status === 'success') return expert.verdict ? publicSwarmText(expert.verdict) : '复核完成';
+        if (status === 'success') return expert.verdict ? publicExpertReviewText(expert.verdict) : '复核完成';
         return '等待调度';
     }
 
-    function renderSwarmResult(r) {
+    function renderExpertReviewResult(r) {
         var panel = document.getElementById('swarmResultPanel');
         var badges = document.getElementById('swarmBadges');
         var list = document.getElementById('swarmExpertList');

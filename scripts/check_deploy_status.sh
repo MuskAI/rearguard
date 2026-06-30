@@ -10,7 +10,7 @@ usage() {
 Usage: DEPLOY_SSH_KEY=/path/to/key ./scripts/check_deploy_status.sh [all|v1|v2]
 
 Optional environment variables:
-  DEPLOY_HOST     Default: 124.222.3.205
+  DEPLOY_HOST     Default: 124.221.92.85
   DEPLOY_USER     Default: ubuntu
   EXPECT_COMMIT   Override the auto-derived expected commit SHA
   STRICT=1        Exit non-zero when service or health checks are unhealthy

@@ -20,7 +20,6 @@ export default defineConfig({
       "/logout": backend,
       "/image_upload": backend,
       "/video_upload": backend,
-      "/retrieve": backend,
       "/static": backend
     }
   }

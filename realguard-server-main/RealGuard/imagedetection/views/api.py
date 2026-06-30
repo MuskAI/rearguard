@@ -1,7 +1,6 @@
 import hashlib
 import hmac
 import io
-import json
 import os
 import secrets
 from collections import defaultdict
@@ -500,6 +499,7 @@ def _history_identity(allow_empty=False):
     if user:
         return {
             "mode": "user",
+            "user_id": user.get("Userid") or user.get("userId") or user.get("id"),
             "phone": str(user.get("phone") or "").strip(),
             "openid": str(user.get("openid") or "").strip(),
         }, None
@@ -509,6 +509,26 @@ def _history_identity(allow_empty=False):
     if allow_empty:
         return {"mode": "anonymous", "phone": "", "openid": ""}, None
     return None, (jsonify({"status": "error", "message": "用户未登录"}), 401)
+
+
+def _history_actor_where(actor):
+    clauses = []
+    params = []
+    user_id = (actor or {}).get("user_id")
+    if user_id not in (None, ""):
+        clauses.append("Userid = %s")
+        params.append(user_id)
+    phone = str((actor or {}).get("phone") or "").strip()
+    if phone:
+        clauses.append("phone = %s")
+        params.append(phone)
+    openid = str((actor or {}).get("openid") or "").strip()
+    if openid:
+        clauses.append("openid = %s")
+        params.append(openid)
+    if not clauses:
+        return "1 = 0", ()
+    return " OR ".join(clauses), tuple(params)
 
 
 def _is_guest_detection_record(item):
@@ -683,61 +703,6 @@ def _video_history_matches_filter(record, filter_key):
     return True
 
 
-def _retrieval_history_record(item, phone, search_type):
-    result_count = int(item.get("result_count") or 0)
-    results = json.loads(item.get("results_json") or "[]")
-    top_result = results[0] if results else {}
-    top_result_id = str(top_result.get("id") or "")
-    top_result_library = top_result_id.split("/", 1)[0] if "/" in top_result_id else ""
-    return {
-        "itemid": item.get("itemid"),
-        "filename": item.get("filename", ""),
-        "file_url": f"/static/uploads/{phone}/retrieve/{item.get('filename', '')}",
-        "search_type": search_type,
-        "result_count": result_count,
-        "top_k": item.get("top_k", 10),
-        "file_size": item.get("file_size", ""),
-        "createtime": format_createtime(item.get("createtime", "")),
-        "results": results,
-        "report_url": f"/history_retrieve/report?itemid={item.get('itemid')}",
-        "has_hits": result_count > 0,
-        "top_result_id": top_result_id,
-        "top_result_library": top_result_library,
-        "top_result_score": round(float(top_result.get("score", 0) or 0), 4) if top_result else 0,
-    }
-
-
-def _retrieval_history_search_fields(record):
-    return [
-        record.get("filename", ""),
-        record.get("createtime", ""),
-        record.get("result_count", ""),
-        record.get("top_k", ""),
-        record.get("search_type", ""),
-        record.get("top_result_id", ""),
-        record.get("top_result_library", ""),
-        record.get("top_result_score", ""),
-        "有命中" if record.get("has_hits") else "无命中",
-        "图像检索" if record.get("search_type") == "image" else "视频检索",
-        f"命中库 {record.get('top_result_library', '')}" if record.get("top_result_library") else "",
-        f"检索库 {record.get('top_result_library', '')}" if record.get("top_result_library") else "",
-        "首个命中" if record.get("top_result_id") else "",
-        "命中库" if record.get("top_result_library") else "",
-        "最高分" if record.get("top_result_id") else "",
-        "数量",
-        "Top-K",
-    ]
-
-
-def _retrieval_history_matches_filter(record, filter_key):
-    result_count = int(record.get("result_count") or 0)
-    if filter_key == "hits":
-        return result_count > 0
-    if filter_key == "empty":
-        return result_count <= 0
-    return True
-
-
 @api_blueprint.route("/me")
 def me():
     user, error = _auth_required()
@@ -745,28 +710,23 @@ def me():
         return error
 
     phone = user.get("phone", "")
+    actor = {
+        "user_id": user.get("Userid") or user.get("userId") or user.get("id"),
+        "phone": phone,
+        "openid": user.get("openid", ""),
+    }
+    history_where, history_params = _history_actor_where(actor)
     counters = {
         "image_detect": 0,
         "video_detect": 0,
-        "image_retrieve": 0,
-        "video_retrieve": 0,
     }
 
-    rows = excute_detection_sql("SELECT COUNT(*) AS cnt FROM data WHERE phone = %s", (phone,))
+    rows = excute_detection_sql(f"SELECT COUNT(*) AS cnt FROM data WHERE {history_where}", history_params)
     if rows:
         counters["image_detect"] = rows[0].get("cnt", 0)
-    rows = excute_detection_sql("SELECT COUNT(*) AS cnt FROM video_data WHERE phone = %s", (phone,))
+    rows = excute_detection_sql(f"SELECT COUNT(*) AS cnt FROM video_data WHERE {history_where}", history_params)
     if rows:
         counters["video_detect"] = rows[0].get("cnt", 0)
-    rows = excute_sql(
-        "SELECT search_type, COUNT(*) AS cnt FROM retrieve_data WHERE phone = %s GROUP BY search_type",
-        (phone,),
-    )
-    for row in rows or []:
-        if row.get("search_type") == "image":
-            counters["image_retrieve"] = row.get("cnt", 0)
-        elif row.get("search_type") == "video":
-            counters["video_retrieve"] = row.get("cnt", 0)
 
     return jsonify({"status": "success", "user": user, "counters": counters})
 
@@ -1091,9 +1051,10 @@ def image_detection_history():
     elif actor["mode"] == "anonymous":
         rows = []
     else:
+        history_where, history_params = _history_actor_where(actor)
         rows = excute_detection_sql(
-            "SELECT * FROM data WHERE phone = %s OR openid = %s ORDER BY createtime DESC",
-            (actor["phone"], actor["openid"]),
+            f"SELECT * FROM data WHERE {history_where} ORDER BY createtime DESC",
+            history_params,
         )
     query_records = []
     for item in rows or []:
@@ -1123,9 +1084,10 @@ def image_detection_thumbnail(itemid):
             (itemid, actor["openid"]),
         )
     else:
+        history_where, history_params = _history_actor_where(actor)
         rows = excute_detection_sql(
-            "SELECT * FROM data WHERE itemid = %s AND (phone = %s OR openid = %s) LIMIT 1",
-            (itemid, actor["phone"], actor["openid"]),
+            f"SELECT * FROM data WHERE itemid = %s AND ({history_where}) LIMIT 1",
+            (itemid, *history_params),
         )
     if not rows:
         return jsonify({"status": "error", "message": "未找到图片记录"}), 404
@@ -1178,9 +1140,10 @@ def video_detection_history():
     elif actor["mode"] == "anonymous":
         rows = []
     else:
+        history_where, history_params = _history_actor_where(actor)
         rows = excute_detection_sql(
-            "SELECT * FROM video_data WHERE phone = %s OR openid = %s ORDER BY createtime DESC",
-            (actor["phone"], actor["openid"]),
+            f"SELECT * FROM video_data WHERE {history_where} ORDER BY createtime DESC",
+            history_params,
         )
     query_records = []
     for item in rows or []:
@@ -1196,52 +1159,3 @@ def video_detection_history():
     }
     records = [record for record in query_records if _video_history_matches_filter(record, filter_key)]
     return jsonify({"status": "success", "records": records[offset: offset + limit], "total": len(records), "filter_counts": filter_counts})
-
-
-@api_blueprint.route("/history/retrievals")
-def retrieval_history():
-    actor, error = _history_identity(allow_empty=True)
-    if error:
-        return error
-    limit, limit_error = _history_limit()
-    if limit_error:
-        return limit_error
-    offset, offset_error = _history_offset()
-    if offset_error:
-        return offset_error
-    query = _history_query()
-    filter_key = str(request.args.get("filter") or "all").strip()
-    if filter_key not in {"all", "hits", "empty"}:
-        return jsonify({"status": "error", "message": "filter 不受支持"}), 400
-
-    search_type = request.args.get("search_type", "image")
-    if search_type not in ("image", "video"):
-        return jsonify({"status": "error", "message": "search_type 必须为 image 或 video"}), 400
-
-    if actor["mode"] != "user":
-        rows = []
-        phone = ""
-    else:
-        phone = actor["phone"]
-        rows = excute_sql(
-            "SELECT * FROM retrieve_data WHERE phone = %s AND search_type = %s ORDER BY createtime DESC",
-            (phone, search_type),
-        )
-    records = []
-    for item in rows or []:
-        record = _retrieval_history_record(item, phone, search_type)
-        if not _contains_history_query(_retrieval_history_search_fields(record), query):
-            continue
-        records.append(record)
-    filter_counts = {
-        "all": len(records),
-        "hits": sum(1 for record in records if int(record.get("result_count") or 0) > 0),
-        "empty": sum(1 for record in records if int(record.get("result_count") or 0) <= 0),
-    }
-    filtered_records = [record for record in records if _retrieval_history_matches_filter(record, filter_key)]
-    return jsonify({
-        "status": "success",
-        "records": filtered_records[offset: offset + limit],
-        "total": len(filtered_records),
-        "filter_counts": filter_counts,
-    })

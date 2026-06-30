@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   DetectResult,
   HistoryFilterCounts,
@@ -16,12 +16,11 @@ import {
   fetchHistoryItem,
   deleteHistory,
   persistArtifacts,
-  TYPE_LABEL,
 } from "./api";
-import Sidebar, { getInitialHistoryFilter, getInitialHistoryQuery } from "./components/Sidebar";
+import { getInitialHistoryFilter, getInitialHistoryQuery } from "./historyParams";
+import Sidebar from "./components/Sidebar";
 import ResultCard from "./components/ResultCard";
 import ForensicGallery from "./components/ForensicGallery";
-import ProvenanceCard from "./components/ProvenanceCard";
 import Logo from "./components/Logo";
 import AdminDashboard from "./components/AdminDashboard";
 
@@ -30,10 +29,9 @@ type Message =
   | { kind: "progress"; stage: number }
   | { kind: "result"; result: DetectResult; previewUrl?: string; file?: File }
   | { kind: "loading"; text: string }
-  | { kind: "forensics"; report: ForensicReport }
-  | { kind: "provenance"; report: ProvenanceReport };
+  | { kind: "forensics"; report: ForensicReport };
 
-const PROGRESS_STEPS = ["正在解析文件…", "正在提取多模态特征…", "正在运行鉴伪模型…", "正在生成检测报告…"];
+const PROGRESS_STEPS = ["正在解析文件…", "正在提取鉴伪线索…", "正在比对风险证据…", "正在生成检测报告…"];
 
 const QUICK_COMMANDS = [
   { label: "检测AI生成", hint: "判断是否为 AI 生成内容" },
@@ -43,13 +41,17 @@ const QUICK_COMMANDS = [
 ];
 const HISTORY_PAGE_SIZE = 100;
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
-const SKILL_NAME = "$realguard-forensics";
-const PUBLIC_ORIGIN = typeof window === "undefined" ? "http://124.222.3.205" : window.location.origin;
-const SKILL_URL = `${PUBLIC_ORIGIN}/v2/skills/realguard-forensics/SKILL.md`;
-const SKILL_COMMAND =
-  `python3 scripts/realguard_cli.py detect <file> --base-url ${PUBLIC_ORIGIN} --api-prefix /v2-api --pretty`;
-const SKILL_HANDOFF =
-  `Use ${SKILL_NAME}; read ${SKILL_URL}; call POST ${PUBLIC_ORIGIN}/v2-api/detect with multipart field file, or run ${SKILL_COMMAND} if the repo CLI is available; then return a concise verdict with confidence, evidence, model version, cache version, and report id.`;
+const REVIEWER_HISTORY_FILTERS = new Set<HistorySidebarFilter>([
+  "all",
+  "real",
+  "suspected",
+  "highly",
+  "unknownVerdict",
+  "forensics",
+  "provenance",
+  "synthid",
+  "watermark",
+]);
 
 function inferType(name: string): FileType {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
@@ -63,6 +65,36 @@ function formatBytes(size: number): string {
   if (size < 1024) return `${size}B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)}KB`;
   return `${(size / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+function formatCapabilitySummary(health: HealthStatus | null): string {
+  if (!health) return "检测服务状态待确认";
+  const caps = health?.capabilities || {};
+  const available = [caps.image === "available" ? "图像" : "", caps.document === "available" ? "文档" : ""].filter(Boolean);
+  const limited = [caps.video === "limited" ? "视频" : "", caps.audio === "limited" ? "音频" : ""]
+    .filter(Boolean)
+    .join(" / ");
+  const service = available.length > 0 ? `${available.join(" / ")}检测服务可用` : health.vlmEnabled ? "检测服务可用" : "部分能力暂不可用";
+  return limited ? `${service} · ${limited}能力暂不可用` : service;
+}
+
+function isAuthRequiredMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return message.includes("请登录") || message.includes("请先登录") || message.includes("认证") || message.includes("权限") || normalized.includes("unauthorized") || normalized.includes("forbidden");
+}
+
+function friendlyMessage(message: string, fallback: string): string {
+  const text = message.trim();
+  if (!text) return fallback;
+  if (text.includes("继续使用 V2")) return "请登录后继续检测";
+  if (isAuthRequiredMessage(text)) return "请登录后继续检测";
+  if (text.includes("Unexpected end of JSON")) return fallback;
+  return text;
+}
+
+function getInitialReviewerHistoryFilter(): HistorySidebarFilter {
+  const filter = getInitialHistoryFilter();
+  return REVIEWER_HISTORY_FILTERS.has(filter) ? filter : "all";
 }
 
 export default function App() {
@@ -96,24 +128,33 @@ export default function App() {
   const [provenanceBusy, setProvenanceBusy] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyQuery, setHistoryQuery] = useState(() => getInitialHistoryQuery());
-  const [historyFilter, setHistoryFilter] = useState<HistorySidebarFilter>(() => getInitialHistoryFilter());
+  const [historyFilter, setHistoryFilter] = useState<HistorySidebarFilter>(() => getInitialReviewerHistoryFilter());
   const [historyLimit, setHistoryLimit] = useState(HISTORY_PAGE_SIZE);
-  const [view, setView] = useState<"detect" | "monitor">(() => (window.location.hash === "#monitor" ? "monitor" : "detect"));
+  const [view, setView] = useState<"detect" | "monitor">("detect");
   const [activeId, setActiveId] = useState<string>();
-  const [skillCopied, setSkillCopied] = useState<"handoff" | "command" | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const restoredHistoryItemRef = useRef(false);
+  const historyLengthRef = useRef(0);
+  const historyLimitRef = useRef(HISTORY_PAGE_SIZE);
   const historyRequestIdRef = useRef(0);
   const historyDetailRequestIdRef = useRef(0);
 
-  const loadHealth = () =>
+  useEffect(() => {
+    historyLengthRef.current = history.length;
+  }, [history.length]);
+
+  useEffect(() => {
+    historyLimitRef.current = historyLimit;
+  }, [historyLimit]);
+
+  const loadHealth = useCallback(() =>
     fetchHealth()
       .then(setHealth)
-      .catch(() => setHealth(null));
+      .catch(() => setHealth(null)), []);
 
-  const loadHistory = async ({
-    preserveOnError = history.length > 0,
+  const loadHistory = useCallback(async ({
+    preserveOnError = historyLengthRef.current > 0,
     append = false,
     reset = false,
   }: {
@@ -125,8 +166,8 @@ export default function App() {
     historyRequestIdRef.current = requestId;
     setHistoryBusy(true);
     try {
-      const offset = append ? history.length : 0;
-      const limit = append ? HISTORY_PAGE_SIZE : reset ? HISTORY_PAGE_SIZE : historyLimit;
+      const offset = append ? historyLengthRef.current : 0;
+      const limit = append ? HISTORY_PAGE_SIZE : reset ? HISTORY_PAGE_SIZE : historyLimitRef.current;
       const data = await fetchHistory({ query: historyQuery, filter: historyFilter, limit, offset });
       if (historyRequestIdRef.current !== requestId) return;
       if (append) {
@@ -147,18 +188,55 @@ export default function App() {
         setHistoryTotal(0);
         setHistoryFilterCounts({ all: 0, vlm: 0, mock: 0, "maps-only": 0, unknown: 0, real: 0, suspected: 0, highly: 0, unknownVerdict: 0, cache: 0, forensics: 0, provenance: 0, synthid: 0, watermark: 0 });
       }
-      setHistoryMessage(error instanceof Error ? error.message : "历史记录暂不可用");
+      setHistoryMessage(friendlyMessage(error instanceof Error ? error.message : "", "历史记录暂不可用"));
     } finally {
       if (historyRequestIdRef.current === requestId) {
         setHistoryBusy(false);
       }
     }
-  };
+  }, [historyFilter, historyQuery]);
+
+  const showHistoryResult = useCallback((result: DetectResult) => {
+    if (result.forensics) {
+      setForensicsByTask((prev) => ({ ...prev, [result.taskId]: result.forensics! }));
+    }
+    if (result.provenance) {
+      setProvenanceByTask((prev) => ({ ...prev, [result.taskId]: result.provenance! }));
+    }
+    const nextMessages: Message[] = [{ kind: "result", result }];
+    if (result.forensics) {
+      nextMessages.push({ kind: "forensics", report: result.forensics });
+    }
+    setMessages(nextMessages);
+    setActiveId(result.taskId);
+  }, []);
+
+  const openHistoryItem = useCallback(async (itemId: string) => {
+    const normalized = itemId.trim();
+    if (!normalized) return;
+    setActiveId(normalized);
+    const requestId = historyDetailRequestIdRef.current + 1;
+    historyDetailRequestIdRef.current = requestId;
+    setMessages([{ kind: "loading", text: "正在加载历史详情…" }]);
+    try {
+      const result: DetectResult = await fetchHistoryItem(normalized);
+      if (historyDetailRequestIdRef.current !== requestId) return;
+      showHistoryResult(result);
+    } catch (error) {
+      if (historyDetailRequestIdRef.current !== requestId) return;
+      setMessages([
+        {
+          kind: "user",
+          text: `历史详情加载失败：${friendlyMessage(error instanceof Error ? error.message : "", "历史详情暂不可用")}`,
+          fileName: "",
+        },
+      ]);
+    }
+  }, [showHistoryResult]);
 
   useEffect(() => {
     loadHealth();
-    void loadHistory({ preserveOnError: false });
-  }, []);
+  }, [loadHealth]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -173,34 +251,34 @@ export default function App() {
 
   useEffect(() => {
     void loadHistory({ preserveOnError: false, reset: true });
-  }, [historyFilter, historyQuery]);
+  }, [historyFilter, historyQuery, loadHistory]);
 
   useEffect(() => {
     setHistoryLimit(HISTORY_PAGE_SIZE);
   }, [historyFilter, historyQuery]);
 
   useEffect(() => {
-    if (restoredHistoryItemRef.current || history.length === 0) return;
-    const initialHistoryItem = getInitialHistoryItem();
-    if (!initialHistoryItem) {
-      restoredHistoryItemRef.current = true;
-      return;
-    }
-    const target = history.find((item) => item.taskId === initialHistoryItem || item.reportId === initialHistoryItem);
+    if (restoredHistoryItemRef.current) return;
     restoredHistoryItemRef.current = true;
-    if (target) {
-      void onSelectHistory(target);
-    }
-  }, [history]);
+    const initialHistoryItem = getInitialHistoryItem();
+    if (initialHistoryItem) void openHistoryItem(initialHistoryItem);
+  }, [openHistoryItem]);
 
   useEffect(() => {
-    const onHash = () => setView(window.location.hash === "#monitor" ? "monitor" : "detect");
+    const onHash = () => {
+      if (window.location.hash === "#monitor") {
+        window.history.replaceState({}, "", `${window.location.pathname}${window.location.search}`);
+      }
+      setView("detect");
+    };
+    onHash();
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (!activeId && !restoredHistoryItemRef.current) return;
     const params = new URLSearchParams(window.location.search);
     if (activeId) params.set("historyItem", activeId);
     else params.delete("historyItem");
@@ -212,34 +290,12 @@ export default function App() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages]);
 
-  const copySkillText = async (kind: "handoff" | "command", text: string) => {
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text);
-      } else {
-        const textarea = document.createElement("textarea");
-        textarea.value = text;
-        textarea.style.position = "fixed";
-        textarea.style.opacity = "0";
-        document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand("copy");
-        document.body.removeChild(textarea);
-      }
-      setSkillCopied(kind);
-      window.setTimeout(() => setSkillCopied(null), 1800);
-    } catch {
-      window.prompt("复制失败，请手动复制：", text);
-    }
-  };
-
   const runDetect = async (file: File) => {
     const type = inferType(file.name);
     const previewUrl = type === "image" ? URL.createObjectURL(file) : undefined;
 
     setMessages((m) => [
       ...m,
-      { kind: "user", text: `请鉴定这个${TYPE_LABEL[type]}文件`, fileName: file.name, previewUrl },
       { kind: "progress", stage: 0 },
     ]);
     setBusy(true);
@@ -251,6 +307,9 @@ export default function App() {
 
     try {
       const result = await detect(file, type);
+      if (result.provenance) {
+        setProvenanceByTask((prev) => ({ ...prev, [result.taskId]: result.provenance! }));
+      }
       setMessages((m) => [
         ...m.filter((msg) => msg.kind !== "progress"),
         { kind: "result", result, previewUrl, file: type === "image" ? file : undefined },
@@ -262,7 +321,7 @@ export default function App() {
         ...m.filter((msg) => msg.kind !== "progress"),
         {
           kind: "user",
-          text: `检测失败：${e instanceof Error ? e.message : "未知错误"}`,
+          text: `检测失败：${friendlyMessage(e instanceof Error ? e.message : "", "检测暂未完成，请稍后重试")}`,
           fileName: "",
         },
       ]);
@@ -276,7 +335,6 @@ export default function App() {
     setForensicsBusy(true);
     setMessages((m) => [
       ...m,
-      { kind: "user", text: "请帮我做可解释性取证分析，提供可视化证据", fileName: file.name },
       { kind: "loading", text: "正在生成 7 项取证可视化证据并逐项判读…" },
     ]);
     try {
@@ -294,7 +352,7 @@ export default function App() {
     } catch (e) {
       setMessages((m) => [
         ...m.filter((msg) => msg.kind !== "loading"),
-        { kind: "user", text: `取证分析失败：${e instanceof Error ? e.message : "未知错误"}`, fileName: "" },
+        { kind: "user", text: `取证分析失败：${friendlyMessage(e instanceof Error ? e.message : "", "取证分析暂未完成，请稍后重试")}`, fileName: "" },
       ]);
     } finally {
       setForensicsBusy(false);
@@ -306,8 +364,7 @@ export default function App() {
     setProvenanceBusy(true);
     setMessages((m) => [
       ...m,
-      { kind: "user", text: "请验证这张图的内容凭证（C2PA）", fileName: file.name },
-      { kind: "loading", text: "正在读取并验证 C2PA 内容凭证…" },
+      { kind: "loading", text: "正在核验内容凭证与文件信息…" },
     ]);
     try {
       const report = await runProvenance(file);
@@ -317,14 +374,11 @@ export default function App() {
       } catch {
         // Keep the current analysis result visible even if persistence fails.
       }
-      setMessages((m) => [
-        ...m.filter((msg) => msg.kind !== "loading"),
-        { kind: "provenance", report },
-      ]);
+      setMessages((m) => m.filter((msg) => msg.kind !== "loading"));
     } catch (e) {
       setMessages((m) => [
         ...m.filter((msg) => msg.kind !== "loading"),
-        { kind: "user", text: `凭证验证失败：${e instanceof Error ? e.message : "未知错误"}`, fileName: "" },
+        { kind: "user", text: `凭证验证失败：${friendlyMessage(e instanceof Error ? e.message : "", "凭证验证暂未完成，请稍后重试")}`, fileName: "" },
       ]);
     } finally {
       setProvenanceBusy(false);
@@ -334,12 +388,12 @@ export default function App() {
   const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (f) {
-      if (f.size > MAX_UPLOAD_BYTES) {
+      if (f.size > uploadLimit) {
         setMessages((m) => [
           ...m,
           {
             kind: "user",
-            text: `检测失败：文件不能超过 ${formatBytes(MAX_UPLOAD_BYTES)}，当前文件为 ${formatBytes(f.size)}。`,
+            text: `检测失败：文件不能超过 ${formatBytes(uploadLimit)}，当前文件为 ${formatBytes(f.size)}。`,
             fileName: f.name,
           },
         ]);
@@ -351,41 +405,7 @@ export default function App() {
   };
 
   const onSelectHistory = async (item: HistoryItem) => {
-    setActiveId(item.taskId);
-    const requestId = historyDetailRequestIdRef.current + 1;
-    historyDetailRequestIdRef.current = requestId;
-    try {
-      const result: DetectResult = await fetchHistoryItem(item.taskId);
-      if (historyDetailRequestIdRef.current !== requestId) return;
-      if (result.forensics) {
-        setForensicsByTask((prev) => ({ ...prev, [result.taskId]: result.forensics! }));
-      }
-      if (result.provenance) {
-        setProvenanceByTask((prev) => ({ ...prev, [result.taskId]: result.provenance! }));
-      }
-      const nextMessages: Message[] = [
-        { kind: "user", text: `历史记录：${item.name}`, fileName: item.name },
-        { kind: "result", result },
-      ];
-      if (result.forensics) {
-        nextMessages.push({ kind: "forensics", report: result.forensics });
-      }
-      if (result.provenance) {
-        nextMessages.push({ kind: "provenance", report: result.provenance });
-      }
-      setMessages([
-        ...nextMessages,
-      ]);
-    } catch (error) {
-      if (historyDetailRequestIdRef.current !== requestId) return;
-      setMessages([
-        {
-          kind: "user",
-          text: error instanceof Error ? error.message : "加载历史详情失败",
-          fileName: "",
-        },
-      ]);
-    }
+    await openHistoryItem(item.taskId);
   };
 
   const onDelete = async (taskId: string) => {
@@ -398,8 +418,19 @@ export default function App() {
       setHistory((items) => items.filter((item) => item.taskId !== taskId));
       void loadHistory({ preserveOnError: true });
     } catch (error) {
-      setHistoryMessage(error instanceof Error ? error.message : "删除历史失败");
+      setHistoryMessage(friendlyMessage(error instanceof Error ? error.message : "", "删除历史失败"));
     }
+  };
+
+  const capabilitySummary = formatCapabilitySummary(health);
+  const uploadLimit = health?.limits?.maxUploadBytes || MAX_UPLOAD_BYTES;
+  const accessAttention = isAuthRequiredMessage(historyMessage);
+  const requestUpload = () => {
+    if (accessAttention) {
+      window.location.href = "/";
+      return;
+    }
+    fileInputRef.current?.click();
   };
 
   const newChat = () => {
@@ -489,7 +520,7 @@ export default function App() {
       <main className="flex-1 flex flex-col min-w-0 min-h-0">
         <header className="px-4 sm:px-6 py-3 border-b border-ink-700 bg-ink-800/95 flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <h1 className="font-serif text-lg sm:text-xl font-semibold text-rice tracking-wide truncate">AI 鉴伪工作台</h1>
+            <h1 className="text-lg sm:text-xl font-semibold text-rice truncate">AI 鉴伪工作台</h1>
             <p className="text-[11px] sm:text-xs text-ink-500 truncate">图像 / 视频 / 音频 / 文档的伪造与 AIGC 检测</p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
@@ -508,57 +539,49 @@ export default function App() {
                   : "bg-cinnabar/10 text-cinnabar border-cinnabar/30"
               }`}
             >
-              ● {health == null ? "状态未知" : health.vlmEnabled ? "VLM 在线" : "Mock 回退"}
+              ● {health == null ? "状态待确认" : health.vlmEnabled ? "检测服务可用" : "部分能力暂不可用"}
             </span>
             <button
               onClick={() => {
                 window.location.href = "/";
               }}
-              className="h-9 px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950 hover:border-brand-cyan/50"
+              className="hidden sm:inline-flex h-9 items-center px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950 hover:border-brand-cyan/50"
             >
               首页
             </button>
             <button
-              onClick={() => {
-                window.location.href = "/?page=developer";
-              }}
-              className="h-9 px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950 hover:border-brand-cyan/50"
+              onClick={newChat}
+              className="hidden sm:inline-flex h-9 items-center px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950 hover:border-jade/50"
             >
-              开发者
-            </button>
-            <button
-              onClick={() => {
-                window.location.hash = "monitor";
-                setView("monitor");
-              }}
-              className="h-9 px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950 hover:border-jade/50"
-            >
-              监控
+              新建检测
             </button>
           </div>
         </header>
 
         <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto bg-grid px-3 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-5">
-          <CapabilityBanner health={health} />
-          <SkillInterventionCard
-            copied={skillCopied}
-            onCopyHandoff={() => copySkillText("handoff", SKILL_HANDOFF)}
-            onCopyCommand={() => copySkillText("command", SKILL_COMMAND)}
-          />
-          {messages.length === 0 && <EmptyState onUpload={() => fileInputRef.current?.click()} />}
+          {accessAttention && (
+            <AccessPanel />
+          )}
+          {messages.length === 0 && (
+            <EmptyState
+              onUpload={requestUpload}
+              capabilitySummary={capabilitySummary}
+              accessAttention={accessAttention}
+            />
+          )}
 
           {messages.map((m, i) => {
             if (m.kind === "user") {
               return (
                 <div key={i} className="flex justify-end">
-                  <div className="max-w-[88%] sm:max-w-[70%] rounded-2xl rounded-tr-sm bg-cinnabar/10 border border-cinnabar/25 px-3 sm:px-4 py-2.5 shadow-sm">
+                  <div className="max-w-[88%] sm:max-w-[70%] rounded-lg bg-cinnabar/10 border border-cinnabar/25 px-3 sm:px-4 py-2.5 shadow-sm">
                     <p className="text-sm text-ink-950">{m.text}</p>
                     {m.fileName && (
                       <div className="mt-2 flex items-center gap-2 min-w-0">
                         {m.previewUrl && (
                           <img src={m.previewUrl} className="h-16 w-16 object-cover rounded-md" />
                         )}
-                        <span className="text-xs text-ink-500 truncate">📎 {m.fileName}</span>
+                        <span className="text-xs text-ink-500 truncate">文件：{m.fileName}</span>
                       </div>
                     )}
                   </div>
@@ -569,7 +592,7 @@ export default function App() {
               return (
                 <div key={i} className="flex gap-2 sm:gap-3">
                   <AgentAvatar />
-                  <div className="min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-ink-800 border border-ink-600 px-3 sm:px-4 py-3 space-y-1.5 shadow-sm">
+                  <div className="min-w-0 flex-1 rounded-lg bg-ink-800 border border-ink-600 px-3 sm:px-4 py-3 space-y-1.5 shadow-sm">
                     {PROGRESS_STEPS.map((step, idx) => (
                       <div
                         key={idx}
@@ -581,7 +604,15 @@ export default function App() {
                             : "text-ink-500/60"
                         }`}
                       >
-                        <span>{idx < m.stage ? "✓" : idx === m.stage ? "◌" : "○"}</span>
+                        <span
+                          className={`h-2 w-2 rounded-full ${
+                            idx < m.stage
+                              ? "bg-jade"
+                              : idx === m.stage
+                              ? "bg-brand-cyan animate-pulse"
+                              : "bg-ink-600"
+                          }`}
+                        />
                         {step}
                       </div>
                     ))}
@@ -593,49 +624,37 @@ export default function App() {
               return (
                 <div key={i} className="flex gap-2 sm:gap-3">
                   <AgentAvatar />
-                  <div className="min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-ink-800 border border-ink-600 px-3 sm:px-4 py-3 flex items-center gap-2 text-sm text-brand-cyan shadow-sm">
-                    <span className="animate-pulse">◌</span> {m.text}
+                  <div className="min-w-0 flex-1 rounded-lg bg-ink-800 border border-ink-600 px-3 sm:px-4 py-3 flex items-center gap-2 text-sm text-brand-cyan shadow-sm">
+                    <span className="h-2 w-2 rounded-full bg-brand-cyan animate-pulse" /> {m.text}
                   </div>
                 </div>
               );
             }
             if (m.kind === "forensics") {
               return (
-                <div key={i} className="flex gap-2 sm:gap-3">
-                  <AgentAvatar />
-                  <div className="flex-1 min-w-0 max-w-4xl">
+                <div key={i} className="mx-auto w-full max-w-6xl">
+                  <div className="min-w-0">
                     <ForensicGallery report={m.report} />
                   </div>
                 </div>
               );
             }
-            if (m.kind === "provenance") {
-              return (
-                <div key={i} className="flex gap-2 sm:gap-3">
-                  <AgentAvatar />
-                  <div className="flex-1 min-w-0 max-w-2xl">
-                    <ProvenanceCard report={m.report} />
-                  </div>
-                </div>
-              );
-            }
             return (
-              <div key={i} className="flex gap-2 sm:gap-3">
-                <AgentAvatar />
-                <div className="flex-1 min-w-0 max-w-3xl">
+              <div key={i} className="mx-auto w-full max-w-6xl">
+                <div className="min-w-0">
                   <ResultCard
                     result={m.result}
                     previewUrl={m.previewUrl}
                     forensicsReport={forensicsByTask[m.result.taskId]}
-                    provenanceReport={provenanceByTask[m.result.taskId]}
+                    provenanceReport={provenanceByTask[m.result.taskId] || m.result.provenance || undefined}
                     onForensics={
-                      m.file && m.result.fileMeta.type === "image"
+                      m.file && m.result.fileMeta?.type === "image"
                         ? () => onForensics(m.file!, m.result.taskId)
                         : undefined
                     }
                     forensicsBusy={forensicsBusy}
                     onProvenance={
-                      m.file && m.result.fileMeta.type === "image"
+                      m.file && m.result.fileMeta?.type === "image"
                         ? () => onProvenance(m.file!, m.result.taskId)
                         : undefined
                     }
@@ -648,37 +667,53 @@ export default function App() {
         </div>
 
         <div className="border-t border-ink-700 bg-ink-800/95 px-3 sm:px-6 py-3 sm:py-4">
-          <div className="grid grid-cols-2 gap-2 mb-3 sm:flex sm:flex-wrap">
-            {QUICK_COMMANDS.map((q) => (
-              <button
-                key={q.label}
-                title={q.hint}
-                onClick={() => fileInputRef.current?.click()}
-                className="text-xs px-3 py-1.5 rounded-full bg-ink-900 border border-ink-600 text-ink-950 hover:border-brand-cyan/50 hover:text-brand-cyan transition"
+          {accessAttention ? (
+            <div className="rounded-lg bg-ink-900 border border-ink-600 px-3 sm:px-4 py-3">
+              <a
+                href="/"
+                className="flex w-full items-center justify-center rounded-lg bg-brand-blue px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-brand-cyan"
               >
-                {q.label}
-              </button>
-            ))}
-          </div>
-          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 rounded-xl bg-ink-900 border border-ink-600 px-3 sm:px-4 py-3">
-            <button
-              disabled={busy}
-              onClick={() => fileInputRef.current?.click()}
-              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-gradient-to-r from-brand-cyan to-brand-blue text-white font-medium text-sm disabled:opacity-50 shadow-sm"
-            >
-              {busy ? "检测中…" : "上传文件检测"}
-            </button>
-            <span className="text-xs sm:text-sm text-ink-500 leading-relaxed">
-              支持点击上传。图像和可提取正文的文档（txt/md/docx）默认走模型；视频、音频和其他复杂文档当前可能回退为演示判定。
-            </span>
-            <input
-              ref={fileInputRef}
-              type="file"
-              className="hidden"
-              accept="image/*,video/*,audio/*,.txt,.pdf,.doc,.docx,.md"
-              onChange={onFile}
-            />
-          </div>
+                登录后开始检测
+              </a>
+              <p className="mt-2 text-center text-xs text-ink-500">
+                登录后可上传单个 {formatBytes(uploadLimit)} 以内的文件并查看完整检测结果。
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className={`${messages.length > 0 ? "hidden sm:flex" : "grid grid-cols-2 sm:flex"} gap-2 mb-3 sm:flex-wrap`}>
+                {QUICK_COMMANDS.map((q) => (
+                  <button
+                    key={q.label}
+                    title={q.hint}
+                    onClick={requestUpload}
+                    className="text-xs px-3 py-1.5 rounded-full bg-ink-900 border border-ink-600 text-ink-950 hover:border-brand-cyan/50 hover:text-brand-cyan transition"
+                  >
+                    {q.label}
+                  </button>
+                ))}
+              </div>
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 rounded-lg bg-ink-900 border border-ink-600 px-3 sm:px-4 py-3">
+                <button
+                  disabled={busy}
+                  onClick={requestUpload}
+                  className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-brand-blue text-white font-medium text-sm disabled:opacity-50 shadow-sm hover:bg-brand-cyan"
+                >
+                  {busy ? "检测中…" : "选择文件开始鉴伪"}
+                </button>
+                <span className="text-xs sm:text-sm text-ink-500 leading-relaxed truncate">
+                  单文件上限 {formatBytes(uploadLimit)} · {capabilitySummary}
+                </span>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  accept="image/*,video/*,audio/*,.txt,.pdf,.doc,.docx,.md"
+                  onChange={onFile}
+                />
+              </div>
+            </>
+          )}
         </div>
       </main>
     </div>
@@ -693,144 +728,65 @@ function AgentAvatar() {
   );
 }
 
-function CapabilityBanner({ health }: { health: HealthStatus | null }) {
-  const unifiedLoginEnabled = Boolean(health?.unifiedLoginEnabled || health?.sessionAuthEnabled);
-  const developerKeyProtected = Boolean(health?.developerKeyAuthEnabled);
-  const capabilityText =
-    health == null
-      ? "尚未获取到后端状态，检测能力与访问控制信息可能不完整。"
-      : health.vlmEnabled
-      ? "图像与可提取正文的文档（txt/md/docx）使用真实模型；视频、音频和其他复杂文档仍为演示判定。"
-      : "当前处于 Mock 回退模式，检测结果仅用于演示流程。";
-  const cacheVersion = health?.analysisCacheVersion?.trim();
-  return (
-    <div className="rounded-xl border border-ink-600 bg-ink-800 px-4 py-3 text-xs sm:text-sm text-ink-500 leading-relaxed">
-      <span className="text-ink-950 font-medium">当前能力：</span>
-      {capabilityText}
-      {cacheVersion && ` 分析缓存版本：${cacheVersion}。`}
-      {unifiedLoginEnabled && " V2 已接入 RealGuard 统一登录，登录后可直接使用检测、历史、报告和监控能力。"}
-      {developerKeyProtected && " 外部程序调用仍可使用开发者 API Key。"}
-    </div>
-  );
-}
-
-function SkillInterventionCard({
-  copied,
-  onCopyHandoff,
-  onCopyCommand,
-}: {
-  copied: "handoff" | "command" | null;
-  onCopyHandoff: () => void;
-  onCopyCommand: () => void;
-}) {
-  return (
-    <section className="overflow-hidden rounded-3xl border border-brand-cyan/30 bg-ink-800 shadow-md shadow-brand-cyan/5">
-      <div className="flex flex-col gap-5 p-5 sm:p-7 lg:flex-row lg:items-stretch lg:justify-between">
-        <div className="min-w-0 flex-1">
-          <div className="mb-3 flex flex-wrap items-center gap-2">
-            <span className="rounded-full border border-jade/30 bg-jade/10 px-3 py-1.5 text-xs font-semibold tracking-[0.18em] text-jade">
-              SKILL 已介入
-            </span>
-            <span className="rounded-full border border-brand-cyan/30 bg-brand-cyan/10 px-3 py-1.5 text-xs text-brand-cyan">
-              OpenClaw / AI Agent 可调用
-            </span>
-          </div>
-          <h2 className="font-serif text-2xl font-semibold text-rice sm:text-3xl">
-            {SKILL_NAME} 是给外部 Agent 的公开鉴伪入口
-          </h2>
-          <p className="mt-3 max-w-4xl text-base leading-relaxed text-ink-500">
-            必须公开 skill 的原因是：OpenClaw 等外部 agent 无法读取你的本地仓库路径，也不知道 RealGuard 的 API、输出字段和解释边界。
-            让它读取 <span className="mx-1 font-mono text-ink-950">{SKILL_URL}</span> 后，就能直接调用公开 V2 API 或仓库 CLI，稳定输出可审计的鉴伪结论。
-          </p>
-          <div className="mt-4 grid gap-3 md:grid-cols-3">
-            {[
-              ["1", "读取公网 Skill", "通过 URL 获取鉴伪流程、API 和解释边界。"],
-              ["2", "调用 V2 API / CLI", "上传文件，输出 agentSummary 与证据字段。"],
-              ["3", "返回带证据结论", "引用 verdict、confidence、模型版本和报告号。"],
-            ].map(([step, title, desc]) => (
-              <div key={step} className="rounded-xl border border-ink-600 bg-ink-900 px-3 py-3">
-                <div className="mb-2 flex items-center gap-2">
-                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-brand-cyan/15 text-xs font-semibold text-brand-cyan">
-                    {step}
-                  </span>
-                  <span className="text-sm font-medium text-ink-950">{title}</span>
-                </div>
-                <p className="text-xs leading-relaxed text-ink-500">{desc}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="flex w-full shrink-0 flex-col gap-3 lg:w-[420px]">
-          <div className="rounded-xl border border-ink-600 bg-ink-900 p-3">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <span className="text-xs font-medium text-ink-950">公开 Skill URL</span>
-              <button
-                onClick={() => navigator.clipboard?.writeText(SKILL_URL)}
-                className="rounded-lg border border-jade/30 px-2.5 py-1 text-xs text-jade hover:bg-jade/10"
-              >
-                复制
-              </button>
-            </div>
-            <code className="block whitespace-pre-wrap break-words rounded-lg bg-ink-800 px-3 py-2 font-mono text-[11px] leading-relaxed text-ink-950">
-              {SKILL_URL}
-            </code>
-          </div>
-          <div className="rounded-xl border border-ink-600 bg-ink-900 p-3">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <span className="text-xs font-medium text-ink-950">给 OpenClaw 的一句话</span>
-              <button
-                onClick={onCopyHandoff}
-                className="rounded-lg border border-brand-cyan/30 px-2.5 py-1 text-xs text-brand-cyan hover:bg-brand-cyan/10"
-              >
-                {copied === "handoff" ? "已复制" : "复制"}
-              </button>
-            </div>
-            <code className="block whitespace-pre-wrap break-words rounded-lg bg-ink-800 px-3 py-2 font-mono text-[11px] leading-relaxed text-ink-950">
-              {SKILL_HANDOFF}
-            </code>
-          </div>
-          <div className="rounded-xl border border-ink-600 bg-ink-900 p-3">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <span className="text-xs font-medium text-ink-950">CLI 命令</span>
-              <button
-                onClick={onCopyCommand}
-                className="rounded-lg border border-jade/30 px-2.5 py-1 text-xs text-jade hover:bg-jade/10"
-              >
-                {copied === "command" ? "已复制" : "复制"}
-              </button>
-            </div>
-            <code className="block whitespace-pre-wrap break-words rounded-lg bg-ink-800 px-3 py-2 font-mono text-[11px] leading-relaxed text-ink-950">
-              {SKILL_COMMAND}
-            </code>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
 function getInitialHistoryItem() {
   if (typeof window === "undefined") return "";
   return new URLSearchParams(window.location.search).get("historyItem") || "";
 }
 
-function EmptyState({ onUpload }: { onUpload: () => void }) {
+function AccessPanel() {
   return (
-    <div className="h-full flex flex-col items-center justify-center text-center gap-4 py-16 sm:py-20 px-4">
-      <Logo size={76} idSuffix="hero" />
-      <div className="w-full max-w-sm">
-        <h2 className="font-serif text-2xl font-semibold text-rice tracking-wide">鉴真伪 · 明真相</h2>
-        <p className="text-sm text-ink-500 mt-2 leading-relaxed">
-          上传任意图像、视频、音频或文档，我会判断它是否为 AI 生成、深度伪造或经过篡改，并给出可信度与依据。
-        </p>
+    <section className="mx-auto w-full max-w-5xl rounded-lg border border-gold/30 bg-gold/10 px-4 py-2.5 shadow-sm">
+      <div className="text-xs leading-relaxed text-ink-500">
+        当前会话需要登录后使用。登录后可上传文件并查看历史记录。
       </div>
-      <button
-        onClick={onUpload}
-        className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-brand-cyan to-brand-blue text-white font-medium shadow-sm"
-      >
-        上传文件开始检测
-      </button>
+    </section>
+  );
+}
+
+function EmptyState({
+  onUpload,
+  capabilitySummary,
+  accessAttention,
+}: {
+  onUpload: () => void;
+  capabilitySummary: string;
+  accessAttention: boolean;
+}) {
+  return (
+    <div className="mx-auto grid w-full max-w-5xl gap-4 py-10 sm:py-14 lg:grid-cols-[1fr_280px]">
+      <section className="rounded-lg border border-ink-700 bg-ink-800 p-6 shadow-sm">
+        <div className="flex items-center gap-3">
+          <Logo size={48} idSuffix="hero" />
+          <div>
+            <h2 className="text-2xl font-semibold text-rice">新建检测</h2>
+            <p className="mt-1 text-sm text-ink-500">鉴伪结论、内容凭证、文件信息和水印线索会汇总到同一张结果卡。</p>
+            <p className="mt-2 text-xs text-ink-500">{capabilitySummary}</p>
+          </div>
+        </div>
+        {accessAttention ? (
+          <a
+            href="/"
+            className="mt-6 inline-flex w-full justify-center rounded-lg bg-brand-blue px-5 py-3 text-sm font-medium text-white shadow-sm hover:bg-brand-cyan sm:w-auto"
+          >
+            登录后开始检测
+          </a>
+        ) : (
+          <button
+            onClick={onUpload}
+            className="mt-6 w-full rounded-lg bg-brand-blue px-5 py-3 text-sm font-medium text-white shadow-sm hover:bg-brand-cyan sm:w-auto"
+          >
+            选择文件开始鉴伪
+          </button>
+        )}
+      </section>
+      <aside className="rounded-lg border border-ink-700 bg-ink-900 p-4">
+        <div className="text-sm font-semibold text-ink-950">三步完成</div>
+        <div className="mt-3 space-y-3 text-xs text-ink-500">
+          <div className="border-l-2 border-brand-cyan/50 pl-3">上传需要检测的文件</div>
+          <div className="border-l-2 border-jade/50 pl-3">查看结论与关键证据</div>
+          <div className="border-l-2 border-gold/60 pl-3">下载或归档检测报告</div>
+        </div>
+      </aside>
     </div>
   );
 }

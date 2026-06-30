@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from imagedetection import creat_app  # noqa: E402
-from imagedetection.views import api, detection, historical_record, retrieve  # noqa: E402
+from imagedetection.views import api, detection  # noqa: E402
 import detector_backend  # noqa: E402
 
 
@@ -869,66 +869,11 @@ def test_guest_history_returns_guest_image_records(client, monkeypatch):
 def test_history_endpoints_return_empty_for_fresh_guest(client):
     image_response = client.get("/api/history/image-detections")
     video_response = client.get("/api/history/video-detections")
-    retrieve_response = client.get("/api/history/retrievals?search_type=image")
 
     assert image_response.status_code == 200
     assert image_response.get_json()["records"] == []
     assert video_response.status_code == 200
     assert video_response.get_json()["records"] == []
-    assert retrieve_response.status_code == 200
-    assert retrieve_response.get_json()["records"] == []
-
-
-def test_retrieval_history_supports_hit_filters(client, monkeypatch):
-    _login_session(client, phone="13900000000")
-
-    def fake_sql(sql, params=None, fetch=True):
-        if sql == "SELECT * FROM retrieve_data WHERE phone = %s AND search_type = %s ORDER BY createtime DESC":
-            assert params == ("13900000000", "image")
-            return [
-                {
-                    "itemid": 1,
-                    "filename": "hit.png",
-                    "result_count": 3,
-                    "top_k": 5,
-                    "file_size": "12KB",
-                    "createtime": "2026-06-01 10:00:00",
-                    "results_json": '[{"id":"libA/gallery/target-001","score":0.9876}]',
-                },
-                {
-                    "itemid": 2,
-                    "filename": "empty.png",
-                    "result_count": 0,
-                    "top_k": 5,
-                    "file_size": "10KB",
-                    "createtime": "2026-06-01 09:00:00",
-                    "results_json": "[]",
-                },
-            ]
-        raise AssertionError(f"unexpected SQL: {sql}")
-
-    monkeypatch.setattr(api, "excute_sql", fake_sql)
-
-    listing = client.get("/api/history/retrievals?search_type=image")
-    hits_only = client.get("/api/history/retrievals?search_type=image&filter=hits")
-    empty_only = client.get("/api/history/retrievals?search_type=image&filter=empty")
-
-    assert listing.status_code == 200
-    payload = listing.get_json()
-    assert payload["filter_counts"]["all"] == 2
-    assert payload["filter_counts"]["hits"] == 1
-    assert payload["filter_counts"]["empty"] == 1
-    assert payload["records"][0]["has_hits"] is True
-    assert payload["records"][0]["top_result_id"] == "libA/gallery/target-001"
-    assert payload["records"][0]["top_result_library"] == "libA"
-    assert payload["records"][0]["top_result_score"] == 0.9876
-    assert hits_only.status_code == 200
-    assert len(hits_only.get_json()["records"]) == 1
-    assert hits_only.get_json()["records"][0]["filename"] == "hit.png"
-    assert empty_only.status_code == 200
-    assert len(empty_only.get_json()["records"]) == 1
-    assert empty_only.get_json()["records"][0]["filename"] == "empty.png"
-    assert empty_only.get_json()["records"][0]["has_hits"] is False
 
 
 def test_guest_thumbnail_uses_guest_openid_lookup(client, monkeypatch, tmp_path):
@@ -963,8 +908,8 @@ def test_video_report_downloads_attachment_for_logged_user(client, monkeypatch):
     _login_session(client)
 
     def fake_detection_sql(sql, params=None, fetch=True):
-        if sql == "SELECT * FROM video_data WHERE itemid = %s AND (phone = %s OR openid = %s) LIMIT 1":
-            assert params == ("41", "13800000000", "openid-1")
+        if sql == "SELECT * FROM video_data WHERE itemid = %s AND (Userid = %s OR phone = %s OR openid = %s) LIMIT 1":
+            assert params == ("41", 1, "13800000000", "openid-1")
             return [{
                 "itemid": 41,
                 "filename": "clip.mp4",
@@ -993,61 +938,12 @@ def test_video_report_downloads_attachment_for_logged_user(client, monkeypatch):
     assert "clip.mp4" in response.get_data(as_text=True)
 
 
-def test_retrieve_search_uses_selected_library_and_persists_history(client, monkeypatch, tmp_path):
-    _login_session(client)
-    insert_calls = []
-    monkeypatch.setattr(retrieve, "current_dir", str(tmp_path))
-    monkeypatch.setattr(retrieve, "list_retrieve_libraries", lambda search_type: ["libA"])
-    monkeypatch.setattr(
-        retrieve,
-        "_build_local_retrieve_results",
-        lambda **kwargs: [
-            {
-                "id": "libA/gallery/case1.png",
-                "score": 0.87,
-                "product": {"product_images": "libA/gallery/case1.png"},
-            }
-        ],
-    )
-    monkeypatch.setattr(retrieve, "get_now_str", lambda: "2026-05-27 13:00:00")
-    monkeypatch.setattr(retrieve, "get_file_size_str", lambda path: "1KB")
-
-    def fake_execute(sql, params=None, fetch=True):
-        if "INSERT INTO retrieve_data" in sql:
-            insert_calls.append((sql, params))
-            return 1
-        raise AssertionError(f"unexpected SQL: {sql}")
-
-    monkeypatch.setattr(retrieve, "excute_sql", fake_execute)
-
-    response = client.post(
-        "/retrieve/search",
-        data={
-            "image": (BytesIO(b"image-binary"), "query.png"),
-            "search_type": "image",
-            "dataset": "libA",
-            "top_k": "5",
-        },
-        content_type="multipart/form-data",
-    )
-
-    assert response.status_code == 200
-    payload = response.get_json()
-    assert payload["dataset"] == "libA"
-    assert payload["base_url"] == "/retrieve/library-file/image/"
-    assert payload["results"][0]["id"].startswith("libA/")
-    assert insert_calls
-    _, params = insert_calls[0]
-    assert params[2] == "image"
-    assert json.loads(params[8])[0]["id"].startswith("libA/")
-
-
 def test_history_detection_records_include_report_urls(client, monkeypatch):
     _login_session(client)
 
     def fake_detection_sql(sql, params=None, fetch=True):
-        if sql == "SELECT * FROM data WHERE phone = %s OR openid = %s ORDER BY createtime DESC":
-            assert params == ("13800000000", "openid-1")
+        if sql == "SELECT * FROM data WHERE Userid = %s OR phone = %s OR openid = %s ORDER BY createtime DESC":
+            assert params == (1, "13800000000", "openid-1")
             return [{
                 "itemid": 51,
                 "filename": "img.png",
@@ -1058,8 +954,8 @@ def test_history_detection_records_include_report_urls(client, monkeypatch):
                 "createtime": "2026-05-27 15:00:00",
                 "explantation": "视觉可疑点\n- 背景纹理重复",
             }]
-        if sql == "SELECT * FROM video_data WHERE phone = %s OR openid = %s ORDER BY createtime DESC":
-            assert params == ("13800000000", "openid-1")
+        if sql == "SELECT * FROM video_data WHERE Userid = %s OR phone = %s OR openid = %s ORDER BY createtime DESC":
+            assert params == (1, "13800000000", "openid-1")
             return [{
                 "itemid": 61,
                 "filename": "vid.mp4",
@@ -1087,11 +983,42 @@ def test_history_detection_records_include_report_urls(client, monkeypatch):
     assert video_response.get_json()["records"][0]["report_url"] == "/video_upload/report?itemid=61"
 
 
+def test_history_uses_userid_for_legacy_bound_records(client, monkeypatch):
+    _login_session(client)
+
+    def fake_detection_sql(sql, params=None, fetch=True):
+        if sql == "SELECT * FROM data WHERE Userid = %s OR phone = %s OR openid = %s ORDER BY createtime DESC":
+            assert params == (1, "13800000000", "openid-1")
+            return [{
+                "itemid": 71,
+                "Userid": 1,
+                "filename": "legacy-openid-only.png",
+                "fake": 63.0,
+                "clarity": "中",
+                "openid": "legacy-wechat-openid",
+                "phone": "",
+                "createtime": "2026-05-28 10:00:00",
+                "explantation": "",
+            }]
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+    monkeypatch.setattr(api, "excute_detection_sql", fake_detection_sql)
+    monkeypatch.setattr(api, "_has_detection_metadata", lambda itemid: False)
+
+    response = client.get("/api/history/image-detections")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["total"] == 1
+    assert payload["records"][0]["itemid"] == 71
+    assert payload["records"][0]["is_guest_record"] is False
+
+
 def test_history_endpoints_support_query_filter_and_limit(client, monkeypatch):
     _login_session(client)
 
     def fake_detection_sql(sql, params=None, fetch=True):
-        if sql == "SELECT * FROM data WHERE phone = %s OR openid = %s ORDER BY createtime DESC":
+        if sql == "SELECT * FROM data WHERE Userid = %s OR phone = %s OR openid = %s ORDER BY createtime DESC":
             return [
                 {
                     "itemid": 101,
@@ -1114,7 +1041,7 @@ def test_history_endpoints_support_query_filter_and_limit(client, monkeypatch):
                     "explantation": "",
                 },
             ]
-        if sql == "SELECT * FROM video_data WHERE phone = %s OR openid = %s ORDER BY createtime DESC":
+        if sql == "SELECT * FROM video_data WHERE Userid = %s OR phone = %s OR openid = %s ORDER BY createtime DESC":
             return [
                 {
                     "itemid": 201,
@@ -1139,39 +1066,11 @@ def test_history_endpoints_support_query_filter_and_limit(client, monkeypatch):
             ]
         raise AssertionError(f"unexpected SQL: {sql}")
 
-    def fake_execute(sql, params=None, fetch=True):
-        assert sql == "SELECT * FROM retrieve_data WHERE phone = %s AND search_type = %s ORDER BY createtime DESC"
-        return [
-            {
-                "itemid": 301,
-                "filename": "query-a.png",
-                "search_type": params[1],
-                "result_count": 3,
-                "top_k": 10,
-                "file_size": "3KB",
-                "createtime": "2026-05-27 18:20:00",
-                "results_json": '[{"id":"libA/gallery/hit-a.png","score":0.9123}]',
-            },
-            {
-                "itemid": 302,
-                "filename": "query-b.png",
-                "search_type": params[1],
-                "result_count": 1,
-                "top_k": 5,
-                "file_size": "2KB",
-                "createtime": "2026-05-27 18:21:00",
-                "results_json": '[{"id":"libB/gallery/hit-b.png","score":0.8345}]',
-            },
-        ]
-
     monkeypatch.setattr(api, "excute_detection_sql", fake_detection_sql)
-    monkeypatch.setattr(api, "excute_sql", fake_execute)
     monkeypatch.setattr(api, "_has_detection_metadata", lambda itemid: itemid == 101)
 
     image_response = client.get("/api/history/image-detections?filter=metadata&query=元数据&limit=1")
     video_response = client.get("/api/history/video-detections?filter=ai&query=AI结论&limit=1")
-    retrieve_response = client.get("/api/history/retrievals?search_type=image&query=query-a&limit=1")
-    retrieve_library_response = client.get("/api/history/retrievals?search_type=image&query=检索库%20libA&limit=1")
 
     assert image_response.status_code == 200
     image_payload = image_response.get_json()
@@ -1185,25 +1084,12 @@ def test_history_endpoints_support_query_filter_and_limit(client, monkeypatch):
     assert len(video_payload["records"]) == 1
     assert video_payload["records"][0]["itemid"] == 201
 
-    assert retrieve_response.status_code == 200
-    retrieve_payload = retrieve_response.get_json()
-    assert retrieve_payload["total"] == 1
-    assert len(retrieve_payload["records"]) == 1
-    assert retrieve_payload["records"][0]["itemid"] == 301
-    assert retrieve_payload["records"][0]["top_result_library"] == "libA"
-
-    assert retrieve_library_response.status_code == 200
-    retrieve_library_payload = retrieve_library_response.get_json()
-    assert retrieve_library_payload["total"] == 1
-    assert len(retrieve_library_payload["records"]) == 1
-    assert retrieve_library_payload["records"][0]["itemid"] == 301
-
 
 def test_history_endpoints_support_offset_pagination(client, monkeypatch):
     _login_session(client)
 
     def fake_detection_sql(sql, params=None, fetch=True):
-        if sql == "SELECT * FROM data WHERE phone = %s OR openid = %s ORDER BY createtime DESC":
+        if sql == "SELECT * FROM data WHERE Userid = %s OR phone = %s OR openid = %s ORDER BY createtime DESC":
             return [
                 {
                     "itemid": 401,
@@ -1228,37 +1114,10 @@ def test_history_endpoints_support_offset_pagination(client, monkeypatch):
             ]
         raise AssertionError(f"unexpected SQL: {sql}")
 
-    def fake_execute(sql, params=None, fetch=True):
-        assert sql == "SELECT * FROM retrieve_data WHERE phone = %s AND search_type = %s ORDER BY createtime DESC"
-        return [
-            {
-                "itemid": 501,
-                "filename": "retrieve-a.png",
-                "search_type": params[1],
-                "result_count": 4,
-                "top_k": 10,
-                "file_size": "2KB",
-                "createtime": "2026-05-27 19:10:00",
-                "results_json": "[]",
-            },
-            {
-                "itemid": 502,
-                "filename": "retrieve-b.png",
-                "search_type": params[1],
-                "result_count": 2,
-                "top_k": 5,
-                "file_size": "2KB",
-                "createtime": "2026-05-27 19:11:00",
-                "results_json": "[]",
-            },
-        ]
-
     monkeypatch.setattr(api, "excute_detection_sql", fake_detection_sql)
-    monkeypatch.setattr(api, "excute_sql", fake_execute)
     monkeypatch.setattr(api, "_has_detection_metadata", lambda itemid: False)
 
     image_response = client.get("/api/history/image-detections?limit=1&offset=1")
-    retrieve_response = client.get("/api/history/retrievals?search_type=image&limit=1&offset=1")
 
     assert image_response.status_code == 200
     image_payload = image_response.get_json()
@@ -1266,83 +1125,14 @@ def test_history_endpoints_support_offset_pagination(client, monkeypatch):
     assert len(image_payload["records"]) == 1
     assert image_payload["records"][0]["itemid"] == 402
 
-    assert retrieve_response.status_code == 200
-    retrieve_payload = retrieve_response.get_json()
-    assert retrieve_payload["total"] == 2
-    assert len(retrieve_payload["records"]) == 1
-    assert retrieve_payload["records"][0]["itemid"] == 502
-
-
-def test_retrieval_history_records_include_report_urls(client, monkeypatch):
-    _login_session(client)
-
-    def fake_execute(sql, params=None, fetch=True):
-        assert sql == "SELECT * FROM retrieve_data WHERE phone = %s AND search_type = %s ORDER BY createtime DESC"
-        return [{
-            "itemid": 71,
-            "filename": "query.png",
-            "search_type": params[1],
-            "result_count": 4,
-            "top_k": 10,
-            "file_size": "2KB",
-            "createtime": "2026-05-27 15:30:00",
-        }]
-
-    monkeypatch.setattr(api, "excute_sql", fake_execute)
-
-    image_response = client.get("/api/history/retrievals?search_type=image")
-    video_response = client.get("/api/history/retrievals?search_type=video")
-
-    assert image_response.status_code == 200
-    assert video_response.status_code == 200
-    assert image_response.get_json()["records"][0]["report_url"] == "/history_retrieve/report?itemid=71"
-    assert video_response.get_json()["records"][0]["report_url"] == "/history_retrieve/report?itemid=71"
-
 
 def test_history_endpoints_reject_invalid_filter_or_limit(client):
     bad_image_limit = client.get("/api/history/image-detections?limit=0")
     bad_image_offset = client.get("/api/history/image-detections?offset=-1")
     bad_image_filter = client.get("/api/history/image-detections?filter=bad")
     bad_video_filter = client.get("/api/history/video-detections?filter=oops")
-    bad_retrieval_limit = client.get("/api/history/retrievals?search_type=image&limit=abc")
-    bad_retrieval_offset = client.get("/api/history/retrievals?search_type=image&offset=oops")
 
     assert bad_image_limit.status_code == 400
     assert bad_image_offset.status_code == 400
     assert bad_image_filter.status_code == 400
     assert bad_video_filter.status_code == 400
-    assert bad_retrieval_limit.status_code == 400
-    assert bad_retrieval_offset.status_code == 400
-
-
-def test_retrieval_report_downloads_attachment(client, monkeypatch):
-    _login_session(client)
-
-    def fake_execute(sql, params=None, fetch=True):
-        if sql == "SELECT * FROM retrieve_data WHERE itemid = %s AND phone = %s":
-            assert params == ("81", "13800000000")
-            return [{
-                "itemid": 81,
-                "filename": "query.png",
-                "search_type": "image",
-                "result_count": 2,
-                "top_k": 5,
-                "file_size": "3KB",
-                "createtime": "2026-05-27 15:40:00",
-                "results_json": json.dumps([
-                    {"id": "libA/a.png", "score": 0.92, "product": {"product_images": "libA/a.png"}},
-                    {"id": "libA/b.png", "score": 0.88, "product": {"product_images": "libA/b.png"}},
-                ]),
-            }]
-        raise AssertionError(f"unexpected SQL: {sql}")
-
-    monkeypatch.setattr(api, "excute_sql", fake_execute)
-    monkeypatch.setattr(historical_record, "excute_sql", fake_execute)
-
-    response = client.get("/history_retrieve/report?itemid=81")
-
-    assert response.status_code == 200
-    text = response.get_data(as_text=True)
-    assert "attachment;" in response.headers["Content-Disposition"]
-    assert "检索报告" in text
-    assert "libA/a.png" in text

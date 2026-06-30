@@ -9,20 +9,20 @@ Run RealGuard before making an AI-content authenticity claim. Use the CLI from t
 
 ## One-Sentence Handoff
 
-Use `$realguard-forensics` and run `python3 scripts/realguard_cli.py detect <file> --base-url http://124.222.3.205 --api-prefix /v2-api --pretty`, then base the 鉴伪 conclusion on `agentSummary`, `verdict`, `confidence`, `modelVersion`, `cacheVersion`, `reportId`, and evidence fields.
+Use `$realguard-forensics` and run `python3 scripts/realguard_cli.py detect <file> --base-url http://124.221.92.85 --api-prefix /v2-api --pretty`, then base the 鉴伪 conclusion on `agentSummary`, `verdict`, `confidence`, `modelVersion`, `cacheVersion`, `reportId`, and evidence fields.
 
 ## Commands
 
 Check the service:
 
 ```bash
-python3 scripts/realguard_cli.py health --base-url http://124.222.3.205 --api-prefix /v2-api --pretty
+python3 scripts/realguard_cli.py health --base-url http://124.221.92.85 --api-prefix /v2-api --pretty
 ```
 
 Detect a file:
 
 ```bash
-python3 scripts/realguard_cli.py detect /path/to/file --base-url http://124.222.3.205 --api-prefix /v2-api --pretty
+python3 scripts/realguard_cli.py detect /path/to/file --base-url http://124.221.92.85 --api-prefix /v2-api --pretty
 ```
 
 If the API is protected, set `REALGUARD_CLI_TOKEN` or pass `--token <token>`.

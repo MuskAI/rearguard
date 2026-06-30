@@ -6,7 +6,6 @@ from flask import Flask, abort, render_template, send_from_directory, session, r
 from .views import detection
 from .views import login
 from .views import historical_record
-from .views import retrieve
 from .views import profile
 from .views import api
 from .views import admin
@@ -26,7 +25,6 @@ def creat_app():
     app.register_blueprint(detection.image_upload_blueprint)
     app.register_blueprint(login.login_blueprint)
     app.register_blueprint(historical_record.historical_record_blueprint)
-    app.register_blueprint(retrieve.retrieve_blueprint)
     app.register_blueprint(profile.profile_blueprint)
     app.register_blueprint(api.api_blueprint)
     app.register_blueprint(admin.admin_blueprint)
@@ -82,13 +80,6 @@ def creat_app():
         if 'user_info' not in session or session['user_info'] is None:
             return render_template('login.html')
         return render_template('introduce.html')
-
-    @app.route('/retrieve_result')
-    def retrieve_result():
-        """检索结果展示页（从历史记录进入）"""
-        if 'user_info' not in session or session['user_info'] is None:
-            return render_template('login.html')
-        return render_template('retrieve_result.html')
 
     @app.route('/legal/<path:filename>')
     def legal_file(filename):
