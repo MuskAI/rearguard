@@ -1,104 +1,180 @@
-# RealGuard
+# RealGuard / 鉴真 AI 项目交接说明
 
-RealGuard 是一个面向数字内容鉴伪和运营监控的 Web 系统。仓库包含两套彼此独立的鉴伪入口：
+RealGuard 是一个面向数字内容鉴伪、证据归档和运营监控的 Web 系统。这个仓库包含主站 V1、深度分析 V2、部署脚本、Nginx 模板和测试代码。
 
-- **V1 RealGuard**：保留原系统功能，包括短信登录、图像/视频鉴伪、历史记录和用户信息。
-- **V2 鉴伪 Agent**：独立新版 Agent，支持 `qwen3-vl-flash` 视觉语言模型检测、可解释性取证分析和 C2PA 内容凭证验证。
-- **Analytics**：基于开源 Umami 的访问监控后台，用于 PV、访客数、DAU、设备、来源和 IP 地区统计大屏。
+本 README 面向项目接手人。请先读完“交接重点”和“哪些东西不在 Git 里”，再开始部署或改代码。
 
-生产环境示例：
+## 交接重点
 
-- 主站：`http://124.221.92.85/`
-- V2：`http://124.221.92.85/v2/`
-- V2 API：`http://124.221.92.85/v2-api/`
-- 监控后台：`http://analytics.realguard.cn/`
+- GitHub 仓库：`git@github.com:MuskAI/rearguard.git`
+- 主分支：`main`
+- 生产服务器：`124.221.92.85`
+- 生产用户：`ubuntu`
+- 当前公网入口：
+  - 主站：`http://124.221.92.85/`
+  - V2 深度分析：`http://124.221.92.85/v2/`
+  - V2 API：`http://124.221.92.85/v2-api/`
+  - Umami 监控：`http://analytics.realguard.cn/`
+- 生产服务：
+  - `realguard-backend.service`：V1 Flask 后端
+  - `realguard-detector-backend.service`：V1 检测后端
+  - `jianzhen-v2-backend.service`：V2 FastAPI 后端
+  - `nginx.service`：公网入口和静态资源
+- 生产代码路径：
+  - `/opt/realguard-server/RealGuard`
+  - `/opt/jianzhen-v2`
+  - `/var/www/realguard-frontend`
+  - `/var/www/v2`
+- 生产配置路径：
+  - `/etc/realguard/realguard-backend.env`
+  - `/etc/realguard/detector-db.env`
+  - `/etc/realguard/jianzhen-v2.env`
+  - `/etc/realguard/agent.env`
+  - `/etc/realguard/sms.env`
 
-## 目录结构
+重要：真实密钥、数据库密码、生产数据、上传文件、SQLite 数据库、运行态 JSON 不在 GitHub 仓库里。接手人需要单独拿到服务器权限和备份文件。
+
+## 系统架构
+
+### V1 RealGuard
+
+V1 是原主站，包含：
+
+- Flask 后端：`realguard-server-main/RealGuard`
+- React/Vite 前端：`realguard-server-main/frontend`
+- MySQL 主业务库：`system`
+- MySQL 检测历史库：`image_detection`
+- 图像/视频检测历史、报告、缩略图、短信登录、管理员控制台和运营大屏
+
+生产服务关系：
+
+```text
+Nginx :80
+  ├── /                         -> /var/www/realguard-frontend
+  ├── /api/*, /admin/*, /image_upload/*, /video_upload/* -> 127.0.0.1:5000
+  ├── /detection-static/*       -> /opt/realguard-server/RealGuard/imagedetection/static
+  └── /v2/*, /v2-api/*          -> V2 静态资源和 API
+
+realguard-backend.service       -> Flask app, 127.0.0.1:5000
+realguard-detector-backend.service -> detector_backend.py, 127.0.0.1:15001
+mysql.service                   -> system / image_detection
+```
+
+### V2 鉴伪 Agent
+
+V2 是深度分析工作台，包含：
+
+- FastAPI 后端：`v2-agent/backend`
+- React/Vite/Tailwind 前端：`v2-agent/frontend`
+- SQLite 持久化：默认 `/opt/jianzhen-v2/data/jianzhen-v2.sqlite3`
+- DashScope OpenAI 兼容接口，默认模型 `qwen3-vl-flash`
+- C2PA、可见水印、SynthID、元数据 AI 线索、统一取证摘要
+
+生产服务关系：
+
+```text
+/v2/       -> /var/www/v2
+/v2-api/*  -> 127.0.0.1:8848
+
+jianzhen-v2-backend.service -> FastAPI, 127.0.0.1:8848
+```
+
+### Analytics
+
+`deploy/analytics/` 里是 Umami 监控后台模板。监控不在主部署脚本里自动发布，需要单独维护。
+
+## 仓库结构
 
 ```text
 .
 ├── realguard-server-main/
-│   ├── RealGuard/              # V1 Flask 后端
+│   ├── RealGuard/              # V1 Flask 后端、模板、SQL、测试
 │   ├── frontend/               # V1 React/Vite 前端
-│   └── deploy/                 # V1 基础 Nginx 配置
+│   └── deploy/                 # V1 Nginx 配置
 ├── v2-agent/
 │   ├── backend/                # V2 FastAPI 后端
 │   ├── frontend/               # V2 React/Vite/Tailwind 前端
-│   └── docker-compose.yml      # V2 独立容器化部署示例
-└── deploy/
-    ├── nginx/                  # 生产 Nginx 反向代理与安全片段
-    └── analytics/              # Umami 监控后台部署模板
+│   └── docker-compose.yml      # V2 容器化示例
+├── deploy/
+│   ├── nginx/                  # 生产 Nginx 配置模板
+│   └── analytics/              # Umami 部署模板
+├── scripts/
+│   ├── deploy_v1.sh            # V1 发布
+│   ├── deploy_v2.sh            # V2 发布
+│   ├── deploy_converge.sh      # 按需发布 V1/V2
+│   └── check_deploy_status.sh  # 线上状态检查
+└── skills/
+    └── realguard-forensics/    # 内部 agent skill 资料
 ```
 
-## 功能概览
+## 这次迁移后的重要变化
 
-V1 RealGuard：
+- 已迁移到新服务器 `124.221.92.85`。
+- 首页 UI 已重做为“数字内容鉴伪工作台”。
+- 首页不再展示“管理入口”按钮，普通用户入口只保留任务、历史和报告。
+- 侵权检索相关页面、接口和公开文档已移除或由 Nginx 拦截。
+- 公开 `developer/API.md` 和 public skill 文件已从前端静态目录删除。
+- V1 历史记录匹配逻辑已修复：现在按 `Userid`、`phone`、`openid` 三重匹配，避免旧微信 openid 记录在手机号登录后不可见。
+- 仍有一批旧图像记录只有 openid、没有 `Userid`/手机号，不能安全自动归属。需要确认映射关系后再手工绑定。
 
-- 短信验证码登录，登录态可持久化。
-- 图像检测、视频检测。
-- 历史记录查看，图片历史支持缩略图。
-- 图像/视频检测结果支持下载自包含 HTML 报告，访客图像检测结果也可立即导出。
-- 手机端适配，保留原页面风格。
-- 首页新增 V2 Agent 独立入口。
+## 哪些东西在 GitHub 里
 
-V2 鉴伪 Agent：
+GitHub 仓库包含：
 
-- 图像、视频、音频、文档入口统一上传。
-- 图像检测与可提取正文的文档检测（`txt` / `md` / `docx`）调用 DashScope OpenAI 兼容接口，默认模型为 `qwen3-vl-flash`。
-- 视频、音频和复杂文档当前保留演示判定链路，前端会明确显示回退状态。
-- 支持导出自包含 HTML 鉴定报告，便于留档与分享给复核方。
-- 若已在界面中执行取证分析或内容凭证验证，导出报告会自动并入这些附加结果。
-- ELA、噪声残差、频域、光照梯度等可解释性取证可视化。
-- C2PA 内容凭证读取与验证。
-- 浅色工作台风格，独立路径 `/v2/`。
-- 提供面向 agent 的 CLI：`python3 scripts/realguard_cli.py detect <file> --base-url http://124.221.92.85 --api-prefix /v2-api --pretty`，可输出机器可读的鉴伪结论、模型版本、缓存版本、证据摘要和报告号。
+- V1/V2 后端源码
+- V1/V2 前端源码
+- SQL schema 和迁移辅助脚本
+- Nginx 配置模板
+- 发布和状态检查脚本
+- 前后端依赖锁文件
+- 测试代码
 
-Agent skill：
+关键依赖文件：
 
-- 仓库内置 `skills/realguard-forensics/`。给授权流程的一句话交接：`Use $realguard-forensics and run python3 scripts/realguard_cli.py detect <file> --base-url http://124.221.92.85 --api-prefix /v2-api --pretty, then return a concise verdict with confidence, evidence, model version, cache version, and report id.`
+- `realguard-server-main/RealGuard/requirements.txt`
+- `realguard-server-main/frontend/package-lock.json`
+- `v2-agent/backend/pyproject.toml`
+- `v2-agent/backend/uv.lock`
+- `v2-agent/frontend/package-lock.json`
 
-监控后台：
+## 哪些东西不在 GitHub 里
 
-- Umami 自托管网站分析。
-- 统计 PV、访客、会话、页面路径、来源、设备、国家/地区。
-- 支持 Boards 大屏和 World Map 组件。
-- 前端通过 `/umami/script.js` 和 `/umami/api/` 同源代理采集。
+这些东西不要提交到 GitHub，需要从服务器或备份里单独交接：
 
-## 环境变量
+- SSH 私钥
+- 数据库密码
+- 阿里云短信密钥
+- DashScope / LLM API Key
+- 管理员 token
+- MySQL 生产数据
+- V2 SQLite 数据
+- 用户上传文件
+- `admin_state.json`
+- Playwright 截图、报告缓存、论文/研究输出
 
-所有真实密钥只通过 `.env` 或系统环境变量提供，不要提交到 Git。
+本地常见不应提交文件：
 
-V1 后端示例：
-
-```bash
-cd realguard-server-main/RealGuard
-cp .env.example .env
+```text
+.playwright-cli/
+output/
+reports/
+research/
+realguard-server-main/RealGuard/admin_state.json
 ```
-
-关键变量：
-
-- `REALGUARD_DB_*`：主业务数据库。
-- `REALGUARD_DETECTION_DB_*`：鉴伪历史数据库。
-- `REALGUARD_DETECTION_BACKEND_URL`：V1 内网检测服务，例如 `http://127.0.0.1:15000`。
-- `ALIYUN_*`：短信验证码服务。
-
-V2 后端示例：
-
-```bash
-cd v2-agent/backend
-cp .env.example .env
-```
-
-关键变量：
-
-- `DASHSCOPE_API_KEY`
-- `DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1`
-- `VLM_MODEL=qwen3-vl-flash`
-- `JIANZHEN_ACCESS_TOKEN`：可选。配置后，V2 历史、报告和监控接口需携带访问令牌。
 
 ## 本地开发
 
-V1 后端：
+### 前置依赖
+
+建议版本：
+
+- Python 3.13
+- Node.js 20+
+- npm 10+
+- MySQL 8 或兼容版本
+- `uv`，用于快速创建测试虚拟环境
+
+### V1 后端
 
 ```bash
 cd realguard-server-main/RealGuard
@@ -109,7 +185,22 @@ cp .env.example .env
 python run.py
 ```
 
-V1 前端：
+默认监听：
+
+```text
+http://127.0.0.1:5000
+```
+
+本地 `.env` 至少需要配置：
+
+- `SECRET_KEY`
+- `REALGUARD_DB_*`
+- `REALGUARD_DETECTION_DB_*`
+- `REALGUARD_DETECTION_BACKEND_URL`
+- `ALIYUN_*`，如果要测试短信
+- `DASHSCOPE_API_KEY`，如果要测试 LLM 相关链路
+
+### V1 前端
 
 ```bash
 cd realguard-server-main/frontend
@@ -117,18 +208,41 @@ npm ci
 npm run dev
 ```
 
-V2 后端：
+构建：
+
+```bash
+npm run build
+```
+
+### V2 后端
 
 ```bash
 cd v2-agent/backend
+uv sync
+cp .env.example .env
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8848 --workers 1
+```
+
+如果机器没有 `uv`，可以使用普通虚拟环境：
+
+```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install fastapi "uvicorn[standard]" python-multipart openai python-dotenv pillow numpy matplotlib
-cp .env.example .env
+pip install fastapi "uvicorn[standard]" python-multipart openai python-dotenv pillow numpy matplotlib c2pa-python opencv-python-headless scipy PyWavelets scikit-learn
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8848 --workers 1
 ```
 
-V2 前端：
+关键环境变量：
+
+- `DASHSCOPE_API_KEY`
+- `DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1`
+- `VLM_MODEL=qwen3-vl-flash`
+- `JIANZHEN_DATA_DIR`
+- `JIANZHEN_ACCESS_TOKEN`
+- `REALGUARD_DEVELOPER_AUTH_SECRET`
+- `JIANZHEN_DEVELOPER_AUTH_URL`
+
+### V2 前端
 
 ```bash
 cd v2-agent/frontend
@@ -136,138 +250,354 @@ npm ci
 npm run dev
 ```
 
-## 验证
+构建：
 
-V1 回归与 smoke 测试：
+```bash
+npm run build
+```
+
+## 测试和验证
+
+### V1 全量测试
 
 ```bash
 uv venv realguard-server-main/RealGuard/.venv-test --python 3.13
-uv pip install --python realguard-server-main/RealGuard/.venv-test/bin/python flask pymysql pillow requests werkzeug pytest
+uv pip install --python realguard-server-main/RealGuard/.venv-test/bin/python \
+  flask pymysql pillow requests werkzeug pytest
 realguard-server-main/RealGuard/.venv-test/bin/pytest realguard-server-main/RealGuard/tests
 ```
 
-V2 接口保护与报告导出测试：
+当前基准：`102 passed`。
+
+### V2 测试
 
 ```bash
 v2-agent/backend/.venv/bin/pytest v2-agent/backend/tests
 ```
 
-## 生产部署参考
-
-推荐进程与端口：
-
-| 服务 | 监听地址 | 说明 |
-| --- | --- | --- |
-| Nginx | `0.0.0.0:80` | 公网唯一入口 |
-| V1 前端静态服务 | `127.0.0.1:8081` | 内部访问 |
-| V1 Flask 后端 | `127.0.0.1:5000` | 内部访问 |
-| V2 FastAPI 后端 | `127.0.0.1:8848` | 内部访问 |
-| Umami | `127.0.0.1:3001` | 内部访问 |
-| PostgreSQL/Umami | `127.0.0.1:5432` | 内部访问 |
-
-Nginx 配置模板在 `deploy/nginx/`：
-
-- `realguard.conf`：主站、V2 和 V1 路由。
-- `analytics.conf`：Umami 后台子域名。
-- `snippets/realguard-security-server.conf`：安全响应头、敏感文件拦截。
-- `snippets/realguard-zones.conf`：限流和连接数区域，需要放在 Nginx `http` 作用域。
-- `snippets/realguard-umami-tracking.conf`：同源统计脚本代理。
-
-部署时可以按需复制：
+### 前端构建
 
 ```bash
-sudo cp deploy/nginx/realguard.conf /etc/nginx/conf.d/realguard.conf
-sudo cp deploy/nginx/analytics.conf /etc/nginx/conf.d/analytics.conf
-sudo cp deploy/nginx/snippets/*.conf /etc/nginx/snippets/
+cd realguard-server-main/frontend && npm run build
+cd ../../v2-agent/frontend && npm run build
+```
+
+### 线上状态检查
+
+```bash
+DEPLOY_SSH_KEY=/path/to/private_key ./scripts/check_deploy_status.sh
+```
+
+严格模式：
+
+```bash
+STRICT=1 DEPLOY_SSH_KEY=/path/to/private_key ./scripts/check_deploy_status.sh
+```
+
+## 生产部署
+
+发布脚本默认目标为：
+
+```text
+ubuntu@124.221.92.85
+```
+
+接手人应使用自己的 SSH key，不要把私钥提交进仓库。
+
+### 发布 V1
+
+```bash
+DEPLOY_SSH_KEY=/path/to/private_key ./scripts/deploy_v1.sh
+```
+
+脚本会做：
+
+- V1 后端编译
+- V1 测试
+- V1 前端构建
+- 后端打包上传
+- 前端 `dist/` 同步到 `/var/www/realguard-frontend/`
+- 重启 `realguard-detector-backend.service`
+- 重启 `realguard-backend.service`
+- 写入 `/opt/realguard-server/DEPLOYED_COMMIT`
+- 健康检查
+
+### 发布 V2
+
+```bash
+DEPLOY_SSH_KEY=/path/to/private_key ./scripts/deploy_v2.sh
+```
+
+脚本会做：
+
+- V2 后端编译和测试
+- V2 前端构建
+- 后端打包上传
+- 前端 `dist/` 同步到 `/var/www/v2/`
+- 重启 `jianzhen-v2-backend.service`
+- 写入 `/opt/jianzhen-v2/DEPLOYED_COMMIT`
+- 健康检查
+
+### 收敛部署
+
+如果不确定 V1/V2 哪个落后，可以用：
+
+```bash
+DEPLOY_SSH_KEY=/path/to/private_key ./scripts/deploy_converge.sh
+```
+
+### Dry Run
+
+```bash
+DRY_RUN=1 DEPLOY_SSH_KEY=/path/to/private_key ./scripts/deploy_v1.sh
+```
+
+## 生产服务器常用命令
+
+登录：
+
+```bash
+ssh -i /path/to/private_key ubuntu@124.221.92.85
+```
+
+服务状态：
+
+```bash
+systemctl status realguard-backend.service
+systemctl status realguard-detector-backend.service
+systemctl status jianzhen-v2-backend.service
+systemctl status nginx.service
+```
+
+查看日志：
+
+```bash
+journalctl -u realguard-backend.service -n 200 --no-pager
+journalctl -u realguard-detector-backend.service -n 200 --no-pager
+journalctl -u jianzhen-v2-backend.service -n 200 --no-pager
+```
+
+健康检查：
+
+```bash
+curl -fsS http://127.0.0.1:5000/api/history/image-detections
+curl -fsS http://127.0.0.1:15001/health
+curl -fsS http://127.0.0.1:8848/api/health
+curl -fsS http://127.0.0.1/v2-api/health
+```
+
+Nginx：
+
+```bash
 sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-Umami 部署模板：
+## 数据备份和恢复
+
+生产数据不在 GitHub。正式交接时至少要给接手人一份最近备份。
+
+### MySQL 备份
+
+在服务器上执行：
 
 ```bash
-cd deploy/analytics
-cp .env.example .env
-docker compose -f docker-compose.example.yml up -d
+backup=/tmp/realguard-mysql-$(date +%F-%H%M%S).sql
+sudo mysqldump --single-transaction --databases system image_detection > "$backup"
+gzip "$backup"
+ls -lh "$backup.gz"
 ```
 
-生产环境建议把 `analytics.realguard.cn` 配成 A 记录指向服务器公网 IP，并尽快补 HTTPS。
-
-## 发布脚本
-
-仓库根目录 `scripts/` 提供了 `V1` 和 `V2` 的发布脚本，用于把“本地 verify 成功的版本”一致地同步到服务器，避免只复制部分后端文件导致线上缺模块或版本不明：
+从服务器拉回本地：
 
 ```bash
-DEPLOY_SSH_KEY=/path/to/key ./scripts/deploy_v1.sh
-DEPLOY_SSH_KEY=/path/to/key ./scripts/deploy_v2.sh
+scp -i /path/to/private_key ubuntu@124.221.92.85:/tmp/realguard-mysql-*.sql.gz .
 ```
 
-如果只是想快速把服务器收敛到当前 `V1 / V2` 目标版本，也可以直接使用统一入口：
+恢复前必须确认目标库可以被覆盖。恢复示例：
 
 ```bash
-DEPLOY_SSH_KEY=/path/to/key ./scripts/deploy_converge.sh
+gunzip -c realguard-mysql-YYYY-MM-DD-HHMMSS.sql.gz | sudo mysql
 ```
 
-它会先检查状态，`repo_state=match` 的目标会直接跳过，只有未对齐的目标才会调用对应发布脚本。
-在 `DRY_RUN=1` 下，状态脚本和统一入口会明确返回 `dry-run` 占位值，表示只做命令预演、不读取真实远端状态。
-
-默认会发布到 `ubuntu@124.221.92.85`，也可以覆盖：
+### V1 上传文件备份
 
 ```bash
-DEPLOY_HOST=example.com DEPLOY_USER=deploy DEPLOY_SSH_KEY=/path/to/key ./scripts/deploy_v2.sh
+sudo tar -czf /tmp/realguard-v1-uploads-$(date +%F-%H%M%S).tgz \
+  -C /opt/realguard-server/RealGuard/imagedetection/static uploads
 ```
 
-脚本会执行：
-
-- 本地 compile / pytest / frontend build
-- 后端完整目录打包上传，避免漏传模块
-- 前端 `dist/` 静态资源同步
-- 重启对应 systemd 服务并轮询健康检查，避免服务启动稍慢时被误判失败
-- 在服务器写入 `DEPLOYED_COMMIT`，便于核对当前线上对应的 Git 提交
-
-仅查看将要执行的命令时可使用：
+恢复：
 
 ```bash
-DRY_RUN=1 DEPLOY_SSH_KEY=/path/to/key ./scripts/deploy_v1.sh
+sudo tar -xzf realguard-v1-uploads-YYYY-MM-DD-HHMMSS.tgz \
+  -C /opt/realguard-server/RealGuard/imagedetection/static
+sudo chown -R ubuntu:ubuntu /opt/realguard-server/RealGuard/imagedetection/static/uploads
 ```
 
-查看当前服务器上 `V1 / V2` 的已部署提交、服务状态和健康检查时可使用：
+### V2 SQLite 数据备份
+
+V2 使用 SQLite，备份时建议先停服务或使用 SQLite 在线备份方式。
+
+简单停机备份：
 
 ```bash
-DEPLOY_SSH_KEY=/path/to/key ./scripts/check_deploy_status.sh
+sudo systemctl stop jianzhen-v2-backend.service
+sudo tar -czf /tmp/jianzhen-v2-data-$(date +%F-%H%M%S).tgz -C /opt/jianzhen-v2 data
+sudo systemctl start jianzhen-v2-backend.service
 ```
 
-默认情况下，状态脚本会按目标路径自动推导 `expected`：
-
-- `V1` 使用 `realguard-server-main/RealGuard` 和 `realguard-server-main/frontend` 最近一次变更提交
-- `V2` 使用 `v2-agent/backend` 和 `v2-agent/frontend` 最近一次变更提交
-
-这样即使仓库后续只新增了发布脚本或文档提交，状态检查仍会默认对齐各自应用的最新业务版本。
-
-如果想把某个提交作为强校验目标，可以加上 `EXPECT_COMMIT`；若希望健康检查失败时直接返回非零退出码，可以加 `STRICT=1`：
+恢复：
 
 ```bash
-EXPECT_COMMIT=$(git rev-parse --short HEAD) STRICT=1 DEPLOY_SSH_KEY=/path/to/key ./scripts/check_deploy_status.sh v2
+sudo systemctl stop jianzhen-v2-backend.service
+sudo tar -xzf jianzhen-v2-data-YYYY-MM-DD-HHMMSS.tgz -C /opt/jianzhen-v2
+sudo chown -R ubuntu:ubuntu /opt/jianzhen-v2/data
+sudo systemctl start jianzhen-v2-backend.service
 ```
 
-状态脚本会同时给出两层结论：
+## 历史记录说明
 
-- `repo_state`：服务器 `DEPLOYED_COMMIT` 是否与当前期望提交一致
-- `code_state`：即使 `DEPLOYED_COMMIT` 落后，`V1 / V2` 实际业务代码是否已经与当前仓库对应目录一致
+V1 历史记录主要在：
 
-这样在仓库只新增了发布脚本或文档、但未改动 `V1 / V2` 业务代码时，不会把线上错误地判断成“应用版本落后”。
+- `image_detection.data`
+- `image_detection.video_data`
+- `image_detection.exif`
+
+用户信息主要在：
+
+- `system.user`
+
+当前历史接口用以下字段归属记录：
+
+- `Userid`
+- `phone`
+- `openid`
+
+原因：旧系统里部分记录来自微信 openid，部分记录来自手机号登录，迁移后如果只按手机号查会漏历史。
+
+注意：仍有旧记录只有 openid，没有 `Userid` 或手机号。不能随便把这类记录展示给任意登录账号，否则会泄露他人历史。需要人工确认 openid 和手机号映射后再更新数据库。
+
+查询未绑定图像记录：
+
+```sql
+SELECT COUNT(*)
+FROM image_detection.data
+WHERE Userid IS NULL AND (phone IS NULL OR phone = '');
+```
 
 ## 安全说明
 
-- 仓库不包含真实 API Key、短信密钥、数据库密码、SSH 私钥。
+- 不要提交 `.env`、私钥、数据库 dump、上传文件、SQLite 数据库。
 - 后端服务建议只监听 `127.0.0.1`，公网只开放 Nginx 的 `80/443`。
-- Nginx 模板包含基础限流、隐藏版本、敏感文件拦截和安全响应头。
-- 上传接口限流较普通接口更宽松，避免影响正常检测。
-- V2 使用本地 SQLite 持久化历史、缓存与轻量监控指标；生产建议把数据库文件放在稳定磁盘路径。
-- 如需对外开放 V2 后台能力，建议配置 `JIANZHEN_ACCESS_TOKEN` 保护历史、报告和监控接口。
+- Nginx 模板包含敏感文件拦截、基础限流和安全响应头。
+- 生产建议尽快补 HTTPS，并把 cookie 设置和代理头一起复核。
+- V2 历史、报告和监控接口如需开放，应配置 `JIANZHEN_ACCESS_TOKEN`。
+- 管理员账号和大屏 token 只在服务器环境变量或数据库中维护。
 
-## GitHub
+## 已知问题和待办
+
+- V1 detector health 可能显示 `degraded`，原因是 `model_deploy.onnx.data` 外部权重文件缺失。服务仍可启动，但如需完整 V1 ONNX 推理，需要补齐该模型文件或确认线上走回退链路。
+- 旧图像历史里有部分 openid-only 记录，不能自动安全归属，需要人工确认映射。
+- Umami 监控后台不在 `deploy_v1.sh` / `deploy_v2.sh` 自动发布范围内。
+- 当前公网示例使用 HTTP。正式对外服务建议配置 HTTPS。
+- 生产数据备份流程需要定期自动化，目前 README 只给手动命令。
+
+## Git 工作流
+
+首次克隆：
 
 ```bash
-git clone https://github.com/MuskAI/rearguard.git
+GIT_SSH_COMMAND='ssh -i /path/to/private_key -o IdentitiesOnly=yes' \
+  git clone git@github.com:MuskAI/rearguard.git
 ```
+
+日常开发：
+
+```bash
+git checkout main
+git pull --ff-only
+# 修改代码
+git status
+git add <files>
+git commit -m "type(scope): message"
+GIT_SSH_COMMAND='ssh -i /path/to/private_key -o IdentitiesOnly=yes' git push origin main
+```
+
+提交前建议：
+
+```bash
+git diff --check
+realguard-server-main/RealGuard/.venv-test/bin/pytest realguard-server-main/RealGuard/tests
+cd realguard-server-main/frontend && npm run build
+cd ../../v2-agent/frontend && npm run build
+```
+
+如果只是文档变更，不需要部署服务器。
+
+## 回滚思路
+
+如果线上出问题：
+
+1. 先看服务日志和 Nginx 状态。
+2. 确认最近部署提交：
+
+```bash
+ssh -i /path/to/private_key ubuntu@124.221.92.85 'cat /opt/realguard-server/DEPLOYED_COMMIT; cat /opt/jianzhen-v2/DEPLOYED_COMMIT'
+```
+
+3. 本地切到上一个稳定提交。
+4. 重新运行对应部署脚本。
+
+示例：
+
+```bash
+git checkout <stable-commit>
+DEPLOY_SSH_KEY=/path/to/private_key ./scripts/deploy_v1.sh
+DEPLOY_SSH_KEY=/path/to/private_key ./scripts/deploy_v2.sh
+git checkout main
+```
+
+如果涉及数据库变更，先备份再回滚。
+
+## 给接手人的交接清单
+
+接手前请确认已经拿到：
+
+- GitHub 仓库权限
+- 服务器 SSH 权限
+- `/etc/realguard/*.env` 的真实配置
+- MySQL root 或运维账号权限
+- 最近一次 MySQL 备份
+- 最近一次 V1 uploads 备份
+- 最近一次 V2 data 备份
+- DashScope / 阿里云短信 / 其他云服务权限
+- 管理员账号或重置方式
+- 域名和 DNS 管理权限
+- 如需完整 V1 ONNX 推理，确认模型权重文件来源
+
+接手后建议先做：
+
+```bash
+git clone git@github.com:MuskAI/rearguard.git
+cd rearguard
+DEPLOY_SSH_KEY=/path/to/private_key ./scripts/check_deploy_status.sh
+```
+
+然后登录服务器确认：
+
+```bash
+systemctl is-active realguard-backend.service
+systemctl is-active realguard-detector-backend.service
+systemctl is-active jianzhen-v2-backend.service
+sudo nginx -t
+```
+
+最后用测试账号登录主站，确认：
+
+- 首页可打开
+- 图像鉴伪入口可进入
+- 视频鉴伪入口可进入
+- 历史记录能显示属于该账号的数据
+- V2 深度分析页面可打开
+- 管理员后台需要登录后访问
