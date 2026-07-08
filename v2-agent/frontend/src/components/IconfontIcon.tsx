@@ -5,11 +5,13 @@ export type IconfontName =
   | "close"
   | "deep-analysis"
   | "history"
+  | "home"
   | "image-forensics"
   | "plus"
   | "report"
   | "search"
   | "shield-check"
+  | "upload"
   | "video-forensics";
 
 interface Props {
@@ -52,6 +54,13 @@ const glyphs: Record<IconfontName, ReactNode> = {
       <path d="M9.1 18.5h5.8" />
     </>
   ),
+  home: (
+    <>
+      <path d="m4.5 11.2 7.5-6.5 7.5 6.5" />
+      <path d="M6.5 10.1v8.4c0 .7.6 1.3 1.3 1.3h8.4c.7 0 1.3-.6 1.3-1.3v-8.4" />
+      <path d="M10 19.8v-5.2h4v5.2" />
+    </>
+  ),
   "image-forensics": (
     <>
       <rect x="4.5" y="5" width="15" height="14" rx="2.2" />
@@ -89,6 +98,13 @@ const glyphs: Record<IconfontName, ReactNode> = {
     <>
       <path d="M12 3.6 5.5 6.3v5.4c0 4.1 2.7 7.5 6.5 8.7 3.8-1.2 6.5-4.6 6.5-8.7V6.3L12 3.6Z" />
       <path d="m8.8 12.1 2.1 2.1 4.4-4.6" />
+    </>
+  ),
+  upload: (
+    <>
+      <path d="M12 15.5V4.8" />
+      <path d="m7.8 9 4.2-4.2L16.2 9" />
+      <path d="M5.5 14.5v3.7c0 .8.7 1.5 1.5 1.5h10c.8 0 1.5-.7 1.5-1.5v-3.7" />
     </>
   ),
   "video-forensics": (

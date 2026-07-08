@@ -21,6 +21,7 @@ import { getInitialHistoryFilter, getInitialHistoryQuery } from "./historyParams
 import Sidebar from "./components/Sidebar";
 import ResultCard from "./components/ResultCard";
 import ForensicGallery from "./components/ForensicGallery";
+import IconfontIcon from "./components/IconfontIcon";
 import Logo from "./components/Logo";
 import AdminDashboard from "./components/AdminDashboard";
 
@@ -456,7 +457,7 @@ export default function App() {
   }
 
   return (
-    <div className="h-full flex flex-col md:flex-row">
+    <div className="h-full flex flex-col md:flex-row bg-[#f4f7f4] text-ink-950">
       <Sidebar
         history={history}
         historyBusy={historyBusy}
@@ -518,16 +519,17 @@ export default function App() {
       )}
 
       <main className="flex-1 flex flex-col min-w-0 min-h-0">
-        <header className="px-4 sm:px-6 py-3 border-b border-ink-700 bg-ink-800/95 flex items-center justify-between gap-3">
+        <header className="px-4 sm:px-6 py-3 border-b border-ink-700 bg-white/95 backdrop-blur flex items-center justify-between gap-3 shadow-sm">
           <div className="min-w-0">
-            <h1 className="text-lg sm:text-xl font-semibold text-rice truncate">AI 鉴伪工作台</h1>
-            <p className="text-[11px] sm:text-xs text-ink-500 truncate">图像 / 视频 / 音频 / 文档的伪造与 AIGC 检测</p>
+            <h1 className="text-lg sm:text-xl font-semibold text-rice truncate">深度证据分析</h1>
+            <p className="text-[11px] sm:text-xs text-ink-500 truncate">上传文件后汇总鉴伪结论、取证线索、内容凭证与报告归档</p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={() => setHistoryOpen(true)}
-              className="md:hidden h-9 px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950"
+              className="md:hidden h-9 px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950 inline-flex items-center gap-1.5"
             >
+              <IconfontIcon name="history" size={14} />
               历史
             </button>
             <span
@@ -545,14 +547,16 @@ export default function App() {
               onClick={() => {
                 window.location.href = "/";
               }}
-              className="hidden sm:inline-flex h-9 items-center px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950 hover:border-brand-cyan/50"
+              className="hidden sm:inline-flex h-9 items-center gap-1.5 px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950 hover:border-brand-cyan/50"
             >
+              <IconfontIcon name="home" size={14} />
               首页
             </button>
             <button
               onClick={newChat}
-              className="hidden sm:inline-flex h-9 items-center px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950 hover:border-jade/50"
+              className="hidden sm:inline-flex h-9 items-center gap-1.5 px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950 hover:border-jade/50"
             >
+              <IconfontIcon name="plus" size={14} />
               新建检测
             </button>
           </div>
@@ -699,6 +703,7 @@ export default function App() {
                   onClick={requestUpload}
                   className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-brand-blue text-white font-medium text-sm disabled:opacity-50 shadow-sm hover:bg-brand-cyan"
                 >
+                  {!busy && <IconfontIcon name="upload" size={16} />}
                   {busy ? "检测中…" : "选择文件开始鉴伪"}
                 </button>
                 <span className="text-xs sm:text-sm text-ink-500 leading-relaxed truncate">
@@ -753,38 +758,63 @@ function EmptyState({
   accessAttention: boolean;
 }) {
   return (
-    <div className="mx-auto grid w-full max-w-5xl gap-4 py-10 sm:py-14 lg:grid-cols-[1fr_280px]">
-      <section className="rounded-lg border border-ink-700 bg-ink-800 p-6 shadow-sm">
-        <div className="flex items-center gap-3">
-          <Logo size={48} idSuffix="hero" />
-          <div>
-            <h2 className="text-2xl font-semibold text-rice">新建检测</h2>
-            <p className="mt-1 text-sm text-ink-500">鉴伪结论、内容凭证、文件信息和水印线索会汇总到同一张结果卡。</p>
-            <p className="mt-2 text-xs text-ink-500">{capabilitySummary}</p>
+    <div className="mx-auto grid w-full max-w-6xl gap-4 py-6 sm:py-10 lg:grid-cols-[minmax(0,1fr)_320px]">
+      <section className="min-h-[320px] rounded-lg border border-dashed border-brand-blue/35 bg-white/90 p-5 sm:p-7 shadow-sm">
+        <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <div className="inline-flex items-center gap-2 rounded-full border border-brand-cyan/25 bg-brand-cyan/10 px-3 py-1 text-[11px] font-medium text-brand-cyan">
+              <IconfontIcon name="deep-analysis" size={14} />
+              深度证据分析
+            </div>
+            <h2 className="mt-4 text-2xl sm:text-3xl font-semibold leading-tight text-rice">新建鉴伪任务</h2>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-500">
+              检测结论、取证线索、内容凭证和报告编号会汇总到同一张结果卡，方便后续复核与归档。
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2 text-xs text-ink-500">
+              <span className="rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1">服务状态同步</span>
+              <span className="rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1">历史记录已接入</span>
+              <span className="rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1">{capabilitySummary}</span>
+            </div>
           </div>
+          <Logo size={56} idSuffix="hero" />
         </div>
         {accessAttention ? (
           <a
             href="/"
-            className="mt-6 inline-flex w-full justify-center rounded-lg bg-brand-blue px-5 py-3 text-sm font-medium text-white shadow-sm hover:bg-brand-cyan sm:w-auto"
+            className="mt-7 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-brand-blue px-5 py-3 text-sm font-medium text-white shadow-sm hover:bg-brand-cyan sm:w-auto"
           >
+            <IconfontIcon name="home" size={16} />
             登录后开始检测
           </a>
         ) : (
           <button
             onClick={onUpload}
-            className="mt-6 w-full rounded-lg bg-brand-blue px-5 py-3 text-sm font-medium text-white shadow-sm hover:bg-brand-cyan sm:w-auto"
+            className="mt-7 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-brand-blue px-5 py-3 text-sm font-medium text-white shadow-sm hover:bg-brand-cyan sm:w-auto"
           >
+            <IconfontIcon name="upload" size={16} />
             选择文件开始鉴伪
           </button>
         )}
       </section>
-      <aside className="rounded-lg border border-ink-700 bg-ink-900 p-4">
-        <div className="text-sm font-semibold text-ink-950">三步完成</div>
-        <div className="mt-3 space-y-3 text-xs text-ink-500">
-          <div className="border-l-2 border-brand-cyan/50 pl-3">上传需要检测的文件</div>
-          <div className="border-l-2 border-jade/50 pl-3">查看结论与关键证据</div>
-          <div className="border-l-2 border-gold/60 pl-3">下载或归档检测报告</div>
+      <aside className="rounded-lg border border-ink-700 bg-ink-900 p-4 shadow-sm">
+        <div className="flex items-center gap-2 text-sm font-semibold text-ink-950">
+          <IconfontIcon name="shield-check" size={17} />
+          任务流程
+        </div>
+        <div className="mt-4 space-y-3 text-xs text-ink-500">
+          {[
+            ["01", "上传文件", "图像、视频、音频或文档"],
+            ["02", "查看证据", "结论、置信度与取证线索"],
+            ["03", "归档报告", "历史记录与报告编号"],
+          ].map((item) => (
+            <div key={item[0]} className="rounded-lg border border-ink-700 bg-white px-3 py-3">
+              <div className="flex items-center gap-2">
+                <span className="rounded-md bg-brand-blue/10 px-2 py-1 font-mono text-[10px] text-brand-blue">{item[0]}</span>
+                <strong className="text-ink-950">{item[1]}</strong>
+              </div>
+              <p className="mt-1 pl-11 leading-relaxed">{item[2]}</p>
+            </div>
+          ))}
         </div>
       </aside>
     </div>

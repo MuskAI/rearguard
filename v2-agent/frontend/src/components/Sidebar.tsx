@@ -116,12 +116,12 @@ export default function Sidebar({
   }
 
   return (
-    <aside className={`w-64 shrink-0 bg-ink-900 border-r border-ink-700 flex flex-col shadow-sm ${className}`}>
+    <aside className={`w-72 shrink-0 bg-white/95 border-r border-ink-700 flex flex-col shadow-sm ${className}`}>
       <div className="p-4 flex items-center gap-2.5">
         <Logo size={36} idSuffix="side" />
         <div className="flex-1 min-w-0">
-          <div className="text-xl font-semibold text-rice leading-tight">鉴真</div>
-          <div className="text-[10px] text-cinnabar-light">AI 鉴伪工作台</div>
+          <div className="text-lg font-semibold text-rice leading-tight">鉴真 AI</div>
+          <div className="text-[10px] text-brand-cyan">证据分析工作台</div>
         </div>
         {onClose && (
           <button
@@ -139,7 +139,7 @@ export default function Sidebar({
           onNew();
           onClose?.();
         }}
-        className="mx-4 mb-3 inline-flex items-center justify-center gap-2 py-2 rounded-lg bg-cinnabar text-white text-sm hover:bg-cinnabar-dark transition shadow-sm"
+        className="mx-4 mb-3 inline-flex items-center justify-center gap-2 py-2 rounded-lg bg-brand-blue text-white text-sm hover:bg-brand-cyan transition shadow-sm"
       >
         <IconfontIcon name="plus" size={16} />
         <span>新建检测</span>
