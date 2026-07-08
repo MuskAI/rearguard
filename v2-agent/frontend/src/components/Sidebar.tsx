@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { HistoryFilterCounts, HistoryItem, HistorySidebarFilter, VERDICT_META, TYPE_LABEL } from "../api";
+import IconfontIcon from "./IconfontIcon";
+import type { IconfontName } from "./IconfontIcon";
 import Logo from "./Logo";
 
 const FILTER_OPTIONS = [
@@ -17,6 +19,17 @@ type SidebarFilterKey = HistorySidebarFilter;
 const PRIMARY_FILTER_KEYS = new Set<SidebarFilterKey>(["all", "highly", "suspected", "real", "unknownVerdict"]);
 const PRIMARY_FILTER_OPTIONS = FILTER_OPTIONS.filter((item) => PRIMARY_FILTER_KEYS.has(item.key as SidebarFilterKey));
 const MORE_FILTER_OPTIONS = FILTER_OPTIONS.filter((item) => !PRIMARY_FILTER_KEYS.has(item.key as SidebarFilterKey));
+const FILTER_ICONS: Partial<Record<SidebarFilterKey, IconfontName>> = {
+  all: "history",
+  highly: "shield-check",
+  suspected: "deep-analysis",
+  real: "shield-check",
+  unknownVerdict: "report",
+  forensics: "deep-analysis",
+  provenance: "archive",
+  watermark: "image-forensics",
+  synthid: "deep-analysis",
+};
 
 function isHistoryNoticeMessage(value?: string) {
   if (!value) return false;
@@ -126,12 +139,16 @@ export default function Sidebar({
           onNew();
           onClose?.();
         }}
-        className="mx-4 mb-3 py-2 rounded-lg bg-cinnabar text-white text-sm hover:bg-cinnabar-dark transition shadow-sm"
+        className="mx-4 mb-3 inline-flex items-center justify-center gap-2 py-2 rounded-lg bg-cinnabar text-white text-sm hover:bg-cinnabar-dark transition shadow-sm"
       >
-        + 新建检测
+        <IconfontIcon name="plus" size={16} />
+        <span>新建检测</span>
       </button>
 
-      <div className="px-4 pb-1 text-[11px] text-ink-500 uppercase">历史记录</div>
+      <div className="px-4 pb-1 inline-flex items-center gap-1.5 text-[11px] text-ink-500 uppercase">
+        <IconfontIcon name="history" size={13} />
+        <span>历史记录</span>
+      </div>
       <div className="flex-1 overflow-y-auto px-2 space-y-1">
         {showHistoryNotice ? (
           <div className="mx-2 mb-2 rounded-lg border border-ink-600 bg-ink-800 px-3 py-3">
@@ -149,6 +166,7 @@ export default function Sidebar({
         ) : (
           <div className="mx-2 mb-2 space-y-2">
             <div className="rounded-lg border border-ink-600 bg-ink-800 px-2.5 py-2 flex items-center gap-2">
+              <IconfontIcon name="search" size={15} className="text-ink-500" />
               <input
                 value={query}
                 onChange={(event) => onQueryChange(event.target.value)}
@@ -177,6 +195,7 @@ export default function Sidebar({
                       : "border-ink-600 bg-ink-800 text-ink-500"
                   }`}
                 >
+                  <IconfontIcon name={FILTER_ICONS[item.key as SidebarFilterKey] || "history"} size={12} />
                   <span>{item.label}</span>
                   <span
                     className={`rounded-full px-1.5 py-0.5 text-[9px] ${
@@ -196,8 +215,9 @@ export default function Sidebar({
                   activeFilterInMore || showMoreFilters
                     ? "border-brand-cyan/40 bg-brand-cyan/10 text-brand-cyan"
                     : "border-ink-600 bg-ink-800 text-ink-500"
-                }`}
+                  }`}
               >
+                <IconfontIcon name="deep-analysis" size={12} />
                 更多筛选
                 {activeFilterInMore && <span className="rounded-full bg-brand-cyan/15 px-1.5 py-0.5 text-[9px]">{activeFilterLabel}</span>}
               </button>
@@ -215,6 +235,7 @@ export default function Sidebar({
                         : "border-ink-600 bg-ink-900 text-ink-500"
                     }`}
                   >
+                    <IconfontIcon name={FILTER_ICONS[item.key as SidebarFilterKey] || "deep-analysis"} size={12} />
                     <span>{item.label}</span>
                     <span
                       className={`rounded-full px-1.5 py-0.5 text-[9px] ${
@@ -292,8 +313,9 @@ export default function Sidebar({
                     <button
                       type="button"
                       onClick={onClearSelection}
-                      className="px-2 py-1 rounded-md border border-ink-600 bg-ink-900 text-[10px]"
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-ink-600 bg-ink-900 text-[10px]"
                     >
+                      <IconfontIcon name="close" size={11} />
                       清除选中
                     </button>
                   )}
@@ -372,7 +394,7 @@ export default function Sidebar({
                 />
               ) : (
                 <span className="h-9 w-9 shrink-0 rounded-md bg-ink-800 border border-ink-600 grid place-items-center text-xs text-ink-500">
-                  {TYPE_LABEL[h.type].slice(0, 1)}
+                  <IconfontIcon name={historyTypeIcon(h)} size={18} />
                 </span>
               )}
               <div className="flex-1 min-w-0">
@@ -418,8 +440,9 @@ export default function Sidebar({
                   onDelete(h.taskId);
                 }}
                 className="opacity-0 group-hover:opacity-100 text-ink-500 hover:text-verdict-fake text-xs px-1"
+                aria-label="删除历史记录"
               >
-                删除
+                <IconfontIcon name="close" size={14} />
               </button>
             </div>
           );
@@ -439,6 +462,12 @@ export default function Sidebar({
       </div>
     </aside>
   );
+}
+
+function historyTypeIcon(item: HistoryItem): IconfontName {
+  if (item.type === "video") return "video-forensics";
+  if (item.type === "document") return "report";
+  return "image-forensics";
 }
 
 function formatHistoryTime(value: string) {

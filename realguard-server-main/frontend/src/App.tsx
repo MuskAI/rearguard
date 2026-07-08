@@ -1,17 +1,9 @@
 import { DragEvent, FormEvent, InputHTMLAttributes, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
-  FileArchive,
-  FileText,
-  Film,
-  History as HistoryIcon,
-  Image as ImageIcon,
-  Layers3,
-  Network,
-  ShieldCheck,
-  Zap,
 } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
+import IconfontIcon from "./components/IconfontIcon";
+import type { IconfontName } from "./components/IconfontIcon";
 import {
   Counters,
   DetectionJob,
@@ -740,7 +732,7 @@ function Nav({
       <header className="nav">
         <div className="nav-inner">
           <button className="nav-logo" aria-label={text.brand} onClick={() => go("home")}>
-            <i className="fa fa-eye" aria-hidden="true" />
+            <IconfontIcon name="brand" size={24} className="nav-logo-icon" />
             <span className="logo-full" aria-hidden="true">{text.brand}</span>
             <span className="logo-mobile" aria-hidden="true">{text.brandMobile}</span>
           </button>
@@ -751,15 +743,15 @@ function Nav({
             <div className="dropdown">
               <button className={`dropdown-trigger ${["image", "video"].includes(page) ? "active" : ""}`}>
                 <span>{text.functions}</span>
-                <i className="fa fa-chevron-down" />
+                <IconfontIcon name="chevron-down" size={14} className="dropdown-chevron" />
               </button>
               <div className="dropdown-menu">
                 <div className="dropdown-label">{text.detection}</div>
                 <button className={`dropdown-item ${page === "image" ? "active-item" : ""}`} onClick={() => { openImage("standard"); setMobileOpen(false); }}>
-                  <i className="fa fa-image" /> {text.imageDetect}
+                  <IconfontIcon name="image-forensics" size={18} className="dropdown-icon" /> {text.imageDetect}
                 </button>
                 <button className={`dropdown-item ${page === "video" ? "active-item" : ""}`} onClick={() => go("video")}>
-                  <i className="fa fa-film" /> {text.videoDetect}
+                  <IconfontIcon name="video-forensics" size={18} className="dropdown-icon" /> {text.videoDetect}
                 </button>
               </div>
             </div>
@@ -777,7 +769,7 @@ function Nav({
               {text.language}
             </button>
             <button className="theme-btn" title={text.theme} onClick={() => setDark(!dark)}>
-              <i className={`fa ${dark ? "fa-sun-o" : "fa-moon-o"}`} />
+              <IconfontIcon name={dark ? "sun" : "moon"} size={18} />
             </button>
           </nav>
           <div className="mobile-nav-actions">
@@ -790,28 +782,28 @@ function Nav({
               {text.language}
             </button>
             <button className="theme-btn" title={text.theme} onClick={() => setDark(!dark)}>
-              <i className={`fa ${dark ? "fa-sun-o" : "fa-moon-o"}`} />
+              <IconfontIcon name={dark ? "sun" : "moon"} size={18} />
             </button>
             <button className="mobile-menu-btn" aria-label={text.openMenu} onClick={() => setMobileOpen(!mobileOpen)}>
-              <i className={`fa ${mobileOpen ? "fa-times" : "fa-bars"}`} />
+              <IconfontIcon name={mobileOpen ? "close" : "menu"} size={18} />
               <span>{text.menu}</span>
             </button>
           </div>
         </div>
         <div className={`mobile-panel ${mobileOpen ? "open" : ""}`}>
-          <button className={page === "home" ? "active" : ""} onClick={() => go("home")}><i className="fa fa-home" /> {text.home}</button>
-          <button className={page === "image" ? "active" : ""} onClick={() => { openImage("standard"); setMobileOpen(false); }}><i className="fa fa-image" /> {text.imageDetect}</button>
-          <button className={page === "video" ? "active" : ""} onClick={() => go("video")}><i className="fa fa-film" /> {text.videoDetect}</button>
-          <button onClick={() => { window.location.href = REALGUARD_V2_CONSOLE_URL; }}><i className="fa fa-bolt" /> {text.v2}</button>
-          <button className={page === "history" ? "active" : ""} onClick={() => go("history")}><i className="fa fa-clock-o" /> {text.history}</button>
-          <button onClick={authAction}><i className={`fa ${user ? "fa-sign-out" : "fa-user"}`} /> {user ? text.logoutFull : text.loginRegister}</button>
+          <button className={page === "home" ? "active" : ""} onClick={() => go("home")}><IconfontIcon name="home" size={18} /> {text.home}</button>
+          <button className={page === "image" ? "active" : ""} onClick={() => { openImage("standard"); setMobileOpen(false); }}><IconfontIcon name="image-forensics" size={18} /> {text.imageDetect}</button>
+          <button className={page === "video" ? "active" : ""} onClick={() => go("video")}><IconfontIcon name="video-forensics" size={18} /> {text.videoDetect}</button>
+          <button onClick={() => { window.location.href = REALGUARD_V2_CONSOLE_URL; }}><IconfontIcon name="deep-analysis" size={18} /> {text.v2}</button>
+          <button className={page === "history" ? "active" : ""} onClick={() => go("history")}><IconfontIcon name="history" size={18} /> {text.history}</button>
+          <button onClick={authAction}><IconfontIcon name={user ? "logout" : "user"} size={18} /> {user ? text.logoutFull : text.loginRegister}</button>
         </div>
       </header>
       <nav className="mobile-bottom-nav">
-        <button className={page === "home" ? "active" : ""} onClick={() => go("home")}><i className="fa fa-home" /><span>{text.mobileShort.home}</span></button>
-        <button className={page === "image" ? "active" : ""} onClick={() => openImage("standard")}><i className="fa fa-image" /><span>{text.mobileShort.image}</span></button>
-        <button className={page === "video" ? "active" : ""} onClick={() => go("video")}><i className="fa fa-film" /><span>{text.mobileShort.video}</span></button>
-        <button className={page === "history" ? "active" : ""} onClick={() => go("history")}><i className="fa fa-clock-o" /><span>{text.mobileShort.history}</span></button>
+        <button className={page === "home" ? "active" : ""} onClick={() => go("home")}><IconfontIcon name="home" size={20} /><span>{text.mobileShort.home}</span></button>
+        <button className={page === "image" ? "active" : ""} onClick={() => openImage("standard")}><IconfontIcon name="image-forensics" size={20} /><span>{text.mobileShort.image}</span></button>
+        <button className={page === "video" ? "active" : ""} onClick={() => go("video")}><IconfontIcon name="video-forensics" size={20} /><span>{text.mobileShort.video}</span></button>
+        <button className={page === "history" ? "active" : ""} onClick={() => go("history")}><IconfontIcon name="history" size={20} /><span>{text.mobileShort.history}</span></button>
       </nav>
     </>
   );
@@ -836,7 +828,7 @@ function HomePage({
       title: text.workflow[0][0],
       desc: text.workflow[0][1],
       action: text.workflow[0][2],
-      icon: ShieldCheck,
+      icon: "shield-check" as IconfontName,
       tone: "blue" as IconTone,
       onClick: () => openImage("standard"),
     },
@@ -845,7 +837,7 @@ function HomePage({
       title: text.workflow[1][0],
       desc: text.workflow[1][1],
       action: text.workflow[1][2],
-      icon: Network,
+      icon: "expert-review" as IconfontName,
       tone: "red" as IconTone,
       onClick: () => openImage("swarm"),
     },
@@ -854,7 +846,7 @@ function HomePage({
       title: text.workflow[2][0],
       desc: text.workflow[2][1],
       action: text.workflow[2][2],
-      icon: FileArchive,
+      icon: "archive" as IconfontName,
       tone: "green" as IconTone,
       onClick: () => setPage("history"),
     },
@@ -863,7 +855,7 @@ function HomePage({
       title: text.workflow[3][0],
       desc: text.workflow[3][1],
       action: text.workflow[3][2],
-      icon: Zap,
+      icon: "bolt" as IconfontName,
       tone: "amber" as IconTone,
       onClick: () => { window.location.href = REALGUARD_V2_CONSOLE_URL; },
     },
@@ -890,25 +882,25 @@ function HomePage({
               </div>
               <div className="home-task-grid">
                 <button className="home-task-card primary" onClick={() => openImage("standard")}>
-                  <ForensicIcon icon={ImageIcon} tone="blue" className="home-task-icon" />
+                  <ForensicIcon name="image-forensics" tone="blue" className="home-task-icon" />
                   <span>{text.home.primaryAction}</span>
                   <small>{lang === "zh" ? "开始普通图片检测" : "Start an image task"}</small>
                 </button>
                 <button className="home-task-card" onClick={() => setPage("video")}>
-                  <ForensicIcon icon={Film} tone="ink" className="home-task-icon" />
+                  <ForensicIcon name="video-forensics" tone="ink" className="home-task-icon" />
                   <span>{text.home.videoAction}</span>
                   <small>{lang === "zh" ? "开始视频真伪检测" : "Start a video task"}</small>
                 </button>
                 <button className="home-task-card" onClick={() => { window.location.href = REALGUARD_V2_CONSOLE_URL; }}>
-                  <ForensicIcon icon={Layers3} tone="amber" className="home-task-icon" />
+                  <ForensicIcon name="deep-analysis" tone="amber" className="home-task-icon" />
                   <span>{text.home.secondaryAction}</span>
                   <small>{lang === "zh" ? "补充深度证据" : "Add deeper evidence"}</small>
                 </button>
               </div>
               <div className="home-continue-row">
                 <span>{text.home.continueKicker}</span>
-                <button onClick={() => setPage("history")}><HistoryIcon size={15} strokeWidth={2} aria-hidden="true" />{text.home.historyAction}</button>
-                <button onClick={() => setPage("history")}><FileText size={15} strokeWidth={2} aria-hidden="true" />{text.home.reportsAction}</button>
+                <button onClick={() => setPage("history")}><IconfontIcon name="history" size={15} />{text.home.historyAction}</button>
+                <button onClick={() => setPage("history")}><IconfontIcon name="report" size={15} />{text.home.reportsAction}</button>
               </div>
             </div>
             <div className="home-trust-row" aria-label={lang === "zh" ? "平台能力摘要" : "Platform capability summary"}>
@@ -970,7 +962,7 @@ function HomePage({
             {workflowCards.map((item) => (
               <button className="home-workflow-card" onClick={item.onClick} key={item.title}>
                 <span>{item.step}</span>
-                <ForensicIcon icon={item.icon} tone={item.tone} className="workflow-icon" />
+                <ForensicIcon name={item.icon} tone={item.tone} className="workflow-icon" />
                 <h3>{item.title}</h3>
                 <p>{item.desc}</p>
                 <strong>{item.action} <ArrowRight size={15} strokeWidth={2} aria-hidden="true" /></strong>
@@ -984,10 +976,10 @@ function HomePage({
         <div className="container">
           <SectionHeader title={text.home.capabilitiesTitle} desc={text.home.capabilitiesDesc} />
           <div className="features-grid">
-            <FeatureCard accent="var(--primary)" tone="blue" icon={ImageIcon} title={text.features[0][0]} desc={text.features[0][1]} action={lang === "zh" ? "进入功能" : "Open tool"} onClick={() => openImage("standard")} />
-            <FeatureCard accent="var(--warning)" tone="ink" icon={Film} title={text.features[1][0]} desc={text.features[1][1]} action={lang === "zh" ? "进入功能" : "Open tool"} onClick={() => setPage("video")} />
-            <FeatureCard accent="var(--primary-dark)" tone="amber" icon={Layers3} title={text.features[2][0]} desc={text.features[2][1]} action={lang === "zh" ? "进入分析" : "Open analysis"} onClick={() => { window.location.href = REALGUARD_V2_CONSOLE_URL; }} />
-            <FeatureCard accent="var(--danger)" tone="red" icon={Network} title={text.features[3][0]} desc={text.features[3][1]} action={lang === "zh" ? "进入会诊" : "Open expert review"} onClick={() => openImage("swarm")} />
+            <FeatureCard accent="var(--primary)" tone="blue" icon="image-forensics" title={text.features[0][0]} desc={text.features[0][1]} action={lang === "zh" ? "进入功能" : "Open tool"} onClick={() => openImage("standard")} />
+            <FeatureCard accent="var(--warning)" tone="ink" icon="video-forensics" title={text.features[1][0]} desc={text.features[1][1]} action={lang === "zh" ? "进入功能" : "Open tool"} onClick={() => setPage("video")} />
+            <FeatureCard accent="var(--primary-dark)" tone="amber" icon="deep-analysis" title={text.features[2][0]} desc={text.features[2][1]} action={lang === "zh" ? "进入分析" : "Open analysis"} onClick={() => { window.location.href = REALGUARD_V2_CONSOLE_URL; }} />
+            <FeatureCard accent="var(--danger)" tone="red" icon="expert-review" title={text.features[3][0]} desc={text.features[3][1]} action={lang === "zh" ? "进入会诊" : "Open expert review"} onClick={() => openImage("swarm")} />
           </div>
         </div>
       </section>
@@ -1005,10 +997,10 @@ function HomePage({
   );
 }
 
-function ForensicIcon({ icon: Icon, tone = "blue", className = "" }: { icon: LucideIcon; tone?: IconTone; className?: string }) {
+function ForensicIcon({ name, tone = "blue", className = "" }: { name: IconfontName; tone?: IconTone; className?: string }) {
   return (
     <span className={`forensic-icon forensic-icon-${tone}${className ? ` ${className}` : ""}`} aria-hidden="true">
-      <Icon size={20} strokeWidth={1.9} />
+      <IconfontIcon name={name} size={21} strokeWidth={1.85} />
     </span>
   );
 }
@@ -1022,10 +1014,10 @@ function SectionHeader({ title, desc }: { title: string; desc: string }) {
   );
 }
 
-function FeatureCard({ accent, icon, tone = "blue", title, desc, action, onClick }: { accent: string; icon: LucideIcon; tone?: IconTone; title: string; desc: string; action: string; onClick: () => void }) {
+function FeatureCard({ accent, icon, tone = "blue", title, desc, action, onClick }: { accent: string; icon: IconfontName; tone?: IconTone; title: string; desc: string; action: string; onClick: () => void }) {
   return (
     <button className="feature-card fade-up visible" style={{ "--card-accent": accent } as React.CSSProperties} onClick={onClick}>
-      <ForensicIcon icon={icon} tone={tone} className="feature-icon" />
+      <ForensicIcon name={icon} tone={tone} className="feature-icon" />
       <h3>{title}</h3>
       <p>{desc}</p>
       <span className="feature-link">
