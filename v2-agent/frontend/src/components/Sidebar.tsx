@@ -426,8 +426,16 @@ export default function Sidebar({
         })}
       </div>
 
-      <div className="p-3 text-[10px] text-ink-500 border-t border-ink-700">
-        鉴真伪 · 明真相
+      <div className="border-t border-ink-700 p-3 text-[10px] text-ink-500">
+        <div>鉴真伪 · 明真相</div>
+        <a
+          href="https://beian.miit.gov.cn/"
+          target="_blank"
+          rel="noreferrer"
+          className="mt-1 inline-block hover:text-ink-950"
+        >
+          浙ICP备2026051442号
+        </a>
       </div>
     </aside>
   );

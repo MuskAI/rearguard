@@ -3435,6 +3435,9 @@ td { color: var(--text-primary); }
 .footer-logo { display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 0.75rem; font-size: 1.1rem; font-weight: 700; color: var(--text-primary); }
 .footer-logo i { color: var(--primary); }
 .footer-copy { font-size: 0.8rem; color: var(--text-muted); }
+.footer-icp { margin-top: 0.35rem; font-size: 0.78rem; color: var(--text-muted); }
+.footer-icp a { color: inherit; text-decoration: none; }
+.footer-icp a:hover { color: var(--primary); text-decoration: underline; }
 
 .fade-up {
   opacity: 0;

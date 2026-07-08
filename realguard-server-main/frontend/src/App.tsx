@@ -270,6 +270,7 @@ const UI_TEXT = {
     footer: {
       brand: "数字内容鉴伪平台",
       copy: "© 2026 数字内容鉴伪平台",
+      icp: "浙ICP备2026051442号",
     },
   },
   en: {
@@ -473,6 +474,7 @@ const UI_TEXT = {
     footer: {
       brand: "Digital Content Forensics",
       copy: "© 2026 Digital Content Forensics Platform",
+      icp: "浙ICP备2026051442号",
     },
   },
 } as const;
@@ -2547,6 +2549,11 @@ function Footer({ lang }: { lang: Lang }) {
     <footer className="footer">
       <div className="footer-logo"><i className="fa fa-eye" /> {text.brand}</div>
       <p className="footer-copy">{text.copy}</p>
+      <p className="footer-icp">
+        <a href="https://beian.miit.gov.cn/" target="_blank" rel="noreferrer">
+          {text.icp}
+        </a>
+      </p>
     </footer>
   );
 }
