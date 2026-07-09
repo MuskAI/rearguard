@@ -216,6 +216,11 @@ def _normalize_visual_issues(value, final_label=''):
             line = line.strip().lstrip("-·•*0123456789.、) ").strip()
             if line:
                 items.append(line)
+    internal_failure_markers = ('LLM调用失败', '无法提供视觉分析', '无法进行视觉分析')
+    items = [
+        item for item in items
+        if not any(marker in item for marker in internal_failure_markers)
+    ]
     if str(final_label or '').strip() == '真实图像':
         return items or ['无明显视觉可疑点。']
     return (items or ['暂未提取到明确的视觉可疑点。'])[:6]
