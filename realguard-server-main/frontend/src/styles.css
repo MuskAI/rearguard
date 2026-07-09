@@ -2753,9 +2753,9 @@ a { text-decoration: none; color: inherit; }
 .page-header p { font-size: 0.82rem; color: var(--text-secondary); }
 .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
 .layout.swarm-layout {
-  grid-template-columns: minmax(320px, 0.74fr) minmax(420px, 1.26fr);
+  grid-template-columns: minmax(320px, 0.78fr) minmax(0, 1.22fr);
   align-items: start;
-  gap: 1rem;
+  gap: 1.25rem;
 }
 .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 1.25rem; box-shadow: var(--shadow-card); transition: all 0.3s; display: flex; flex-direction: column; }
 .swarm-control-card {
@@ -3440,6 +3440,122 @@ td { color: var(--text-primary); }
   100% { transform: translateY(-3px) scale(1); }
 }
 
+/* Expert review is a task status, not a second hero section. Keep it compact. */
+.swarm-status-card .swarm-job-panel {
+  --swarm-text: var(--text-primary);
+  --swarm-muted: var(--text-secondary);
+  --swarm-soft: color-mix(in srgb, var(--primary) 10%, var(--bg-input));
+  --swarm-card: var(--bg-card);
+  margin-top: 0.85rem;
+  border: 1px solid rgba(11,92,255,0.16);
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg, rgba(11,92,255,0.06), rgba(6,214,160,0.05)),
+    var(--bg-card);
+  color: var(--text-primary);
+  box-shadow: none;
+}
+.swarm-status-card .swarm-job-panel::after { display: none; }
+.swarm-status-card .swarm-job-head {
+  padding: 0.75rem 0.85rem 0.55rem;
+  color: var(--text-primary);
+  font-size: 0.84rem;
+  letter-spacing: 0;
+}
+.swarm-status-card .swarm-job-head i {
+  color: var(--primary);
+  filter: none;
+}
+.swarm-status-card .swarm-job-head strong {
+  min-width: 58px;
+  padding: 4px 9px;
+  color: #fff;
+  background: var(--primary);
+  box-shadow: none;
+}
+.swarm-compact-body {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0 0.85rem 0.85rem;
+}
+.swarm-status-card .swarm-job-summary {
+  padding: 0.7rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-input) 82%, transparent);
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+}
+.swarm-status-card .swarm-job-summary strong {
+  color: var(--text-primary);
+  font-size: 0.84rem;
+}
+.swarm-status-card .swarm-viz-stats {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+.swarm-status-card .swarm-viz-stats span {
+  padding: 0.55rem 0.6rem;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font-size: 0.66rem;
+  backdrop-filter: none;
+}
+.swarm-status-card .swarm-viz-stats b {
+  display: inline;
+  margin-left: 4px;
+  color: var(--primary);
+  font-size: 0.82rem;
+}
+.swarm-status-card .swarm-progress-track {
+  height: 8px;
+  margin-top: 0;
+  background: var(--bg-input);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.swarm-status-card .swarm-progress-track span {
+  background: linear-gradient(90deg, var(--primary), var(--accent));
+  box-shadow: none;
+}
+.swarm-status-card .swarm-progress-track span::after { display: none; }
+.swarm-status-card .swarm-expert-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+  max-height: none;
+  overflow: visible;
+  padding: 0;
+}
+.swarm-status-card .swarm-expert-card {
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 0.45rem;
+  padding: 0.48rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  backdrop-filter: none;
+  box-shadow: none;
+}
+.swarm-status-card .swarm-expert-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+.swarm-status-card .swarm-expert-body strong {
+  color: var(--text-primary);
+  font-size: 0.68rem;
+}
+.swarm-status-card .swarm-expert-body em {
+  color: var(--text-muted);
+  font-size: 0.58rem;
+}
+.swarm-status-card .swarm-expert-card b {
+  color: var(--text-secondary);
+  font-size: 0.62rem;
+}
+
 @media (max-width: 1024px) {
   .home-hero-grid { grid-template-columns: 1fr; }
   .home-briefing-board { min-height: 560px; }
@@ -3699,6 +3815,13 @@ td { color: var(--text-primary); }
   .sample-item { align-items: center; }
   .sample-thumb { width: 64px; height: 48px; }
   .result-media { max-height: 210px; }
+  .swarm-status-card .swarm-viz-stats,
+  .swarm-status-card .swarm-expert-grid { grid-template-columns: 1fr; }
+  .swarm-status-card .swarm-viz-stats span {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
   .results-header { align-items: flex-start; flex-direction: column; gap: 6px; margin-bottom: 1rem; }
   table { min-width: 560px; }
   .login-card { max-width: none; padding: 1.25rem; border-radius: 20px 20px 0 0; }

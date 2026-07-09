@@ -55,7 +55,6 @@ const HISTORY_PAGE_SIZE = 100;
 const REALGUARD_V2_CONSOLE_URL = "/v2/";
 const REALGUARD_TERMS_VERSION = "2026-06-03";
 const SWARM_CANCELLED_ERROR = "__REALGUARD_SWARM_CANCELLED__";
-const SWARM_RAIN_DROPS = Array.from({ length: 28 }, (_, index) => index);
 const SWARM_PLACEHOLDER_EXPERTS: PublicExpertReviewExpert[] = Array.from({ length: 8 }, (_, index) => ({
   id: `placeholder-${index}`,
   status: "queued"
@@ -1352,7 +1351,7 @@ function ImageDetectionPage({
     <main className="main">
       <div className="container">
         <PageHeader icon="fa-image" title={pageText.imageTitle} desc={pageText.imageDesc} />
-        <div className={`layout ${detectMode === "swarm" ? "swarm-layout" : ""}`}>
+        <div className={`layout detection-workbench ${detectMode === "swarm" ? "swarm-layout" : ""}`}>
           <div className={`card ${detectMode === "swarm" ? "swarm-control-card" : ""}`}>
             <div className="section-label"><i className="fa fa-cogs" /> {tr("选择鉴伪任务", "Select forensic task")}</div>
             <div className="model-tabs" aria-label={tr("鉴伪任务模式", "Forensic task mode")}>
@@ -1373,26 +1372,13 @@ function ImageDetectionPage({
               <i className={`fa ${busy ? "fa-circle-o-notch detect-spin" : "fa-search"}`} /> {busy ? tr("正在分析", "Analyzing") : tr("开始检测", "Start detection")}
             </button>
           </div>
-          {detectMode === "swarm" ? (
-            <>
-              <div className="card swarm-status-card">
-                <div className="section-label"><i className="fa fa-info-circle" /> {tr("当前状态", "Current status")}</div>
-                <StatusRow status={status} busy={busy} />
-                <div className="card-divider" />
-                {result ? <ImageResult result={result} lang={lang} /> : <ImageSamples onSelect={detectSample} busy={busy} lang={lang} />}
-              </div>
-              <div className="card swarm-stage-card">
-                <ExpertReviewJobPanel job={swarmJob} busy={busy} lang={lang} />
-              </div>
-            </>
-          ) : (
-            <div className="card">
-              <div className="section-label"><i className="fa fa-info-circle" /> {tr("当前状态", "Current status")}</div>
-              <StatusRow status={status} busy={busy} />
-              <div className="card-divider" />
-              {result ? <ImageResult result={result} lang={lang} /> : <ImageSamples onSelect={detectSample} busy={busy} lang={lang} />}
-            </div>
-          )}
+          <div className={`card ${detectMode === "swarm" ? "swarm-status-card" : ""}`}>
+            <div className="section-label"><i className="fa fa-info-circle" /> {tr("当前状态", "Current status")}</div>
+            <StatusRow status={status} busy={busy} />
+            {detectMode === "swarm" && <ExpertReviewJobPanel job={swarmJob} busy={busy} lang={lang} />}
+            <div className="card-divider" />
+            {result ? <ImageResult result={result} lang={lang} /> : <ImageSamples onSelect={detectSample} busy={busy} lang={lang} />}
+          </div>
         </div>
       </div>
     </main>
@@ -1998,7 +1984,6 @@ function ExpertReviewJobPanel({ job, busy, lang }: { job: DetectionJob | null; b
   const hasConsensus = typeof consensusScore === "number" && Number.isFinite(consensusScore);
   const consensusPercent = hasConsensus ? Math.round(Math.max(0, Math.min(1, Number(consensusScore))) * 100) : progress;
   const consensusLabel = hasConsensus ? tr("共识度", "Consensus") : tr("检测进度", "Progress");
-  const visualState = busy || job?.status === "running" ? "active" : "calm";
   const liveProgress = job?.status === "success" || job?.status === "failed" ? progress : Math.floor(progress / 25) * 25;
   const liveText = `${summary}，${tr("进度", "progress")} ${liveProgress}%`;
   return (
@@ -2012,71 +1997,42 @@ function ExpertReviewJobPanel({ job, busy, lang }: { job: DetectionJob | null; b
         <span><i className="fa fa-sitemap" aria-hidden="true" /> {tr("专家会诊复核", "Expert review")}</span>
         <strong>{progress}%</strong>
       </div>
-      <div className="swarm-command-grid">
-        <div className={`swarm-stage-viz ${job?.status || "queued"} ${visualState}`}>
-          <div className="swarm-rain" aria-hidden="true">
-            {SWARM_RAIN_DROPS.map((index) => <span key={index} style={{ "--rain-index": index } as React.CSSProperties} />)}
-          </div>
-          <div className="swarm-orbit-field" aria-hidden="true">
-            <div className="swarm-orbit orbit-a" />
-            <div className="swarm-orbit orbit-b" />
-            <div className="swarm-orbit orbit-c" />
-            <div className="swarm-constellation-lines" />
-            <div className="swarm-core-viz">
-              <span className="swarm-core-pulse" />
-              <span className="swarm-core-ring" />
-              <i className="fa fa-fingerprint" />
-              <b>{tr("会诊中", "Reviewing")}</b>
-            </div>
-            <div className="swarm-scanline" />
-            {visualExperts.slice(0, 8).map((expert, index) => (
-              <span
-                className={`swarm-node ${normalizeExpertReviewStatus(expert.status)}`}
-                style={{ "--node-index": index } as React.CSSProperties}
-                key={`${expert.publicId || expert.id || index}-viz`}
-              >
-                <i>{String(index + 1).padStart(2, "0")}</i>
-              </span>
-            ))}
-          </div>
+      <div className="swarm-compact-body">
+        <div className="swarm-job-summary">
+          <strong>{summary}</strong>
+          {!job && <span>{tr("选择专家会诊后，上传图片即可启动多源复核。", "Upload an image after choosing expert review to start multi-source review.")}</span>}
+          {job && <span>{tr("这里只保留进度、共识和关键专家状态，详细过程进入历史记录复查。", "This view keeps progress, consensus, and key expert status; detailed traces remain in history.")}</span>}
         </div>
-        <aside className="swarm-briefing-side">
-          <div className="swarm-job-summary">
-            <strong>{summary}</strong>
-            {!job && <span>{tr("上传图片并点击开始检测后，系统会组织多名鉴伪专家进行并行复核。", "Upload an image and start detection to run a parallel expert review.")}</span>}
-            {job && <span>{tr("页面展示综合进度与共识信号，详细过程用于质量追踪。", "This page shows aggregate progress and consensus; detailed process data supports quality tracking.")}</span>}
-          </div>
-          <div className="swarm-viz-stats">
-            <span>{tr("活跃专家", "Active experts")} <b>{activeExperts}</b></span>
-            <span>{tr("已完成", "Completed")} <b>{finishedExperts}</b></span>
-            <span>{consensusLabel} <b>{consensusPercent}%</b></span>
-          </div>
-          <div
-            className="swarm-progress-track"
-            role="progressbar"
-            aria-label={tr("专家会诊进度", "Expert review progress")}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={progress}
-          >
-            <span style={{ width: `${progress}%` }} />
-          </div>
-          <div className="swarm-expert-grid" aria-label={tr("匿名专家队列", "Anonymous expert queue")}>
-            {visualExperts.slice(0, 8).map((expert, index) => {
-              const status = normalizeExpertReviewStatus(expert.status);
-              return (
-                <div className={`swarm-expert-card ${status}`} key={`${expert.publicId || expert.id || index}-card`}>
-                  <span className="swarm-expert-icon"><i className="fa fa-user-secret" aria-hidden="true" /></span>
-                  <span className="swarm-expert-body">
-                    <strong>{publicExpertReviewExpertName(expert, index, lang)}</strong>
-                    <em>{publicExpertReviewExpertMessage(expert, lang)}</em>
-                  </span>
-                  <b>{publicExpertReviewExpertStatusLabel(expert.status, lang)}</b>
-                </div>
-              );
-            })}
-          </div>
-        </aside>
+        <div className="swarm-viz-stats">
+          <span>{tr("活跃专家", "Active")} <b>{activeExperts}</b></span>
+          <span>{tr("已完成", "Done")} <b>{finishedExperts}</b></span>
+          <span>{consensusLabel} <b>{consensusPercent}%</b></span>
+        </div>
+        <div
+          className="swarm-progress-track"
+          role="progressbar"
+          aria-label={tr("专家会诊进度", "Expert review progress")}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={progress}
+        >
+          <span style={{ width: `${progress}%` }} />
+        </div>
+        <div className="swarm-expert-grid" aria-label={tr("匿名专家队列", "Anonymous expert queue")}>
+          {visualExperts.slice(0, 6).map((expert, index) => {
+            const status = normalizeExpertReviewStatus(expert.status);
+            return (
+              <div className={`swarm-expert-card ${status}`} key={`${expert.publicId || expert.id || index}-card`}>
+                <span className="swarm-expert-icon"><i className="fa fa-user-secret" aria-hidden="true" /></span>
+                <span className="swarm-expert-body">
+                  <strong>{publicExpertReviewExpertName(expert, index, lang)}</strong>
+                  <em>{publicExpertReviewExpertMessage(expert, lang)}</em>
+                </span>
+                <b>{publicExpertReviewExpertStatusLabel(expert.status, lang)}</b>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
