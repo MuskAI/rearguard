@@ -1,4 +1,5 @@
-import { DragEvent, FormEvent, InputHTMLAttributes, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { DragEvent, FormEvent, InputHTMLAttributes, ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
+import type { RefObject } from "react";
 import {
   ArrowRight,
 } from "lucide-react";
@@ -38,7 +39,7 @@ import {
   publicExpertReviewJobSummary,
 } from "./swarmPublic";
 
-type PageKey = "home" | "image" | "video" | "history" | "developer";
+type PageKey = "home" | "image" | "video" | "history";
 type Status = { tone: "ok" | "error" | "info"; text: string } | null;
 type AuthMode = "password" | "sms" | "register" | "reset";
 type HistoryTabKey = "image" | "video";
@@ -63,8 +64,8 @@ const UI_TEXT = {
   zh: {
     boot: "正在连接系统...",
     nav: {
-      brand: "数字内容鉴伪平台",
-      brandMobile: "鉴伪平台",
+      brand: "鉴真AI",
+      brandMobile: "鉴真AI",
       home: "首页",
       functions: "功能",
       detection: "检测",
@@ -96,17 +97,17 @@ const UI_TEXT = {
       action: "登录/注册",
     },
     home: {
-      eyebrow: "鉴真 AI 工作台",
-      eyebrowNote: "内容审核、证据复核与报告归档",
-      titleLine1: "证据驱动",
-      titleLine2: "鉴伪任务台",
-      desc: "从上传、检测、复核到报告归档，按真实工作流组织图像、视频和深度取证任务。",
-      taskKicker: "任务入口",
-      taskTitle: "先开始检测，后进入复核与归档",
-      primaryAction: "图像鉴伪",
-      videoAction: "视频鉴伪",
-      secondaryAction: "进入深度分析",
-      continueKicker: "任务完成后",
+      eyebrow: "鉴真 AI",
+      eyebrowNote: "数字内容鉴伪工作台",
+      titleLine1: "新建鉴伪任务",
+      titleLine2: "",
+      desc: "选择内容类型并上传文件，查看判断、置信度与可复核证据。",
+      taskKicker: "开始检测",
+      taskTitle: "选择内容类型",
+      primaryAction: "检测图片",
+      videoAction: "检测视频",
+      secondaryAction: "深度分析",
+      continueKicker: "继续处理",
       historyAction: "历史记录",
       reportsAction: "报告归档",
       trust1: "普通检测与深度取证分流",
@@ -124,19 +125,19 @@ const UI_TEXT = {
       usage: "报告",
       usageSmall: "复核与归档",
       handoff: "报告归档",
-      workflowKicker: "从任务开始",
-      workflowTitle: "把检测入口和后续复核拆清楚。",
-      workflowDesc: "首页只承担任务启动和结果回看；账号管理、归档整理与权限相关能力留在登录后的上下文里。",
+      workflowKicker: "检测流程",
+      workflowTitle: "从文件到结论，每一步都有依据。",
+      workflowDesc: "上传原始内容，经过模型分析与证据汇总，再进入人工复核和报告归档。",
       capabilitiesTitle: "核心能力",
       capabilitiesDesc: "检测、报告与深度分析保持独立，但在首页以同一条证据链呈现。",
-      evidenceTitle: "结果不是一句话，而是一组可复核证据",
-      evidenceDesc: "示例卡保留判断比例，但首页更强调报告、证据字段和后续追踪。",
+      evidenceTitle: "边界结果不急着下结论",
+      evidenceDesc: "概率处在临界区间时，平台会明确提示复核，并保留元数据、模型证据和报告入口。",
     },
     workflow: [
-      ["内容审核团队", "上传图像或视频，直接获得真伪结论、置信度、证据字段和报告编号。", "开始鉴伪"],
-      ["专家会诊复核", "调度多类鉴伪专家投票复核，把共识度、分歧点和证据一起呈现。", "进入会诊"],
-      ["历史与报告", "按账号查看检测记录、报告编号和证据摘要，便于复核、归档和追踪。", "查看历史"],
-      ["深度分析工作台", "融合误差图、噪声残差和来源凭证，补充更细的取证证据。", "进入分析"],
+      ["上传原始内容", "保留文件名、格式和分辨率，支持拖放上传与示例检测。", "开始上传"],
+      ["模型与证据分析", "计算生成风险，并汇总元数据、视觉线索和可疑点。", "开始检测"],
+      ["边界结果复核", "临界结果可进入多专家会诊，查看共识度和关键分歧。", "专家会诊"],
+      ["报告与历史归档", "下载检测报告，并按账号追踪记录和复核上下文。", "查看历史"],
     ],
     features: [
       ["图像鉴伪", "基于深度学习的图像真伪识别，支持多种场景的生成图像检测。"],
@@ -145,8 +146,8 @@ const UI_TEXT = {
       ["专家会诊复核", "调度多类鉴伪专家投票复核，输出综合结论、共识度和分歧提示。"],
     ],
     examples: [
-      ["案例一：泳池场景人物图像", "综合判断为生成图像（53.8%），点击查看检测结果。"],
-      ["案例二：几何色块人像图像", "综合判断为生成图像（73.9%），点击查看检测结果。"],
+      ["案例一：泳池场景人物图像", "生成风险 53.8%，处于边界区间，建议结合原图和元数据复核。"],
+      ["案例二：几何色块人像图像", "生成风险 73.9%，风险较高，但仍建议结合证据报告确认。"],
     ],
     skillPanel: {
       badge1: "检测记录已接入",
@@ -267,7 +268,7 @@ const UI_TEXT = {
   en: {
     boot: "Connecting to RealGuard...",
     nav: {
-      brand: "Digital Content Forensics",
+      brand: "RealGuard",
       brandMobile: "RealGuard",
       home: "Home",
       functions: "Tools",
@@ -302,15 +303,15 @@ const UI_TEXT = {
     home: {
       eyebrow: "Jianzhen AI workspace",
       eyebrowNote: "Review, evidence, and report archive",
-      titleLine1: "Evidence-led",
-      titleLine2: "forensics tasks",
-      desc: "A task-first workspace for upload, detection, review, and report archiving across image, video, and deep evidence workflows.",
-      taskKicker: "Task entry",
-      taskTitle: "Start detection first, then continue into review",
-      primaryAction: "Image forensics",
-      videoAction: "Video forensics",
-      secondaryAction: "Open deep analysis",
-      continueKicker: "After detection",
+      titleLine1: "Start a forensic task",
+      titleLine2: "",
+      desc: "Choose a content type, upload the source, and review the verdict, confidence, and supporting evidence.",
+      taskKicker: "Start detection",
+      taskTitle: "Choose a content type",
+      primaryAction: "Check an image",
+      videoAction: "Check a video",
+      secondaryAction: "Deep analysis",
+      continueKicker: "Continue",
       historyAction: "History",
       reportsAction: "Report archive",
       trust1: "Standard detection and deep evidence stay separated",
@@ -328,19 +329,19 @@ const UI_TEXT = {
       usage: "Reports",
       usageSmall: "Review and archive",
       handoff: "Report archive",
-      workflowKicker: "Start from the task",
-      workflowTitle: "Separate task entry from review and archive work.",
-      workflowDesc: "The home screen starts detection and opens results. Account management, archive operations, and permission flows stay in logged-in contexts.",
+      workflowKicker: "Detection flow",
+      workflowTitle: "Every conclusion keeps its evidence trail.",
+      workflowDesc: "Upload the source, run model and evidence analysis, then continue to human review and report archiving.",
       capabilitiesTitle: "Core capabilities",
       capabilitiesDesc: "Detection, reports, and deep analysis stay separate but are presented as one evidence workflow.",
-      evidenceTitle: "A result is not a sentence. It is a reviewable evidence set.",
-      evidenceDesc: "Examples keep the probability view while emphasizing reports, evidence fields, and follow-up tracking.",
+      evidenceTitle: "Borderline scores should stay reviewable",
+      evidenceDesc: "The interface marks uncertain scores clearly and preserves metadata, model evidence, and report actions.",
     },
     workflow: [
-      ["Content review teams", "Upload images or videos and receive verdicts, confidence, evidence fields, and report IDs.", "Start forensics"],
-      ["Expert review", "Run a multi-expert review panel and inspect consensus, disagreements, and supporting evidence.", "Open expert review"],
-      ["History and reports", "Review detection records, report IDs, and evidence summaries for audit, archive, and follow-up.", "Open history"],
-      ["Deep analysis workbench", "Combine ELA, noise residuals, and provenance signals for deeper forensic evidence.", "Open analysis"],
+      ["Upload the source", "Keep filename, format, and resolution while using drag-and-drop or a sample file.", "Upload a file"],
+      ["Run model and evidence analysis", "Calculate generated-content risk and summarize metadata, visual signals, and issues.", "Start detection"],
+      ["Review borderline results", "Send uncertain results to expert review and inspect consensus and disagreements.", "Expert review"],
+      ["Archive reports and history", "Download the report and keep the record and review context tied to the account.", "Open history"],
     ],
     features: [
       ["Image Forensics", "Deep-learning image authenticity detection across generated-image scenarios."],
@@ -349,8 +350,8 @@ const UI_TEXT = {
       ["Expert Review Panel", "Runs multiple forensic experts as a voting panel with consensus and disagreement signals."],
     ],
     examples: [
-      ["Case 1: Poolside person image", "Overall verdict: likely AI-generated (53.8%). Open the detection result."],
-      ["Case 2: Geometric portrait image", "Overall verdict: likely AI-generated (73.9%). Open the detection result."],
+      ["Case 1: Poolside person image", "Generated-content risk is 53.8%, a borderline score that requires source and metadata review."],
+      ["Case 2: Geometric portrait image", "Generated-content risk is 73.9%. The risk is elevated, but the evidence report should still be reviewed."],
     ],
     skillPanel: {
       badge1: "Detection records ready",
@@ -506,7 +507,8 @@ function App() {
   const text = UI_TEXT[lang];
 
   useEffect(() => {
-    document.body.toggleAttribute("data-theme", dark);
+    if (dark) document.body.setAttribute("data-theme", "dark");
+    else document.body.removeAttribute("data-theme");
     getStorage()?.setItem("theme", dark ? "dark" : "light");
   }, [dark]);
 
@@ -564,6 +566,13 @@ function App() {
   }, [page, imageModeIntent]);
 
   useEffect(() => {
+    if (loading) return;
+    window.requestAnimationFrame(() => {
+      document.getElementById("main-content")?.focus({ preventScroll: true });
+    });
+  }, [loading, page]);
+
+  useEffect(() => {
     if (isDemoMode()) {
       setUser({ Userid: 1, username: "演示用户", phone: "13800000000", openid: "demo" });
       setCounters({ image_detect: 18, video_detect: 7 });
@@ -591,6 +600,7 @@ function App() {
   }
 
   async function handleDetectionDone() {
+    if (isDemoMode()) return;
     if (!user) {
       const next = guestDetections + 1;
       setGuestDetections(next);
@@ -612,7 +622,7 @@ function App() {
   if (loading) {
     return (
       <div className="boot-screen">
-        <i className="fa fa-circle-o-notch fa-spin" />
+        <IconfontIcon name="loader" size={20} className="spin" />
         <span>{text.boot}</span>
       </div>
     );
@@ -620,6 +630,9 @@ function App() {
 
   return (
     <>
+      <a className="skip-link" href="#main-content">
+        {lang === "zh" ? "跳到主要内容" : "Skip to main content"}
+      </a>
       <Nav
         page={page}
         setPage={setPage}
@@ -636,7 +649,7 @@ function App() {
       {!user && (
         <div className="trial-strip">
           <div className="container">
-            <span className="trial-icon"><i className="fa fa-info-circle" /></span>
+            <span className="trial-icon"><IconfontIcon name="info" size={17} /></span>
             <span className="trial-copy">
               <strong>{text.trial.title}</strong>
               <span>{text.trial.desc}</span>
@@ -667,13 +680,6 @@ function App() {
         />
       )}
       {page === "history" && <HistoryPage setPage={setPage} lang={lang} />}
-      {page === "developer" && (
-        user ? (
-          <AccessPlatformPage onNeedAuth={requireAuth} lang={lang} />
-        ) : (
-          <AccessLoginGate lang={lang} onLogin={requireAuth} />
-        )
-      )}
 
       <Footer lang={lang} />
 
@@ -715,6 +721,7 @@ function Nav({
   onLogout: () => void;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
   const text = UI_TEXT[lang].nav;
   const go = (next: PageKey) => {
     setPage(next);
@@ -725,6 +732,17 @@ function Nav({
     if (user) onLogout();
     else onLogin();
   };
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+    function handleMenuKeydown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      setMobileOpen(false);
+      window.requestAnimationFrame(() => mobileMenuButtonRef.current?.focus());
+    }
+    document.addEventListener("keydown", handleMenuKeydown);
+    return () => document.removeEventListener("keydown", handleMenuKeydown);
+  }, [mobileOpen]);
 
   return (
     <>
@@ -739,26 +757,22 @@ function Nav({
             <button className={page === "home" ? "active" : ""} onClick={() => go("home")}>
               {text.home}
             </button>
-            <div className="dropdown">
-              <button className={`dropdown-trigger ${["image", "video"].includes(page) ? "active" : ""}`}>
-                <span>{text.functions}</span>
-                <IconfontIcon name="chevron-down" size={14} className="dropdown-chevron" />
-              </button>
-              <div className="dropdown-menu">
-                <div className="dropdown-label">{text.detection}</div>
-                <button className={`dropdown-item ${page === "image" ? "active-item" : ""}`} onClick={() => { openImage("standard"); setMobileOpen(false); }}>
-                  <IconfontIcon name="image-forensics" size={18} className="dropdown-icon" /> {text.imageDetect}
-                </button>
-                <button className={`dropdown-item ${page === "video" ? "active-item" : ""}`} onClick={() => go("video")}>
-                  <IconfontIcon name="video-forensics" size={18} className="dropdown-icon" /> {text.videoDetect}
-                </button>
-              </div>
-            </div>
+            <button className={page === "image" ? "active" : ""} onClick={() => openImage("standard")}>
+              {text.imageDetect}
+            </button>
+            <button className={page === "video" ? "active" : ""} onClick={() => go("video")}>
+              {text.videoDetect}
+            </button>
             <button className={page === "history" ? "active" : ""} onClick={() => go("history")}>
               {text.history}
             </button>
-            <button onClick={() => { window.location.href = REALGUARD_V2_CONSOLE_URL; }}>{text.v2}</button>
-            <button onClick={authAction}>{user ? text.logout : text.login}</button>
+            <button className="nav-deep-link" onClick={() => { window.location.href = REALGUARD_V2_CONSOLE_URL; }}>
+              {text.v2}<ArrowRight size={14} aria-hidden="true" />
+            </button>
+            <button className="nav-auth-action" onClick={authAction}>
+              <IconfontIcon name={user ? "logout" : "user"} size={16} />
+              {user ? text.logout : text.login}
+            </button>
             <button
               className="language-toggle"
               title={text.languageAria}
@@ -767,7 +781,7 @@ function Nav({
             >
               {text.language}
             </button>
-            <button className="theme-btn" title={text.theme} onClick={() => setDark(!dark)}>
+            <button className="theme-btn" title={text.theme} aria-label={text.theme} onClick={() => setDark(!dark)}>
               <IconfontIcon name={dark ? "sun" : "moon"} size={18} />
             </button>
           </nav>
@@ -780,22 +794,22 @@ function Nav({
             >
               {text.language}
             </button>
-            <button className="theme-btn" title={text.theme} onClick={() => setDark(!dark)}>
+            <button className="theme-btn" title={text.theme} aria-label={text.theme} onClick={() => setDark(!dark)}>
               <IconfontIcon name={dark ? "sun" : "moon"} size={18} />
             </button>
-            <button className="mobile-menu-btn" aria-label={text.openMenu} onClick={() => setMobileOpen(!mobileOpen)}>
+            <button ref={mobileMenuButtonRef} className="mobile-menu-btn" aria-label={text.openMenu} aria-expanded={mobileOpen} aria-controls="mobile-navigation" onClick={() => setMobileOpen(!mobileOpen)}>
               <IconfontIcon name={mobileOpen ? "close" : "menu"} size={18} />
               <span>{text.menu}</span>
             </button>
           </div>
         </div>
-        <div className={`mobile-panel ${mobileOpen ? "open" : ""}`}>
-          <button className={page === "home" ? "active" : ""} onClick={() => go("home")}><IconfontIcon name="home" size={18} /> {text.home}</button>
-          <button className={page === "image" ? "active" : ""} onClick={() => { openImage("standard"); setMobileOpen(false); }}><IconfontIcon name="image-forensics" size={18} /> {text.imageDetect}</button>
-          <button className={page === "video" ? "active" : ""} onClick={() => go("video")}><IconfontIcon name="video-forensics" size={18} /> {text.videoDetect}</button>
-          <button onClick={() => { window.location.href = REALGUARD_V2_CONSOLE_URL; }}><IconfontIcon name="deep-analysis" size={18} /> {text.v2}</button>
-          <button className={page === "history" ? "active" : ""} onClick={() => go("history")}><IconfontIcon name="history" size={18} /> {text.history}</button>
-          <button onClick={authAction}><IconfontIcon name={user ? "logout" : "user"} size={18} /> {user ? text.logoutFull : text.loginRegister}</button>
+        <div id="mobile-navigation" className={`mobile-panel ${mobileOpen ? "open" : ""}`} aria-hidden={!mobileOpen}>
+          <button className={`mobile-primary-link ${page === "home" ? "active" : ""}`} onClick={() => go("home")}><IconfontIcon name="home" size={18} /> {text.home}</button>
+          <button className={`mobile-primary-link ${page === "image" ? "active" : ""}`} onClick={() => { openImage("standard"); setMobileOpen(false); }}><IconfontIcon name="image-forensics" size={18} /> {text.imageDetect}</button>
+          <button className={`mobile-primary-link ${page === "video" ? "active" : ""}`} onClick={() => go("video")}><IconfontIcon name="video-forensics" size={18} /> {text.videoDetect}</button>
+          <button className="mobile-secondary-link" onClick={() => { window.location.href = REALGUARD_V2_CONSOLE_URL; }}><IconfontIcon name="deep-analysis" size={18} /> {text.v2}</button>
+          <button className={`mobile-primary-link ${page === "history" ? "active" : ""}`} onClick={() => go("history")}><IconfontIcon name="history" size={18} /> {text.history}</button>
+          <button className="mobile-secondary-link" onClick={authAction}><IconfontIcon name={user ? "logout" : "user"} size={18} /> {user ? text.logoutFull : text.loginRegister}</button>
         </div>
       </header>
       <nav className="mobile-bottom-nav">
@@ -820,14 +834,14 @@ function HomePage({
   lang: Lang;
 }) {
   const text = UI_TEXT[lang];
-  const totalDetect = counters.image_detect + counters.video_detect || 10000;
+  const totalDetect = counters.image_detect + counters.video_detect;
   const workflowCards = [
     {
       step: "01",
       title: text.workflow[0][0],
       desc: text.workflow[0][1],
       action: text.workflow[0][2],
-      icon: "shield-check" as IconfontName,
+      icon: "upload" as IconfontName,
       tone: "blue" as IconTone,
       onClick: () => openImage("standard"),
     },
@@ -836,119 +850,108 @@ function HomePage({
       title: text.workflow[1][0],
       desc: text.workflow[1][1],
       action: text.workflow[1][2],
-      icon: "expert-review" as IconfontName,
-      tone: "red" as IconTone,
-      onClick: () => openImage("swarm"),
+      icon: "activity" as IconfontName,
+      tone: "amber" as IconTone,
+      onClick: () => openImage("standard"),
     },
     {
       step: "03",
       title: text.workflow[2][0],
       desc: text.workflow[2][1],
       action: text.workflow[2][2],
-      icon: "archive" as IconfontName,
-      tone: "green" as IconTone,
-      onClick: () => setPage("history"),
+      icon: "expert-review" as IconfontName,
+      tone: "red" as IconTone,
+      onClick: () => openImage("swarm"),
     },
     {
       step: "04",
       title: text.workflow[3][0],
       desc: text.workflow[3][1],
       action: text.workflow[3][2],
-      icon: "bolt" as IconfontName,
-      tone: "amber" as IconTone,
-      onClick: () => { window.location.href = REALGUARD_V2_CONSOLE_URL; },
+      icon: "archive" as IconfontName,
+      tone: "green" as IconTone,
+      onClick: () => setPage("history"),
     },
   ];
 
   return (
     <>
-      <section className="home-hero-section">
-        <div className="container home-hero-grid">
-          <div className="home-hero-copy fade-up visible">
-            <div className="home-eyebrow">
-              <span>{text.home.eyebrow}</span>
-              <i>{text.home.eyebrowNote}</i>
-            </div>
-            <h1>
-              <span>{text.home.titleLine1}</span>
-              <span>{text.home.titleLine2}</span>
-            </h1>
-            <p>{text.home.desc}</p>
-            <div className="home-task-panel" aria-label={text.home.taskKicker}>
-              <div className="home-task-panel-head">
-                <span>{text.home.taskKicker}</span>
-                <strong>{text.home.taskTitle}</strong>
+      <main id="main-content" className="home-main" tabIndex={-1}>
+        <section className="home-command-section">
+          <div className="container">
+            <header className="home-intro fade-up visible">
+              <div className="home-eyebrow">
+                <span>{text.home.eyebrow}</span>
+                <small>{text.home.eyebrowNote}</small>
               </div>
-              <div className="home-task-grid">
-                <button className="home-task-card primary" onClick={() => openImage("standard")}>
-                  <ForensicIcon name="image-forensics" tone="blue" className="home-task-icon" />
-                  <span>{text.home.primaryAction}</span>
-                  <small>{lang === "zh" ? "开始普通图片检测" : "Start an image task"}</small>
-                </button>
-                <button className="home-task-card" onClick={() => setPage("video")}>
-                  <ForensicIcon name="video-forensics" tone="ink" className="home-task-icon" />
-                  <span>{text.home.videoAction}</span>
-                  <small>{lang === "zh" ? "开始视频真伪检测" : "Start a video task"}</small>
-                </button>
-                <button className="home-task-card" onClick={() => { window.location.href = REALGUARD_V2_CONSOLE_URL; }}>
-                  <ForensicIcon name="deep-analysis" tone="amber" className="home-task-icon" />
-                  <span>{text.home.secondaryAction}</span>
-                  <small>{lang === "zh" ? "补充深度证据" : "Add deeper evidence"}</small>
-                </button>
+              <div className="home-intro-row">
+                <div>
+                  <h1>{text.home.titleLine1}</h1>
+                  <p>{text.home.desc}</p>
+                </div>
+                <span className="service-status"><i />{lang === "zh" ? "图片 · 视频 · 深度取证" : "Image · Video · Deep forensics"}</span>
               </div>
-              <div className="home-continue-row">
-                <span>{text.home.continueKicker}</span>
-                <button onClick={() => setPage("history")}><IconfontIcon name="history" size={15} />{text.home.historyAction}</button>
-                <button onClick={() => setPage("history")}><IconfontIcon name="report" size={15} />{text.home.reportsAction}</button>
-              </div>
-            </div>
-            <div className="home-trust-row" aria-label={lang === "zh" ? "平台能力摘要" : "Platform capability summary"}>
-              <div>
-                <strong>{lang === "zh" ? "任务分流" : "Task routing"}</strong>
-                <span>{text.home.trust1}</span>
-              </div>
-              <div>
-                <strong>{totalDetect.toLocaleString(localeFor(lang))}+</strong>
-                <span>{text.home.trust2}</span>
-              </div>
-              <div>
-                <strong>{lang === "zh" ? "报告" : "Reports"}</strong>
-                <span>{text.home.trust3}</span>
-              </div>
-            </div>
-          </div>
+            </header>
 
-          <div className="home-briefing-board fade-up visible" aria-label={lang === "zh" ? "RealGuard 证据简报" : "RealGuard evidence brief"}>
-            <div className="briefing-label">
-              <span>{text.home.briefingLabel}</span>
-              <b>RG-0427</b>
+            <div className="home-workbench">
+              <section className="task-launcher fade-up visible" aria-labelledby="task-launcher-title">
+                <div className="panel-heading">
+                  <div>
+                    <span>{text.home.taskKicker}</span>
+                    <h2 id="task-launcher-title">{text.home.taskTitle}</h2>
+                  </div>
+                  <small>{lang === "zh" ? "支持图片、视频与深度取证" : "Image, video, and deep forensics"}</small>
+                </div>
+                <div className="task-choice-list">
+                  <button className="task-choice primary" onClick={() => openImage("standard")}>
+                    <ForensicIcon name="image-forensics" tone="blue" className="task-choice-icon" />
+                    <span><strong>{text.home.primaryAction}</strong><small>{lang === "zh" ? "识别生成内容与可疑编辑痕迹" : "Inspect generated content and suspicious edits"}</small></span>
+                    <em>JPG · PNG · WEBP</em>
+                    <ArrowRight size={18} aria-hidden="true" />
+                  </button>
+                  <button className="task-choice" onClick={() => setPage("video")}>
+                    <ForensicIcon name="video-forensics" tone="ink" className="task-choice-icon" />
+                    <span><strong>{text.home.videoAction}</strong><small>{lang === "zh" ? "定位可疑片段与生成风险" : "Locate suspicious segments and generated-content risk"}</small></span>
+                    <em>MP4 · MOV · URL</em>
+                    <ArrowRight size={18} aria-hidden="true" />
+                  </button>
+                  <button className="task-choice" onClick={() => { window.location.href = REALGUARD_V2_CONSOLE_URL; }}>
+                    <ForensicIcon name="deep-analysis" tone="amber" className="task-choice-icon" />
+                    <span><strong>{text.home.secondaryAction}</strong><small>{lang === "zh" ? "查看误差图、噪声与来源凭证" : "Review error maps, noise, and provenance"}</small></span>
+                    <em>{lang === "zh" ? "独立工作台" : "Workbench"}</em>
+                    <ArrowRight size={18} aria-hidden="true" />
+                  </button>
+                </div>
+                <button className="expert-review-entry" onClick={() => openImage("swarm")}>
+                  <IconfontIcon name="expert-review" size={18} />
+                  <span><strong>{lang === "zh" ? "需要多专家复核？" : "Need a multi-expert review?"}</strong>{lang === "zh" ? "进入专家会诊" : "Open expert review"}</span>
+                  <ArrowRight size={16} aria-hidden="true" />
+                </button>
+              </section>
+
+              <aside className="evidence-preview fade-up visible" aria-label={lang === "zh" ? "检测结果示例" : "Detection result example"}>
+                <div className="panel-heading evidence-heading">
+                  <div><span>{lang === "zh" ? "结果预览" : "Result preview"}</span><h2>{lang === "zh" ? "证据摘要" : "Evidence brief"}</h2></div>
+                  <code>RG-DEMO-02</code>
+                </div>
+                <figure className="evidence-media">
+                  <img src="/system/case2.webp" alt={lang === "zh" ? "几何色块人像检测示例" : "Geometric portrait detection sample"} />
+                  <figcaption><span>{lang === "zh" ? "生成风险" : "Generated risk"}</span><strong>73.9%</strong><em>{lang === "zh" ? "需复核" : "Review"}</em></figcaption>
+                </figure>
+                <dl className="evidence-list">
+                  <div><dt><IconfontIcon name="activity" size={16} />{lang === "zh" ? "模型判断" : "Model"}</dt><dd>{lang === "zh" ? "风险较高" : "Elevated risk"}</dd></div>
+                  <div><dt><IconfontIcon name="info" size={16} />{lang === "zh" ? "元数据" : "Metadata"}</dt><dd>{lang === "zh" ? "缺少相机信息" : "Camera data missing"}</dd></div>
+                  <div><dt><IconfontIcon name="report" size={16} />{lang === "zh" ? "建议动作" : "Next step"}</dt><dd>{lang === "zh" ? "结合原图复核" : "Review the source"}</dd></div>
+                </dl>
+              </aside>
             </div>
-            <div className="briefing-image-card primary">
-              <img src="/system/case2.webp" alt={lang === "zh" ? "生成图像检测示例" : "Generated image detection sample"} />
-              <div>
-                <span>{text.home.overall}</span>
-                <strong>{text.home.risk}</strong>
-              </div>
-            </div>
-            <div className="briefing-image-card secondary">
-              <img src="/system/case1.webp" alt={lang === "zh" ? "泳池场景检测示例" : "Poolside image detection sample"} />
-              <div>
-                <span>{text.home.support}</span>
-                <strong>{text.home.texture}</strong>
-              </div>
-            </div>
-            <div className="briefing-feed">
-              <div><span>ELA</span><strong>{text.home.ela}</strong><small>{text.home.elaSmall}</small></div>
-              <div><span>{lang === "zh" ? "噪声" : "Noise"}</span><strong>{text.home.noise}</strong><small>{text.home.noiseSmall}</small></div>
-              <div><span>{lang === "zh" ? "用量" : "Usage"}</span><strong>{text.home.usage}</strong><small>{text.home.usageSmall}</small></div>
-            </div>
-            <div className="briefing-agent-card">
-              <span>{text.home.handoff}</span>
-              <code>{lang === "zh" ? "检测记录 · 可复核报告" : "Detection record · reviewable report"}</code>
+
+            <div className="home-resume-bar">
+              <div><span>{text.home.continueKicker}</span><strong>{totalDetect > 0 ? `${totalDetect.toLocaleString(localeFor(lang))} ${lang === "zh" ? "条账号记录" : "account records"}` : (lang === "zh" ? "登录后可查看检测记录与报告" : "Log in to review records and reports")}</strong></div>
+              <button onClick={() => setPage("history")}><IconfontIcon name="history" size={17} />{text.home.historyAction}<ArrowRight size={15} aria-hidden="true" /></button>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
 
       <section className="section home-workflow-section">
         <div className="container">
@@ -957,29 +960,16 @@ function HomePage({
             <h2>{text.home.workflowTitle}</h2>
             <p>{text.home.workflowDesc}</p>
           </div>
-          <div className="home-workflow-grid">
+          <ol className="home-workflow-grid">
             {workflowCards.map((item) => (
-              <button className="home-workflow-card" onClick={item.onClick} key={item.title}>
+              <li className="home-workflow-card" key={item.title}>
                 <span>{item.step}</span>
                 <ForensicIcon name={item.icon} tone={item.tone} className="workflow-icon" />
-                <h3>{item.title}</h3>
-                <p>{item.desc}</p>
-                <strong>{item.action} <ArrowRight size={15} strokeWidth={2} aria-hidden="true" /></strong>
-              </button>
+                <div><h3>{item.title}</h3><p>{item.desc}</p></div>
+                <button onClick={item.onClick}>{item.action}<ArrowRight size={15} strokeWidth={2} aria-hidden="true" /></button>
+              </li>
             ))}
-          </div>
-        </div>
-      </section>
-
-      <section className="section section-alt home-capability-section">
-        <div className="container">
-          <SectionHeader title={text.home.capabilitiesTitle} desc={text.home.capabilitiesDesc} />
-          <div className="features-grid">
-            <FeatureCard accent="var(--primary)" tone="blue" icon="image-forensics" title={text.features[0][0]} desc={text.features[0][1]} action={lang === "zh" ? "进入功能" : "Open tool"} onClick={() => openImage("standard")} />
-            <FeatureCard accent="var(--warning)" tone="ink" icon="video-forensics" title={text.features[1][0]} desc={text.features[1][1]} action={lang === "zh" ? "进入功能" : "Open tool"} onClick={() => setPage("video")} />
-            <FeatureCard accent="var(--primary-dark)" tone="amber" icon="deep-analysis" title={text.features[2][0]} desc={text.features[2][1]} action={lang === "zh" ? "进入分析" : "Open analysis"} onClick={() => { window.location.href = REALGUARD_V2_CONSOLE_URL; }} />
-            <FeatureCard accent="var(--danger)" tone="red" icon="expert-review" title={text.features[3][0]} desc={text.features[3][1]} action={lang === "zh" ? "进入会诊" : "Open expert review"} onClick={() => openImage("swarm")} />
-          </div>
+          </ol>
         </div>
       </section>
 
@@ -992,6 +982,7 @@ function HomePage({
           </div>
         </div>
       </section>
+      </main>
     </>
   );
 }
@@ -1010,67 +1001,6 @@ function SectionHeader({ title, desc }: { title: string; desc: string }) {
       <h2 className="section-title">{title}</h2>
       <p className="section-desc">{desc}</p>
     </div>
-  );
-}
-
-function FeatureCard({ accent, icon, tone = "blue", title, desc, action, onClick }: { accent: string; icon: IconfontName; tone?: IconTone; title: string; desc: string; action: string; onClick: () => void }) {
-  return (
-    <button className="feature-card fade-up visible" style={{ "--card-accent": accent } as React.CSSProperties} onClick={onClick}>
-      <ForensicIcon name={icon} tone={tone} className="feature-icon" />
-      <h3>{title}</h3>
-      <p>{desc}</p>
-      <span className="feature-link">
-        {action} <ArrowRight size={15} strokeWidth={2} aria-hidden="true" />
-      </span>
-    </button>
-  );
-}
-
-function CopySnippetCard({
-  id,
-  title,
-  desc,
-  text,
-  copiedId,
-  onCopy,
-  lang = "zh",
-  variant = "default",
-}: {
-  id: string;
-  title: string;
-  desc: string;
-  text: string;
-  copiedId: string;
-  onCopy: (id: string, text: string) => void;
-  lang?: Lang;
-  variant?: "default" | "primary" | "compact";
-}) {
-  const copied = copiedId === id;
-  const copyText = UI_TEXT[lang].copy;
-  const handleCopy = () => onCopy(id, text);
-  return (
-    <article
-      className={`copy-snippet-card copy-snippet-card-${variant} ${copied ? "copied" : ""}`}
-      role="button"
-      tabIndex={0}
-      onClick={handleCopy}
-      onKeyDown={(event) => {
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        handleCopy();
-      }}
-      aria-label={`${copyText.aria}: ${title}`}
-    >
-      <div className="copy-snippet-head">
-        <span className="copy-snippet-status">{copied ? copyText.copied : copyText.ready}</span>
-        <span className="copy-snippet-action" aria-hidden="true">
-          {copied ? copyText.copied : copyText.copy}
-        </span>
-      </div>
-      <strong>{title}</strong>
-      <p>{desc}</p>
-      <pre><code>{text}</code></pre>
-    </article>
   );
 }
 
@@ -1105,39 +1035,20 @@ async function copyTextToClipboard(text: string, promptLabel = "复制以下内�
   return false;
 }
 
-function SkillEntryPanel({ lang }: { lang: Lang }) {
-  void lang;
-  return null;
-}
-
-function AccessLoginGate({ lang, onLogin }: { lang: Lang; onLogin: () => void }) {
-  const isZh = lang === "zh";
-  return (
-    <main className="main">
-      <section className="page-hero">
-        <div className="container">
-          <div className="section-label"><i className="fa fa-lock" /> {isZh ? "账号登录" : "Account Login"}</div>
-          <h1>{isZh ? "请先登录后继续" : "Please log in to continue"}</h1>
-          <p>{isZh ? "账号登录后可查看检测记录、报告归档、复核状态和管理入口。" : "After account login, you can review detection records, report archives, review status, and management entries."}</p>
-          <button className="btn-primary" onClick={onLogin}>
-            <i className="fa fa-user" /> {isZh ? "登录/注册" : "Log in / Sign up"}
-          </button>
-        </div>
-      </section>
-    </main>
-  );
-}
-
-function AccessPlatformPage({ lang, onNeedAuth }: { lang: Lang; onNeedAuth: () => void }) {
-  return <AccessLoginGate lang={lang} onLogin={onNeedAuth} />;
-}
-
 function ExampleCard({ image, title, desc, real, fake, lang }: { image: string; title: string; desc: string; real: number; fake: number; lang: Lang }) {
+  const isHighRisk = fake >= 75;
+  const isLikelyReal = fake < 35;
+  const outcomeTone = isHighRisk ? "fake" : isLikelyReal ? "real" : "review";
+  const outcomeLabel = isHighRisk
+    ? translate(lang, "生成风险较高", "Elevated generated risk")
+    : isLikelyReal
+      ? translate(lang, "偏向真实", "Likely real")
+      : translate(lang, "需复核", "Review required");
   return (
-    <div className="example-card fade-up visible">
+    <article className="example-card fade-up visible">
       <div className="example-img">
-        <img src={image} alt={title} />
-        <span className="example-badge fake">{lang === "zh" ? "生成图像" : "Generated image"}</span>
+        <img src={image} alt={title} loading="lazy" />
+        <span className={`example-badge ${outcomeTone}`}>{outcomeLabel}</span>
       </div>
       <div className="example-body">
         <h3>{title}</h3>
@@ -1145,7 +1056,7 @@ function ExampleCard({ image, title, desc, real, fake, lang }: { image: string; 
         <Progress label={lang === "zh" ? "真实概率" : "Real probability"} value={real} tone="green" />
         <Progress label={lang === "zh" ? "生成概率" : "Generated probability"} value={fake} tone="red" />
       </div>
-    </div>
+    </article>
   );
 }
 
@@ -1174,6 +1085,7 @@ function ImageDetectionPage({
   const [busy, setBusy] = useState(false);
   const [detectMode, setDetectMode] = useState<ImageDetectMode>(initialMode);
   const [swarmJob, setExpertReviewJob] = useState<DetectionJob | null>(null);
+  const resultPanelRef = useRef<HTMLDivElement>(null);
   const swarmRunTokenRef = useRef(0);
   const swarmAbortRef = useRef<AbortController | null>(null);
 
@@ -1197,6 +1109,12 @@ function ImageDetectionPage({
   useEffect(() => () => {
     if (preview.startsWith("blob:")) URL.revokeObjectURL(preview);
   }, [preview]);
+
+  useEffect(() => {
+    if (!result) return;
+    const frame = window.requestAnimationFrame(() => resultPanelRef.current?.focus({ preventScroll: true }));
+    return () => window.cancelAnimationFrame(frame);
+  }, [result]);
 
   function selectFile(next: File | null) {
     cancelExpertReviewRun();
@@ -1348,15 +1266,15 @@ function ImageDetectionPage({
   }
 
   return (
-    <main className="main">
+    <main id="main-content" className="main" tabIndex={-1}>
       <div className="container">
-        <PageHeader icon="fa-image" title={pageText.imageTitle} desc={pageText.imageDesc} />
+        <PageHeader icon="image-forensics" title={pageText.imageTitle} desc={pageText.imageDesc} />
         <div className={`layout detection-workbench ${detectMode === "swarm" ? "swarm-layout" : ""}`}>
           <div className={`card ${detectMode === "swarm" ? "swarm-control-card" : ""}`}>
-            <div className="section-label"><i className="fa fa-cogs" /> {tr("选择鉴伪任务", "Select forensic task")}</div>
+            <div className="section-label"><IconfontIcon name="settings" size={17} /> {tr("选择鉴伪任务", "Select forensic task")}</div>
             <div className="model-tabs" aria-label={tr("鉴伪任务模式", "Forensic task mode")}>
-              <button className={`model-tab ${detectMode === "standard" ? "active" : ""}`} type="button" aria-pressed={detectMode === "standard"} disabled={busy} onClick={() => setDetectMode("standard")}><i className="fa fa-magic" aria-hidden="true" /> {tr("标准检测", "Standard")}</button>
-              <button className={`model-tab ${detectMode === "swarm" ? "active" : ""}`} type="button" aria-pressed={detectMode === "swarm"} disabled={busy} onClick={() => setDetectMode("swarm")}><i className="fa fa-sitemap" aria-hidden="true" /> {tr("专家会诊", "Expert review")}</button>
+              <button className={`model-tab ${detectMode === "standard" ? "active" : ""}`} type="button" aria-pressed={detectMode === "standard"} disabled={busy} onClick={() => setDetectMode("standard")}><IconfontIcon name="sparkles" size={16} /> {tr("标准检测", "Standard")}</button>
+              <button className={`model-tab ${detectMode === "swarm" ? "active" : ""}`} type="button" aria-pressed={detectMode === "swarm"} disabled={busy} onClick={() => setDetectMode("swarm")}><IconfontIcon name="expert-review" size={16} /> {tr("专家会诊", "Expert review")}</button>
             </div>
             <div className="model-desc">
               <strong>{detectMode === "swarm" ? tr("专家会诊复核：", "Expert review: ") : tr("标准检测：", "Standard detection: ")}</strong>
@@ -1365,19 +1283,19 @@ function ImageDetectionPage({
                 : tr("分析图像是否存在生成式内容风险，并结合元数据做辅助展示。", "Analyzes generated-content risk and uses metadata as supporting context.")}
             </div>
             <div className="card-divider" />
-            <div className="section-label"><i className="fa fa-upload" /> {tr("上传图片", "Upload image")}</div>
+            <div className="section-label"><IconfontIcon name="upload" size={17} /> {tr("上传图片", "Upload image")}</div>
             {isGuest && <TrialHint used={guestDetections} lang={lang} />}
             <UploadBox accept="image/*" file={file} preview={preview} onFile={selectFile} kind={imageKind} lang={lang} />
             <button className={`btn-primary ${busy ? "detecting" : ""}`} disabled={!file || busy} onClick={submit}>
-              <i className={`fa ${busy ? "fa-circle-o-notch detect-spin" : "fa-search"}`} /> {busy ? tr("正在分析", "Analyzing") : tr("开始检测", "Start detection")}
+              <IconfontIcon name={busy ? "loader" : "search"} size={18} className={busy ? "spin" : ""} /> {busy ? tr("正在分析", "Analyzing") : tr("开始检测", "Start detection")}
             </button>
           </div>
           <div className={`card ${detectMode === "swarm" ? "swarm-status-card" : ""}`}>
-            <div className="section-label"><i className="fa fa-info-circle" /> {tr("当前状态", "Current status")}</div>
+            <div className="section-label"><IconfontIcon name="activity" size={17} /> {tr("当前状态", "Current status")}</div>
             <StatusRow status={status} busy={busy} />
             {detectMode === "swarm" && <ExpertReviewJobPanel job={swarmJob} busy={busy} lang={lang} />}
             <div className="card-divider" />
-            {result ? <ImageResult result={result} lang={lang} /> : <ImageSamples onSelect={detectSample} busy={busy} lang={lang} />}
+            {result ? <ImageResult result={result} lang={lang} panelRef={resultPanelRef} /> : <ImageSamples onSelect={detectSample} busy={busy} lang={lang} />}
           </div>
         </div>
       </div>
@@ -1406,6 +1324,13 @@ function VideoDetectionPage({
   const [result, setResult] = useState<VideoDetectionResult | null>(null);
   const [status, setStatus] = useState<Status>({ tone: "info", text: tr("等待上传视频或填写 URL...", "Waiting for video upload or URL...") });
   const [busy, setBusy] = useState(false);
+  const resultPanelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!result) return;
+    const frame = window.requestAnimationFrame(() => resultPanelRef.current?.focus({ preventScroll: true }));
+    return () => window.cancelAnimationFrame(frame);
+  }, [result]);
 
   function selectFile(next: File | null) {
     if (next) {
@@ -1445,28 +1370,28 @@ function VideoDetectionPage({
   }
 
   return (
-    <main className="main">
+    <main id="main-content" className="main" tabIndex={-1}>
       <div className="container">
-        <PageHeader icon="fa-film" title={pageText.videoTitle} desc={pageText.videoDesc} />
+        <PageHeader icon="video-forensics" title={pageText.videoTitle} desc={pageText.videoDesc} />
         <div className="layout">
           <div className="card">
-            <div className="section-label"><i className="fa fa-upload" /> {tr("上传视频", "Upload video")}</div>
+            <div className="section-label"><IconfontIcon name="upload" size={17} /> {tr("上传视频", "Upload video")}</div>
             {isGuest && <TrialHint used={guestDetections} lang={lang} />}
             <UploadBox accept="video/*" file={file} onFile={selectFile} kind={videoKind} lang={lang} />
             <div className="url-or">{tr("或", "or")}</div>
-            <div className="section-label"><i className="fa fa-link" /> {tr("输入视频 URL", "Enter video URL")}</div>
+            <div className="section-label"><IconfontIcon name="link" size={17} /> {tr("输入视频 URL", "Enter video URL")}</div>
             <div className="url-input-wrap">
-              <input className="url-input" value={videoUrl} onChange={(event) => setVideoUrl(event.target.value)} placeholder="https://example.com/video.mp4" />
+              <input className="url-input" aria-label={tr("视频 URL", "Video URL")} value={videoUrl} onChange={(event) => setVideoUrl(event.target.value)} placeholder="https://example.com/video.mp4" />
             </div>
             <button className={`btn-primary ${busy ? "detecting" : ""}`} disabled={busy || (!file && !videoUrl.trim())} onClick={submit}>
-              <i className={`fa ${busy ? "fa-spinner detect-spin" : "fa-search"}`} /> {busy ? tr("检测中…", "Detecting...") : tr("开始检测", "Start detection")}
+              <IconfontIcon name={busy ? "loader" : "search"} size={18} className={busy ? "spin" : ""} /> {busy ? tr("检测中…", "Detecting...") : tr("开始检测", "Start detection")}
             </button>
           </div>
           <div className="card">
-            <div className="section-label"><i className="fa fa-info-circle" /> {tr("当前状态", "Current status")}</div>
+            <div className="section-label"><IconfontIcon name="activity" size={17} /> {tr("当前状态", "Current status")}</div>
             <StatusRow status={status} busy={busy} />
             <div className="card-divider" />
-            {result ? <VideoResult result={result} lang={lang} /> : <VideoSamples lang={lang} />}
+            {result ? <VideoResult result={result} lang={lang} panelRef={resultPanelRef} /> : <VideoSamples lang={lang} />}
           </div>
         </div>
       </div>
@@ -1525,7 +1450,14 @@ function HistoryPage({ setPage, lang }: { setPage: (page: PageKey) => void; lang
         setHistoryTotal(0);
         setHistoryFilterCounts({});
       }
-      setStatus({ tone: "error", text: errorMessage(error) });
+      console.warn("History records could not be loaded", error);
+      setStatus({
+        tone: "error",
+        text: tr(
+          "历史记录暂时无法加载，请检查登录状态后重试。",
+          "History is temporarily unavailable. Check your sign-in state and try again."
+        ),
+      });
     } finally {
       if (historyRequestIdRef.current === requestId) {
         setHistoryBusy(false);
@@ -1615,15 +1547,15 @@ function HistoryPage({ setPage, lang }: { setPage: (page: PageKey) => void; lang
   }
 
   return (
-    <main className="main">
+    <main id="main-content" className="main" tabIndex={-1}>
       <div className="container">
-        <PageHeader icon="fa-history" title={UI_TEXT[lang].pages.historyTitle} desc={UI_TEXT[lang].pages.historyDesc} />
+        <PageHeader icon="history" title={UI_TEXT[lang].pages.historyTitle} desc={UI_TEXT[lang].pages.historyDesc} />
         <div className="card">
           <div className="model-tabs history-tabs">
             <button className={`model-tab ${tab === "image" ? "active" : ""}`} onClick={() => updateHistoryTab("image")}>{UI_TEXT[lang].pages.imageTitle}</button>
             <button className={`model-tab ${tab === "video" ? "active" : ""}`} onClick={() => updateHistoryTab("video")}>{UI_TEXT[lang].pages.videoTitle}</button>
           </div>
-          {status && <div className={`notice ${status.tone}`}>{status.text}</div>}
+          {status && (records.length > 0 || status.tone !== "error") && <div className={`notice ${status.tone}`} role={status.tone === "error" ? "alert" : "status"}>{status.text}</div>}
           {records.length ? (
             <>
               <div className="history-summary-grid">
@@ -1644,8 +1576,9 @@ function HistoryPage({ setPage, lang }: { setPage: (page: PageKey) => void; lang
               </div>
               <div className="history-search-bar">
                 <div className="input-wrap">
-                  <i className="fa fa-search" />
+                  <IconfontIcon name="search" size={17} />
                   <input
+                    aria-label={tr("搜索历史记录", "Search history")}
                     value={query}
                     onChange={(event) => updateHistoryQuery(event.target.value)}
                     placeholder={tr("按文件名、结论、时间搜索历史记录", "Search by filename, verdict, or time")}
@@ -1675,6 +1608,7 @@ function HistoryPage({ setPage, lang }: { setPage: (page: PageKey) => void; lang
                   }}
                   disabled={historyBusy}
                 >
+                  <IconfontIcon name={historyBusy ? "loader" : "refresh"} size={15} className={historyBusy ? "spin" : ""} />
                   {historyBusy ? tr("刷新中", "Refreshing") : tr("刷新记录", "Refresh records")}
                 </button>
                 <button
@@ -1684,6 +1618,7 @@ function HistoryPage({ setPage, lang }: { setPage: (page: PageKey) => void; lang
                   }`}
                   onClick={copyCurrentView}
                 >
+                  <IconfontIcon name={copied ? "check" : "copy"} size={15} />
                   {copied ? tr("已复制视图链接", "View URL copied") : tr("复制当前视图", "Copy current view")}
                 </button>
                 {(filter !== "all" || query.trim()) && (
@@ -1735,7 +1670,7 @@ function HistoryPage({ setPage, lang }: { setPage: (page: PageKey) => void; lang
                 </>
               ) : (
                 <EmptyState
-                  icon="fa-filter"
+                  icon="filter"
                   text={tr("当前筛选条件下暂无记录", "No records match the current filters")}
                   actions={[
                     { label: tr("清除条件", "Clear filters"), onClick: () => { updateHistoryFilter("all"); updateHistoryQuery(""); } },
@@ -1746,7 +1681,7 @@ function HistoryPage({ setPage, lang }: { setPage: (page: PageKey) => void; lang
             </>
           ) : status?.tone === "error" ? (
             <EmptyState
-              icon="fa-exclamation-triangle"
+              icon="alert-triangle"
               text={status.text}
               actions={[
                 { label: historyBusy ? tr("加载中", "Loading") : tr("重试加载", "Retry"), onClick: () => { void loadHistoryRecords(tab); } },
@@ -1755,7 +1690,7 @@ function HistoryPage({ setPage, lang }: { setPage: (page: PageKey) => void; lang
             />
           ) : !status && (filter !== "all" || query.trim()) ? (
             <EmptyState
-              icon="fa-filter"
+              icon="filter"
               text={tr("当前筛选条件下暂无记录", "No records match the current filters")}
               actions={[
                 { label: tr("清除条件", "Clear filters"), onClick: () => { updateHistoryFilter("all"); updateHistoryQuery(""); } },
@@ -1764,7 +1699,7 @@ function HistoryPage({ setPage, lang }: { setPage: (page: PageKey) => void; lang
             />
           ) : !status && (
             <EmptyState
-              icon="fa-clock-o"
+              icon="clock"
               text={tr("暂无记录", "No records yet")}
               actions={[
                 { label: UI_TEXT[lang].pages.imageTitle, onClick: () => setPage("image") },
@@ -1778,11 +1713,11 @@ function HistoryPage({ setPage, lang }: { setPage: (page: PageKey) => void; lang
   );
 }
 
-function PageHeader({ icon, title, desc }: { icon: string; title: string; desc: string }) {
+function PageHeader({ icon, title, desc }: { icon: IconfontName; title: string; desc: string }) {
   return (
     <div className="page-header">
-      <h1><i className={`fa ${icon}`} /> {title}</h1>
-      <p>{desc}</p>
+      <ForensicIcon name={icon} tone="blue" className="page-heading-icon" />
+      <div><span>REALGUARD</span><h1>{title}</h1><p>{desc}</p></div>
     </div>
   );
 }
@@ -1790,22 +1725,12 @@ function PageHeader({ icon, title, desc }: { icon: string; title: string; desc: 
 function TrialHint({ used, lang }: { used: number; lang: Lang }) {
   return (
     <div className="trial-note">
-      <i className="fa fa-info-circle" />
+      <IconfontIcon name="info" size={16} />
       <span>
         {used >= 1
           ? translate(lang, "访客检测次数已用完，登录后继续使用。", "Guest detection has been used. Log in to continue.")
           : translate(lang, "访客可免费完成 1 次检测，本次不会要求登录。", "Guests can complete one free detection. This run does not require login.")}
       </span>
-    </div>
-  );
-}
-
-function StatusPill({ status }: { status: Status }) {
-  if (!status) return null;
-  return (
-    <div className={`status-pill ${status.tone}`}>
-      <i className={`fa ${status.tone === "ok" ? "fa-check-circle" : status.tone === "error" ? "fa-exclamation-circle" : "fa-info-circle"}`} />
-      <span>{status.text}</span>
     </div>
   );
 }
@@ -1845,8 +1770,18 @@ function UploadBox({
     >
       <input accept={accept} type="file" id={`file-${kind}`} onChange={(event) => onFile(event.target.files?.[0] || null)} />
       {!file ? (
-        <label htmlFor={`file-${kind}`} className="upload-placeholder">
-          <div className="upload-icon"><i className="fa fa-cloud-upload" /></div>
+        <label
+          htmlFor={`file-${kind}`}
+          className="upload-placeholder"
+          tabIndex={0}
+          role="button"
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            document.getElementById(`file-${kind}`)?.click();
+          }}
+        >
+          <div className="upload-icon"><IconfontIcon name="upload" size={28} /></div>
           <div className="upload-text">{tr(`拖放${kind}到此处，或点击上传`, `Drop ${kind} here, or click to upload`)}</div>
           <div className="upload-hint">{tr(`支持常见${kind}格式`, `Supports common ${kind} formats`)}</div>
         </label>
@@ -1856,7 +1791,7 @@ function UploadBox({
           <div className="file-meta">
             <span>{file.name}</span><span>·</span><span>{formatSize(file.size)}</span><span className="file-badge">{kind}</span>
           </div>
-          <button className="clear-btn" type="button" onClick={() => onFile(null)}><i className="fa fa-times" /> {tr("清除", "Clear")}</button>
+          <button className="clear-btn" type="button" onClick={() => onFile(null)}><IconfontIcon name="x" size={15} /> {tr("清除", "Clear")}</button>
         </div>
       )}
     </div>
@@ -1865,7 +1800,7 @@ function UploadBox({
 
 function StatusRow({ status, busy }: { status: Status; busy: boolean }) {
   return (
-    <div className="status-row">
+    <div className="status-row" role="status" aria-live="polite">
       <div className={`status-dot ${status?.tone === "ok" ? "ready" : ""} ${busy ? "busy" : ""}`} />
       <div className="status-text">{status?.text}</div>
     </div>
@@ -1884,7 +1819,7 @@ function ImageSamples({
   const tr = (zh: string, en: string) => translate(lang, zh, en);
   return (
     <>
-      <div className="section-label"><i className="fa fa-th-large" style={{ color: "var(--warning)" }} /> {tr("示例图片", "Sample images")} <span className="label-muted">{tr("点击直接检测", "Click to detect")}</span></div>
+      <div className="section-label"><IconfontIcon name="grid" size={17} /> {tr("示例图片", "Sample images")} <span className="label-muted">{tr("点击直接检测", "Click to detect")}</span></div>
       <div className="sample-list">
         <SampleItem image="/system/index1.jpg" title={tr("示例图片 1", "Sample image 1")} label={tr("点击检测", "Detect")} neutral disabled={busy} onClick={onSelect} lang={lang} />
         <SampleItem image="/system/index2.jpg" title={tr("示例图片 2", "Sample image 2")} label={tr("点击检测", "Detect")} neutral disabled={busy} onClick={onSelect} lang={lang} />
@@ -1904,7 +1839,7 @@ function VideoSamples({ lang }: { lang: Lang }) {
   const tr = (zh: string, en: string) => translate(lang, zh, en);
   return (
     <>
-      <div className="section-label"><i className="fa fa-th-large" style={{ color: "var(--warning)" }} /> {tr("示例视频", "Sample videos")} <span className="label-muted">{tr("点击查看效果", "Click to preview")}</span></div>
+      <div className="section-label"><IconfontIcon name="grid" size={17} /> {tr("示例视频", "Sample videos")} <span className="label-muted">{tr("点击查看效果", "Click to preview")}</span></div>
       <div className="sample-list">
         <SampleItem image="/system/video5227-cover.jpg" title={tr("示例视频 1（video5227）", "Sample video 1 (video5227)")} label={tr("示例", "Sample")} fake play lang={lang} />
         <SampleItem image="/system/video189-cover.jpg" title={tr("示例视频 2（video189）", "Sample video 2 (video189)")} label={tr("示例", "Sample")} play lang={lang} />
@@ -1942,19 +1877,19 @@ function SampleItem({
   lang: Lang;
 }) {
   const labelClass = neutral ? "neutral" : fake ? "fake" : "real";
-  const labelIcon = neutral ? "fa-search" : fake ? "fa-times" : "fa-check";
+  const labelIcon: IconfontName = neutral ? "search" : fake ? "x" : "check";
 
   return (
     <button className="sample-item" type="button" disabled={disabled} onClick={() => onClick?.({ image, title })}>
       <div className="sample-thumb">
         <img src={image} alt={title} />
-        {play && <i className="fa fa-play-circle play-icon" />}
+        {play && <span className="play-icon"><IconfontIcon name="play" size={22} /></span>}
       </div>
       <div className="sample-body">
         <div className="sample-name">{title}</div>
         <div className="sample-meta">
-          <span className={`sample-label ${labelClass}`}><i className={`fa ${labelIcon}`} /> {label}</span>
-          <span className="sample-hint">{translate(lang, "查看", "View")} <i className="fa fa-chevron-right" /></span>
+          <span className={`sample-label ${labelClass}`}><IconfontIcon name={labelIcon} size={12} /> {label}</span>
+          <span className="sample-hint">{translate(lang, "查看", "View")} <IconfontIcon name="chevron-right" size={13} /></span>
         </div>
       </div>
     </button>
@@ -1964,9 +1899,9 @@ function SampleItem({
 function Tips({ items, lang }: { items: string[]; lang: Lang }) {
   return (
     <>
-      <div className="section-label"><i className="fa fa-lightbulb-o" style={{ color: "var(--warning)" }} /> {translate(lang, "使用说明", "Usage notes")}</div>
+      <div className="section-label"><IconfontIcon name="lightbulb" size={17} /> {translate(lang, "使用说明", "Usage notes")}</div>
       <ul className="tips-list">
-        {items.map((item) => <li key={item}><i className="fa fa-check-circle" /><span>{item}</span></li>)}
+        {items.map((item) => <li key={item}><IconfontIcon name="check-circle" size={15} /><span>{item}</span></li>)}
       </ul>
     </>
   );
@@ -1994,7 +1929,7 @@ function ExpertReviewJobPanel({ job, busy, lang }: { job: DetectionJob | null; b
     >
       <span className="sr-only" aria-live="polite">{liveText}</span>
       <div className="swarm-job-head">
-        <span><i className="fa fa-sitemap" aria-hidden="true" /> {tr("专家会诊复核", "Expert review")}</span>
+        <span><IconfontIcon name="expert-review" size={17} /> {tr("专家会诊复核", "Expert review")}</span>
         <strong>{progress}%</strong>
       </div>
       <div className="swarm-compact-body">
@@ -2023,7 +1958,7 @@ function ExpertReviewJobPanel({ job, busy, lang }: { job: DetectionJob | null; b
             const status = normalizeExpertReviewStatus(expert.status);
             return (
               <div className={`swarm-expert-card ${status}`} key={`${expert.publicId || expert.id || index}-card`}>
-                <span className="swarm-expert-icon"><i className="fa fa-user-secret" aria-hidden="true" /></span>
+                <span className="swarm-expert-icon"><IconfontIcon name="user-secret" size={17} /></span>
                 <span className="swarm-expert-body">
                   <strong>{publicExpertReviewExpertName(expert, index, lang)}</strong>
                   <em>{publicExpertReviewExpertMessage(expert, lang)}</em>
@@ -2038,19 +1973,23 @@ function ExpertReviewJobPanel({ job, busy, lang }: { job: DetectionJob | null; b
   );
 }
 
-function ImageResult({ result, lang }: { result: ImageDetectionResult; lang: Lang }) {
+function ImageResult({ result, lang, panelRef }: { result: ImageDetectionResult; lang: Lang; panelRef: RefObject<HTMLDivElement> }) {
   const probability = Math.round((result.probability || 0) * 1000) / 10;
   const swarm = result.swarm;
   const swarmExperts = swarm?.experts || [];
   const tr = (zh: string, en: string) => translate(lang, zh, en);
+  const requiresReview = probability > 35 && probability < 75;
+  const verdictLabel = requiresReview ? tr("需人工复核", "Human review required") : result.final_label;
+  const verdictTone = requiresReview ? "review" : result.final_label.includes("AI") ? "danger" : "ok";
   return (
-    <div className="result-panel">
-      <div className="section-label"><i className="fa fa-bar-chart" /> {tr("检测结果", "Detection result")}</div>
+    <div className="result-panel" ref={panelRef} tabIndex={-1}>
+      <div className="section-label"><IconfontIcon name="bar-chart" size={17} /> {tr("检测结果", "Detection result")}</div>
       {result.image_url && <img className="result-media" src={result.image_url} alt={result.filename} />}
       <div className="verdict-row">
-        <span className={result.final_label.includes("AI") ? "pill danger" : "pill ok"}>{result.final_label}</span>
-        <strong>{probability}%</strong>
+        <span className={`pill ${verdictTone}`}>{verdictLabel}</span>
+        <div className="verdict-score"><span>{tr("生成风险", "Generated risk")}</span><strong>{probability}%</strong></div>
       </div>
+      <p className="result-caveat"><IconfontIcon name="info" size={15} />{tr("模型概率用于辅助判断；边界结果请结合原图、元数据与证据报告复核。", "Model probability supports review. Borderline results should be checked against the source, metadata, and evidence report.")}</p>
       <div className="case-kv">
         <Info label={tr("置信度", "Confidence")} value={result.confidence || "-"} />
         <Info label={tr("文件名", "Filename")} value={result.filename || "-"} />
@@ -2059,13 +1998,13 @@ function ImageResult({ result, lang }: { result: ImageDetectionResult; lang: Lan
       </div>
       <div className="result-actions">
         <button className="btn-code" type="button" onClick={() => downloadImageReport(result.itemid)}>
-          <i className="fa fa-download" /> {tr("下载报告", "Download report")}
+          <IconfontIcon name="download" size={16} /> {tr("下载报告", "Download report")}
         </button>
       </div>
       {swarm?.enabled && (
         <div className="swarm-result-panel">
           <div className="swarm-result-head">
-            <h4><i className="fa fa-sitemap" /> {tr("专家会诊意见", "Expert review opinion")}</h4>
+            <h4><IconfontIcon name="expert-review" size={17} /> {tr("专家会诊意见", "Expert review opinion")}</h4>
             <div className="swarm-result-badges">
               <span>{tr("有效专家", "Effective experts")} {swarm.effectiveExperts || 0}/{swarm.totalExperts || swarmExperts.length}</span>
               <span>{tr("共识", "Consensus")} {Math.round(Number(swarm.consensusScore || 0) * 100)}%</span>
@@ -2084,21 +2023,26 @@ function ImageResult({ result, lang }: { result: ImageDetectionResult; lang: Lan
   );
 }
 
-function VideoResult({ result, lang }: { result: VideoDetectionResult; lang: Lang }) {
+function VideoResult({ result, lang, panelRef }: { result: VideoDetectionResult; lang: Lang; panelRef: RefObject<HTMLDivElement> }) {
   const tr = (zh: string, en: string) => translate(lang, zh, en);
+  const probability = Math.round(result.fake_percentage * 10) / 10;
+  const requiresReview = probability > 35 && probability < 75;
+  const verdictLabel = requiresReview ? tr("需人工复核", "Human review required") : (result.final_label || tr("未标注", "Unlabeled"));
+  const verdictTone = requiresReview ? "review" : result.final_label.includes("AI") ? "danger" : "ok";
   return (
-    <div className="result-panel">
-      <div className="section-label"><i className="fa fa-bar-chart" /> {tr("视频检测结果", "Video detection result")}</div>
+    <div className="result-panel" ref={panelRef} tabIndex={-1}>
+      <div className="section-label"><IconfontIcon name="bar-chart" size={17} /> {tr("视频检测结果", "Video detection result")}</div>
       {result.video_url && <video className="result-media" src={result.video_url} controls />}
       <div className="verdict-row">
-        <span className={result.final_label.includes("AI") ? "pill danger" : "pill ok"}>{result.final_label || tr("未标注", "Unlabeled")}</span>
-        <strong>{Math.round(result.fake_percentage * 10) / 10}%</strong>
+        <span className={`pill ${verdictTone}`}>{verdictLabel}</span>
+        <div className="verdict-score"><span>{tr("生成风险", "Generated risk")}</span><strong>{probability}%</strong></div>
       </div>
+      <p className="result-caveat"><IconfontIcon name="info" size={15} />{tr("视频结论用于辅助复核，请结合可疑片段与原始文件确认。", "Use the suspicious segments and original file to verify the model-assisted verdict.")}</p>
       <Progress label={tr("真实概率", "Real probability")} value={result.real_percentage} tone="green" />
       <Progress label={tr("生成概率", "Generated probability")} value={result.fake_percentage} tone="red" />
       <div className="result-actions">
         <button className="btn-code" type="button" onClick={() => downloadVideoReport(result.itemid)}>
-          <i className="fa fa-download" /> {tr("下载报告", "Download report")}
+          <IconfontIcon name="download" size={16} /> {tr("下载报告", "Download report")}
         </button>
       </div>
       <div className="case-block"><p>{result.explanation || tr("暂无详细说明", "No detailed explanation yet")}</p></div>
@@ -2156,28 +2100,28 @@ function HistoryRecords({
             <a className="history-media" href={mediaUrl || undefined} target={mediaUrl ? "_blank" : undefined} rel="noreferrer" aria-label={mediaUrl ? tr(`查看 ${title}`, `View ${title}`) : title}>
               {previewUrl ? (
                 isVideo ? (
-                  <div className="history-placeholder"><i className="fa fa-film" /></div>
+                  <div className="history-placeholder"><IconfontIcon name="video-forensics" size={26} /></div>
                 ) : (
                   <img src={previewUrl} alt={title} loading="lazy" />
                 )
               ) : (
-                <div className="history-placeholder"><i className={`fa ${isVideo ? "fa-film" : "fa-image"}`} /></div>
+                <div className="history-placeholder"><IconfontIcon name={isVideo ? "video-forensics" : "image-forensics"} size={26} /></div>
               )}
-              {mediaUrl && <span className="history-view"><i className="fa fa-eye" /> {tr("查看", "View")}</span>}
+              {mediaUrl && <span className="history-view"><IconfontIcon name="eye" size={14} /> {tr("查看", "View")}</span>}
             </a>
             <div className="history-body">
               <div className="history-title" title={title}>{renderHighlightedText(title, query)}</div>
               {guestRecord && (
                 <div className="history-tags">
-                  <span className="history-tag guest"><i className="fa fa-user-secret" /> {renderHighlightedText(tr("访客", "Guest"), query)}</span>
-                  {hasMetadata && <span className="history-tag meta"><i className="fa fa-info-circle" /> {renderHighlightedText(tr("元数据", "Metadata"), query)}</span>}
-                  {hasIssues && <span className="history-tag issue"><i className="fa fa-exclamation-triangle" /> {renderHighlightedText(issueCount > 0 ? tr(`可疑点 ${issueCount}`, `Issues ${issueCount}`) : tr("可疑点", "Issues"), query)}</span>}
+                  <span className="history-tag guest"><IconfontIcon name="user-secret" size={12} /> {renderHighlightedText(tr("访客", "Guest"), query)}</span>
+                  {hasMetadata && <span className="history-tag meta"><IconfontIcon name="info" size={12} /> {renderHighlightedText(tr("元数据", "Metadata"), query)}</span>}
+                  {hasIssues && <span className="history-tag issue"><IconfontIcon name="alert-triangle" size={12} /> {renderHighlightedText(issueCount > 0 ? tr(`可疑点 ${issueCount}`, `Issues ${issueCount}`) : tr("可疑点", "Issues"), query)}</span>}
                 </div>
               )}
               {!guestRecord && (hasMetadata || hasIssues) && (
                 <div className="history-tags">
-                  {hasMetadata && <span className="history-tag meta"><i className="fa fa-info-circle" /> {renderHighlightedText(tr("元数据", "Metadata"), query)}</span>}
-                  {hasIssues && <span className="history-tag issue"><i className="fa fa-exclamation-triangle" /> {renderHighlightedText(issueCount > 0 ? tr(`可疑点 ${issueCount}`, `Issues ${issueCount}`) : tr("可疑点", "Issues"), query)}</span>}
+                  {hasMetadata && <span className="history-tag meta"><IconfontIcon name="info" size={12} /> {renderHighlightedText(tr("元数据", "Metadata"), query)}</span>}
+                  {hasIssues && <span className="history-tag issue"><IconfontIcon name="alert-triangle" size={12} /> {renderHighlightedText(issueCount > 0 ? tr(`可疑点 ${issueCount}`, `Issues ${issueCount}`) : tr("可疑点", "Issues"), query)}</span>}
                 </div>
               )}
               <div className="history-row"><span>{tr("时间", "Time")}</span><strong>{renderHighlightedText(timeText, query)}</strong></div>
@@ -2193,7 +2137,7 @@ function HistoryRecords({
                       else if (tab === "video") downloadVideoReport(Number(record.itemid));
                     }}
                   >
-                    <i className="fa fa-download" /> {tr("报告", "Report")}
+                    <IconfontIcon name="download" size={14} /> {tr("报告", "Report")}
                   </button>
                 </div>
               )}
@@ -2218,13 +2162,13 @@ function EmptyState({
   text,
   actions = [],
 }: {
-  icon: string;
+  icon: IconfontName;
   text: string;
   actions?: Array<{ label: string; onClick: () => void }>;
 }) {
   return (
     <div className="empty-state">
-      <i className={`fa ${icon}`} />
+      <IconfontIcon name={icon} size={30} />
       <span>{text}</span>
       {actions.length > 0 && (
         <div className="empty-state-actions">
@@ -2241,23 +2185,60 @@ function EmptyState({
 
 function AuthModal({ onAuthed, onClose, lang }: { onAuthed: () => Promise<void>; onClose: () => void; lang: Lang }) {
   const text = UI_TEXT[lang].auth;
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const dialog = dialogRef.current;
+    document.body.classList.add("modal-open");
+    window.requestAnimationFrame(() => dialog?.querySelector<HTMLElement>("input, button")?.focus());
+
+    function handleKeydown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab" || !dialog) return;
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>("a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex='-1'])"));
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeydown);
+    return () => {
+      document.body.classList.remove("modal-open");
+      document.removeEventListener("keydown", handleKeydown);
+      const fallback = document.querySelector<HTMLElement>(".trial-strip button, .nav-auth-action");
+      if (previousFocus && previousFocus !== document.body && previousFocus.id !== "main-content") previousFocus.focus();
+      else fallback?.focus();
+    };
+  }, [onClose]);
+
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true">
-      <div className="login-card modal-login-card auth-shell">
-        <button className="case-modal-close modal-close" onClick={onClose}><i className="fa fa-times" /></button>
+    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <div ref={dialogRef} className="login-card modal-login-card auth-shell" role="dialog" aria-modal="true" aria-labelledby="auth-dialog-title">
+        <button className="case-modal-close modal-close" type="button" aria-label={lang === "zh" ? "关闭登录窗口" : "Close sign-in dialog"} onClick={onClose}><IconfontIcon name="x" size={18} /></button>
         <aside className="auth-rail" aria-label={text.railTitle}>
-          <div className="auth-rail-mark"><i className="fa fa-shield" /></div>
+          <div className="auth-rail-mark"><IconfontIcon name="shield-check" size={24} /></div>
           <h3>{text.railTitle}</h3>
           <p>{text.railDesc}</p>
           <div className="auth-rail-points">
-            {text.railPoints.map((item) => <span key={item}><i className="fa fa-check" /> {item}</span>)}
+            {text.railPoints.map((item) => <span key={item}><IconfontIcon name="check" size={14} /> {item}</span>)}
           </div>
         </aside>
         <div className="auth-main">
           <div className="login-header">
-            <span className="login-icon"><i className="fa fa-shield" /></span>
+            <span className="login-icon"><IconfontIcon name="shield-check" size={22} /></span>
             <div>
-              <h2>{text.title}</h2>
+              <h2 id="auth-dialog-title">{text.title}</h2>
               <p className="sub">{text.desc}</p>
             </div>
           </div>
@@ -2385,24 +2366,28 @@ function AuthForm({ onAuthed, lang }: { onAuthed: () => Promise<void>; lang: Lan
   const passwordLabel = mode === "reset" ? text.newPasswordLabel : text.passwordLabel;
   const passwordPlaceholder = mode === "password" ? text.passwordPlaceholder : text.newPasswordPlaceholder;
   const submitText = mode === "register" ? text.create : mode === "reset" ? text.resetAction : text.login;
-  const submitIcon = mode === "register" ? "fa-user-plus" : mode === "reset" ? "fa-refresh" : "fa-sign-in";
+  const submitIcon: IconfontName = mode === "register" ? "user" : mode === "reset" ? "refresh" : "lock";
   const requiresTerms = mode !== "reset";
 
   return (
     <>
-      <div className="login-tabs">
-        <button type="button" className={`login-tab ${mode === "password" ? "active" : ""}`} onClick={() => switchMode("password")}>{text.password}</button>
-        <button type="button" className={`login-tab ${mode === "sms" ? "active" : ""}`} onClick={() => switchMode("sms")}>{text.sms}</button>
-        <button type="button" className={`login-tab ${mode === "register" ? "active" : ""}`} onClick={() => switchMode("register")}>{text.register}</button>
-        <button type="button" className={`login-tab ${mode === "reset" ? "active" : ""}`} onClick={() => switchMode("reset")}>{text.reset}</button>
+      <div className="login-tabs" role="tablist" aria-label={tr("登录方式", "Sign-in method")}>
+        <button type="button" role="tab" aria-selected={mode === "password"} className={`login-tab ${mode === "password" ? "active" : ""}`} onClick={() => switchMode("password")}>{text.password}</button>
+        <button type="button" role="tab" aria-selected={mode === "sms"} className={`login-tab ${mode === "sms" ? "active" : ""}`} onClick={() => switchMode("sms")}>{text.sms}</button>
       </div>
+      {(mode === "register" || mode === "reset") && (
+        <div className="auth-context-bar">
+          <span>{mode === "register" ? text.register : text.reset}</span>
+          <button type="button" onClick={() => switchMode("password")}>{text.backLogin}</button>
+        </div>
+      )}
       <form onSubmit={submit} className="login-panel active">
-        <AuthInput icon="fa-phone" label={text.phone} value={phone} onChange={setPhone} placeholder={text.phonePlaceholder} inputMode="numeric" autoComplete="tel" maxLength={11} />
-        {mode === "register" && <AuthInput icon="fa-user" label={text.username} value={username} onChange={setUsername} placeholder={text.usernamePlaceholder} autoComplete="name" maxLength={64} />}
+        <AuthInput icon="phone" label={text.phone} value={phone} onChange={setPhone} placeholder={text.phonePlaceholder} inputMode="numeric" autoComplete="tel" maxLength={11} />
+        {mode === "register" && <AuthInput icon="user" label={text.username} value={username} onChange={setUsername} placeholder={text.usernamePlaceholder} autoComplete="name" maxLength={64} />}
         {needsPassword && (
           <>
             <AuthInput
-              icon="fa-lock"
+              icon="lock"
               label={passwordLabel}
               value={secret}
               onChange={setSecret}
@@ -2411,7 +2396,7 @@ function AuthForm({ onAuthed, lang }: { onAuthed: () => Promise<void>; lang: Lan
               autoComplete={mode === "password" ? "current-password" : "new-password"}
               rightAction={(
                 <button type="button" className="password-toggle" onClick={() => setShowSecret((value) => !value)} aria-label={showSecret ? tr("隐藏密码", "Hide password") : tr("显示密码", "Show password")}>
-                  <i className={`fa ${showSecret ? "fa-eye-slash" : "fa-eye"}`} />
+                  <IconfontIcon name={showSecret ? "eye-off" : "eye"} size={17} />
                 </button>
               )}
             />
@@ -2420,11 +2405,11 @@ function AuthForm({ onAuthed, lang }: { onAuthed: () => Promise<void>; lang: Lan
         )}
         {needsSms && (
           <div className="form-group">
-            <label className="form-label">{text.smsCode}</label>
+            <label className="form-label" htmlFor="auth-sms-code">{text.smsCode}</label>
             <div className="code-row">
               <div className="input-wrap">
-                <i className="fa fa-shield" />
-                <input value={smsCode} onChange={(event) => setSmsCode(event.target.value)} placeholder={text.smsPlaceholder} inputMode="numeric" autoComplete="one-time-code" maxLength={8} />
+                <IconfontIcon name="shield-check" size={17} />
+                <input id="auth-sms-code" value={smsCode} onChange={(event) => setSmsCode(event.target.value)} placeholder={text.smsPlaceholder} inputMode="numeric" autoComplete="one-time-code" maxLength={8} />
               </div>
               <button
                 type="button"
@@ -2445,11 +2430,12 @@ function AuthForm({ onAuthed, lang }: { onAuthed: () => Promise<void>; lang: Lan
             </span>
           </label>
         )}
-        {status && <div className={`notice ${status.tone}`}>{status.text}</div>}
-        <button type="submit" className="btn-primary" disabled={busy}><i className={`fa ${submitIcon}`} /> {submitText}</button>
+        {status && <div className={`notice ${status.tone}`} role={status.tone === "error" ? "alert" : "status"}>{status.text}</div>}
+        <button type="submit" className="btn-primary" disabled={busy}><IconfontIcon name={busy ? "loader" : submitIcon} size={17} className={busy ? "spin" : ""} /> {submitText}</button>
         <div className="auth-foot-actions">
-          {mode !== "reset" && <button type="button" onClick={() => switchMode("reset")}>{text.forgot}</button>}
-          {mode === "reset" && <button type="button" onClick={() => switchMode("password")}>{text.backLogin}</button>}
+          {(mode === "password" || mode === "sms") && <button type="button" onClick={() => switchMode("register")}>{tr("还没有账号？注册", "New here? Create an account")}</button>}
+          {(mode === "password" || mode === "sms") && <button type="button" onClick={() => switchMode("reset")}>{text.forgot}</button>}
+          {(mode === "register" || mode === "reset") && <button type="button" onClick={() => switchMode("password")}>{text.backLogin}</button>}
         </div>
       </form>
     </>
@@ -2468,7 +2454,7 @@ function AuthInput({
   maxLength,
   rightAction,
 }: {
-  icon: string;
+  icon: IconfontName;
   label: string;
   value: string;
   onChange: (value: string) => void;
@@ -2479,12 +2465,13 @@ function AuthInput({
   maxLength?: number;
   rightAction?: ReactNode;
 }) {
+  const inputId = useId();
   return (
     <div className="form-group">
-      <label className="form-label">{label}</label>
+      <label className="form-label" htmlFor={inputId}>{label}</label>
       <div className={`input-wrap ${rightAction ? "has-action" : ""}`}>
-        <i className={`fa ${icon}`} />
-        <input type={type} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} autoComplete={autoComplete} inputMode={inputMode} maxLength={maxLength} />
+        <IconfontIcon name={icon} size={17} />
+        <input id={inputId} type={type} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} autoComplete={autoComplete} inputMode={inputMode} maxLength={maxLength} />
         {rightAction && <span className="input-action">{rightAction}</span>}
       </div>
     </div>
@@ -2495,7 +2482,7 @@ function Footer({ lang }: { lang: Lang }) {
   const text = UI_TEXT[lang].footer;
   return (
     <footer className="footer">
-      <div className="footer-logo"><i className="fa fa-eye" /> {text.brand}</div>
+      <div className="footer-logo"><IconfontIcon name="brand" size={20} /> {text.brand}</div>
       <p className="footer-copy">{text.copy}</p>
       <p className="footer-icp">
         <a href="https://beian.miit.gov.cn/" target="_blank" rel="noreferrer">
@@ -2592,7 +2579,7 @@ function getInitialLang(): Lang {
 function getInitialPage(): PageKey {
   if (typeof window === "undefined") return "home";
   const value = new URLSearchParams(window.location.search).get("page") as PageKey | null;
-  return value && ["home", "image", "video", "history", "developer"].includes(value) ? value : "home";
+  return value && ["home", "image", "video", "history"].includes(value) ? value : "home";
 }
 
 function getInitialImageMode(): ImageDetectMode {
