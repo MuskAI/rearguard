@@ -190,7 +190,7 @@ if [[ "$TARGET" == "all" || "$TARGET" == "v1" ]]; then
     "/opt/realguard-server/DEPLOYED_COMMIT" \
     "realguard-backend.service" \
     "http://127.0.0.1:5000/api/history/image-detections" \
-    "http://127.0.0.1/api/history/image-detections" \
+    "https://www.rrreal.cn/api/history/image-detections" \
     "realguard-server-main/RealGuard" \
     "realguard-server-main/frontend"
 fi
@@ -200,7 +200,7 @@ if [[ "$TARGET" == "all" || "$TARGET" == "v2" ]]; then
     "/opt/jianzhen-v2/DEPLOYED_COMMIT" \
     "jianzhen-v2-backend.service" \
     "http://127.0.0.1:8848/api/health" \
-    "http://127.0.0.1/v2-api/health" \
+    "https://www.rrreal.cn/v2-api/health" \
     "v2-agent/backend" \
     "v2-agent/frontend"
 fi

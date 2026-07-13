@@ -11,9 +11,10 @@ RealGuard 是一个面向数字内容鉴伪、证据归档和运营监控的 Web
 - 生产服务器：`124.221.92.85`
 - 生产用户：`ubuntu`
 - 当前公网入口：
-  - 主站：`http://124.221.92.85/`
-  - V2 深度分析：`http://124.221.92.85/v2/`
-  - V2 API：`http://124.221.92.85/v2-api/`
+  - 主站：`https://www.rrreal.cn/`
+  - V2 深度分析：`https://www.rrreal.cn/v2/`
+  - V2 API：`https://www.rrreal.cn/v2-api/`
+  - 应急 IP 入口：`http://124.221.92.85/`
   - Umami 监控：`http://analytics.realguard.cn/`
 - 生产服务：
   - `realguard-backend.service`：V1 Flask 后端
@@ -31,6 +32,8 @@ RealGuard 是一个面向数字内容鉴伪、证据归档和运营监控的 Web
   - `/etc/realguard/jianzhen-v2.env`
   - `/etc/realguard/agent.env`
   - `/etc/realguard/sms.env`
+  - `/etc/nginx/conf.d/myapp.conf`
+  - `/etc/letsencrypt/live/www.rrreal.cn/`
 
 重要：真实密钥、数据库密码、生产数据、上传文件、SQLite 数据库、运行态 JSON 不在 GitHub 仓库里。接手人需要单独拿到服务器权限和备份文件。
 
@@ -49,7 +52,8 @@ V1 是原主站，包含：
 生产服务关系：
 
 ```text
-Nginx :80
+Nginx :80 -> HTTPS canonical redirect
+Nginx :443 (rrreal.cn, www.rrreal.cn)
   ├── /                         -> /var/www/realguard-frontend
   ├── /api/*, /admin/*, /image_upload/*, /video_upload/* -> 127.0.0.1:5000
   ├── /detection-static/*       -> /opt/realguard-server/RealGuard/imagedetection/static
@@ -97,6 +101,7 @@ jianzhen-v2-backend.service -> FastAPI, 127.0.0.1:8848
 │   └── docker-compose.yml      # V2 容器化示例
 ├── deploy/
 │   ├── nginx/                  # 生产 Nginx 配置模板
+│   ├── letsencrypt/            # Certbot 自动续期部署钩子
 │   └── analytics/              # Umami 部署模板
 ├── scripts/
 │   ├── deploy_v1.sh            # V1 发布
@@ -110,6 +115,8 @@ jianzhen-v2-backend.service -> FastAPI, 127.0.0.1:8848
 ## 这次迁移后的重要变化
 
 - 已迁移到新服务器 `124.221.92.85`。
+- 正式域名为 `https://www.rrreal.cn/`，HTTP 和根域名统一跳转到该地址。
+- Let's Encrypt 证书覆盖 `rrreal.cn` 与 `www.rrreal.cn`，由 `certbot.timer` 自动续期。
 - 首页 UI 已重做为“数字内容鉴伪工作台”。
 - 首页不再展示“管理入口”按钮，普通用户入口只保留任务、历史和报告。
 - 侵权检索相关页面、接口和公开文档已移除或由 Nginx 拦截。
@@ -391,6 +398,40 @@ Nginx：
 ```bash
 sudo nginx -t
 sudo systemctl reload nginx
+```
+
+### 域名和 HTTPS
+
+DNSPod 中应只保留以下主站解析：
+
+```text
+@    A    124.221.92.85
+www  A    124.221.92.85
+```
+
+不要让根域名同时指向旧服务器 `124.222.3.205`。DNS 变更传播期间，旧服务器可临时安装
+`deploy/nginx/rrreal-legacy-redirect.conf`，把根域请求和 ACME 校验转发到新服务器。
+
+证书与自动续期状态：
+
+```bash
+sudo certbot certificates
+systemctl status certbot.timer
+sudo certbot renew --dry-run
+```
+
+Certbot 续期后通过以下钩子检查并热重载 Nginx：
+
+```text
+/etc/letsencrypt/renewal-hooks/deploy/realguard-reload-nginx
+```
+
+线上检查：
+
+```bash
+curl -I http://www.rrreal.cn/
+curl -I https://www.rrreal.cn/
+curl -I https://rrreal.cn/
 ```
 
 ## 数据备份和恢复
