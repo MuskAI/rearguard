@@ -16,8 +16,8 @@ Optional environment variables:
                 Default: 15001
   DRY_RUN=1     Print commands without executing them
 
-This script verifies V1, builds the frontend, uploads the backend package and
-frontend dist assets, restarts realguard-backend.service, then runs health checks.
+This script verifies V1, builds the frontend, uploads the backend package,
+frontend dist assets and nginx site config, restarts services, then runs health checks.
 EOF
 }
 
@@ -31,7 +31,8 @@ require_ssh_key
 ROOT_DIR="$(repo_root)"
 BACKEND_DIR="$ROOT_DIR/realguard-server-main/RealGuard"
 FRONTEND_DIR="$ROOT_DIR/realguard-server-main/frontend"
-COMMIT_SHA="$(latest_commit_for_paths realguard-server-main/RealGuard realguard-server-main/frontend)"
+NGINX_CONFIG="$ROOT_DIR/realguard-server-main/deploy/nginx-realguard-frontend.conf"
+COMMIT_SHA="$(latest_commit_for_paths realguard-server-main/RealGuard realguard-server-main/frontend realguard-server-main/deploy/nginx-realguard-frontend.conf)"
 DETECTOR_PORT="${REALGUARD_DETECTOR_PORT:-15001}"
 TMP_DIR="$(mktemp -d)"
 ARCHIVE_PATH="$TMP_DIR/realguard-v1-backend.tgz"
@@ -57,6 +58,7 @@ write_commit_marker "$MARKER_PATH" "$COMMIT_SHA"
 log_step 4 "Upload V1 release"
 run_scp "$ARCHIVE_PATH" "$REMOTE:/tmp/realguard-v1-backend.tgz"
 run_scp "$MARKER_PATH" "$REMOTE:/tmp/realguard-v1.DEPLOYED_COMMIT"
+run_scp "$NGINX_CONFIG" "$REMOTE:/tmp/realguard-frontend.nginx.conf"
 run_scp -r "$FRONTEND_DIR/dist/." "$REMOTE:/var/www/realguard-frontend/"
 
 log_step 5 "Activate V1 release"
@@ -86,6 +88,6 @@ sudo mkdir -p /etc/systemd/system/realguard-backend.service.d && sudo tee /etc/s
 [Service]
 Environment=REALGUARD_DETECTION_BACKEND_URL=http://127.0.0.1:$DETECTOR_PORT
 UNIT
-sudo bash -lc 'set -a; [ ! -f /etc/realguard/realguard-backend.env ] || . /etc/realguard/realguard-backend.env; [ ! -f /etc/realguard/detector-db.env ] || . /etc/realguard/detector-db.env; set +a; cd /opt/realguard-server/RealGuard && /opt/realguard-server/.venv/bin/python -m flask --app run:app admin-db-upgrade' && sudo systemctl daemon-reload && sudo systemctl enable realguard-detector-backend.service >/dev/null && sudo systemctl restart realguard-detector-backend.service && sudo systemctl restart realguard-backend.service && rm -f /tmp/realguard-v1-backend.tgz /tmp/realguard-v1.DEPLOYED_COMMIT && health_ready=0 && for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do if curl -fsS http://127.0.0.1:$DETECTOR_PORT/health >/dev/null && curl -fsS http://127.0.0.1:5000/api/history/image-detections >/dev/null; then health_ready=1; break; fi; sleep 1; done && test \"\$health_ready\" = \"1\" && systemctl is-active realguard-detector-backend.service && systemctl is-active realguard-backend.service && curl -fsS http://127.0.0.1:$DETECTOR_PORT/health >/dev/null && curl -fsS http://127.0.0.1:5000/api/history/image-detections >/dev/null && curl -fsS -o /dev/null http://127.0.0.1/ && curl -fsS http://127.0.0.1/admin/login | grep -q '慧鉴 AI 管理员认证' && admin_register_code=\$(curl -sS -o /tmp/realguard-admin-register.html -w '%{http_code}' http://127.0.0.1/admin/register) && test \"\$admin_register_code\" = \"403\" && ! grep -q '注册管理员' /tmp/realguard-admin-register.html && big_screen_code=\$(curl -sS -o /tmp/realguard-big-screen.json -w '%{http_code}' http://127.0.0.1/api/admin/big-screen) && test \"\$big_screen_code\" = \"401\" && cat /opt/realguard-server/DEPLOYED_COMMIT"
+sudo bash -lc 'set -a; [ ! -f /etc/realguard/realguard-backend.env ] || . /etc/realguard/realguard-backend.env; [ ! -f /etc/realguard/detector-db.env ] || . /etc/realguard/detector-db.env; set +a; cd /opt/realguard-server/RealGuard && /opt/realguard-server/.venv/bin/python -m flask --app run:app admin-db-upgrade' && sudo systemctl daemon-reload && sudo systemctl enable realguard-detector-backend.service >/dev/null && sudo systemctl restart realguard-detector-backend.service && sudo systemctl restart realguard-backend.service && sudo install -m 644 /tmp/realguard-frontend.nginx.conf /etc/nginx/sites-enabled/realguard-frontend && sudo nginx -t && sudo systemctl reload nginx && rm -f /tmp/realguard-v1-backend.tgz /tmp/realguard-v1.DEPLOYED_COMMIT /tmp/realguard-frontend.nginx.conf && health_ready=0 && for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do if curl -fsS http://127.0.0.1:$DETECTOR_PORT/health >/dev/null && curl -fsS http://127.0.0.1:5000/api/history/image-detections >/dev/null; then health_ready=1; break; fi; sleep 1; done && test \"\$health_ready\" = \"1\" && systemctl is-active realguard-detector-backend.service && systemctl is-active realguard-backend.service && curl -fsS http://127.0.0.1:$DETECTOR_PORT/health >/dev/null && curl -fsS http://127.0.0.1:5000/api/history/image-detections >/dev/null && curl -fsS -o /dev/null http://127.0.0.1/ && curl -fsS http://127.0.0.1/admin/login | grep -q '慧鉴 AI 管理员认证' && admin_register_code=\$(curl -sS -o /tmp/realguard-admin-register.html -w '%{http_code}' http://127.0.0.1/admin/register) && test \"\$admin_register_code\" = \"403\" && ! grep -q '注册管理员' /tmp/realguard-admin-register.html && big_screen_code=\$(curl -sS -o /tmp/realguard-big-screen.json -w '%{http_code}' http://127.0.0.1/api/admin/big-screen) && test \"\$big_screen_code\" = \"401\" && cat /opt/realguard-server/DEPLOYED_COMMIT"
 
 printf '\nV1 deployed from commit %s to %s\n' "$COMMIT_SHA" "$REMOTE"
