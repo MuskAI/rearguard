@@ -1,7 +1,6 @@
-"""鉴真 AI 鉴伪工作台后端。
+"""慧鉴 AI 鉴伪工作台后端。
 
-图像/文本检测调用真实视觉语言模型（qwen3-vl-flash via DashScope），
-视频/音频及任何模型调用失败时回退到确定性 Mock。检测逻辑见 detector.py。
+图像和可提取正文的文档仅返回真实模型结果；未部署能力与模型故障会明确失败。
 """
 from __future__ import annotations
 
@@ -24,7 +23,7 @@ from starlette.responses import Response
 
 from . import detector, provenance, reporting, storage, synthid_detector, unified_forensics, visible_watermark_detector
 
-app = FastAPI(title="鉴真 AI 鉴伪工作台", version="0.2.0")
+app = FastAPI(title="慧鉴 AI 鉴伪工作台", version="0.3.0")
 ACCESS_TOKEN = os.getenv("JIANZHEN_ACCESS_TOKEN", "").strip()
 MAX_UPLOAD_BYTES = int(os.getenv("JIANZHEN_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
 SESSION_AUTH_URL = (
@@ -85,13 +84,19 @@ EXT_TO_TYPE = {
     "mp4": "video", "mov": "video", "avi": "video", "mkv": "video", "webm": "video",
     "mp3": "audio", "wav": "audio", "m4a": "audio", "flac": "audio", "aac": "audio",
     "txt": "document", "pdf": "document", "doc": "document", "docx": "document", "md": "document",
+    "csv": "document", "json": "document", "log": "document",
 }
 
 def _detect_type(filename: str, declared: str | None) -> str:
-    if declared in detector.DIMENSIONS_BY_TYPE:
-        return declared
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    return EXT_TO_TYPE.get(ext, "image")
+    inferred = EXT_TO_TYPE.get(ext)
+    if inferred is None:
+        if not ext and declared in detector.DIMENSIONS_BY_TYPE:
+            return declared
+        raise HTTPException(status_code=415, detail="不支持的文件格式")
+    if declared in detector.DIMENSIONS_BY_TYPE and declared != inferred:
+        raise HTTPException(status_code=422, detail="文件类型与扩展名不一致")
+    return inferred
 
 
 def _client_ip(request: Request) -> str | None:
@@ -165,7 +170,7 @@ def _require_protected_access(request: Request) -> dict:
     actor = _session_access_granted(request)
     if actor:
         return actor
-    raise HTTPException(status_code=401, detail="请先登录 RealGuard 后继续使用 V2")
+    raise HTTPException(status_code=401, detail="请先登录慧鉴 AI 后继续使用深度分析")
 
 
 def _request_developer_key(request: Request) -> str:
@@ -272,7 +277,7 @@ def _require_report_share_access(request: Request, item: dict) -> dict:
     if DEVELOPER_API_KEY_REQUIRED:
         return _require_report_access(request, item)
     if ACCESS_TOKEN:
-        raise HTTPException(status_code=401, detail="请先登录 RealGuard 后继续使用 V2")
+        raise HTTPException(status_code=401, detail="请先登录慧鉴 AI 后继续使用深度分析")
     return {"mode": "public"}
 
 
@@ -342,10 +347,10 @@ def _public_capabilities() -> dict:
         "unifiedLoginEnabled": bool(SESSION_AUTH_URL),
         "sessionAuthEnabled": bool(SESSION_AUTH_URL),
         "capabilities": {
-            "image": "available",
-            "document": "available",
-            "video": "limited",
-            "audio": "limited",
+            "image": "available" if detector.API_KEY else "unavailable",
+            "document": "limited" if detector.API_KEY else "unavailable",
+            "video": "unavailable",
+            "audio": "unavailable",
         },
         "synthid": {
             "enabled": bool(synthid_status.get("enabled")),
@@ -469,11 +474,7 @@ def _build_result(
         "explanation": analysis["explanation"],
         "synthid": analysis.get("synthid"),
         "visibleWatermark": analysis.get("visibleWatermark"),
-        "disclaimer": (
-            "本结果由演示用 Mock 算法生成，不构成权威鉴定结论。"
-            if analysis["source"] == "mock"
-            else "本结果由视觉语言模型分析生成，仅供参考，不构成权威鉴定结论。"
-        ),
+        "disclaimer": "本结果由自动化检测模型生成，仅供专业复核参考，不构成司法鉴定结论。",
     }
     if provenance_report is not None:
         result["provenance"] = provenance_report
@@ -515,6 +516,11 @@ async def detect(request: Request, file: UploadFile = File(...), fileType: str |
         raise HTTPException(status_code=400, detail="空文件")
     filename = file.filename or "unknown"
     ftype = _detect_type(filename, fileType)
+    if ftype in {"video", "audio"}:
+        label = "视频" if ftype == "video" else "音频"
+        raise HTTPException(status_code=422, detail=f"{label}检测能力尚未部署，本次不会生成模拟结论")
+    if not detector.API_KEY:
+        raise HTTPException(status_code=503, detail="真实模型服务未配置，暂时无法生成检测结论")
     sha256 = hashlib.sha256(data).hexdigest()
     thumbnail = _image_data_uri(data, ftype, max_side=180, quality=44)
     preview = _image_data_uri(data, ftype, max_side=960, quality=72)
@@ -525,7 +531,13 @@ async def detect(request: Request, file: UploadFile = File(...), fileType: str |
     if cached is not None:
         analysis = cached
     else:
-        analysis = await run_in_threadpool(detector.analyze, ftype, filename, data)
+        try:
+            analysis = await run_in_threadpool(detector.analyze, ftype, filename, data)
+        except detector.DetectionUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if not storage.is_publishable_analysis(analysis):
+        raise HTTPException(status_code=503, detail="真实模型未返回可发布的明确结论")
+    if not cache_hit:
         storage.put_cached_analysis(ftype, sha256, analysis)
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     token_usage = _token_usage_from_payload(analysis, cache_hit=cache_hit)

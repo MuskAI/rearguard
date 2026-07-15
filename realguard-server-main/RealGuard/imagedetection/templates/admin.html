@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>RealGuard Admin Console</title>
+  <title>慧鉴 AI 管理控制台</title>
   <link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,600;6..72,800&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700;900&display=swap" rel="stylesheet">
   <style>
     :root{
@@ -215,7 +215,7 @@
     <section class="notice">
       <div class="eyebrow">Access control</div>
       <h1>后台权限未开启</h1>
-      <p>当前账号没有 RealGuard 管理控制台权限。请在服务环境中配置 <code>REALGUARD_ADMIN_PHONES</code> 或 <code>REALGUARD_ADMIN_USER_IDS</code>。</p>
+      <p>当前账号没有慧鉴 AI 管理控制台权限。请在服务环境中配置 <code>REALGUARD_ADMIN_PHONES</code> 或 <code>REALGUARD_ADMIN_USER_IDS</code>。</p>
       {% if not admin_configured %}<p>当前检测到尚未配置管理员白名单。</p>{% endif %}
       <p><a class="btn secondary" href="/login">返回登录</a></p>
     </section>
@@ -225,7 +225,7 @@
     <aside class="sidebar">
       <a class="brand" href="#dashboard" data-route="dashboard">
         <span class="brand-mark">R</span>
-        <span><span class="brand-title">RealGuard</span><span class="brand-sub">admin console</span></span>
+        <span><span class="brand-title">慧鉴 AI</span><span class="brand-sub">管理控制台</span></span>
       </a>
       <nav class="nav-group">
         <div class="nav-label">Operations</div>
@@ -246,7 +246,7 @@
 
     <main class="main">
       <header class="topbar">
-        <div class="crumbs"><span>RealGuard</span><span>/</span><strong id="crumb">控制台</strong></div>
+        <div class="crumbs"><span>慧鉴 AI</span><span>/</span><strong id="crumb">控制台</strong></div>
         <div class="top-actions">
           <button class="btn secondary" onclick="loadAll()">刷新</button>
           <a class="btn secondary" href="/admin/screen" target="_blank" rel="noopener">大屏</a>
@@ -263,7 +263,7 @@
         <section class="view active" id="view-dashboard" data-title="控制台">
           <div class="hero">
             <div class="hero-card">
-              <div class="eyebrow">Vue Element Admin inspired · RealGuard native</div>
+              <div class="eyebrow">慧鉴 AI · 运行与证据管理</div>
               <h1>鉴伪系统管理工作台</h1>
               <p class="subtitle">面向运维和业务管理员的单页控制台：模型健康、路由策略、用户、检测记录和 访问凭证 集中管理，保留权限白名单和真实服务状态。</p>
             </div>

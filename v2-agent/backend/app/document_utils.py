@@ -61,15 +61,15 @@ def extract_text(filename: str, data: bytes) -> ExtractedDocument:
         try:
             text = _normalize_text(_extract_docx_text(data))
         except (KeyError, zipfile.BadZipFile, ElementTree.ParseError, RuntimeError):
-            return ExtractedDocument(text="", note="DOCX 文件解析失败，已回退演示判定")
+            return ExtractedDocument(text="", note="DOCX 文件解析失败")
         if not text:
-            return ExtractedDocument(text="", note="DOCX 文件未提取到可分析正文，已回退演示判定")
+            return ExtractedDocument(text="", note="DOCX 文件未提取到可分析正文")
         return ExtractedDocument(text=text, note="已从 DOCX 提取正文")
 
     if ext in UNSUPPORTED_BINARY_EXTENSIONS:
-        return ExtractedDocument(text="", note=f"当前未支持 {ext.upper()} 正文抽取，已回退演示判定")
+        return ExtractedDocument(text="", note=f"当前未支持 {ext.upper()} 正文抽取")
 
     decoded = _normalize_text(_decode_plain_text(data))
     if decoded:
         return ExtractedDocument(text=decoded, note="已按通用文本方式提取正文")
-    return ExtractedDocument(text="", note="未提取到可分析正文，已回退演示判定")
+    return ExtractedDocument(text="", note="未提取到可分析正文")

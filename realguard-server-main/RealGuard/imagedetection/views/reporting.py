@@ -29,30 +29,30 @@ def _html_page(title: str, accent: str, body: str) -> str:
   <title>{escape(title)}</title>
   <style>
     :root {{
-      --bg: #f5f7fb;
+      --bg: #f7f7f2;
       --card: #ffffff;
-      --text: #1f2937;
-      --muted: #6b7280;
-      --line: #d8dee9;
+      --text: #16324a;
+      --muted: #5e716d;
+      --line: #ccd8d3;
       --accent: {accent};
     }}
     * {{ box-sizing: border-box; }}
     body {{ margin: 0; font-family: "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text); }}
     .page {{ max-width: 980px; margin: 0 auto; padding: 32px 20px 48px; }}
-    .hero, .card {{ background: var(--card); border: 1px solid var(--line); border-radius: 18px; }}
+    .hero, .card {{ background: var(--card); border: 1px solid var(--line); border-radius: 8px; }}
     .hero {{ padding: 26px; margin-bottom: 18px; }}
     .card {{ padding: 18px; margin-top: 18px; }}
-    .eyebrow {{ color: var(--accent); font-size: 12px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }}
+    .eyebrow {{ color: var(--accent); font-size: 12px; font-weight: 700; letter-spacing: 0; text-transform: uppercase; }}
     h1 {{ margin: 10px 0 8px; font-size: 32px; line-height: 1.15; }}
     h2 {{ margin: 0 0 12px; font-size: 18px; }}
     p {{ margin: 0; line-height: 1.75; }}
-    .pill {{ display: inline-flex; align-items: center; padding: 8px 14px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 12%, white); color: var(--accent); font-weight: 700; margin-top: 10px; }}
+    .pill {{ display: inline-flex; align-items: center; padding: 8px 12px; border-radius: 6px; background: color-mix(in srgb, var(--accent) 12%, white); color: var(--accent); font-weight: 700; margin-top: 10px; }}
     .grid {{ display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 18px; }}
     .meta-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }}
-    .meta-grid > div {{ border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; background: #fafbff; }}
+    .meta-grid > div {{ border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; background: #f7faf8; }}
     .meta-grid span {{ display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }}
     .meta-grid strong {{ display: block; font-size: 14px; word-break: break-word; }}
-    .preview {{ width: 100%; border-radius: 14px; border: 1px solid var(--line); background: #eef2f8; display: block; object-fit: cover; }}
+    .preview {{ width: 100%; border-radius: 8px; border: 1px solid var(--line); background: #edf3ef; display: block; object-fit: cover; }}
     table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
     th, td {{ padding: 10px 8px; border-top: 1px solid var(--line); text-align: left; vertical-align: top; }}
     thead th {{ color: var(--muted); font-weight: 600; border-top: 0; padding-top: 0; }}
@@ -75,25 +75,29 @@ def _html_page(title: str, accent: str, body: str) -> str:
 
 
 def image_report_filename(itemid: int | str) -> str:
-    return f"realguard-image-report-{itemid}.html"
+    return f"huijian-image-report-{itemid}.html"
 
 
 def video_report_filename(itemid: int | str) -> str:
-    return f"realguard-video-report-{itemid}.html"
+    return f"huijian-video-report-{itemid}.html"
 
 
 def image_report_content(item: dict, result: dict) -> str:
-    final_label = result.get("final_label") or ("AI生成图像" if float(item.get("fake", 0) or 0) >= 50 else "真实图像")
-    accent = "#d64242" if "AI" in str(final_label) else "#239c73"
+    probability = round(float(result.get("probability", 0) or 0) * 100, 1)
+    confidence = _safe_text(result.get("confidence"), "")
+    requires_review = 35 < probability < 75 or confidence == "低"
+    final_label = "需人工复核" if requires_review else (
+        result.get("final_label") or ("AI生成图像" if float(item.get("fake", 0) or 0) >= 50 else "真实图像")
+    )
+    accent = "#b36a12" if requires_review else ("#d9573f" if "AI" in str(final_label) else "#1b8f7a")
     image_url = escape(_safe_text(result.get("image_url"), ""))
     preview = f'<img class="preview" src="{image_url}" alt="{escape(_safe_text(result.get("filename")))}" />' if image_url else '<div class="preview" style="min-height:260px;"></div>'
-    probability = round(float(result.get("probability", 0) or 0) * 100, 1)
     return _html_page(
-        f"RealGuard 图像鉴伪报告 {item.get('itemid')}",
+        f"慧鉴 AI 图像鉴伪报告 {item.get('itemid')}",
         accent,
         f"""
         <section class="hero">
-          <div class="eyebrow">RealGuard Image Report</div>
+          <div class="eyebrow">Huijian AI Image Report</div>
           <h1>图像鉴伪报告</h1>
           <p>报告编号：IMG-{item.get('itemid')}。该报告用于留存图像鉴伪结论、核心元信息与简洁分析说明。</p>
           <div class="pill">{escape(_safe_text(final_label))} · {probability}%</div>
@@ -120,8 +124,8 @@ def image_report_content(item: dict, result: dict) -> str:
           <table>
             <thead><tr><th>字段</th><th>内容</th></tr></thead>
             <tbody>
-              <tr><td>视觉可疑点</td><td>{escape("；".join(result.get("visual_issues") or ["未列出"]))}</td></tr>
-              <tr><td>元数据</td><td>{escape("已提供" if result.get("all_metadata") else "未提供")}</td></tr>
+              <tr><td>视觉可疑点</td><td>{escape("；".join(result.get("visual_issues") or ["未完成视觉复核"]))}</td></tr>
+              <tr><td>元数据</td><td>{escape("已提取，仅作辅助证据" if result.get("all_metadata") else "未提取到；缺失本身不代表伪造")}</td></tr>
             </tbody>
           </table>
           <div class="footnote">说明：本报告仅作业务留档与人工复核辅助，不构成司法或监管最终鉴定结论。</div>
@@ -131,19 +135,22 @@ def image_report_content(item: dict, result: dict) -> str:
 
 
 def video_report_content(item: dict, result: dict) -> str:
-    final_label = result.get("final_label") or "视频检测结果"
-    accent = "#d64242" if "AI" in str(final_label) else "#239c73"
+    probability = round(float(result.get("fake_percentage", 0) or 0), 1)
+    confidence = _safe_text(result.get("confidence"), "")
+    requires_review = 35 < probability < 75 or confidence == "低"
+    final_label = "需人工复核" if requires_review else (result.get("final_label") or "视频检测结果")
+    accent = "#b36a12" if requires_review else ("#d9573f" if "AI" in str(final_label) else "#1b8f7a")
     video_url = escape(_safe_text(result.get("video_url"), ""))
     preview = f'<video class="preview" src="{video_url}" controls></video>' if video_url else '<div class="preview" style="min-height:260px;"></div>'
     return _html_page(
-        f"RealGuard 视频鉴伪报告 {item.get('itemid')}",
+        f"慧鉴 AI 视频鉴伪报告 {item.get('itemid')}",
         accent,
         f"""
         <section class="hero">
-          <div class="eyebrow">RealGuard Video Report</div>
+          <div class="eyebrow">Huijian AI Video Report</div>
           <h1>视频鉴伪报告</h1>
           <p>报告编号：VID-{item.get('itemid')}。该报告用于留存视频鉴伪结论、基础参数与简洁分析说明。</p>
-          <div class="pill">{escape(_safe_text(final_label))} · {round(float(result.get("fake_percentage", 0) or 0), 1)}%</div>
+          <div class="pill">{escape(_safe_text(final_label))} · {probability}%</div>
           <div class="grid" style="margin-top:18px;">
             <div>
               <div class="meta-grid">

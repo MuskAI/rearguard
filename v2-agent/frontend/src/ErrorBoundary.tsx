@@ -43,7 +43,7 @@ export function StartupError({ error }: { error: unknown }) {
     <div className="grid min-h-screen place-items-center bg-[#f2f7f4] px-4 text-[#201813]">
       <div className="w-full max-w-lg rounded-lg border border-[#c8d8d1] bg-white p-6 shadow-sm">
         <div className="text-sm font-semibold text-[#c7392f]">页面加载失败</div>
-        <h1 className="mt-2 text-2xl font-semibold">鉴真 AI 鉴伪工作台未能启动</h1>
+        <h1 className="mt-2 text-2xl font-semibold">慧鉴 AI 鉴伪工作台未能启动</h1>
         <p className="mt-3 text-sm leading-7 text-[#5f6d66]">
           当前页面暂时没有启动成功。请刷新页面；如果仍然失败，换用最新版 Chrome、Edge 或 Safari 后重试。
         </p>

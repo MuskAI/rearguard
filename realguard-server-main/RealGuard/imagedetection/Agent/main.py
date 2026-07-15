@@ -7,6 +7,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from agents.evidence_collector import EvidenceCollector
 from agents.reasoning_agent import ReasoningAgent
 from utils.evidence_summary import summarize_evidence
+from utils.public_explanation import clean_visual_issues, user_explanation
 
 _system = None
 
@@ -38,63 +39,6 @@ def _strict_pipeline_enabled() -> bool:
         "false",
         "no",
     )
-
-
-def _user_explanation(
-    parsed: dict,
-    llm_used: bool,
-    metadata_field_count: int,
-) -> str:
-    """面向页面的推理说明：保留证据结论，不暴露公式和内部概率。"""
-    final = parsed.get("final_label", "")
-    conf = parsed.get("confidence", "")
-    p_visual = float(parsed.get("p_visual", 0.5) or 0.5)
-
-    if final == "AI生成图像":
-        lines = ["综合检测器、视觉细节与元数据线索，图像整体更偏向 AI 生成。"]
-    else:
-        lines = ["综合检测器、视觉细节与元数据线索，图像整体更偏向真实拍摄。"]
-
-    if p_visual >= 0.65:
-        lines.append("视觉层面存在一定不自然特征，支持当前判定。")
-    elif p_visual <= 0.35:
-        lines.append("视觉层面整体较自然，未发现明显 AI 生成痕迹。")
-    else:
-        lines.append("视觉层面存在少量不确定特征，需结合其他证据综合判断。")
-
-    if metadata_field_count > 0:
-        lines.append(f"已提取 {metadata_field_count} 项元数据，为真实性判断提供辅助线索。")
-    else:
-        lines.append("图像缺少可验证的相机元数据，增加了内容真实性风险。")
-
-    if not llm_used:
-        lines.append("多模态视觉 API 未完成调用，当前结果未包含完整视觉分析。")
-    lines.append(f"当前置信度：{conf}。")
-    return "\n".join(lines)
-
-
-def _clean_visual_issues(raw: str, final_label: str) -> list:
-    if final_label == "真实图像":
-        return ["无明显视觉可疑点。"]
-
-    text = (raw or "").strip()
-    issues = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        line = line.lstrip("-·•*0123456789.、) ").strip()
-        if not line or "无明显" in line or line == "无可疑点":
-            continue
-        issues.append(line)
-    if not issues and text:
-        issues = [text]
-    if not issues:
-        issues = [
-            "局部纹理与边缘过渡存在不自然特征。",
-            "画面缺少可验证的真实相机成像线索。",
-        ]
-    return issues[:6]
 
 
 def detect(image_path: str) -> dict:
@@ -164,13 +108,14 @@ class _AIGCAgentSystem:
         )
         confidence = parsed.get("confidence") or "低"
         raw_response = parsed.get("raw_response") or ""
-        visual_issues = _clean_visual_issues(parsed.get("visual_issues", ""), final_label)
+        visual_issues = clean_visual_issues(parsed.get("visual_issues", ""), llm_used)
         agent_reasoning = raw_response
 
-        explanation = _user_explanation(
+        explanation = user_explanation(
             parsed,
             llm_used=llm_used,
             metadata_field_count=len(metadata_raw),
+            visual_issues=visual_issues,
         )
 
         final_result = {

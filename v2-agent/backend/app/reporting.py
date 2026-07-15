@@ -286,7 +286,7 @@ def build_report_html(result: dict, *, forensics: dict | None = None, provenance
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>鉴真鉴定报告 {report_id}</title>
+  <title>慧鉴 AI 鉴伪报告 {report_id}</title>
   <style>
     :root {{
       color-scheme: light;
@@ -470,7 +470,7 @@ def build_report_html(result: dict, *, forensics: dict | None = None, provenance
   <main class="page">
     <section class="hero">
       <div class="eyebrow">Jianzhen Report</div>
-      <h1>鉴真 AI 鉴伪鉴定报告</h1>
+      <h1>慧鉴 AI 数字内容鉴伪报告</h1>
       <p>报告号 {report_id}，任务号 {task_id}。本报告用于留存检测结果、主要证据维度与辅助取证说明。</p>
       <div class="pill">{meta["label"]} · 置信度 {_fmt_percent(result.get("confidence"))}</div>
       <div class="hero-grid">

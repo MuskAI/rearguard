@@ -103,6 +103,13 @@ export function downloadImageReport(itemid: number) {
   triggerDownload(`/image_upload/report?itemid=${encodeURIComponent(String(itemid))}`);
 }
 
+export function submitImageFeedback(itemid: number, feedback: 1 | -1 | 0) {
+  return jsonRequest<{ feedback: 1 | -1 | null; message: string }>("/image_upload/feedback", {
+    method: "POST",
+    body: JSON.stringify({ itemid, feedback }),
+  });
+}
+
 export function detectVideo(payload: { file?: File; videoUrl?: string; fastMode: boolean }) {
   const body = new FormData();
   if (payload.file) body.append("video_file", payload.file);
@@ -152,6 +159,9 @@ export type ImageDetectionResult = {
   itemid: number;
   final_label: string;
   probability: number;
+  detector_probability?: number;
+  p_visual?: number | null;
+  p_metadata?: number | null;
   confidence: string;
   explanation: string;
   image_url: string;
@@ -160,6 +170,9 @@ export type ImageDetectionResult = {
   resolution?: string;
   img_format?: string;
   visual_issues?: string[];
+  all_metadata?: Record<string, unknown>;
+  llm_used?: boolean;
+  feedback?: 1 | -1 | null;
   swarm?: ExpertReviewResult;
 };
 

@@ -120,7 +120,7 @@ export default function Sidebar({
       <div className="p-4 flex items-center gap-2.5">
         <Logo size={36} idSuffix="side" />
         <div className="flex-1 min-w-0">
-          <div className="text-lg font-semibold text-rice leading-tight">鉴真 AI</div>
+          <div className="text-lg font-semibold text-rice leading-tight">慧鉴 AI</div>
           <div className="text-[10px] text-brand-cyan">证据分析工作台</div>
         </div>
         {onClose && (
@@ -450,7 +450,7 @@ export default function Sidebar({
       </div>
 
       <div className="border-t border-ink-700 p-3 text-[10px] text-ink-500">
-        <div>鉴真伪 · 明真相</div>
+        <div>核证据 · 慎结论</div>
         <a
           href="https://beian.miit.gov.cn/"
           target="_blank"

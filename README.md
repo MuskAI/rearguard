@@ -1,6 +1,6 @@
-# RealGuard / 鉴真 AI 项目交接说明
+# 慧鉴 AI 项目交接说明
 
-RealGuard 是一个面向数字内容鉴伪、证据归档和运营监控的 Web 系统。这个仓库包含主站 V1、深度分析 V2、部署脚本、Nginx 模板和测试代码。
+慧鉴 AI 是一个面向数字内容鉴伪、证据归档和运营监控的 Web 系统。这个仓库包含主站 V1、深度分析 V2、部署脚本、Nginx 模板和测试代码；`RealGuard`、`jianzhen-v2` 等旧名称仅保留在内部服务名和兼容路径中。
 
 本 README 面向项目接手人。请先读完“交接重点”和“哪些东西不在 Git 里”，再开始部署或改代码。
 
@@ -39,7 +39,7 @@ RealGuard 是一个面向数字内容鉴伪、证据归档和运营监控的 Web
 
 ## 系统架构
 
-### V1 RealGuard
+### V1 主站
 
 V1 是原主站，包含：
 
@@ -64,7 +64,7 @@ realguard-detector-backend.service -> detector_backend.py, 127.0.0.1:15001
 mysql.service                   -> system / image_detection
 ```
 
-### V2 鉴伪 Agent
+### V2 深度分析
 
 V2 是深度分析工作台，包含：
 
@@ -118,11 +118,22 @@ jianzhen-v2-backend.service -> FastAPI, 127.0.0.1:8848
 - 正式域名为 `https://www.rrreal.cn/`，HTTP 和根域名统一跳转到该地址。
 - Let's Encrypt 证书覆盖 `rrreal.cn` 与 `www.rrreal.cn`，由 `certbot.timer` 自动续期。
 - 首页 UI 已重做为“数字内容鉴伪工作台”。
+- 对外产品名统一为“慧鉴 AI”，旧服务名仅作为部署兼容标识保留。
+- 生产检测不再生成随机或模拟结论：模型不可用时返回明确错误，不写历史、不生成报告。
 - 首页不再展示“管理入口”按钮，普通用户入口只保留任务、历史和报告。
 - 侵权检索相关页面、接口和公开文档已移除或由 Nginx 拦截。
 - 公开 `developer/API.md` 和 public skill 文件已从前端静态目录删除。
 - V1 历史记录匹配逻辑已修复：现在按 `Userid`、`phone`、`openid` 三重匹配，避免旧微信 openid 记录在手机号登录后不可见。
 - 仍有一批旧图像记录只有 openid、没有 `Userid`/手机号，不能安全自动归属。需要确认映射关系后再手工绑定。
+
+## 品牌与界面规范
+
+- 品牌标志：扫描框包围玉色镜片，并以朱砂色确认方印收尾，组件位于 `realguard-server-main/frontend/src/components/BrandMark.tsx`。
+- 品牌形象：“小鉴”，一个手持放大镜的取证印章助手。它只用于空状态、登录引导和友好提示，不遮挡证据图片或检测结论。
+- 主色：墨蓝 `#16324A`、湖蓝 `#1F5F7A`、玉色 `#1B8F7A`；风险色使用朱砂 `#D9573F`，提醒色使用暖黄 `#F2C14E`，页面底色为纸白 `#F7F7F2`。
+- 视觉原则：工作台优先、证据优先、少装饰；圆角不超过 `8px`，交互目标至少 `44px`，不要使用大面积渐变、悬浮装饰球或卡片套卡片。
+- 结论语言：只有真实模型调用成功且返回明确判定时才展示概率。证据不足时使用“需人工复核”，元数据缺失不能单独作为伪造证据。
+- 形象资源：V1 与 V2 分别位于 `realguard-server-main/frontend/public/brand/` 和 `v2-agent/frontend/public/brand/`。
 
 ## 哪些东西在 GitHub 里
 

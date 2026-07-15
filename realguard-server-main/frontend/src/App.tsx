@@ -3,6 +3,7 @@ import type { RefObject } from "react";
 import {
   ArrowRight,
 } from "lucide-react";
+import BrandMark from "./components/BrandMark";
 import IconfontIcon from "./components/IconfontIcon";
 import type { IconfontName } from "./components/IconfontIcon";
 import {
@@ -28,7 +29,8 @@ import {
   registerUser,
   resetPassword,
   sendSmsCode,
-  startExpertReviewImageDetection
+  startExpertReviewImageDetection,
+  submitImageFeedback,
 } from "./api";
 import {
   normalizeExpertReviewStatus,
@@ -53,26 +55,26 @@ const emptyCounters: Counters = {
   video_detect: 0
 };
 const HISTORY_PAGE_SIZE = 100;
-const REALGUARD_V2_CONSOLE_URL = "/v2/";
-const REALGUARD_TERMS_VERSION = "2026-06-03";
-const SWARM_CANCELLED_ERROR = "__REALGUARD_SWARM_CANCELLED__";
+const HUIJIAN_V2_CONSOLE_URL = "/v2/";
+const HUIJIAN_TERMS_VERSION = "2026-07-15";
+const SWARM_CANCELLED_ERROR = "__HUIJIAN_SWARM_CANCELLED__";
 const SWARM_PLACEHOLDER_EXPERTS: PublicExpertReviewExpert[] = Array.from({ length: 8 }, (_, index) => ({
   id: `placeholder-${index}`,
   status: "queued"
 }));
 const UI_TEXT = {
   zh: {
-    boot: "正在连接系统...",
+    boot: "正在连接慧鉴 AI...",
     nav: {
-      brand: "鉴真AI",
-      brandMobile: "鉴真AI",
+      brand: "慧鉴 AI",
+      brandMobile: "慧鉴",
       home: "首页",
       functions: "功能",
       detection: "检测",
       imageDetect: "图像鉴伪",
       videoDetect: "视频鉴伪",
       history: "历史记录",
-      developer: "管理入口",
+      developer: "账号中心",
       v2: "深度分析",
       login: "登录",
       logout: "退出",
@@ -88,7 +90,7 @@ const UI_TEXT = {
         image: "图像",
         video: "视频",
         history: "历史",
-        developer: "管理",
+        developer: "账号",
       },
     },
     trial: {
@@ -97,7 +99,7 @@ const UI_TEXT = {
       action: "登录/注册",
     },
     home: {
-      eyebrow: "鉴真 AI",
+      eyebrow: "慧鉴 AI",
       eyebrowNote: "数字内容鉴伪工作台",
       titleLine1: "新建鉴伪任务",
       titleLine2: "",
@@ -152,10 +154,10 @@ const UI_TEXT = {
     skillPanel: {
       badge1: "检测记录已接入",
       badge2: "报告归档可查看",
-      title: "登录后查看检测记录、报告归档和管理入口",
-      desc: "普通账号可在这里回到检测结果、报告编号、复核状态和管理入口，不展示技术接入说明。",
+      title: "登录后查看检测记录与报告归档",
+      desc: "普通账号可在这里回到检测结果、报告编号和复核状态，不展示后台管理功能。",
       reasonTitle: "为什么需要登录",
-      reason: "检测记录、报告归档和管理入口需要绑定账号，便于追踪结果、保护上传内容并保留复核上下文。",
+      reason: "检测记录与报告归档需要绑定账号，便于追踪结果、保护上传内容并保留复核上下文。",
       protocol: [
         ["01 登录", "确认账号", "绑定检测记录与报告"],
         ["02 查看", "选择记录", "回看图像、视频与深度分析结果"],
@@ -165,12 +167,12 @@ const UI_TEXT = {
       terminalStrong: "登录后继续查看记录",
       copyV2Title: "深度分析入口",
       copyV2Desc: "继续补充更细的取证证据和报告信息。",
-      copyUrlTitle: "管理入口",
+      copyUrlTitle: "账号中心",
       copyUrlDesc: "查看账号下的记录与归档信息。",
       copyV1Title: "图像鉴伪入口",
       copyV1Desc: "回到标准图像检测任务。",
       openV2: "进入深度分析",
-      openDev: "打开管理入口",
+      openDev: "打开账号中心",
     },
     copy: {
       ready: "点击复制",
@@ -189,9 +191,9 @@ const UI_TEXT = {
     },
     developer: {
       docsBrandSmall: "账号管理",
-      badges: ["检测记录", "报告归档", "复核状态", "管理入口"],
-      title: "RealGuard 管理入口",
-      desc: "账号登录后查看检测记录、报告归档、复核状态和管理入口。这里面向普通用户继续工作，不展示技术接入内容。",
+      badges: ["检测记录", "报告归档", "复核状态", "账号中心"],
+      title: "慧鉴 AI 账号中心",
+      desc: "账号登录后查看检测记录、报告归档和复核状态。这里面向普通用户继续工作，不展示后台管理功能。",
       commands: ["查看记录", "打开报告", "管理归档", "继续检测"],
       keyAction: "查看账号",
       skillAction: "查看报告",
@@ -201,7 +203,7 @@ const UI_TEXT = {
         ["查看检测记录", "登录后按账号查看图像、视频和深度分析任务。"],
         ["打开报告归档", "回看报告编号、证据摘要和下载状态。"],
         ["管理复核状态", "跟踪待复核、已确认和需要补充材料的记录。"],
-        ["继续开始任务", "从管理入口回到图像、视频或深度分析工作。"],
+        ["继续开始任务", "从账号中心回到图像、视频或深度分析工作。"],
       ],
       navGroups: ["继续工作", "记录归档", "账号管理", "资源"],
       navLinks: {
@@ -229,7 +231,7 @@ const UI_TEXT = {
       title: "账户登录",
       desc: "登录后 30 天内自动保持状态",
       railTitle: "安全接入",
-      railDesc: "一次注册即可使用检测、历史记录、报告归档和管理入口。",
+      railDesc: "一次注册即可使用检测、历史记录与报告归档。",
       railPoints: ["协议可追溯", "短信校验", "记录归属账号"],
       password: "密码登录",
       sms: "验证码登录",
@@ -260,16 +262,16 @@ const UI_TEXT = {
       termsRequired: "请先阅读并同意用户协议和隐私政策",
     },
     footer: {
-      brand: "数字内容鉴伪平台",
-      copy: "© 2026 数字内容鉴伪平台",
+      brand: "慧鉴 AI",
+      copy: "© 2026 慧鉴 AI 数字内容鉴伪工作台",
       icp: "浙ICP备2026051442号",
     },
   },
   en: {
-    boot: "Connecting to RealGuard...",
+    boot: "Connecting to Huijian AI...",
     nav: {
-      brand: "RealGuard",
-      brandMobile: "RealGuard",
+      brand: "Huijian AI",
+      brandMobile: "Huijian",
       home: "Home",
       functions: "Tools",
       detection: "Detection",
@@ -301,7 +303,7 @@ const UI_TEXT = {
       action: "Log in / Sign up",
     },
     home: {
-      eyebrow: "Jianzhen AI workspace",
+      eyebrow: "Huijian AI workspace",
       eyebrowNote: "Review, evidence, and report archive",
       titleLine1: "Start a forensic task",
       titleLine2: "",
@@ -356,10 +358,10 @@ const UI_TEXT = {
     skillPanel: {
       badge1: "Detection records ready",
       badge2: "Reports available after login",
-      title: "Log in to view detection records, report archive, and management entry",
-      desc: "Your account keeps results, report IDs, review status, and management entries together for ordinary user workflows.",
+      title: "Log in to view detection records and report archives",
+      desc: "Your account keeps results, report IDs, and review status together for ordinary user workflows.",
       reasonTitle: "Why login is required",
-      reason: "Detection records, report archives, and management entries are tied to your account so uploaded content and review context stay protected.",
+      reason: "Detection records and report archives are tied to your account so uploaded content and review context stay protected.",
       protocol: [
         ["01 Login", "Confirm account", "Bind records and reports"],
         ["02 Review", "Choose a record", "Open image, video, or deep analysis results"],
@@ -394,8 +396,8 @@ const UI_TEXT = {
     developer: {
       docsBrandSmall: "Account management",
       badges: ["Detection records", "Report archive", "Review status", "Management"],
-      title: "RealGuard Management",
-      desc: "After account login, review detection records, report archives, review status, and management entries for ordinary user workflows.",
+      title: "Huijian AI Account Center",
+      desc: "After account login, review detection records, report archives, and review status for ordinary user workflows.",
       commands: ["Review records", "Open reports", "Manage archive", "Continue detection"],
       keyAction: "View account",
       skillAction: "View reports",
@@ -464,8 +466,8 @@ const UI_TEXT = {
       termsRequired: "Please agree to the Terms and Privacy Policy first",
     },
     footer: {
-      brand: "Digital Content Forensics",
-      copy: "© 2026 Digital Content Forensics Platform",
+      brand: "Huijian AI",
+      copy: "© 2026 Huijian AI Forensics Workspace",
       icp: "浙ICP备2026051442号",
     },
   },
@@ -514,7 +516,7 @@ function App() {
 
   useEffect(() => {
     document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
-    document.title = lang === "zh" ? "数字内容鉴伪平台" : "Digital Content Forensics Platform";
+    document.title = lang === "zh" ? "慧鉴 AI · 数字内容鉴伪工作台" : "Huijian AI · Digital Forensics Workspace";
     document.body.dataset.lang = lang;
     getStorage()?.setItem("realguard_lang", lang);
   }, [lang]);
@@ -749,7 +751,7 @@ function Nav({
       <header className="nav">
         <div className="nav-inner">
           <button className="nav-logo" aria-label={text.brand} onClick={() => go("home")}>
-            <IconfontIcon name="brand" size={24} className="nav-logo-icon" />
+            <BrandMark size={32} className="nav-brand-mark" label={text.brand} />
             <span className="logo-full" aria-hidden="true">{text.brand}</span>
             <span className="logo-mobile" aria-hidden="true">{text.brandMobile}</span>
           </button>
@@ -766,7 +768,7 @@ function Nav({
             <button className={page === "history" ? "active" : ""} onClick={() => go("history")}>
               {text.history}
             </button>
-            <button className="nav-deep-link" onClick={() => { window.location.href = REALGUARD_V2_CONSOLE_URL; }}>
+            <button className="nav-deep-link" onClick={() => { window.location.href = HUIJIAN_V2_CONSOLE_URL; }}>
               {text.v2}<ArrowRight size={14} aria-hidden="true" />
             </button>
             <button className="nav-auth-action" onClick={authAction}>
@@ -807,7 +809,7 @@ function Nav({
           <button className={`mobile-primary-link ${page === "home" ? "active" : ""}`} onClick={() => go("home")}><IconfontIcon name="home" size={18} /> {text.home}</button>
           <button className={`mobile-primary-link ${page === "image" ? "active" : ""}`} onClick={() => { openImage("standard"); setMobileOpen(false); }}><IconfontIcon name="image-forensics" size={18} /> {text.imageDetect}</button>
           <button className={`mobile-primary-link ${page === "video" ? "active" : ""}`} onClick={() => go("video")}><IconfontIcon name="video-forensics" size={18} /> {text.videoDetect}</button>
-          <button className="mobile-secondary-link" onClick={() => { window.location.href = REALGUARD_V2_CONSOLE_URL; }}><IconfontIcon name="deep-analysis" size={18} /> {text.v2}</button>
+          <button className="mobile-secondary-link" onClick={() => { window.location.href = HUIJIAN_V2_CONSOLE_URL; }}><IconfontIcon name="deep-analysis" size={18} /> {text.v2}</button>
           <button className={`mobile-primary-link ${page === "history" ? "active" : ""}`} onClick={() => go("history")}><IconfontIcon name="history" size={18} /> {text.history}</button>
           <button className="mobile-secondary-link" onClick={authAction}><IconfontIcon name={user ? "logout" : "user"} size={18} /> {user ? text.logoutFull : text.loginRegister}</button>
         </div>
@@ -889,7 +891,14 @@ function HomePage({
                   <h1>{text.home.titleLine1}</h1>
                   <p>{text.home.desc}</p>
                 </div>
-                <span className="service-status"><i />{lang === "zh" ? "图片 · 视频 · 深度取证" : "Image · Video · Deep forensics"}</span>
+                <div className="home-intro-companion">
+                  <img src="/brand/huijian-mascot.webp" alt={lang === "zh" ? "慧鉴 AI 品牌助手小鉴" : "Huijian AI brand assistant"} />
+                  <div>
+                    <strong>{lang === "zh" ? "小鉴" : "Xiao Jian"}</strong>
+                    <span>{lang === "zh" ? "核对证据，再给结论" : "Evidence before verdicts"}</span>
+                    <em className="service-status"><i />{lang === "zh" ? "服务在线" : "Service online"}</em>
+                  </div>
+                </div>
               </div>
             </header>
 
@@ -915,7 +924,7 @@ function HomePage({
                     <em>MP4 · MOV · URL</em>
                     <ArrowRight size={18} aria-hidden="true" />
                   </button>
-                  <button className="task-choice" onClick={() => { window.location.href = REALGUARD_V2_CONSOLE_URL; }}>
+                  <button className="task-choice" onClick={() => { window.location.href = HUIJIAN_V2_CONSOLE_URL; }}>
                     <ForensicIcon name="deep-analysis" tone="amber" className="task-choice-icon" />
                     <span><strong>{text.home.secondaryAction}</strong><small>{lang === "zh" ? "查看误差图、噪声与来源凭证" : "Review error maps, noise, and provenance"}</small></span>
                     <em>{lang === "zh" ? "独立工作台" : "Workbench"}</em>
@@ -940,7 +949,7 @@ function HomePage({
                 </figure>
                 <dl className="evidence-list">
                   <div><dt><IconfontIcon name="activity" size={16} />{lang === "zh" ? "模型判断" : "Model"}</dt><dd>{lang === "zh" ? "风险较高" : "Elevated risk"}</dd></div>
-                  <div><dt><IconfontIcon name="info" size={16} />{lang === "zh" ? "元数据" : "Metadata"}</dt><dd>{lang === "zh" ? "缺少相机信息" : "Camera data missing"}</dd></div>
+                  <div><dt><IconfontIcon name="info" size={16} />{lang === "zh" ? "元数据" : "Metadata"}</dt><dd>{lang === "zh" ? "未验证来源凭证" : "Provenance unverified"}</dd></div>
                   <div><dt><IconfontIcon name="report" size={16} />{lang === "zh" ? "建议动作" : "Next step"}</dt><dd>{lang === "zh" ? "结合原图复核" : "Review the source"}</dd></div>
                 </dl>
               </aside>
@@ -1116,6 +1125,23 @@ function ImageDetectionPage({
     return () => window.cancelAnimationFrame(frame);
   }, [result]);
 
+  function changeDetectMode(nextMode: ImageDetectMode) {
+    if (nextMode === detectMode) return;
+    cancelExpertReviewRun();
+    setDetectMode(nextMode);
+    setResult(null);
+    setExpertReviewJob(null);
+    setStatus({
+      tone: "info",
+      text: file
+        ? tr(
+            `已切换到${nextMode === "swarm" ? "专家会诊" : "标准检测"}，请开始新的检测`,
+            `Switched to ${nextMode === "swarm" ? "expert review" : "standard detection"}. Start a new run.`,
+          )
+        : tr("等待上传图片...", "Waiting for image upload..."),
+    });
+  }
+
   function selectFile(next: File | null) {
     cancelExpertReviewRun();
     if (next) {
@@ -1273,8 +1299,8 @@ function ImageDetectionPage({
           <div className={`card ${detectMode === "swarm" ? "swarm-control-card" : ""}`}>
             <div className="section-label"><IconfontIcon name="settings" size={17} /> {tr("选择鉴伪任务", "Select forensic task")}</div>
             <div className="model-tabs" aria-label={tr("鉴伪任务模式", "Forensic task mode")}>
-              <button className={`model-tab ${detectMode === "standard" ? "active" : ""}`} type="button" aria-pressed={detectMode === "standard"} disabled={busy} onClick={() => setDetectMode("standard")}><IconfontIcon name="sparkles" size={16} /> {tr("标准检测", "Standard")}</button>
-              <button className={`model-tab ${detectMode === "swarm" ? "active" : ""}`} type="button" aria-pressed={detectMode === "swarm"} disabled={busy} onClick={() => setDetectMode("swarm")}><IconfontIcon name="expert-review" size={16} /> {tr("专家会诊", "Expert review")}</button>
+              <button className={`model-tab ${detectMode === "standard" ? "active" : ""}`} type="button" aria-pressed={detectMode === "standard"} disabled={busy} onClick={() => changeDetectMode("standard")}><IconfontIcon name="sparkles" size={16} /> {tr("标准检测", "Standard")}</button>
+              <button className={`model-tab ${detectMode === "swarm" ? "active" : ""}`} type="button" aria-pressed={detectMode === "swarm"} disabled={busy} onClick={() => changeDetectMode("swarm")}><IconfontIcon name="expert-review" size={16} /> {tr("专家会诊", "Expert review")}</button>
             </div>
             <div className="model-desc">
               <strong>{detectMode === "swarm" ? tr("专家会诊复核：", "Expert review: ") : tr("标准检测：", "Standard detection: ")}</strong>
@@ -1293,9 +1319,10 @@ function ImageDetectionPage({
           <div className={`card ${detectMode === "swarm" ? "swarm-status-card" : ""}`}>
             <div className="section-label"><IconfontIcon name="activity" size={17} /> {tr("当前状态", "Current status")}</div>
             <StatusRow status={status} busy={busy} />
+            <AnalysisProgress fileReady={Boolean(file)} busy={busy} complete={Boolean(result)} mode={detectMode} lang={lang} />
             {detectMode === "swarm" && <ExpertReviewJobPanel job={swarmJob} busy={busy} lang={lang} />}
             <div className="card-divider" />
-            {result ? <ImageResult result={result} lang={lang} panelRef={resultPanelRef} /> : <ImageSamples onSelect={detectSample} busy={busy} lang={lang} />}
+            {result ? <ImageResult result={result} mode={detectMode} canFeedback={!isGuest} lang={lang} panelRef={resultPanelRef} /> : <ImageSamples onSelect={detectSample} busy={busy} lang={lang} />}
           </div>
         </div>
       </div>
@@ -1717,7 +1744,7 @@ function PageHeader({ icon, title, desc }: { icon: IconfontName; title: string; 
   return (
     <div className="page-header">
       <ForensicIcon name={icon} tone="blue" className="page-heading-icon" />
-      <div><span>REALGUARD</span><h1>{title}</h1><p>{desc}</p></div>
+      <div><span>HUIJIAN AI</span><h1>{title}</h1><p>{desc}</p></div>
     </div>
   );
 }
@@ -1804,6 +1831,42 @@ function StatusRow({ status, busy }: { status: Status; busy: boolean }) {
       <div className={`status-dot ${status?.tone === "ok" ? "ready" : ""} ${busy ? "busy" : ""}`} />
       <div className="status-text">{status?.text}</div>
     </div>
+  );
+}
+
+function AnalysisProgress({
+  fileReady,
+  busy,
+  complete,
+  mode,
+  lang,
+}: {
+  fileReady: boolean;
+  busy: boolean;
+  complete: boolean;
+  mode: ImageDetectMode;
+  lang: Lang;
+}) {
+  const tr = (zh: string, en: string) => translate(lang, zh, en);
+  const steps = [
+    { label: tr("原始文件", "Source file"), done: fileReady, current: !fileReady },
+    {
+      label: mode === "swarm" ? tr("多源复核", "Multi-source review") : tr("模型与证据分析", "Model and evidence"),
+      done: complete,
+      current: fileReady && !complete,
+    },
+    { label: tr("结果与报告", "Result and report"), done: complete, current: false },
+  ];
+
+  return (
+    <ol className="analysis-progress" aria-label={tr("检测任务进度", "Detection task progress")} aria-busy={busy}>
+      {steps.map((step, index) => (
+        <li className={step.done ? "done" : step.current ? "current" : "pending"} key={step.label}>
+          <span>{step.done ? <IconfontIcon name="check" size={13} /> : index + 1}</span>
+          <em>{step.label}</em>
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -1973,23 +2036,79 @@ function ExpertReviewJobPanel({ job, busy, lang }: { job: DetectionJob | null; b
   );
 }
 
-function ImageResult({ result, lang, panelRef }: { result: ImageDetectionResult; lang: Lang; panelRef: RefObject<HTMLDivElement> }) {
+function ImageResult({
+  result,
+  mode,
+  canFeedback,
+  lang,
+  panelRef,
+}: {
+  result: ImageDetectionResult;
+  mode: ImageDetectMode;
+  canFeedback: boolean;
+  lang: Lang;
+  panelRef: RefObject<HTMLDivElement>;
+}) {
   const probability = Math.round((result.probability || 0) * 1000) / 10;
   const swarm = result.swarm;
   const swarmExperts = swarm?.experts || [];
   const tr = (zh: string, en: string) => translate(lang, zh, en);
-  const requiresReview = probability > 35 && probability < 75;
+  const [feedback, setFeedback] = useState<1 | -1 | null>(result.feedback ?? null);
+  const [feedbackBusy, setFeedbackBusy] = useState(false);
+  const [feedbackMessage, setFeedbackMessage] = useState("");
+  const visualIssues = (result.visual_issues || []).filter((item) => {
+    const text = String(item || "");
+    return text && !text.includes("暂未提取") && !text.includes("无明显视觉可疑点");
+  });
+  const metadataCount = Object.keys(result.all_metadata || {}).length;
+  const requiresReview = (probability > 35 && probability < 75) || result.confidence === "低";
   const verdictLabel = requiresReview ? tr("需人工复核", "Human review required") : result.final_label;
   const verdictTone = requiresReview ? "review" : result.final_label.includes("AI") ? "danger" : "ok";
+
+  useEffect(() => {
+    setFeedback(result.feedback ?? null);
+    setFeedbackMessage("");
+  }, [result.itemid, result.feedback]);
+
+  async function sendFeedback(next: 1 | -1) {
+    if (!result.itemid || feedbackBusy) return;
+    const value = feedback === next ? 0 : next;
+    setFeedbackBusy(true);
+    setFeedbackMessage("");
+    try {
+      const response = await submitImageFeedback(result.itemid, value);
+      setFeedback(response.feedback ?? null);
+      setFeedbackMessage(tr("感谢反馈，已记录。", "Thanks. Your feedback was recorded."));
+    } catch (error) {
+      setFeedbackMessage(errorMessage(error));
+    } finally {
+      setFeedbackBusy(false);
+    }
+  }
+
   return (
     <div className="result-panel" ref={panelRef} tabIndex={-1}>
-      <div className="section-label"><IconfontIcon name="bar-chart" size={17} /> {tr("检测结果", "Detection result")}</div>
+      <div className="result-title-row">
+        <div className="section-label"><IconfontIcon name="bar-chart" size={17} /> {tr("检测结果", "Detection result")}</div>
+        <span className="result-mode-badge"><IconfontIcon name={mode === "swarm" ? "expert-review" : "sparkles"} size={13} />{mode === "swarm" ? tr("专家会诊", "Expert review") : tr("标准检测", "Standard")}</span>
+      </div>
       {result.image_url && <img className="result-media" src={result.image_url} alt={result.filename} />}
       <div className="verdict-row">
         <span className={`pill ${verdictTone}`}>{verdictLabel}</span>
         <div className="verdict-score"><span>{tr("生成风险", "Generated risk")}</span><strong>{probability}%</strong></div>
       </div>
       <p className="result-caveat"><IconfontIcon name="info" size={15} />{tr("模型概率用于辅助判断；边界结果请结合原图、元数据与证据报告复核。", "Model probability supports review. Borderline results should be checked against the source, metadata, and evidence report.")}</p>
+      <div className="result-evidence-grid" aria-label={tr("证据完整度", "Evidence availability")}>
+        <div><span>{tr("视觉复核", "Visual review")}</span><strong>{mode === "swarm" ? tr("多源复核", "Multi-source") : result.llm_used ? (visualIssues.length ? tr(`${visualIssues.length} 项线索`, `${visualIssues.length} signals`) : tr("未见明确可疑点", "No explicit issue")) : tr("未完成", "Unavailable")}</strong></div>
+        <div><span>{tr("文件元数据", "File metadata")}</span><strong>{metadataCount ? tr(`${metadataCount} 项已读取`, `${metadataCount} fields`) : tr("未读取到", "Unavailable")}</strong></div>
+        <div><span>{tr("证据结论", "Evidence status")}</span><strong>{requiresReview ? tr("需要复核", "Review needed") : tr("可供参考", "Available")}</strong></div>
+      </div>
+      {visualIssues.length > 0 && (
+        <div className="result-evidence-block">
+          <h4>{tr("可复核视觉线索", "Reviewable visual signals")}</h4>
+          <ul>{visualIssues.slice(0, 5).map((item) => <li key={item}>{item}</li>)}</ul>
+        </div>
+      )}
       <div className="case-kv">
         <Info label={tr("置信度", "Confidence")} value={result.confidence || "-"} />
         <Info label={tr("文件名", "Filename")} value={result.filename || "-"} />
@@ -1997,9 +2116,11 @@ function ImageResult({ result, lang, panelRef }: { result: ImageDetectionResult;
         <Info label={tr("分辨率", "Resolution")} value={result.resolution || "-"} />
       </div>
       <div className="result-actions">
-        <button className="btn-code" type="button" onClick={() => downloadImageReport(result.itemid)}>
-          <IconfontIcon name="download" size={16} /> {tr("下载报告", "Download report")}
-        </button>
+        {result.itemid ? (
+          <button className="btn-code" type="button" onClick={() => downloadImageReport(result.itemid)}>
+            <IconfontIcon name="download" size={16} /> {tr("下载报告", "Download report")}
+          </button>
+        ) : <span className="result-report-unavailable">{tr("报告将在记录归档后可用", "Report available after archiving")}</span>}
       </div>
       {swarm?.enabled && (
         <div className="swarm-result-panel">
@@ -2018,7 +2139,17 @@ function ImageResult({ result, lang, panelRef }: { result: ImageDetectionResult;
           )}
         </div>
       )}
-      <div className="case-block"><p>{result.explanation}</p></div>
+      <div className="case-block result-explanation"><h4>{tr("结论说明", "Verdict notes")}</h4><p>{result.explanation}</p></div>
+      {result.itemid && canFeedback ? (
+        <div className="result-feedback">
+          <span>{tr("这次判断是否有帮助？", "Was this verdict useful?")}</span>
+          <div>
+            <button type="button" className={feedback === 1 ? "active" : ""} disabled={feedbackBusy} aria-pressed={feedback === 1} onClick={() => sendFeedback(1)}><IconfontIcon name="check" size={14} />{tr("有帮助", "Helpful")}</button>
+            <button type="button" className={feedback === -1 ? "active negative" : ""} disabled={feedbackBusy} aria-pressed={feedback === -1} onClick={() => sendFeedback(-1)}><IconfontIcon name="alert-triangle" size={14} />{tr("判断不准确", "Inaccurate")}</button>
+          </div>
+          {feedbackMessage && <small role="status">{feedbackMessage}</small>}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2168,7 +2299,10 @@ function EmptyState({
 }) {
   return (
     <div className="empty-state">
-      <IconfontIcon name={icon} size={30} />
+      <div className="empty-state-mascot">
+        <img src="/brand/huijian-mascot.webp" alt="" />
+        <span><IconfontIcon name={icon} size={17} /></span>
+      </div>
       <span>{text}</span>
       {actions.length > 0 && (
         <div className="empty-state-actions">
@@ -2227,12 +2361,13 @@ function AuthModal({ onAuthed, onClose, lang }: { onAuthed: () => Promise<void>;
       <div ref={dialogRef} className="login-card modal-login-card auth-shell" role="dialog" aria-modal="true" aria-labelledby="auth-dialog-title">
         <button className="case-modal-close modal-close" type="button" aria-label={lang === "zh" ? "关闭登录窗口" : "Close sign-in dialog"} onClick={onClose}><IconfontIcon name="x" size={18} /></button>
         <aside className="auth-rail" aria-label={text.railTitle}>
-          <div className="auth-rail-mark"><IconfontIcon name="shield-check" size={24} /></div>
+          <div className="auth-rail-mark"><BrandMark size={38} label={lang === "zh" ? "慧鉴 AI" : "Huijian AI"} /></div>
           <h3>{text.railTitle}</h3>
           <p>{text.railDesc}</p>
           <div className="auth-rail-points">
             {text.railPoints.map((item) => <span key={item}><IconfontIcon name="check" size={14} /> {item}</span>)}
           </div>
+          <img className="auth-rail-mascot" src="/brand/huijian-mascot.webp" alt="" />
         </aside>
         <div className="auth-main">
           <div className="login-header">
@@ -2332,7 +2467,7 @@ function AuthForm({ onAuthed, lang }: { onAuthed: () => Promise<void>; lang: Lan
           setStatus({ tone: "error", text: passwordError });
           return;
         }
-        await registerUser({ phone, secret, username, sms_code: smsCode, accepted_terms: acceptedTerms, terms_version: REALGUARD_TERMS_VERSION });
+        await registerUser({ phone, secret, username, sms_code: smsCode, accepted_terms: acceptedTerms, terms_version: HUIJIAN_TERMS_VERSION });
         setStatus({ tone: "ok", text: tr("注册成功，请切换到登录", "Account created. Switch to log in.") });
         setMode("password");
         setSmsCode("");
@@ -2482,7 +2617,7 @@ function Footer({ lang }: { lang: Lang }) {
   const text = UI_TEXT[lang].footer;
   return (
     <footer className="footer">
-      <div className="footer-logo"><IconfontIcon name="brand" size={20} /> {text.brand}</div>
+      <div className="footer-logo"><BrandMark size={28} label={text.brand} /> {text.brand}</div>
       <p className="footer-copy">{text.copy}</p>
       <p className="footer-icp">
         <a href="https://beian.miit.gov.cn/" target="_blank" rel="noreferrer">

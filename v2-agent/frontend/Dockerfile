@@ -1,4 +1,4 @@
-# 鉴真前端 — Vite 构建 + nginx 静态托管（含 /api 反向代理到后端）
+# 慧鉴 AI 前端 — Vite 构建 + nginx 静态托管（含 /api 反向代理到后端）
 FROM node:20-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./

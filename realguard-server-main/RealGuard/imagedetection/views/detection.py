@@ -528,10 +528,18 @@ def _fake_percentage_from_v2(payload):
         return round((1.0 - confidence) * 100, 1)
     if verdict in ('suspected_fake', 'highly_suspected_fake', 'fake', 'ai', 'likely_ai_generated'):
         return round(confidence * 100, 1)
-    return 50.0
+    raise ValueError('备用检测服务未返回明确判定')
+
+
+def _assert_v2_publishable(payload):
+    source = str(payload.get('source') or '').strip().lower()
+    verdict = str(payload.get('verdict') or '').strip().lower()
+    if source != 'vlm' or verdict in ('', 'unknown'):
+        raise RuntimeError('备用检测服务未产生可发布的真实模型结论')
 
 
 def _insert_v2_fallback_record(payload, image_bytes, filename, backend_openid, phone, user_info):
+    _assert_v2_publishable(payload)
     stored_name, file_path = _save_local_upload(image_bytes, backend_openid or phone or 'guest', filename)
     img_format, resolution = get_image_info(file_path)
     file_size = (payload.get('fileMeta') or {}).get('size') or get_file_size_str(file_path)
@@ -612,6 +620,7 @@ def _detect_with_v2_fallback(image_bytes, safe_name, mimetype, backend_openid, p
     )
     response.raise_for_status()
     payload = response.json()
+    _assert_v2_publishable(payload)
     api_json = _insert_v2_fallback_record(payload, image_bytes, safe_name, backend_openid, phone, user_info)
     fallback_model = _model_by_route('fallback')
     api_json.setdefault('data', {}).update(_route_data(

@@ -13,7 +13,8 @@ from typing import Any
 
 DATA_DIR = Path(os.getenv("JIANZHEN_DATA_DIR", Path(__file__).resolve().parents[1] / "data"))
 DB_PATH = DATA_DIR / "jianzhen-v2.sqlite3"
-ANALYSIS_CACHE_VERSION = os.getenv("JIANZHEN_ANALYSIS_CACHE_VERSION", "v6-low-ela-weight")
+ANALYSIS_CACHE_VERSION = os.getenv("JIANZHEN_ANALYSIS_CACHE_VERSION", "v7-real-results-only")
+PUBLISHABLE_VERDICTS = frozenset({"real", "suspected_fake", "highly_suspected_fake"})
 
 _INIT_LOCK = threading.Lock()
 _INITIALIZED = False
@@ -138,6 +139,15 @@ def cache_key(file_type: str, sha256: str) -> str:
     return f"{ANALYSIS_CACHE_VERSION}:{file_type}:{sha256}"
 
 
+def is_publishable_analysis(analysis: Any) -> bool:
+    """Return whether an analysis may be exposed as a detection conclusion."""
+    return (
+        isinstance(analysis, dict)
+        and analysis.get("source") == "vlm"
+        and analysis.get("verdict") in PUBLISHABLE_VERDICTS
+    )
+
+
 def get_cached_analysis(file_type: str, sha256: str) -> dict[str, Any] | None:
     with _connect() as conn:
         row = conn.execute(
@@ -146,10 +156,15 @@ def get_cached_analysis(file_type: str, sha256: str) -> dict[str, Any] | None:
         ).fetchone()
     if not row:
         return None
-    return json.loads(row["analysis_json"])
+    analysis = json.loads(row["analysis_json"])
+    if not is_publishable_analysis(analysis):
+        return None
+    return analysis
 
 
 def put_cached_analysis(file_type: str, sha256: str, analysis: dict[str, Any]) -> None:
+    if not is_publishable_analysis(analysis):
+        return
     with _connect() as conn:
         conn.execute(
             """

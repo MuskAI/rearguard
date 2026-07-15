@@ -1,7 +1,7 @@
 [project]
-name = "lingjian-backend"
+name = "huijian-backend"
 version = "0.1.0"
-description = "灵鉴 AI 鉴伪工作台后端"
+description = "慧鉴 AI 鉴伪工作台后端"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.110",

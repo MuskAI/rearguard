@@ -32,14 +32,8 @@ type Message =
   | { kind: "loading"; text: string }
   | { kind: "forensics"; report: ForensicReport };
 
-const PROGRESS_STEPS = ["正在解析文件…", "正在提取鉴伪线索…", "正在比对风险证据…", "正在生成检测报告…"];
-
-const QUICK_COMMANDS = [
-  { label: "检测AI生成", hint: "判断是否为 AI 生成内容" },
-  { label: "检测换脸", hint: "检测人脸深度伪造" },
-  { label: "检测PS篡改", hint: "检测拼接/局部重绘痕迹" },
-  { label: "出具鉴定报告", hint: "生成可下载报告" },
-];
+const PROGRESS_STEPS = ["文件已校验", "服务端模型与证据分析进行中"];
+const AVAILABLE_CAPABILITIES = ["图像综合鉴伪", "TXT / MD / DOCX 文本检测"];
 const HISTORY_PAGE_SIZE = 100;
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 const REVIEWER_HISTORY_FILTERS = new Set<HistorySidebarFilter>([
@@ -58,7 +52,7 @@ function inferType(name: string): FileType {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
   if (["mp4", "mov", "avi", "mkv", "webm"].includes(ext)) return "video";
   if (["mp3", "wav", "m4a", "flac", "aac"].includes(ext)) return "audio";
-  if (["txt", "pdf", "doc", "docx", "md"].includes(ext)) return "document";
+  if (["txt", "pdf", "doc", "docx", "md", "csv", "json", "log"].includes(ext)) return "document";
   return "image";
 }
 
@@ -71,12 +65,8 @@ function formatBytes(size: number): string {
 function formatCapabilitySummary(health: HealthStatus | null): string {
   if (!health) return "检测服务状态待确认";
   const caps = health?.capabilities || {};
-  const available = [caps.image === "available" ? "图像" : "", caps.document === "available" ? "文档" : ""].filter(Boolean);
-  const limited = [caps.video === "limited" ? "视频" : "", caps.audio === "limited" ? "音频" : ""]
-    .filter(Boolean)
-    .join(" / ");
-  const service = available.length > 0 ? `${available.join(" / ")}检测服务可用` : health.vlmEnabled ? "检测服务可用" : "部分能力暂不可用";
-  return limited ? `${service} · ${limited}能力暂不可用` : service;
+  const available = [caps.image === "available" ? "图像" : "", ["available", "limited"].includes(caps.document || "") ? "文档文本" : ""].filter(Boolean);
+  return available.length > 0 ? `${available.join(" / ")}检测可用` : "检测模型暂不可用";
 }
 
 function isAuthRequiredMessage(message: string): boolean {
@@ -87,7 +77,7 @@ function isAuthRequiredMessage(message: string): boolean {
 function friendlyMessage(message: string, fallback: string): string {
   const text = message.trim();
   if (!text) return fallback;
-  if (text.includes("继续使用 V2")) return "请登录后继续检测";
+  if (text.includes("继续使用 V2") || text.includes("继续使用深度分析")) return "请登录后继续检测";
   if (isAuthRequiredMessage(text)) return "请登录后继续检测";
   if (text.includes("Unexpected end of JSON")) return fallback;
   return text;
@@ -301,12 +291,8 @@ export default function App() {
     ]);
     setBusy(true);
 
-    for (let s = 1; s < PROGRESS_STEPS.length; s++) {
-      await new Promise((r) => setTimeout(r, 550));
-      setMessages((m) => m.map((msg) => (msg.kind === "progress" ? { ...msg, stage: s } : msg)));
-    }
-
     try {
+      setMessages((m) => m.map((msg) => (msg.kind === "progress" ? { ...msg, stage: 1 } : msg)));
       const result = await detect(file, type);
       if (result.provenance) {
         setProvenanceByTask((prev) => ({ ...prev, [result.taskId]: result.provenance! }));
@@ -389,7 +375,18 @@ export default function App() {
   const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (f) {
-      if (f.size > uploadLimit) {
+      const type = inferType(f.name);
+      const ext = f.name.split(".").pop()?.toLowerCase() || "";
+      if (type === "video" || type === "audio" || ["pdf", "doc"].includes(ext)) {
+        setMessages((m) => [
+          ...m,
+          {
+            kind: "user",
+            text: "该文件类型的真实检测能力尚未部署，本次不会生成模拟结论。请选择图片、TXT、MD、CSV、JSON、LOG 或 DOCX 文件。",
+            fileName: f.name,
+          },
+        ]);
+      } else if (f.size > uploadLimit) {
         setMessages((m) => [
           ...m,
           {
@@ -568,9 +565,7 @@ export default function App() {
           )}
           {messages.length === 0 && (
             <EmptyState
-              onUpload={requestUpload}
               capabilitySummary={capabilitySummary}
-              accessAttention={accessAttention}
             />
           )}
 
@@ -685,16 +680,11 @@ export default function App() {
             </div>
           ) : (
             <>
-              <div className={`${messages.length > 0 ? "hidden sm:flex" : "grid grid-cols-2 sm:flex"} gap-2 mb-3 sm:flex-wrap`}>
-                {QUICK_COMMANDS.map((q) => (
-                  <button
-                    key={q.label}
-                    title={q.hint}
-                    onClick={requestUpload}
-                    className="text-xs px-3 py-1.5 rounded-full bg-ink-900 border border-ink-600 text-ink-950 hover:border-brand-cyan/50 hover:text-brand-cyan transition"
-                  >
-                    {q.label}
-                  </button>
+              <div className={`${messages.length > 0 ? "hidden sm:flex" : "flex"} gap-2 mb-3 flex-wrap`} aria-label="当前可用检测能力">
+                {AVAILABLE_CAPABILITIES.map((label) => (
+                  <span key={label} className="inline-flex min-h-8 items-center rounded-md border border-ink-600 bg-ink-900 px-3 text-xs text-ink-500">
+                    <IconfontIcon name="shield-check" size={13} className="mr-1.5 text-jade" />{label}
+                  </span>
                 ))}
               </div>
               <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 rounded-lg bg-ink-900 border border-ink-600 px-3 sm:px-4 py-3">
@@ -713,7 +703,7 @@ export default function App() {
                   ref={fileInputRef}
                   type="file"
                   className="hidden"
-                  accept="image/*,video/*,audio/*,.txt,.pdf,.doc,.docx,.md"
+                  accept="image/*,.txt,.md,.csv,.json,.log,.docx"
                   onChange={onFile}
                 />
               </div>
@@ -749,13 +739,9 @@ function AccessPanel() {
 }
 
 function EmptyState({
-  onUpload,
   capabilitySummary,
-  accessAttention,
 }: {
-  onUpload: () => void;
   capabilitySummary: string;
-  accessAttention: boolean;
 }) {
   return (
     <div className="mx-auto grid w-full max-w-6xl gap-4 py-6 sm:py-10 lg:grid-cols-[minmax(0,1fr)_320px]">
@@ -776,25 +762,10 @@ function EmptyState({
               <span className="rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1">{capabilitySummary}</span>
             </div>
           </div>
-          <Logo size={56} idSuffix="hero" />
+          <div className="flex shrink-0 items-end gap-2">
+            <img src="/v2/brand/huijian-mascot.webp" alt="慧鉴 AI 品牌助手小鉴" className="h-28 w-20 object-contain drop-shadow-md" />
+          </div>
         </div>
-        {accessAttention ? (
-          <a
-            href="/"
-            className="mt-7 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-brand-blue px-5 py-3 text-sm font-medium text-white shadow-sm hover:bg-brand-cyan sm:w-auto"
-          >
-            <IconfontIcon name="home" size={16} />
-            登录后开始检测
-          </a>
-        ) : (
-          <button
-            onClick={onUpload}
-            className="mt-7 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-brand-blue px-5 py-3 text-sm font-medium text-white shadow-sm hover:bg-brand-cyan sm:w-auto"
-          >
-            <IconfontIcon name="upload" size={16} />
-            选择文件开始鉴伪
-          </button>
-        )}
       </section>
       <aside className="rounded-lg border border-ink-700 bg-ink-900 p-4 shadow-sm">
         <div className="flex items-center gap-2 text-sm font-semibold text-ink-950">
@@ -803,7 +774,7 @@ function EmptyState({
         </div>
         <div className="mt-4 space-y-3 text-xs text-ink-500">
           {[
-            ["01", "上传文件", "图像、视频、音频或文档"],
+            ["01", "上传文件", "图像或可提取正文的文档"],
             ["02", "查看证据", "结论、置信度与取证线索"],
             ["03", "归档报告", "历史记录与报告编号"],
           ].map((item) => (

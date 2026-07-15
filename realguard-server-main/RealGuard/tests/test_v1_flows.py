@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from imagedetection import creat_app  # noqa: E402
-from imagedetection.views import api, detection  # noqa: E402
+from imagedetection.views import api, detection, reporting  # noqa: E402
 import detector_backend  # noqa: E402
 
 
@@ -392,6 +392,42 @@ def test_image_detect_falls_back_to_v2_when_v1_backend_is_down(client, monkeypat
     assert payload["result"]["final_label"] == "AI生成图像"
     assert payload["result"]["probability"] == pytest.approx(0.76)
     assert payload["result"]["image_url"] == "/static/uploads/openid-1/image/stored-demo.png"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"source": "mock", "verdict": "suspected_fake", "confidence": 0.8},
+        {"source": "unknown", "verdict": "unknown", "confidence": 0.5},
+        {"source": "vlm", "verdict": "unknown", "confidence": 0.5},
+    ],
+)
+def test_v2_fallback_rejects_results_without_a_publishable_model_verdict(payload):
+    with pytest.raises(RuntimeError, match="真实模型结论"):
+        detection._assert_v2_publishable(payload)
+
+
+def test_v2_probability_conversion_rejects_unknown_verdict():
+    with pytest.raises(ValueError, match="明确判定"):
+        detection._fake_percentage_from_v2({"verdict": "unknown", "confidence": 0.5})
+
+
+def test_image_report_marks_borderline_result_for_human_review():
+    html = reporting.image_report_content(
+        {"itemid": 9, "fake": 66.1, "createtime": "2026-07-15 10:00:00"},
+        {
+            "final_label": "AI生成图像",
+            "probability": 0.661,
+            "confidence": "低",
+            "filename": "sample.png",
+            "visual_issues": [],
+            "all_metadata": {},
+        },
+    )
+
+    assert "需人工复核 · 66.1%" in html
+    assert "缺失本身不代表伪造" in html
+    assert reporting.image_report_filename(9) == "huijian-image-report-9.html"
 
 
 def test_image_detect_can_use_aliyun_primary_and_records_backend_model(client, monkeypatch, tmp_path):

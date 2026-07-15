@@ -1,6 +1,6 @@
-"""检测核心：图像/文本走真实 VLM（qwen3-vl-flash），视频/音频暂用 Mock。
+"""检测核心：只返回真实模型或真实取证工具产生的结果。
 
-任何 VLM 调用失败都会回退到确定性 Mock，保证接口永不中断。
+生产检测失败时必须明确返回不可用，不能用演示数据替代真实性结论。
 """
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ import hashlib
 import io
 import json
 import os
-import random
 import re
 
 from dotenv import load_dotenv
@@ -22,7 +21,7 @@ load_dotenv()
 API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
 BASE_URL = os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
 VLM_MODEL = os.getenv("VLM_MODEL", "qwen3-vl-flash")
-MOCK_MODEL_VERSION = "ruijian-turing-mock-v0.1"
+FORENSIC_MAPS_VERSION = "huijian-forensic-maps-v1"
 IMAGE_SUSPECT_THRESHOLD = float(os.getenv("JIANZHEN_IMAGE_SUSPECT_THRESHOLD", "0.62"))
 IMAGE_HIGH_THRESHOLD = float(os.getenv("JIANZHEN_IMAGE_HIGH_THRESHOLD", "0.82"))
 IMAGE_REGION_THRESHOLD = float(os.getenv("JIANZHEN_IMAGE_REGION_THRESHOLD", "0.72"))
@@ -32,6 +31,10 @@ IMAGE_AUXILIARY_KEYS = {"ela"}
 FORENSIC_AUXILIARY_KEYS = {"ela", "noise", "noise_consistency", "jpeg_curve"}
 
 _client: OpenAI | None = None
+
+
+class DetectionUnavailableError(RuntimeError):
+    """Raised when no real detector can produce a defensible result."""
 
 
 def _get_client() -> OpenAI | None:
@@ -249,7 +252,7 @@ def _token_usage(resp) -> dict:
 # ---------------------------------------------------------------------------
 # 真实 VLM 分析
 # ---------------------------------------------------------------------------
-IMAGE_SYSTEM = """你是「鉴真」图像鉴伪取证引擎，融合视觉语义分析与信号级取证。
+IMAGE_SYSTEM = """你是「慧鉴 AI」图像鉴伪取证引擎，融合视觉语义分析与信号级取证。
 你的判定必须建立在证据之上，绝不能因为画面内容看起来正常、好看或合理就默认判真——
 AIGC 与深伪的危险恰恰在于「看起来很真」。同时也不能见风就是雨，要给出有理有据的概率判断。
 
@@ -401,7 +404,7 @@ def analyze_text_vlm(text: str) -> dict | None:
     return _normalize(parsed, "document", source="vlm", model=VLM_MODEL, token_usage=_token_usage(resp))
 
 
-FORENSIC_SYSTEM = """你是「鉴真」可解释性取证分析引擎。你会收到一张原图，以及对它做的多张信号级取证可视化图
+FORENSIC_SYSTEM = """你是「慧鉴 AI」可解释性取证分析引擎。你会收到一张原图，以及对它做的多张信号级取证可视化图
 （ELA压缩对齐、噪声成分、噪声一致性、频域谱、光照梯度、光照一致性、多次JPEG压缩曲线）。
 
 请像数字图像取证专家那样，逐张判读每幅证据图上**具体可见的异常现象**（位置、形态、颜色），
@@ -521,7 +524,7 @@ status 含义：ok=正常 / warn=可疑 / danger=高危。confidence 与 verdict
         "summary": summary,
         "items": items,
         "jpegPoints": jpeg_points,
-        "modelVersion": VLM_MODEL if source == "vlm" else MOCK_MODEL_VERSION,
+        "modelVersion": VLM_MODEL if source == "vlm" else FORENSIC_MAPS_VERSION,
         "source": source,
         "tokenUsage": token_usage,
     }
@@ -612,60 +615,16 @@ def _normalize(parsed: dict, file_type: str, source: str, model: str, token_usag
     }
 
 
-# ---------------------------------------------------------------------------
-# Mock 回退
-# ---------------------------------------------------------------------------
-def mock_analysis(file_type: str, data: bytes) -> dict:
-    seed = int(hashlib.sha256(data).hexdigest(), 16) % (2**32)
-    rng = random.Random(seed)
-    dims_def = DIMENSIONS_BY_TYPE[file_type]
-    dimensions = []
-    for d in dims_def:
-        score = round(rng.uniform(0.05, 0.97), 2)
-        result = "疑似伪造" if score >= 0.6 else "存疑" if score >= 0.4 else "未见明显异常"
-        dimensions.append({**d, "score": score, "result": result})
-
-    top = max(dimensions, key=lambda x: x["score"])
-    confidence = top["score"]
-    verdict = _verdict_from_score(confidence)
-
-    regions = []
-    if file_type in ("image", "video") and verdict != "real":
-        for _ in range(rng.randint(1, 3)):
-            regions.append({
-                "x": round(rng.uniform(0.05, 0.6), 3),
-                "y": round(rng.uniform(0.05, 0.6), 3),
-                "w": round(rng.uniform(0.15, 0.35), 3),
-                "h": round(rng.uniform(0.15, 0.35), 3),
-                "label": rng.choice(REGION_LABELS),
-                "score": round(rng.uniform(0.6, 0.95), 2),
-            })
-
-    explanations = {
-        "real": "各检测维度得分均处于正常区间，未发现生成模型指纹或篡改痕迹，判定为真实内容。",
-        "suspected_fake": f"在「{top['label']}」维度检测到可疑信号（得分 {confidence}），存在一定伪造嫌疑。",
-        "highly_suspected_fake": f"「{top['label']}」维度得分高达 {confidence}，并检测到区域级异常，判定为高度疑似伪造。",
-    }
-    return {
-        "verdict": verdict,
-        "confidence": confidence,
-        "dimensions": dimensions,
-        "regions": regions,
-        "explanation": explanations[verdict],
-        "modelVersion": MOCK_MODEL_VERSION,
-        "source": "mock",
-    }
-
-
 def analyze(file_type: str, filename: str, data: bytes) -> dict:
-    """统一入口：能用真实模型就用，否则回退 Mock。"""
-    extracted = None
+    """统一入口：只接受真实检测结果，能力缺失或调用失败时明确中止。"""
     if file_type == "image":
         result = analyze_image_vlm(data)
         if result:
             result = _merge_synthid(result, data)
             return _merge_visible_watermark(result, file_type, filename, data)
-    elif file_type == "document":
+        raise DetectionUnavailableError("图像检测模型暂不可用，本次未生成真实性结论，请稍后重试。")
+
+    if file_type == "document":
         extracted = document_utils.extract_text(filename, data)
         if extracted.text.strip():
             result = analyze_text_vlm(extracted.text)
@@ -673,14 +632,9 @@ def analyze(file_type: str, filename: str, data: bytes) -> dict:
                 if extracted.note:
                     result["explanation"] = f"{result['explanation']}\n文档处理：{extracted.note}。"
                 return result
-    # video / audio / 失败回退
-    result = mock_analysis(file_type, data)
-    if file_type == "document":
-        note = extracted.note if extracted else "未提取到可分析正文，已回退演示判定"
-        result["explanation"] = f"{result['explanation']}\n文档处理：{note}。"
-    if file_type == "image":
-        result = _merge_synthid(result, data)
-        return _merge_visible_watermark(result, file_type, filename, data)
-    if file_type == "video":
-        return _merge_visible_watermark(result, file_type, filename, data)
-    return result
+            raise DetectionUnavailableError("文档检测模型暂不可用，本次未生成真实性结论，请稍后重试。")
+        note = extracted.note or "未提取到可分析正文"
+        raise DetectionUnavailableError(f"无法分析该文档：{note}。本次未生成真实性结论。")
+
+    capability = {"video": "视频", "audio": "音频"}.get(file_type, "该类型")
+    raise DetectionUnavailableError(f"{capability}检测能力尚未部署，本次未生成真实性结论。")

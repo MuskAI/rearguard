@@ -9,6 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app import detector  # noqa: E402
+import pytest
 
 
 def _docx_bytes(text: str) -> bytes:
@@ -47,8 +48,21 @@ def test_docx_document_uses_extracted_text_for_vlm(monkeypatch):
     assert "已从 DOCX 提取正文" in result["explanation"]
 
 
-def test_pdf_document_falls_back_with_clear_note():
-    result = detector.analyze("document", "sample.pdf", b"%PDF-1.4 fake document bytes")
+def test_pdf_document_without_extractable_text_returns_unavailable():
+    with pytest.raises(detector.DetectionUnavailableError) as exc_info:
+        detector.analyze("document", "sample.pdf", b"%PDF-1.4 fake document bytes")
 
-    assert result["source"] == "mock"
-    assert "当前未支持 PDF 正文抽取" in result["explanation"]
+    assert "当前未支持 PDF 正文抽取" in str(exc_info.value)
+    assert "未生成真实性结论" in str(exc_info.value)
+
+
+def test_image_model_failure_never_returns_a_mock_result(monkeypatch):
+    monkeypatch.setattr(detector, "analyze_image_vlm", lambda _data: None)
+
+    with pytest.raises(detector.DetectionUnavailableError, match="未生成真实性结论"):
+        detector.analyze("image", "sample.png", b"not-an-image")
+
+
+def test_unsupported_media_never_returns_a_mock_result():
+    with pytest.raises(detector.DetectionUnavailableError, match="尚未部署"):
+        detector.analyze("video", "sample.mp4", b"video")

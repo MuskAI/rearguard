@@ -28,10 +28,43 @@ def _png_with_itxt(keyword: str, text: str) -> bytes:
     return signature + _png_chunk(b"IHDR", ihdr) + _png_chunk(b"iTXt", itxt) + _png_chunk(b"IDAT", idat) + _png_chunk(b"IEND", b"")
 
 
+def _vlm_analysis(
+    *,
+    file_type: str = "document",
+    verdict: str = "real",
+    source: str = "vlm",
+    model_version: str = "pytest-vlm",
+) -> dict:
+    dimension_key = "aigc_image" if file_type == "image" else "aigc_text"
+    return {
+        "verdict": verdict,
+        "confidence": 0.22,
+        "dimensions": [
+            {
+                "key": dimension_key,
+                "label": "真实模型检测",
+                "score": 0.22,
+                "result": "未见明显异常",
+            }
+        ],
+        "regions": [],
+        "explanation": "pytest 稳定真实模型结论",
+        "modelVersion": model_version,
+        "source": source,
+        "synthid": {"detected": False},
+        "visibleWatermark": {"detected": False, "provider": None},
+    }
+
+
+def _stable_vlm_analyze(file_type: str, _filename: str, _data: bytes) -> dict:
+    return _vlm_analysis(file_type=file_type)
+
+
 @pytest.fixture
 def client(monkeypatch, tmp_path):
     monkeypatch.setenv("JIANZHEN_ACCESS_TOKEN", "test-token")
     monkeypatch.setenv("JIANZHEN_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-dashscope-key")
     for module_name in ("app.storage", "app.main", "storage", "main"):
         sys.modules.pop(module_name, None)
     import app.storage as storage  # noqa: WPS433
@@ -39,6 +72,8 @@ def client(monkeypatch, tmp_path):
     import app.main as main  # noqa: WPS433
 
     importlib.reload(main)
+    monkeypatch.setattr(main.detector, "API_KEY", "test-dashscope-key")
+    monkeypatch.setattr(main.detector, "analyze", _stable_vlm_analyze)
     return TestClient(main.app)
 
 
@@ -49,12 +84,15 @@ def developer_key_client(monkeypatch, tmp_path):
     monkeypatch.setenv("JIANZHEN_REQUIRE_DEVELOPER_API_KEY", "true")
     monkeypatch.setenv("JIANZHEN_DEVELOPER_AUTH_URL", "http://realguard-v1.internal/api/developer/keys/verify")
     monkeypatch.setenv("REALGUARD_DEVELOPER_AUTH_SECRET", "internal-secret")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-dashscope-key")
     for module_name in ("app.storage", "app.main", "storage", "main"):
         sys.modules.pop(module_name, None)
     import app.storage as storage  # noqa: WPS433
     importlib.reload(storage)
     import app.main as main  # noqa: WPS433
     importlib.reload(main)
+    monkeypatch.setattr(main.detector, "API_KEY", "test-dashscope-key")
+    monkeypatch.setattr(main.detector, "analyze", _stable_vlm_analyze)
 
     def fake_verify(api_key, request):
         if api_key == "rg_sk_user1":
@@ -102,8 +140,9 @@ def test_health_exposes_access_protection(client):
     assert payload["unifiedLoginEnabled"] is True
     assert payload["sessionAuthEnabled"] is True
     assert payload["capabilities"]["image"] == "available"
-    assert payload["capabilities"]["video"] == "limited"
-    assert payload["capabilities"]["audio"] == "limited"
+    assert payload["capabilities"]["document"] == "limited"
+    assert payload["capabilities"]["video"] == "unavailable"
+    assert payload["capabilities"]["audio"] == "unavailable"
     assert "model" not in payload
     assert "version" not in payload
     assert "calibration" not in payload
@@ -115,6 +154,121 @@ def test_health_exposes_access_protection(client):
     assert "researchInterfaceVersion" not in payload
     assert "protectedEndpoints" not in payload
     assert "developerProtectedEndpoints" not in payload
+
+
+def test_health_and_detect_are_unavailable_without_model_key(client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    monkeypatch.setattr(main.detector, "API_KEY", "")
+
+    health = client.get("/api/health")
+    detect = client.post(
+        "/api/detect",
+        files={"file": ("sample.txt", b"no model key", "text/plain")},
+    )
+
+    assert health.status_code == 200
+    assert health.json()["capabilities"]["image"] == "unavailable"
+    assert health.json()["capabilities"]["document"] == "unavailable"
+    assert health.json()["capabilities"]["video"] == "unavailable"
+    assert health.json()["capabilities"]["audio"] == "unavailable"
+    assert detect.status_code == 503
+    assert "真实模型服务未配置" in detect.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("filename", "media_type"),
+    [
+        ("sample.mp4", "video/mp4"),
+        ("sample.wav", "audio/wav"),
+    ],
+)
+def test_detect_rejects_unsupported_media_without_model_call(client, monkeypatch, filename, media_type):
+    import app.main as main  # noqa: WPS433
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("unsupported media must not call the model")
+
+    monkeypatch.setattr(main.detector, "analyze", fail_if_called)
+    response = client.post(
+        "/api/detect",
+        files={"file": (filename, b"unsupported-media", media_type)},
+    )
+
+    assert response.status_code == 422
+    assert "尚未部署" in response.json()["detail"]
+    assert "不会生成模拟结论" in response.json()["detail"]
+
+
+def test_detect_rejects_declared_type_mismatch_and_unknown_extension(client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("invalid upload must not call the model")
+
+    monkeypatch.setattr(main.detector, "analyze", fail_if_called)
+    mismatch = client.post(
+        "/api/detect",
+        files={"file": ("sample.mp4", b"video", "video/mp4")},
+        data={"fileType": "image"},
+    )
+    unknown = client.post(
+        "/api/detect",
+        files={"file": ("sample.bin", b"binary", "application/octet-stream")},
+        data={"fileType": "image"},
+    )
+
+    assert mismatch.status_code == 422
+    assert "不一致" in mismatch.json()["detail"]
+    assert unknown.status_code == 415
+    assert "不支持" in unknown.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "analysis",
+    [
+        _vlm_analysis(source="mock"),
+        _vlm_analysis(source="maps-only"),
+        _vlm_analysis(source="unknown"),
+        _vlm_analysis(source="vlm", verdict="unknown"),
+        _vlm_analysis(source="vlm", verdict=""),
+    ],
+    ids=["mock-source", "maps-only-source", "unknown-source", "unknown-verdict", "empty-verdict"],
+)
+def test_detect_rejects_non_publishable_analysis(client, monkeypatch, analysis):
+    import app.main as main  # noqa: WPS433
+
+    monkeypatch.setattr(main.detector, "analyze", lambda *_args, **_kwargs: analysis)
+    response = client.post(
+        "/api/detect",
+        files={"file": ("contract.txt", json.dumps(analysis).encode(), "text/plain")},
+    )
+    history = client.get("/api/history", headers={"X-Jianzhen-Token": "test-token"})
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "真实模型未返回可发布的明确结论"
+    assert history.status_code == 200
+    assert history.json()["total"] == 0
+
+
+def test_analysis_cache_only_accepts_publishable_vlm_results(client):
+    import app.storage as storage  # noqa: WPS433
+
+    invalid_cases = [
+        _vlm_analysis(source="mock"),
+        _vlm_analysis(source="maps-only"),
+        _vlm_analysis(source="unknown"),
+        _vlm_analysis(verdict="unknown"),
+    ]
+    for index, analysis in enumerate(invalid_cases):
+        sha256 = f"invalid-{index}"
+        storage.put_cached_analysis("document", sha256, analysis)
+        assert storage.get_cached_analysis("document", sha256) is None
+
+    valid = _vlm_analysis(verdict="suspected_fake")
+    storage.put_cached_analysis("document", "valid-vlm", valid)
+
+    assert storage.get_cached_analysis("document", "valid-vlm") == valid
 
 
 def test_admin_health_requires_token_and_exposes_diagnostics(client):
@@ -302,7 +456,7 @@ def test_developer_key_report_share_is_scoped_to_owner(developer_key_client):
     assert public.status_code == 200
     assert "text/html" in public.headers["content-type"]
     assert "content-disposition" not in public.headers
-    assert "鉴真 AI 鉴伪鉴定报告" in public.text
+    assert "慧鉴 AI 数字内容鉴伪报告" in public.text
     assert tampered.status_code == 403
 
 
@@ -326,7 +480,7 @@ def test_report_download_returns_attachment_html(client):
     assert "</html>" in response.text
     assert "color-mix" not in response.text
     assert report_id in response.text
-    assert "鉴真 AI 鉴伪鉴定报告" in response.text
+    assert "慧鉴 AI 数字内容鉴伪报告" in response.text
 
 
 def test_provenance_reads_tc260_aigc_metadata_without_c2pa(client):
@@ -504,7 +658,7 @@ def test_history_artifacts_persist_into_history_and_download(client):
                 "confidence": 0.33,
                 "summary": "未见明显异常。",
                 "items": [{"key": "ela", "title": "压缩对齐分析", "status": "ok", "finding": "未见明显异常"}],
-                "modelVersion": "mock",
+                "modelVersion": "huijian-forensic-maps-v1",
                 "source": "maps-only",
             },
             "provenance": {
@@ -622,8 +776,8 @@ def test_history_filters_and_counts_include_synthid(client, monkeypatch):
             "dimensions": [],
             "regions": [],
             "explanation": "未命中 SynthID。",
-            "modelVersion": "mock",
-            "source": "mock",
+            "modelVersion": "qwen3-vl-flash",
+            "source": "vlm",
             "synthid": {
                 "detected": False,
                 "supported": True,
@@ -683,8 +837,8 @@ def test_history_filters_and_counts_include_verdict_breakdown(client, monkeypatc
             "dimensions": [],
             "regions": [],
             "explanation": "真实内容。",
-            "modelVersion": "mock",
-            "source": "mock",
+            "modelVersion": "qwen3-vl-flash",
+            "source": "vlm",
             "synthid": {"detected": False, "supported": True, "confidence": 0.0, "phaseMatch": 0.0, "evidenceLevel": "none", "note": "未检测到 SynthID"},
             "visibleWatermark": {"detected": False, "provider": None, "confidence": 0.0, "evidenceLevel": "none", "hits": [], "temporal": {"sampledFrames": 1, "positiveFrames": 0, "moving": False}, "note": "未检测到可见水印"},
         },
@@ -717,7 +871,7 @@ def test_history_filters_and_counts_include_verdict_breakdown(client, monkeypatc
             "regions": [],
             "explanation": "未知判定。",
             "modelVersion": "qwen3-vl-flash",
-            "source": "unknown",
+            "source": "vlm",
             "synthid": {"detected": False, "supported": True, "confidence": 0.0, "phaseMatch": 0.0, "evidenceLevel": "none", "note": "未检测到 SynthID"},
             "visibleWatermark": {"detected": False, "provider": None, "confidence": 0.0, "evidenceLevel": "none", "hits": [], "temporal": {"sampledFrames": 1, "positiveFrames": 0, "moving": False}, "note": "未检测到可见水印"},
         },
@@ -731,7 +885,7 @@ def test_history_filters_and_counts_include_verdict_breakdown(client, monkeypatc
     client.post("/api/detect", files={"file": ("real.png", b"verdict-a", "image/png")})
     client.post("/api/detect", files={"file": ("suspected.png", b"verdict-b", "image/png")})
     client.post("/api/detect", files={"file": ("highly.png", b"verdict-c", "image/png")})
-    client.post("/api/detect", files={"file": ("unknown.png", b"verdict-d", "image/png")})
+    unknown = client.post("/api/detect", files={"file": ("unknown.png", b"verdict-d", "image/png")})
 
     listing = client.get("/api/history", headers={"X-Jianzhen-Token": "test-token"})
     real_only = client.get("/api/history?verdict=real", headers={"X-Jianzhen-Token": "test-token"})
@@ -744,15 +898,15 @@ def test_history_filters_and_counts_include_verdict_breakdown(client, monkeypatc
     assert payload["filterCounts"]["real"] == 1
     assert payload["filterCounts"]["suspected"] == 1
     assert payload["filterCounts"]["highly"] == 1
-    assert payload["filterCounts"]["unknownVerdict"] == 1
+    assert payload["filterCounts"]["unknownVerdict"] == 0
+    assert unknown.status_code == 503
     assert len(real_only.json()["items"]) == 1
     assert real_only.json()["items"][0]["verdict"] == "real"
     assert len(suspected_only.json()["items"]) == 1
     assert suspected_only.json()["items"][0]["verdict"] == "suspected_fake"
     assert len(highly_only.json()["items"]) == 1
     assert highly_only.json()["items"][0]["verdict"] == "highly_suspected_fake"
-    assert len(unknown_only.json()["items"]) == 1
-    assert unknown_only.json()["items"][0]["verdict"] == "unknown"
+    assert unknown_only.json()["items"] == []
 
 
 def test_metrics_include_source_and_evidence_breakdown(client):
@@ -786,7 +940,7 @@ def test_metrics_include_source_and_evidence_breakdown(client):
     assert "sources" in payload["byDay"][0]
     assert "verdicts" in payload["byDay"][0]
     assert "evidence" in payload["byDay"][0]
-    assert payload["summary"]["analysisCacheVersion"] == "v6-low-ela-weight"
+    assert payload["summary"]["analysisCacheVersion"] == "v7-real-results-only"
 
 
 def test_metrics_supports_window_sizes(client):
@@ -826,8 +980,8 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
             "dimensions": [],
             "regions": [],
             "explanation": "命中 Gemini 水印。",
-            "modelVersion": "mock-model",
-            "source": "mock",
+            "modelVersion": "qwen3-vl-flash-watermark",
+            "source": "vlm",
             "synthid": {"detected": True},
             "visibleWatermark": {"detected": True, "provider": "gemini"},
         },
@@ -836,9 +990,9 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
             "confidence": 0.66,
             "dimensions": [],
             "regions": [],
-            "explanation": "仅证据图模式。",
-            "modelVersion": "maps-only-model",
-            "source": "maps-only",
+            "explanation": "真实模型给出疑似结论。",
+            "modelVersion": "qwen3-vl-flash-evidence",
+            "source": "vlm",
             "synthid": {"detected": False},
             "visibleWatermark": {"detected": False, "provider": None},
         },
@@ -847,9 +1001,9 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
             "confidence": 0.55,
             "dimensions": [],
             "regions": [],
-            "explanation": "未知来源模式。",
-            "modelVersion": "unknown-model",
-            "source": "unknown",
+            "explanation": "真实模型未见明显异常。",
+            "modelVersion": "qwen3-vl-flash",
+            "source": "vlm",
             "synthid": {"detected": False},
             "visibleWatermark": {"detected": False, "provider": None},
         },
@@ -868,9 +1022,9 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
     assert detect_b.status_code == 200
     assert detect_c.status_code == 200
     assert detect_d.status_code == 200
-    assert detect_a.json()["cacheVersion"] == "v6-low-ela-weight"
+    assert detect_a.json()["cacheVersion"] == "v7-real-results-only"
     assert detect_a_cached.json()["cacheHit"] is True
-    assert detect_a_cached.json()["cacheVersion"] == "v6-low-ela-weight"
+    assert detect_a_cached.json()["cacheVersion"] == "v7-real-results-only"
 
     task_a = detect_a.json()["taskId"]
     task_b = detect_b.json()["taskId"]
@@ -888,19 +1042,11 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
 
     limited = client.get("/api/history?limit=1", headers={"X-Jianzhen-Token": "test-token"})
     by_source = client.get(
-        f"/api/history?source=mock&query={detect_b.json()['reportId']}",
+        f"/api/history?source=vlm&query={detect_b.json()['reportId']}",
         headers={"X-Jianzhen-Token": "test-token"},
     )
-    by_maps_only = client.get(
-        "/api/history?source=maps-only&query=%E4%BB%85%E8%AF%81%E6%8D%AE%E5%9B%BE",
-        headers={"X-Jianzhen-Token": "test-token"},
-    )
-    by_unknown = client.get(
-        "/api/history?source=unknown&query=%E6%9C%AA%E7%9F%A5%E6%9D%A5%E6%BA%90",
-        headers={"X-Jianzhen-Token": "test-token"},
-    )
-    by_model = client.get("/api/history?query=mock-model", headers={"X-Jianzhen-Token": "test-token"})
-    by_cache_version = client.get("/api/history?query=%E7%BC%93%E5%AD%98%E7%89%88%E6%9C%AC%20v6-low-ela-weight", headers={"X-Jianzhen-Token": "test-token"})
+    by_model = client.get("/api/history?query=qwen3-vl-flash-watermark", headers={"X-Jianzhen-Token": "test-token"})
+    by_cache_version = client.get("/api/history?query=%E7%BC%93%E5%AD%98%E7%89%88%E6%9C%AC%20v7-real-results-only", headers={"X-Jianzhen-Token": "test-token"})
     by_query = client.get("/api/history?query=%E7%9C%9F%E5%AE%9E%E6%A8%A1%E5%9E%8B", headers={"X-Jianzhen-Token": "test-token"})
     by_evidence = client.get(
         "/api/history?hasWatermark=true&hasSynthid=true&query=gemini%20%E6%B0%B4%E5%8D%B0",
@@ -921,32 +1067,19 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
 
     assert by_source.status_code == 200
     assert by_source.json()["total"] == 1
-    assert by_source.json()["items"][0]["source"] == "mock"
-    assert by_source.json()["items"][0]["modelVersion"] == "mock-model"
+    assert by_source.json()["items"][0]["source"] == "vlm"
+    assert by_source.json()["items"][0]["modelVersion"] == "qwen3-vl-flash-watermark"
     assert by_source.json()["items"][0]["reportId"] == detect_b.json()["reportId"]
     assert by_source.json()["filterCounts"]["maps-only"] == 0
 
-    assert by_maps_only.status_code == 200
-    assert by_maps_only.json()["total"] == 1
-    assert by_maps_only.json()["filterCounts"]["maps-only"] == 1
-    assert by_maps_only.json()["filterCounts"]["unknown"] == 0
-    assert by_maps_only.json()["items"][0]["source"] == "maps-only"
-    assert by_maps_only.json()["items"][0]["reportId"] == detect_c.json()["reportId"]
-
-    assert by_unknown.status_code == 200
-    assert by_unknown.json()["total"] == 1
-    assert by_unknown.json()["filterCounts"]["unknown"] == 1
-    assert by_unknown.json()["items"][0]["source"] == "unknown"
-    assert by_unknown.json()["items"][0]["reportId"] == detect_d.json()["reportId"]
-
     assert by_model.status_code == 200
     assert by_model.json()["total"] == 1
-    assert by_model.json()["items"][0]["modelVersion"] == "mock-model"
+    assert by_model.json()["items"][0]["modelVersion"] == "qwen3-vl-flash-watermark"
     assert by_model.json()["items"][0]["reportId"] == detect_b.json()["reportId"]
 
     assert by_cache_version.status_code == 200
     assert by_cache_version.json()["total"] >= 5
-    assert {item["cacheVersion"] for item in by_cache_version.json()["items"]} == {"v6-low-ela-weight"}
+    assert {item["cacheVersion"] for item in by_cache_version.json()["items"]} == {"v7-real-results-only"}
 
     assert by_query.status_code == 200
     assert by_query.json()["total"] >= 1
