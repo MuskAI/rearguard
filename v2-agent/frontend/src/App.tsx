@@ -4,12 +4,18 @@ import {
   Bot,
   Check,
   CircleDashed,
+  FileCheck2,
   FileText,
+  Fingerprint,
   Image as ImageIcon,
+  Layers3,
   LoaderCircle,
+  LockKeyhole,
   LogIn,
   Paperclip,
   RefreshCw,
+  Route,
+  ScanSearch,
   Send,
   ShieldCheck,
   Sparkles,
@@ -17,6 +23,7 @@ import {
   UserRound,
   Video,
   Volume2,
+  Waypoints,
 } from "lucide-react";
 import {
   AccountUser,
@@ -602,43 +609,118 @@ function WelcomeWorkspace({
   onLogin: () => void;
 }) {
   return (
-    <div className="welcome-workspace">
-      <div className="welcome-copy">
-        <div className="welcome-agent">
-          <img src="/brand/huijian-mascot.webp" alt="慧鉴AI 品牌助手小鉴" />
-          <span><Sparkles size={14} /> 小鉴已就绪</span>
+    <div className="welcome-page">
+      <section className="welcome-workspace" aria-labelledby="welcome-title">
+        <div className="welcome-copy">
+          <div className="welcome-agent-scene">
+            <div className="welcome-agent">
+              <img src="/brand/huijian-mascot.webp" alt="慧鉴AI 品牌助手小鉴" width="96" height="126" />
+              <span><Sparkles size={14} /> 小鉴已就绪</span>
+            </div>
+            <div className="evidence-stack" aria-label="小鉴会核验的三类证据">
+              <span><Fingerprint size={15} /> 来源线索</span>
+              <span><ScanSearch size={15} /> 模型痕迹</span>
+              <span><Layers3 size={15} /> 内容结构</span>
+            </div>
+          </div>
+          <p className="welcome-eyebrow">可信内容，从看清证据开始</p>
+          <h2 id="welcome-title">把内容交给小鉴，<br />一起看清真假。</h2>
+          <p className="welcome-description">慧鉴AI 将模型判断、来源核验与关键证据放进同一个任务，给出可理解、可追溯的辅助结论。</p>
+          <div className="hero-proof-row" aria-label="慧鉴AI 分析链路">
+            <span><i>01</i> 自动识别</span>
+            <span><i>02</i> 多路核验</span>
+            <span><i>03</i> 报告归档</span>
+          </div>
+          {!user && <button type="button" className="welcome-login-link" onClick={onLogin}><BadgeCheck size={16} /> 登录后，历史记录只对你本人可见</button>}
         </div>
-        <p className="welcome-eyebrow">可信内容，从看清证据开始</p>
-        <h2>把内容交给小鉴，<br />一起看清真假。</h2>
-        <p className="welcome-description">上传待核验内容，小鉴会把结论、关键证据与报告整理在同一个任务里。</p>
-        {!user && <button type="button" className="welcome-login-link" onClick={onLogin}><BadgeCheck size={16} /> 登录后，历史记录只对你本人可见</button>}
-      </div>
 
-      <section
-        className={`upload-stage ${dragging ? "dragging" : ""}`}
-        onDragEnter={(event) => { event.preventDefault(); onDragEnter(); }}
-        onDragOver={(event) => event.preventDefault()}
-        onDragLeave={(event) => { if (event.currentTarget === event.target) onDragLeave(); }}
-        onDrop={onDrop}
-      >
-        <div className="upload-stage-icon"><UploadCloud size={28} /></div>
-        <h3>{dragging ? "松开即可开始鉴伪" : "上传或拖放待鉴别内容"}</h3>
-        <p>系统会自动识别内容类型并选择合适的分析链路</p>
-        <button type="button" className="primary-button upload-button" onClick={onOpenFile} disabled={busy}><Paperclip size={17} /> 选择文件</button>
-        <div className="capability-strip" aria-label="支持的内容类型">
-          <div><ImageIcon size={18} /><span><strong>图像</strong><small>多源鉴伪</small></span><Check size={14} /></div>
-          <div><Video size={18} /><span><strong>视频</strong><small>抽帧分析</small></span><Check size={14} /></div>
-          <div><FileText size={18} /><span><strong>文档</strong><small>正文检测</small></span><Check size={14} /></div>
-          <div className="unavailable"><Volume2 size={18} /><span><strong>音频</strong><small>尚未部署</small></span><CircleDashed size={14} /></div>
+        <section
+          className={`upload-stage ${dragging ? "dragging" : ""}`}
+          onDragEnter={(event) => { event.preventDefault(); onDragEnter(); }}
+          onDragOver={(event) => event.preventDefault()}
+          onDragLeave={(event) => { if (event.currentTarget === event.target) onDragLeave(); }}
+          onDrop={onDrop}
+          aria-label="统一鉴伪上传入口"
+        >
+          <div className="upload-stage-topline">
+            <span><i /> 统一鉴伪入口</span>
+            <small>自动调度可用能力</small>
+          </div>
+          <div className="upload-stage-core">
+            <div className="upload-stage-icon"><UploadCloud size={28} /></div>
+            <h3>{dragging ? "松开即可开始鉴伪" : "上传或拖放待鉴别内容"}</h3>
+            <p>图片、视频或文档，会自动进入对应的分析链路</p>
+            <button type="button" className="primary-button upload-button" onClick={onOpenFile} disabled={busy}><Paperclip size={17} /> 选择文件</button>
+          </div>
+          <div className="capability-strip" aria-label="支持的内容类型">
+            <div><ImageIcon size={18} /><span><strong>图像</strong><small>多源鉴伪</small></span><Check size={14} /></div>
+            <div><Video size={18} /><span><strong>视频</strong><small>抽帧分析</small></span><Check size={14} /></div>
+            <div><FileText size={18} /><span><strong>文档</strong><small>正文检测</small></span><Check size={14} /></div>
+            <div className="unavailable"><Volume2 size={18} /><span><strong>音频</strong><small>尚未部署</small></span><CircleDashed size={14} /></div>
+          </div>
+          <small className="upload-limits">图片/文档不超过 25 MB · 视频不超过 100 MB</small>
+        </section>
+
+        <div className="trust-notes">
+          <span><ShieldCheck size={16} /> 不生成随机结论</span>
+          <span><BadgeCheck size={16} /> 个人任务严格隔离</span>
+          <span><FileText size={16} /> 支持报告归档</span>
         </div>
-        <small className="upload-limits">图片/文档不超过 25 MB · 视频不超过 100 MB</small>
       </section>
 
-      <div className="trust-notes">
-        <span><ShieldCheck size={16} /> 不生成随机结论</span>
-        <span><BadgeCheck size={16} /> 个人任务严格隔离</span>
-        <span><FileText size={16} /> 支持报告归档</span>
-      </div>
+      <section className="home-introduction" aria-label="慧鉴AI 产品介绍">
+        <section className="intro-band intro-overview" aria-labelledby="overview-title">
+          <div className="intro-heading">
+            <span>WHAT · 慧鉴AI</span>
+            <h3 id="overview-title">不止给一个概率，<br />还要说明依据来自哪里。</h3>
+            <p>面向图像、视频与文档的统一内容鉴伪 Agent。小鉴会组织可用检测能力，把不同证据放在同一条分析链路中呈现。</p>
+          </div>
+          <div className="intro-pillars">
+            <article>
+              <span><ScanSearch size={20} /> 01</span>
+              <h4>模型判断</h4>
+              <p>识别生成痕迹与异常模式，并展示风险分数和置信信息。</p>
+            </article>
+            <article>
+              <span><Fingerprint size={20} /> 02</span>
+              <h4>来源核验</h4>
+              <p>结合元数据、内容凭证与可用来源线索，补足单一模型的盲区。</p>
+            </article>
+            <article>
+              <span><FileCheck2 size={20} /> 03</span>
+              <h4>证据报告</h4>
+              <p>把关键依据和结论整理成可下载报告，方便复核与归档。</p>
+            </article>
+          </div>
+        </section>
+
+        <section className="intro-band workflow-band" aria-labelledby="workflow-title">
+          <div className="section-kicker"><Route size={17} /> HOW · 一次任务如何完成</div>
+          <div className="workflow-heading">
+            <h3 id="workflow-title">从一份内容，到一份可复核结论</h3>
+            <p>复杂能力留在系统内部，用户只需要完成一次上传。</p>
+          </div>
+          <ol className="workflow-steps">
+            <li><span>01</span><UploadCloud size={21} /><div><strong>提交内容</strong><p>自动识别文件类型并完成基础校验。</p></div></li>
+            <li><span>02</span><Waypoints size={21} /><div><strong>能力调度</strong><p>选择当前可用的模型与核验链路。</p></div></li>
+            <li><span>03</span><Layers3 size={21} /><div><strong>证据交叉</strong><p>统一整理模型、来源和内容层证据。</p></div></li>
+            <li><span>04</span><FileCheck2 size={21} /><div><strong>结论归档</strong><p>呈现风险说明，并生成可追溯报告。</p></div></li>
+          </ol>
+        </section>
+
+        <section className="intro-band boundary-band" aria-labelledby="boundary-title">
+          <div className="boundary-mark"><LockKeyhole size={28} /></div>
+          <div className="boundary-copy">
+            <span>TRUST · 能力边界</span>
+            <h3 id="boundary-title">让系统负责找证据，<br />把最终判断留给人。</h3>
+          </div>
+          <div className="boundary-list">
+            <span><ShieldCheck size={17} /><b>真实链路</b> 服务不可用时明确提示，不用模拟结果代替。</span>
+            <span><LockKeyhole size={17} /><b>账户隔离</b> 登录用户只能访问自己的任务与历史。</span>
+            <span><BadgeCheck size={17} /><b>辅助决策</b> 高风险场景仍应结合原始来源与人工复核。</span>
+          </div>
+        </section>
+      </section>
     </div>
   );
 }
