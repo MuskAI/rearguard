@@ -345,6 +345,252 @@ export async function detect(file: File, fileType?: FileType): Promise<DetectRes
   return normalizeDetectResult(await parseJson(res, `检测失败 (${res.status})`));
 }
 
+export interface AccountUser {
+  Userid: number;
+  username: string;
+  phone: string;
+  openid?: string;
+}
+
+export interface AccountCounters {
+  image_detect: number;
+  video_detect: number;
+}
+
+export interface ImageAgentExpert {
+  id: string;
+  publicId?: string;
+  status?: "queued" | "running" | "success" | "failed" | "skipped" | string;
+  publicName?: string;
+  publicMessage?: string;
+  publicVerdict?: string;
+}
+
+export interface ImageAgentReview {
+  enabled?: boolean;
+  score?: number;
+  finalLabel?: string;
+  confidence?: string;
+  consensusLevel?: string;
+  consensusScore?: number;
+  disagreement?: boolean;
+  effectiveExperts?: number;
+  totalExperts?: number;
+  experts?: ImageAgentExpert[];
+  evidence?: string[];
+}
+
+export interface ImageAgentResult {
+  itemid: number;
+  final_label: string;
+  probability: number;
+  detector_probability?: number;
+  p_visual?: number | null;
+  p_metadata?: number | null;
+  confidence: string;
+  explanation: string;
+  image_url: string;
+  filename: string;
+  file_size?: string;
+  resolution?: string;
+  img_format?: string;
+  visual_issues?: string[];
+  all_metadata?: Record<string, unknown>;
+  llm_used?: boolean;
+  feedback?: 1 | -1 | null;
+  swarm?: ImageAgentReview;
+}
+
+export interface ImageAgentJob {
+  id: string;
+  filename?: string;
+  status: "queued" | "running" | "success" | "failed" | string;
+  createdAt?: string;
+  updatedAt?: string;
+  progress?: number;
+  experts?: ImageAgentExpert[];
+  summary?: string;
+  error?: string;
+  result?: {
+    status?: string;
+    result?: ImageAgentResult;
+    message?: string;
+  } | null;
+}
+
+export interface VideoAgentResult {
+  itemid: number;
+  filename: string;
+  video_url: string;
+  fake_percentage: number;
+  real_percentage: number;
+  final_label: string;
+  confidence: string;
+  confidence_score?: number;
+  explanation: string;
+  frame_count?: number;
+  d3_std?: number;
+  encoder?: string;
+  meta?: Record<string, string>;
+}
+
+export interface ImageHistoryRecord {
+  itemid: number;
+  filename: string;
+  image_url: string;
+  thumbnail_url?: string;
+  real_prob: number;
+  fake_prob: number;
+  final_label: string;
+  confidence: string;
+  createtime: string;
+  report_url?: string;
+}
+
+export interface VideoHistoryRecord {
+  itemid: number;
+  filename: string;
+  video_url: string;
+  real_percentage: number;
+  fake_percentage: number;
+  final_label: string;
+  confidence: string;
+  createtime: string;
+  report_url?: string;
+}
+
+async function accountJson<T>(path: string, init: RequestInit = {}, fallback = "请求失败"): Promise<T> {
+  const headers = new Headers(init.headers);
+  if (init.body && !(init.body instanceof FormData)) headers.set("Content-Type", "application/json");
+  const res = await fetch(path, { ...init, credentials: "include", cache: "no-store", headers });
+  return parseJson<T>(res, fallback);
+}
+
+export function fetchCurrentUser(): Promise<{ status: string; user: AccountUser; counters: AccountCounters }> {
+  return accountJson("/api/me", {}, "用户状态暂不可用");
+}
+
+export function loginByPassword(phone: string, secret: string, acceptedTerms: boolean) {
+  return accountJson<{ status: string; user: AccountUser }>(
+    "/api/login/password",
+    { method: "POST", body: JSON.stringify({ phone, secret, accepted_terms: acceptedTerms }) },
+    "登录失败",
+  );
+}
+
+export function loginBySms(phone: string, smsCode: string, acceptedTerms: boolean) {
+  return accountJson<{ status: string; user: AccountUser }>(
+    "/api/login/sms",
+    { method: "POST", body: JSON.stringify({ phone, sms_code: smsCode, accepted_terms: acceptedTerms }) },
+    "登录失败",
+  );
+}
+
+export function sendSmsCode(phone: string, scene: "login" | "register" | "reset") {
+  return accountJson<{ success: boolean; message?: string; debug_code?: string; expires_in?: number }>(
+    "/sms/send_code",
+    { method: "POST", body: JSON.stringify({ phone, scene }) },
+    "验证码发送失败",
+  );
+}
+
+export function registerAccount(payload: {
+  phone: string;
+  secret: string;
+  username: string;
+  smsCode: string;
+  acceptedTerms: boolean;
+}) {
+  return accountJson<{ status: string; message: string }>(
+    "/api/register",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        phone: payload.phone,
+        secret: payload.secret,
+        username: payload.username,
+        sms_code: payload.smsCode,
+        accepted_terms: payload.acceptedTerms,
+        terms_version: "2026-06-03",
+      }),
+    },
+    "注册失败",
+  );
+}
+
+export function logoutAccount() {
+  return accountJson<{ status: string }>("/api/logout", { method: "POST" }, "退出失败");
+}
+
+export function startImageAgent(file: File, signal?: AbortSignal) {
+  const body = new FormData();
+  body.append("image", file);
+  return accountJson<{ status: string; job: ImageAgentJob }>(
+    "/image_upload/detect_swarm",
+    { method: "POST", body, signal },
+    "多源鉴伪任务启动失败",
+  );
+}
+
+export function fetchImageAgentJob(jobId: string, signal?: AbortSignal) {
+  return accountJson<{ status: string; job: ImageAgentJob }>(
+    `/image_upload/jobs/${encodeURIComponent(jobId)}`,
+    { signal },
+    "鉴伪任务状态暂不可用",
+  );
+}
+
+export function detectVideoWithAgent(file: File) {
+  const body = new FormData();
+  body.append("video_file", file);
+  body.append("fast_mode", "1");
+  return accountJson<{ status: string; result: VideoAgentResult }>(
+    "/video_upload/detect",
+    { method: "POST", body },
+    "视频鉴伪失败",
+  );
+}
+
+export function fetchImageHistory(limit = 100) {
+  return accountJson<{ status: string; records: ImageHistoryRecord[]; total: number }>(
+    `/api/history/image-detections?limit=${encodeURIComponent(String(limit))}`,
+    {},
+    "图像历史暂不可用",
+  );
+}
+
+export function fetchVideoHistory(limit = 100) {
+  return accountJson<{ status: string; records: VideoHistoryRecord[]; total: number }>(
+    `/api/history/video-detections?limit=${encodeURIComponent(String(limit))}`,
+    {},
+    "视频历史暂不可用",
+  );
+}
+
+export function fetchImageAgentResult(itemId: number) {
+  return accountJson<{ status: string; result: ImageAgentResult }>(
+    `/image_upload/result?itemid=${encodeURIComponent(String(itemId))}`,
+    {},
+    "图像记录暂不可用",
+  );
+}
+
+export function fetchVideoAgentResult(itemId: number) {
+  return accountJson<{ status: string; result: VideoAgentResult }>(
+    `/video_upload/result?itemid=${encodeURIComponent(String(itemId))}`,
+    {},
+    "视频记录暂不可用",
+  );
+}
+
+export function imageReportUrl(itemId: number): string {
+  return `/image_upload/report?itemid=${encodeURIComponent(String(itemId))}`;
+}
+
+export function videoReportUrl(itemId: number): string {
+  return `/video_upload/report?itemid=${encodeURIComponent(String(itemId))}`;
+}
+
 export type ForensicStatus = "ok" | "warn" | "danger";
 
 export interface ForensicItem {
@@ -462,12 +708,12 @@ export async function fetchHistory(params?: {
     search.set("hasWatermark", "true");
   }
   const qs = search.toString();
-  const res = await fetch(`/v2-api/history${qs ? `?${qs}` : ""}`, withSession());
+  const res = await fetch(`/v2-api/history${qs ? `?${qs}` : ""}`, withSession({ cache: "no-store" }));
   return normalizeHistoryPayload(await parseJson(res, "历史记录暂不可用"));
 }
 
 export async function fetchHistoryItem(taskId: string): Promise<DetectResult> {
-  const res = await fetch(`/v2-api/history/${taskId}`, withSession());
+  const res = await fetch(`/v2-api/history/${taskId}`, withSession({ cache: "no-store" }));
   return normalizeDetectResult(await parseJson(res, "历史详情暂不可用"));
 }
 

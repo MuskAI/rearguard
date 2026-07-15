@@ -1,8 +1,9 @@
 import os
+import secrets
 from datetime import timedelta
 
 import click
-from flask import Flask, abort, render_template, send_from_directory, session, redirect
+from flask import Flask, abort, render_template, request, send_from_directory, session, redirect
 from .views import detection
 from .views import login
 from .views import historical_record
@@ -13,7 +14,7 @@ from .views import admin
 
 def creat_app():
     app = Flask(__name__)
-    app.secret_key = os.environ.get('SECRET_KEY') or os.environ.get('REALGUARD_SECRET_KEY') or 'gdq821821'
+    app.secret_key = os.environ.get('SECRET_KEY') or os.environ.get('REALGUARD_SECRET_KEY') or secrets.token_urlsafe(48)
     app.config.update(
         PERMANENT_SESSION_LIFETIME=timedelta(days=30),
         SESSION_COOKIE_HTTPONLY=True,
@@ -28,6 +29,15 @@ def creat_app():
     app.register_blueprint(profile.profile_blueprint)
     app.register_blueprint(api.api_blueprint)
     app.register_blueprint(admin.admin_blueprint)
+
+    @app.after_request
+    def prevent_sensitive_response_caching(response):
+        if request.path.startswith(('/api/', '/image_upload/', '/video_upload/', '/sms/', '/admin/')):
+            response.headers['Cache-Control'] = 'private, no-store, max-age=0'
+            response.headers['Pragma'] = 'no-cache'
+            response.vary.add('Cookie')
+            response.vary.add('Authorization')
+        return response
 
     @app.cli.command("admin-db-upgrade")
     def admin_db_upgrade():

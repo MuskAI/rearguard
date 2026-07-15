@@ -354,6 +354,7 @@ def _matches_history_filters(
 
 def list_history(
     *,
+    owner_user_id: str | None = None,
     limit: int = 100,
     offset: int = 0,
     query: str | None = None,
@@ -365,15 +366,22 @@ def list_history(
     has_watermark: bool | None = None,
     has_synthid: bool | None = None,
 ) -> tuple[list[dict[str, Any]], int, dict[str, int]]:
+    ownership_sql = ""
+    ownership_params: tuple[Any, ...] = ()
+    if owner_user_id is not None:
+        ownership_sql = "WHERE h.developer_user_id = ?"
+        ownership_params = (str(owner_user_id),)
     with _connect() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT h.task_id, h.report_id, h.created_at, h.file_type, h.file_name, h.result_json, h.thumbnail,
                    a.forensics_json, a.provenance_json
             FROM history h
             LEFT JOIN history_artifacts a ON a.task_id = h.task_id
+            {ownership_sql}
             ORDER BY created_at DESC
             """,
+            ownership_params,
         ).fetchall()
     items = [_history_summary_from_row(row) for row in rows]
     normalized_query = (query or "").strip().lower()

@@ -1,8 +1,7 @@
-import os
 from flask import Blueprint, render_template, request, session, jsonify
 
-from imagedetection.views.login import _hash_password, _password_matches
-from imagedetection.views.utils import excute_detection_sql
+from imagedetection.views.login import _hash_password, _password_matches, _password_policy_error
+from imagedetection.views.utils import excute_detection_sql, excute_sql
 
 profile_blueprint = Blueprint('profile_blueprint', __name__)
 
@@ -19,13 +18,13 @@ def profile_page():
     clauses = []
     params = []
     if user_id not in (None, ''):
-        clauses.append('Userid = %s')
+        clauses.append('(Userid = %s)')
         params.append(user_id)
     if phone:
-        clauses.append('phone = %s')
+        clauses.append('(Userid IS NULL AND phone = %s)')
         params.append(phone)
     if openid:
-        clauses.append('openid = %s')
+        clauses.append("(Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s)")
         params.append(openid)
     history_where = ' OR '.join(clauses) if clauses else '1 = 0'
     history_params = tuple(params)
@@ -67,10 +66,13 @@ def change_password():
 
     if not old_password or not new_password:
         return jsonify({'status': 'error', 'message': '请填写完整信息'}), 400
-    if len(new_password) < 4:
-        return jsonify({'status': 'error', 'message': '新密码至少4位'}), 400
+    password_error = _password_policy_error(new_password)
+    if password_error:
+        return jsonify({'status': 'error', 'message': password_error}), 400
 
-    phone = session['user_info'].get('phone', '')
+    phone = str(session['user_info'].get('phone') or '').strip()
+    if not phone:
+        return jsonify({'status': 'error', 'message': '当前账号未绑定手机号，请使用短信找回或联系管理员'}), 400
 
     rows = excute_sql("SELECT secret FROM user WHERE phone = %s LIMIT 1", (phone,))
     if not rows or not _password_matches(rows[0].get('secret', ''), old_password):

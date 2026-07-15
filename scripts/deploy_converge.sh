@@ -64,12 +64,12 @@ deploy_if_needed() {
   DEPLOY_SSH_KEY="$DEPLOY_SSH_KEY" DEPLOY_HOST="$DEPLOY_HOST" DEPLOY_USER="$DEPLOY_USER" DRY_RUN="$DRY_RUN" bash "$script_path"
 }
 
-if [[ "$TARGET" == "all" || "$TARGET" == "v1" ]]; then
-  deploy_if_needed "V1" "$v1_repo_state" "$DEPLOY_V1"
-fi
-
 if [[ "$TARGET" == "all" || "$TARGET" == "v2" ]]; then
   deploy_if_needed "V2" "$v2_repo_state" "$DEPLOY_V2"
+fi
+
+if [[ "$TARGET" == "all" || "$TARGET" == "v1" ]]; then
+  deploy_if_needed "V1" "$v1_repo_state" "$DEPLOY_V1"
 fi
 
 printf '\nFinal status:\n'

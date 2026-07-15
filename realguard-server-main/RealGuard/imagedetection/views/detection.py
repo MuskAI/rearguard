@@ -3,7 +3,9 @@ import json
 import uuid
 import io
 import copy
+import ipaddress
 import requests
+import socket
 import threading
 import time
 from urllib.parse import urlparse
@@ -56,6 +58,7 @@ IMAGE_DETECT_FALLBACK = os.environ.get('REALGUARD_IMAGE_DETECT_FALLBACK', '0').s
 VIDEO_DETECT_TIMEOUT_NORMAL = 120
 IMAGE_DETECT_TIMEOUT = 180
 V2_DETECT_TIMEOUT = int(os.environ.get('REALGUARD_V2_DETECT_TIMEOUT', '180'))
+ALLOW_REMOTE_VIDEO_URLS = str(os.environ.get('REALGUARD_ALLOW_REMOTE_VIDEO_URLS', '0')).strip().lower() in ('1', 'true', 'yes')
 GUEST_DETECTION_SESSION_KEY = 'guest_detection_count'
 GUEST_DETECTION_LIMIT = int(os.environ.get('REALGUARD_GUEST_DETECTION_LIMIT', '1'))
 STATIC_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'static'))
@@ -267,17 +270,35 @@ def _detection_owner_where(user_id, phone, openid):
     clauses = []
     params = []
     if user_id not in (None, ''):
-        clauses.append("Userid = %s")
+        clauses.append("(Userid = %s)")
         params.append(user_id)
     if phone:
-        clauses.append("phone = %s")
+        clauses.append("(Userid IS NULL AND phone = %s)")
         params.append(phone)
     if openid:
-        clauses.append("openid = %s")
+        clauses.append("(Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s)")
         params.append(openid)
     if not clauses:
         return "1 = 0", ()
     return " OR ".join(clauses), tuple(params)
+
+
+def _runtime_owner_matches(owner, user_id, phone, openid, is_guest):
+    owner = owner or {}
+    owner_user_id = owner.get('Userid') or owner.get('userId') or owner.get('id')
+    owner_phone = str(owner.get('phone') or '').strip()
+    owner_openid = str(owner.get('openid') or '').strip()
+    if is_guest:
+        return bool(openid and owner_user_id in (None, '') and not owner_phone and owner_openid == openid)
+    if user_id not in (None, ''):
+        if owner_user_id not in (None, ''):
+            return str(owner_user_id) == str(user_id)
+        if phone and owner_phone:
+            return owner_phone == phone
+        return bool(openid and not owner_phone and owner_openid == openid)
+    if phone and owner_phone:
+        return owner_phone == phone
+    return bool(openid and not owner_phone and owner_openid == openid)
 
 
 def _load_detection_record(table, itemid):
@@ -285,7 +306,7 @@ def _load_detection_record(table, itemid):
     if is_guest:
         if not openid:
             return None
-        sql = f"SELECT * FROM {table} WHERE itemid = %s AND openid = %s LIMIT 1"
+        sql = f"SELECT * FROM {table} WHERE itemid = %s AND Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s LIMIT 1"
         rows = excute_detection_sql(sql, (itemid, openid))
     else:
         owner_where, owner_params = _detection_owner_where(user_id, phone, openid)
@@ -322,6 +343,9 @@ def _mark_guest_detection_used(is_guest):
 
 
 def _backend_static_url(kind, record):
+    itemid = (record or {}).get('itemid')
+    if itemid:
+        return f"/api/media/{kind}/{itemid}"
     filename = (record or {}).get('filename') or ''
     folder = (record or {}).get('openid') or (record or {}).get('phone') or 'guest'
     if not filename:
@@ -375,6 +399,31 @@ def _truthy(value):
     if isinstance(value, bool):
         return value
     return str(value or '').strip().lower() in ('1', 'true', 'yes', 'on', 'v2', 'auto')
+
+
+def _validate_public_video_url(value):
+    parsed = urlparse(str(value or '').strip())
+    if parsed.scheme not in {'http', 'https'} or not parsed.hostname or parsed.username or parsed.password:
+        return False
+    try:
+        port = parsed.port
+    except ValueError:
+        return False
+    if port not in (None, 80, 443):
+        return False
+    try:
+        addresses = {
+            item[4][0]
+            for item in socket.getaddrinfo(parsed.hostname, port or (443 if parsed.scheme == 'https' else 80), type=socket.SOCK_STREAM)
+        }
+    except (OSError, ValueError):
+        return False
+    if not addresses:
+        return False
+    try:
+        return all(ipaddress.ip_address(address).is_global for address in addresses)
+    except ValueError:
+        return False
 
 
 def _model_by_route(role):
@@ -968,7 +1017,7 @@ def _run_image_detection_payload(image_bytes, filename, mimetype, user_info, *, 
                 'agent_reasoning': public_agent_reasoning,
                 'llm_used': bool(public_agent_reasoning),
                 'visual_issues': visual_issues,
-                'image_url': _public_backend_static_url(data.get('image_url')) or _backend_static_url('image', data),
+                'image_url': f"/api/media/image/{data_itemid}" if data_itemid else '',
                 'filename': data.get('filename') or safe_name,
                 'file_size': data.get('file_size') or (data.get('meta') or {}).get('file_size', ''),
                 'img_format': data.get('img_format') or (data.get('meta') or {}).get('img_format', ''),
@@ -1833,14 +1882,7 @@ def image_detection_job(job_id):
         return jsonify({'status': 'error', 'message': '任务不存在'}), 404
     owner = job.get('actor') or {}
     user_id, phone, openid, is_guest = _detection_owner()
-    if is_guest:
-        allowed = bool(openid and owner.get('openid') == openid)
-    else:
-        allowed = bool(
-            (user_id not in (None, '') and owner.get('Userid') == user_id)
-            or (phone and owner.get('phone') == phone)
-            or (openid and owner.get('openid') == openid)
-        )
+    allowed = _runtime_owner_matches(owner, user_id, phone, openid, is_guest)
     if not allowed:
         return jsonify({'status': 'error', 'message': '无权查看该任务'}), 403
     return jsonify({'status': 'success', 'job': _public_detection_job(job)})
@@ -1991,7 +2033,11 @@ def video_detect():
     file = request.files.get('video_file')
 
     if not file and not video_url:
-        return jsonify({'status': 'error', 'message': '请上传视频文件或填写视频 URL'}), 400
+        return jsonify({'status': 'error', 'message': '请上传视频文件'}), 400
+    if video_url and not ALLOW_REMOTE_VIDEO_URLS:
+        return jsonify({'status': 'error', 'message': '远程视频 URL 已禁用，请直接上传视频文件'}), 400
+    if video_url and not _validate_public_video_url(video_url):
+        return jsonify({'status': 'error', 'message': '视频 URL 必须是可公开访问的 HTTP(S) 地址'}), 400
 
     try:
         form_data = {
@@ -2049,9 +2095,7 @@ def video_detect():
     encoder = data.get('encoder', '')
     record = None
     if itemid:
-        rows = excute_detection_sql("SELECT * FROM video_data WHERE itemid = %s", (itemid,))
-        if rows:
-            record = rows[0]
+        record = _load_detection_record('video_data', itemid)
     video_file_url = _backend_static_url('video', record or {'openid': backend_openid, 'filename': ''})
 
     _mark_guest_detection_used(is_guest)

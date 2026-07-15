@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import random
 import re
 import time
@@ -89,9 +90,11 @@ def _record_terms_acceptance(phone):
     return result is not None
 
 
+_SMS_HASH_SECRET = os.environ.get('SECRET_KEY') or os.environ.get('REALGUARD_SECRET_KEY') or secrets.token_urlsafe(48)
+
+
 def _hash_code(code):
-    secret = os.environ.get('SECRET_KEY') or 'realguard-sms-code'
-    return hashlib.sha256((secret + ':' + code).encode('utf-8')).hexdigest()
+    return hashlib.sha256((_SMS_HASH_SECRET + ':' + code).encode('utf-8')).hexdigest()
 
 
 def _is_password_hash(value):
@@ -280,15 +283,15 @@ def _send_sms_code(phone, scene):
     code = ''.join(random.choice('0123456789') for _ in range(SMS_CODE_LENGTH))
     provider = os.environ.get('SMS_PROVIDER', '').strip().lower()
     if not provider:
-        provider = 'aliyun' if os.environ.get('ALIYUN_ACCESS_KEY_ID') else 'mock'
+        provider = 'aliyun' if os.environ.get('ALIYUN_ACCESS_KEY_ID') else 'disabled'
 
     if provider == 'aliyun':
         _send_sms_by_aliyun(phone, code, scene)
     elif provider != 'mock':
-        raise RuntimeError('不支持的短信服务提供方')
+        raise RuntimeError('短信服务未配置，请设置 SMS_PROVIDER=aliyun；本地测试需显式设置 SMS_PROVIDER=mock')
 
     _save_sms_code(scene, phone, code)
-    return code if os.environ.get('SMS_DEBUG_RETURN_CODE') == '1' or provider == 'mock' else None
+    return code if os.environ.get('SMS_DEBUG_RETURN_CODE') == '1' else None
 
 
 def _sync_detection_user(phone, username='', openid=''):
@@ -369,6 +372,7 @@ def login_verify():
             if not _record_terms_acceptance(phone):
                 return render_template('login.html', error='协议确认记录失败，请稍后重试')
             _sync_detection_user(phone, user.get('username') or phone, user.get('openid', '') or phone)
+            session.clear()
             session.permanent = True
             session['user_info'] = {
                 'Userid': user['Userid'],
@@ -401,6 +405,7 @@ def login_sms_verify():
             if not _record_terms_acceptance(phone):
                 return render_template('login.html', error='协议确认记录失败，请稍后重试', login_mode='sms')
             _sync_detection_user(phone, user.get('username') or phone, user.get('openid', '') or phone)
+            session.clear()
             session.permanent = True
             session['user_info'] = {
                 'Userid': user['Userid'],

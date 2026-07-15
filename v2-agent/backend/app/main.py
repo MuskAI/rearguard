@@ -67,6 +67,8 @@ def _allowed_origins() -> list[str]:
         return [origin.strip() for origin in raw.split(",") if origin.strip()]
     return [
         "http://124.221.92.85",
+        "https://rrreal.cn",
+        "https://www.rrreal.cn",
         "https://realguard.cn",
         "https://www.realguard.cn",
     ]
@@ -78,6 +80,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def prevent_sensitive_response_caching(request: Request, call_next):
+    response = await call_next(request)
+    sensitive_prefixes = (
+        "/api/history",
+        "/api/report",
+        "/api/admin",
+        "/api/metrics",
+    )
+    if request.url.path.startswith(sensitive_prefixes):
+        response.headers["Cache-Control"] = "private, no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Vary"] = "Cookie, Authorization"
+    return response
 
 EXT_TO_TYPE = {
     "jpg": "image", "jpeg": "image", "png": "image", "webp": "image", "bmp": "image", "gif": "image",
@@ -118,6 +136,14 @@ def _request_token(request: Request) -> str:
 
 def _admin_access_granted(request: Request) -> bool:
     return bool(ACCESS_TOKEN) and secrets.compare_digest(_request_token(request), ACCESS_TOKEN)
+
+
+def _require_admin_access(request: Request) -> dict:
+    if _admin_access_granted(request):
+        return {"mode": "admin"}
+    if _session_access_granted(request) or _request_token(request):
+        raise HTTPException(status_code=403, detail="仅管理员可访问该接口")
+    raise HTTPException(status_code=401, detail="管理员认证信息缺失")
 
 
 def _verify_session_user_sync(request: Request) -> dict | None:
@@ -163,14 +189,17 @@ def _session_access_granted(request: Request) -> dict | None:
 
 
 def _require_protected_access(request: Request) -> dict:
-    if not ACCESS_TOKEN:
-        return {"mode": "public"}
     if _admin_access_granted(request):
         return {"mode": "admin"}
     actor = _session_access_granted(request)
     if actor:
         return actor
-    raise HTTPException(status_code=401, detail="请先登录慧鉴 AI 后继续使用深度分析")
+    api_key = _request_developer_key(request)
+    if api_key:
+        if not DEVELOPER_AUTH_CONFIGURED:
+            raise HTTPException(status_code=503, detail="API Key 校验服务未配置")
+        return _verify_developer_key_sync(api_key, request)
+    raise HTTPException(status_code=401, detail="请先登录慧鉴 AI")
 
 
 def _request_developer_key(request: Request) -> str:
@@ -248,37 +277,25 @@ def _require_internal_developer_auth(request: Request) -> None:
         raise HTTPException(status_code=403, detail="内部鉴权失败")
 
 
-def _require_report_access(request: Request, item: dict) -> dict:
-    if _admin_access_granted(request):
-        return {"mode": "admin"}
-    session_actor = _session_access_granted(request)
-    if session_actor:
-        return session_actor
-    if not DEVELOPER_API_KEY_REQUIRED:
-        return {"mode": "public"}
-    if not DEVELOPER_AUTH_CONFIGURED:
-        raise HTTPException(status_code=503, detail="API Key 校验服务未配置")
-    api_key = _request_developer_key(request)
-    if not api_key:
-        raise HTTPException(status_code=401, detail="请在 X-RealGuard-Key 中提供 API Key")
-    actor = _verify_developer_key_sync(api_key, request)
-    item_user_id = str(item.get("_developerUserId") or "")
-    if item_user_id and item_user_id == str(actor.get("userId") or ""):
+def _require_owned_item(request: Request, item: dict, *, missing_detail: str) -> dict:
+    actor = _require_protected_access(request)
+    if actor.get("mode") == "admin":
         return actor
-    raise HTTPException(status_code=403, detail="当前 API Key 无权访问该报告")
+    item_user_id = str(item.get("_developerUserId") or "")
+    actor_user_id = str(actor.get("userId") or "")
+    if item_user_id and actor_user_id and secrets.compare_digest(item_user_id, actor_user_id):
+        return actor
+    # Hide object existence from other tenants and from users accessing legacy
+    # unowned rows. Null ownership must be repaired explicitly by an admin.
+    raise HTTPException(status_code=404, detail=missing_detail)
+
+
+def _require_report_access(request: Request, item: dict) -> dict:
+    return _require_owned_item(request, item, missing_detail="报告不存在")
 
 
 def _require_report_share_access(request: Request, item: dict) -> dict:
-    if _admin_access_granted(request):
-        return {"mode": "admin"}
-    session_actor = _session_access_granted(request)
-    if session_actor:
-        return session_actor
-    if DEVELOPER_API_KEY_REQUIRED:
-        return _require_report_access(request, item)
-    if ACCESS_TOKEN:
-        raise HTTPException(status_code=401, detail="请先登录慧鉴 AI 后继续使用深度分析")
-    return {"mode": "public"}
+    return _require_report_access(request, item)
 
 
 def _report_share_secret() -> str:
@@ -497,7 +514,7 @@ def health() -> dict:
 
 @app.get("/api/admin/health")
 def admin_health(request: Request) -> dict:
-    _require_protected_access(request)
+    _require_admin_access(request)
     return {
         **_public_capabilities(),
         "model": detector.VLM_MODEL,
@@ -625,7 +642,7 @@ async def provenance_check(request: Request, file: UploadFile = File(...)) -> di
 
 @app.get("/api/history")
 def history(request: Request) -> dict:
-    _require_protected_access(request)
+    actor = _require_protected_access(request)
     try:
         limit = int(request.query_params.get("limit", "100"))
     except ValueError:
@@ -658,6 +675,7 @@ def history(request: Request) -> dict:
         raise HTTPException(status_code=400, detail="verdict 不受支持")
 
     items, total, filter_counts = storage.list_history(
+        owner_user_id=None if actor.get("mode") == "admin" else str(actor.get("userId") or ""),
         limit=limit,
         offset=offset,
         query=request.query_params.get("query"),
@@ -674,19 +692,19 @@ def history(request: Request) -> dict:
 
 @app.get("/api/history/{task_id}")
 def history_item(task_id: str, request: Request) -> dict:
-    _require_protected_access(request)
     item = storage.get_history(task_id)
     if not item:
         raise HTTPException(status_code=404, detail="记录不存在")
+    _require_owned_item(request, item, missing_detail="记录不存在")
     return _strip_internal_history_fields(item)
 
 
 @app.post("/api/history/{task_id}/artifacts")
 def history_artifacts(task_id: str, request: Request, payload: dict | None = Body(default=None)) -> dict:
-    _require_protected_access(request)
     item = storage.get_history(task_id)
     if not item:
         raise HTTPException(status_code=404, detail="记录不存在")
+    _require_owned_item(request, item, missing_detail="记录不存在")
     body = payload or {}
     storage.put_history_artifacts(
         item["taskId"],
@@ -698,10 +716,11 @@ def history_artifacts(task_id: str, request: Request, payload: dict | None = Bod
 
 @app.delete("/api/history/{task_id}")
 def delete_item(task_id: str, request: Request) -> dict:
-    _require_protected_access(request)
-    item = storage.delete_history(task_id)
+    item = storage.get_history(task_id)
     if not item:
         raise HTTPException(status_code=404, detail="记录不存在")
+    _require_owned_item(request, item, missing_detail="记录不存在")
+    storage.delete_history(task_id)
     return {"deleted": task_id}
 
 
@@ -810,7 +829,7 @@ def report_public(report_id: str, request: Request) -> Response:
 
 @app.get("/api/metrics")
 def metrics(request: Request) -> dict:
-    _require_protected_access(request)
+    _require_admin_access(request)
     try:
         days = int(request.query_params.get("days", "14"))
     except ValueError:

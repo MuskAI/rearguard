@@ -14,6 +14,11 @@ from imagedetection import creat_app  # noqa: E402
 from imagedetection.views import api, detection, reporting  # noqa: E402
 import detector_backend  # noqa: E402
 
+OWNER_WHERE = "(Userid = %s) OR (Userid IS NULL AND phone = %s) OR (Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s)"
+GUEST_OWNER_WHERE = "Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s"
+IMAGE_HISTORY_QUERY = f"SELECT * FROM data WHERE {OWNER_WHERE} ORDER BY createtime DESC"
+VIDEO_HISTORY_QUERY = f"SELECT * FROM video_data WHERE {OWNER_WHERE} ORDER BY createtime DESC"
+
 
 class _FakeResponse:
     def __init__(self, payload):
@@ -309,7 +314,7 @@ def test_guest_image_detect_returns_rewritten_url_and_then_blocks(client, monkey
 
     assert first.status_code == 200
     payload = first.get_json()
-    assert payload["result"]["image_url"] == "/detection-static/uploads/guest/image/demo.png"
+    assert payload["result"]["image_url"] == "/api/media/image/11"
     with client.session_transaction() as sess:
         assert sess[detection.GUEST_DETECTION_SESSION_KEY] == 1
 
@@ -391,7 +396,7 @@ def test_image_detect_falls_back_to_v2_when_v1_backend_is_down(client, monkeypat
     assert payload["result"]["itemid"] == 88
     assert payload["result"]["final_label"] == "AI生成图像"
     assert payload["result"]["probability"] == pytest.approx(0.76)
-    assert payload["result"]["image_url"] == "/static/uploads/openid-1/image/stored-demo.png"
+    assert payload["result"]["image_url"] == "/api/media/image/88"
 
 
 @pytest.mark.parametrize(
@@ -818,22 +823,24 @@ def test_video_detect_logged_in_builds_public_media_url(client, monkeypatch):
         detection,
         "excute_detection_sql",
         lambda sql, params=None, fetch=True: [{
+            "itemid": 21,
             "filename": "video.mp4",
             "openid": "openid-1",
             "phone": "13800000000",
-        }] if sql == "SELECT * FROM video_data WHERE itemid = %s" else [],
+        }] if sql == f"SELECT * FROM video_data WHERE itemid = %s AND ({OWNER_WHERE}) LIMIT 1" else [],
     )
 
     response = client.post(
         "/video_upload/detect",
-        data={"video_url": "https://example.com/video.mp4", "fast_mode": "1"},
+        data={"video_file": (BytesIO(b"fake-video"), "video.mp4"), "fast_mode": "1"},
+        content_type="multipart/form-data",
     )
 
     assert response.status_code == 200
     payload = response.get_json()["result"]
     assert payload["final_label"] == "AI生成视频"
     assert payload["confidence"] == "高"
-    assert payload["video_url"] == "/detection-static/uploads/openid-1/video/video.mp4"
+    assert payload["video_url"] == "/api/media/video/21"
 
 
 def test_guest_image_report_downloads_attachment(client, monkeypatch):
@@ -841,7 +848,7 @@ def test_guest_image_report_downloads_attachment(client, monkeypatch):
         sess["guest_openid"] = "guest-123"
 
     def fake_detection_sql(sql, params=None, fetch=True):
-        if sql == "SELECT * FROM data WHERE itemid = %s AND openid = %s LIMIT 1":
+        if sql == f"SELECT * FROM data WHERE itemid = %s AND {GUEST_OWNER_WHERE} LIMIT 1":
             assert params == ("31", "guest-123")
             return [{
                 "itemid": 31,
@@ -873,7 +880,7 @@ def test_guest_history_returns_guest_image_records(client, monkeypatch):
         sess["guest_openid"] = "guest-abc"
 
     def fake_detection_sql(sql, params=None, fetch=True):
-        if sql == "SELECT * FROM data WHERE openid = %s ORDER BY createtime DESC":
+        if sql == f"SELECT * FROM data WHERE {GUEST_OWNER_WHERE} ORDER BY createtime DESC":
             assert params == ("guest-abc",)
             return [{
                 "itemid": 35,
@@ -920,7 +927,7 @@ def test_guest_thumbnail_uses_guest_openid_lookup(client, monkeypatch, tmp_path)
     thumb_path.write_bytes(b"fake-webp")
 
     def fake_detection_sql(sql, params=None, fetch=True):
-        if sql == "SELECT * FROM data WHERE itemid = %s AND openid = %s LIMIT 1":
+        if sql == f"SELECT * FROM data WHERE itemid = %s AND {GUEST_OWNER_WHERE} LIMIT 1":
             assert params == (91, "guest-thumb")
             return [{
                 "itemid": 91,
@@ -944,7 +951,7 @@ def test_video_report_downloads_attachment_for_logged_user(client, monkeypatch):
     _login_session(client)
 
     def fake_detection_sql(sql, params=None, fetch=True):
-        if sql == "SELECT * FROM video_data WHERE itemid = %s AND (Userid = %s OR phone = %s OR openid = %s) LIMIT 1":
+        if sql == f"SELECT * FROM video_data WHERE itemid = %s AND ({OWNER_WHERE}) LIMIT 1":
             assert params == ("41", 1, "13800000000", "openid-1")
             return [{
                 "itemid": 41,
@@ -978,7 +985,7 @@ def test_history_detection_records_include_report_urls(client, monkeypatch):
     _login_session(client)
 
     def fake_detection_sql(sql, params=None, fetch=True):
-        if sql == "SELECT * FROM data WHERE Userid = %s OR phone = %s OR openid = %s ORDER BY createtime DESC":
+        if sql == IMAGE_HISTORY_QUERY:
             assert params == (1, "13800000000", "openid-1")
             return [{
                 "itemid": 51,
@@ -990,7 +997,7 @@ def test_history_detection_records_include_report_urls(client, monkeypatch):
                 "createtime": "2026-05-27 15:00:00",
                 "explantation": "视觉可疑点\n- 背景纹理重复",
             }]
-        if sql == "SELECT * FROM video_data WHERE Userid = %s OR phone = %s OR openid = %s ORDER BY createtime DESC":
+        if sql == VIDEO_HISTORY_QUERY:
             assert params == (1, "13800000000", "openid-1")
             return [{
                 "itemid": 61,
@@ -1023,7 +1030,7 @@ def test_history_uses_userid_for_legacy_bound_records(client, monkeypatch):
     _login_session(client)
 
     def fake_detection_sql(sql, params=None, fetch=True):
-        if sql == "SELECT * FROM data WHERE Userid = %s OR phone = %s OR openid = %s ORDER BY createtime DESC":
+        if sql == IMAGE_HISTORY_QUERY:
             assert params == (1, "13800000000", "openid-1")
             return [{
                 "itemid": 71,
@@ -1054,7 +1061,7 @@ def test_history_endpoints_support_query_filter_and_limit(client, monkeypatch):
     _login_session(client)
 
     def fake_detection_sql(sql, params=None, fetch=True):
-        if sql == "SELECT * FROM data WHERE Userid = %s OR phone = %s OR openid = %s ORDER BY createtime DESC":
+        if sql == IMAGE_HISTORY_QUERY:
             return [
                 {
                     "itemid": 101,
@@ -1077,7 +1084,7 @@ def test_history_endpoints_support_query_filter_and_limit(client, monkeypatch):
                     "explantation": "",
                 },
             ]
-        if sql == "SELECT * FROM video_data WHERE Userid = %s OR phone = %s OR openid = %s ORDER BY createtime DESC":
+        if sql == VIDEO_HISTORY_QUERY:
             return [
                 {
                     "itemid": 201,
@@ -1125,7 +1132,7 @@ def test_history_endpoints_support_offset_pagination(client, monkeypatch):
     _login_session(client)
 
     def fake_detection_sql(sql, params=None, fetch=True):
-        if sql == "SELECT * FROM data WHERE Userid = %s OR phone = %s OR openid = %s ORDER BY createtime DESC":
+        if sql == IMAGE_HISTORY_QUERY:
             return [
                 {
                     "itemid": 401,

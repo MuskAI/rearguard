@@ -192,7 +192,9 @@ if [[ "$TARGET" == "all" || "$TARGET" == "v1" ]]; then
     "http://127.0.0.1:5000/api/history/image-detections" \
     "https://www.rrreal.cn/api/history/image-detections" \
     "realguard-server-main/RealGuard" \
-    "realguard-server-main/frontend"
+    "realguard-server-main/frontend" \
+    "realguard-server-main/deploy/nginx-realguard-frontend.conf" \
+    "deploy/nginx/realguard.conf"
 fi
 
 if [[ "$TARGET" == "all" || "$TARGET" == "v2" ]]; then

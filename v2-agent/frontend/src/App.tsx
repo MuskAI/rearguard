@@ -1,793 +1,673 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from "react";
 import {
+  BadgeCheck,
+  Bot,
+  Check,
+  CircleDashed,
+  FileText,
+  Image as ImageIcon,
+  LoaderCircle,
+  LogIn,
+  Paperclip,
+  RefreshCw,
+  Send,
+  ShieldCheck,
+  Sparkles,
+  UploadCloud,
+  UserRound,
+  Video,
+  Volume2,
+} from "lucide-react";
+import {
+  AccountUser,
   DetectResult,
-  HistoryFilterCounts,
-  HealthStatus,
-  HistoryItem,
-  HistorySidebarFilter,
   FileType,
-  ForensicReport,
-  ProvenanceReport,
+  HealthStatus,
+  ImageAgentJob,
+  ImageHistoryRecord,
+  VideoHistoryRecord,
   detect,
+  detectVideoWithAgent,
+  downloadReport,
+  fetchCurrentUser,
   fetchHealth,
-  runForensics,
-  runProvenance,
   fetchHistory,
   fetchHistoryItem,
-  deleteHistory,
+  fetchImageAgentJob,
+  fetchImageAgentResult,
+  fetchImageHistory,
+  fetchVideoAgentResult,
+  fetchVideoHistory,
+  imageReportUrl,
+  logoutAccount,
   persistArtifacts,
+  runForensics,
+  runProvenance,
+  startImageAgent,
+  videoReportUrl,
 } from "./api";
-import { getInitialHistoryFilter, getInitialHistoryQuery } from "./historyParams";
-import Sidebar from "./components/Sidebar";
-import ResultCard from "./components/ResultCard";
-import ForensicGallery from "./components/ForensicGallery";
-import IconfontIcon from "./components/IconfontIcon";
-import Logo from "./components/Logo";
-import AdminDashboard from "./components/AdminDashboard";
+import type { AgentHistoryEntry, AgentOutcome, AgentProgress, PendingFile } from "./agentTypes";
+import AgentHistory, { MobileHistoryButton } from "./components/AgentHistory";
+import AgentResult from "./components/AgentResult";
+import AuthDialog from "./components/AuthDialog";
 
-type Message =
-  | { kind: "user"; text: string; fileName: string; previewUrl?: string }
-  | { kind: "progress"; stage: number }
-  | { kind: "result"; result: DetectResult; previewUrl?: string; file?: File }
-  | { kind: "loading"; text: string }
-  | { kind: "forensics"; report: ForensicReport };
+const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
+const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
+const ACCEPTED_FILES = "image/jpeg,image/png,image/webp,image/bmp,image/gif,video/mp4,video/quicktime,video/webm,.txt,.md,.csv,.json,.log,.docx,.mp4,.mov,.webm";
 
-const PROGRESS_STEPS = ["文件已校验", "服务端模型与证据分析进行中"];
-const AVAILABLE_CAPABILITIES = ["图像综合鉴伪", "TXT / MD / DOCX 文本检测"];
-const HISTORY_PAGE_SIZE = 100;
-const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
-const REVIEWER_HISTORY_FILTERS = new Set<HistorySidebarFilter>([
-  "all",
-  "real",
-  "suspected",
-  "highly",
-  "unknownVerdict",
-  "forensics",
-  "provenance",
-  "synthid",
-  "watermark",
-]);
+type UploadKind = "image" | "video" | "audio" | "document" | "unknown";
 
-function inferType(name: string): FileType {
-  const ext = name.split(".").pop()?.toLowerCase() ?? "";
-  if (["mp4", "mov", "avi", "mkv", "webm"].includes(ext)) return "video";
-  if (["mp3", "wav", "m4a", "flac", "aac"].includes(ext)) return "audio";
-  if (["txt", "pdf", "doc", "docx", "md", "csv", "json", "log"].includes(ext)) return "document";
-  return "image";
+function inferKind(name: string): UploadKind {
+  const ext = name.split(".").pop()?.toLowerCase() || "";
+  if (["jpg", "jpeg", "png", "webp", "bmp", "gif"].includes(ext)) return "image";
+  if (["mp4", "mov", "webm", "avi", "mkv", "flv", "wmv"].includes(ext)) return "video";
+  if (["mp3", "wav", "m4a", "flac", "aac", "ogg"].includes(ext)) return "audio";
+  if (["txt", "md", "csv", "json", "log", "docx"].includes(ext)) return "document";
+  return "unknown";
 }
 
-function formatBytes(size: number): string {
-  if (size < 1024) return `${size}B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)}KB`;
-  return `${(size / (1024 * 1024)).toFixed(1)}MB`;
+function kindLabel(kind: UploadKind) {
+  return { image: "图像", video: "视频", audio: "音频", document: "文档", unknown: "文件" }[kind];
 }
 
-function formatCapabilitySummary(health: HealthStatus | null): string {
-  if (!health) return "检测服务状态待确认";
-  const caps = health?.capabilities || {};
-  const available = [caps.image === "available" ? "图像" : "", ["available", "limited"].includes(caps.document || "") ? "文档文本" : ""].filter(Boolean);
-  return available.length > 0 ? `${available.join(" / ")}检测可用` : "检测模型暂不可用";
+function formatBytes(size: number) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function isAuthRequiredMessage(message: string): boolean {
-  const normalized = message.toLowerCase();
-  return message.includes("请登录") || message.includes("请先登录") || message.includes("认证") || message.includes("权限") || normalized.includes("unauthorized") || normalized.includes("forbidden");
+function verdictLabel(verdict: DetectResult["verdict"]) {
+  return { real: "更倾向真实", suspected_fake: "疑似生成", highly_suspected_fake: "高度疑似", unknown: "待复核" }[verdict];
 }
 
-function friendlyMessage(message: string, fallback: string): string {
-  const text = message.trim();
-  if (!text) return fallback;
-  if (text.includes("继续使用 V2") || text.includes("继续使用深度分析")) return "请登录后继续检测";
-  if (isAuthRequiredMessage(text)) return "请登录后继续检测";
-  if (text.includes("Unexpected end of JSON")) return fallback;
-  return text;
+function timestamp(value: string) {
+  const parsed = Date.parse(value.replace(/\./g, "-").replace(" ", "T"));
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function getInitialReviewerHistoryFilter(): HistorySidebarFilter {
-  const filter = getInitialHistoryFilter();
-  return REVIEWER_HISTORY_FILTERS.has(filter) ? filter : "all";
+function imageHistoryEntry(record: ImageHistoryRecord): AgentHistoryEntry {
+  return {
+    key: `image:${record.itemid}`,
+    origin: "image",
+    recordId: String(record.itemid),
+    title: record.filename || `图像任务 ${record.itemid}`,
+    typeLabel: "图像",
+    verdictLabel: record.final_label || (record.fake_prob >= 50 ? "疑似生成" : "更倾向真实"),
+    score: Math.max(0, Math.min(Number(record.fake_prob || 0) / 100, 1)),
+    createdAt: record.createtime || "",
+    thumbnail: record.thumbnail_url || record.image_url,
+  };
+}
+
+function videoHistoryEntry(record: VideoHistoryRecord): AgentHistoryEntry {
+  return {
+    key: `video:${record.itemid}`,
+    origin: "video",
+    recordId: String(record.itemid),
+    title: record.filename || `视频任务 ${record.itemid}`,
+    typeLabel: "视频",
+    verdictLabel: record.final_label || (record.fake_percentage >= 50 ? "疑似合成" : "更倾向真实"),
+    score: Math.max(0, Math.min(Number(record.fake_percentage || 0) / 100, 1)),
+    createdAt: record.createtime || "",
+  };
+}
+
+function evidenceHistoryEntry(record: Awaited<ReturnType<typeof fetchHistory>>["items"][number]): AgentHistoryEntry {
+  const typeNames: Record<FileType, string> = { image: "图像", video: "视频", audio: "音频", document: "文档" };
+  return {
+    key: `evidence:${record.taskId}`,
+    origin: "evidence",
+    recordId: record.taskId,
+    title: record.name || "未命名任务",
+    typeLabel: typeNames[record.type],
+    verdictLabel: verdictLabel(record.verdict),
+    score: Number(record.confidence || 0),
+    createdAt: record.createdAt || "",
+    thumbnail: record.thumbnail,
+  };
+}
+
+function isAbort(error: unknown) {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+function wait(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException("Aborted", "AbortError"));
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    const abort = () => {
+      window.clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
+function progressFromJob(job: ImageAgentJob): AgentProgress {
+  const progress = Math.max(8, Math.min(Number(job.progress || 0), 98));
+  if (progress >= 78) return { title: "正在形成综合意见", detail: job.summary || "汇总共识、分歧与关键证据", percent: progress, stage: "report", experts: job.experts };
+  if (progress >= 42) return { title: "正在交叉核验证据", detail: job.summary || "比对模型、元数据与内容凭证", percent: progress, stage: "evidence", experts: job.experts };
+  return { title: "已调度鉴伪角色", detail: job.summary || "多源检测正在并行执行", percent: progress, stage: "dispatch", experts: job.experts };
 }
 
 export default function App() {
-  const [history, setHistory] = useState<HistoryItem[]>([]);
-  const [historyTotal, setHistoryTotal] = useState(0);
-  const [historyFilterCounts, setHistoryFilterCounts] = useState<HistoryFilterCounts>({
-    all: 0,
-    vlm: 0,
-    mock: 0,
-    "maps-only": 0,
-    unknown: 0,
-    real: 0,
-    suspected: 0,
-    highly: 0,
-    unknownVerdict: 0,
-    cache: 0,
-    forensics: 0,
-    provenance: 0,
-    synthid: 0,
-    watermark: 0,
-  });
-  const [historyMessage, setHistoryMessage] = useState("");
-  const [historyBusy, setHistoryBusy] = useState(false);
+  const [user, setUser] = useState<AccountUser | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [authOpen, setAuthOpen] = useState(false);
   const [health, setHealth] = useState<HealthStatus | null>(null);
-  const [monitorReloadKey] = useState(0);
-  const [forensicsByTask, setForensicsByTask] = useState<Record<string, ForensicReport>>({});
-  const [provenanceByTask, setProvenanceByTask] = useState<Record<string, ProvenanceReport>>({});
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [history, setHistory] = useState<AgentHistoryEntry[]>([]);
+  const [historyQuery, setHistoryQuery] = useState("");
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyMessage, setHistoryMessage] = useState("");
+  const [mobileHistoryOpen, setMobileHistoryOpen] = useState(false);
+  const [activeKey, setActiveKey] = useState<string>();
+  const [pendingFile, setPendingFile] = useState<PendingFile | null>(null);
+  const [progress, setProgress] = useState<AgentProgress | null>(null);
+  const [outcome, setOutcome] = useState<AgentOutcome | null>(null);
+  const [errorMessage, setErrorMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [forensicsBusy, setForensicsBusy] = useState(false);
   const [provenanceBusy, setProvenanceBusy] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [historyQuery, setHistoryQuery] = useState(() => getInitialHistoryQuery());
-  const [historyFilter, setHistoryFilter] = useState<HistorySidebarFilter>(() => getInitialReviewerHistoryFilter());
-  const [historyLimit, setHistoryLimit] = useState(HISTORY_PAGE_SIZE);
-  const [view, setView] = useState<"detect" | "monitor">("detect");
-  const [activeId, setActiveId] = useState<string>();
+  const [downloadBusy, setDownloadBusy] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const restoredHistoryItemRef = useRef(false);
-  const historyLengthRef = useRef(0);
-  const historyLimitRef = useRef(HISTORY_PAGE_SIZE);
-  const historyRequestIdRef = useRef(0);
-  const historyDetailRequestIdRef = useRef(0);
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const resultRef = useRef<HTMLDivElement>(null);
+  const runControllerRef = useRef<AbortController | null>(null);
+  const runTokenRef = useRef(0);
+  const historyTokenRef = useRef(0);
+  const detailTokenRef = useRef(0);
+  const userIdRef = useRef<number | null>(null);
+  const previewUrlRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    historyLengthRef.current = history.length;
-  }, [history.length]);
+  const loadHistoryForUser = useCallback(async (account: AccountUser) => {
+    const requestToken = ++historyTokenRef.current;
+    const expectedUserId = account.Userid;
+    setHistoryLoading(true);
+    setHistoryMessage("");
+    const results = await Promise.allSettled([
+      fetchHistory({ limit: 100 }),
+      fetchImageHistory(100),
+      fetchVideoHistory(100),
+    ]);
+    if (requestToken !== historyTokenRef.current || userIdRef.current !== expectedUserId) return;
 
-  useEffect(() => {
-    historyLimitRef.current = historyLimit;
-  }, [historyLimit]);
-
-  const loadHealth = useCallback(() =>
-    fetchHealth()
-      .then(setHealth)
-      .catch(() => setHealth(null)), []);
-
-  const loadHistory = useCallback(async ({
-    preserveOnError = historyLengthRef.current > 0,
-    append = false,
-    reset = false,
-  }: {
-    preserveOnError?: boolean;
-    append?: boolean;
-    reset?: boolean;
-  } = {}) => {
-    const requestId = historyRequestIdRef.current + 1;
-    historyRequestIdRef.current = requestId;
-    setHistoryBusy(true);
-    try {
-      const offset = append ? historyLengthRef.current : 0;
-      const limit = append ? HISTORY_PAGE_SIZE : reset ? HISTORY_PAGE_SIZE : historyLimitRef.current;
-      const data = await fetchHistory({ query: historyQuery, filter: historyFilter, limit, offset });
-      if (historyRequestIdRef.current !== requestId) return;
-      if (append) {
-        setHistory((current) => {
-          const seen = new Set(current.map((item) => item.taskId));
-          return current.concat(data.items.filter((item) => !seen.has(item.taskId)));
-        });
-      } else {
-        setHistory(data.items);
-      }
-      setHistoryTotal(data.total);
-      setHistoryFilterCounts(data.filterCounts);
-      setHistoryMessage("");
-    } catch (error) {
-      if (historyRequestIdRef.current !== requestId) return;
-      if (!preserveOnError) {
-        setHistory([]);
-        setHistoryTotal(0);
-        setHistoryFilterCounts({ all: 0, vlm: 0, mock: 0, "maps-only": 0, unknown: 0, real: 0, suspected: 0, highly: 0, unknownVerdict: 0, cache: 0, forensics: 0, provenance: 0, synthid: 0, watermark: 0 });
-      }
-      setHistoryMessage(friendlyMessage(error instanceof Error ? error.message : "", "历史记录暂不可用"));
-    } finally {
-      if (historyRequestIdRef.current === requestId) {
-        setHistoryBusy(false);
-      }
-    }
-  }, [historyFilter, historyQuery]);
-
-  const showHistoryResult = useCallback((result: DetectResult) => {
-    if (result.forensics) {
-      setForensicsByTask((prev) => ({ ...prev, [result.taskId]: result.forensics! }));
-    }
-    if (result.provenance) {
-      setProvenanceByTask((prev) => ({ ...prev, [result.taskId]: result.provenance! }));
-    }
-    const nextMessages: Message[] = [{ kind: "result", result }];
-    if (result.forensics) {
-      nextMessages.push({ kind: "forensics", report: result.forensics });
-    }
-    setMessages(nextMessages);
-    setActiveId(result.taskId);
+    const merged: AgentHistoryEntry[] = [];
+    const [evidenceResult, imageResult, videoResult] = results;
+    if (evidenceResult.status === "fulfilled") merged.push(...evidenceResult.value.items.map(evidenceHistoryEntry));
+    if (imageResult.status === "fulfilled") merged.push(...(imageResult.value.records || []).map(imageHistoryEntry));
+    if (videoResult.status === "fulfilled") merged.push(...(videoResult.value.records || []).map(videoHistoryEntry));
+    merged.sort((a, b) => timestamp(b.createdAt) - timestamp(a.createdAt));
+    setHistory(merged);
+    if (results.every((result) => result.status === "rejected")) setHistoryMessage("个人历史暂时无法读取，请稍后刷新");
+    setHistoryLoading(false);
   }, []);
 
-  const openHistoryItem = useCallback(async (itemId: string) => {
-    const normalized = itemId.trim();
-    if (!normalized) return;
-    setActiveId(normalized);
-    const requestId = historyDetailRequestIdRef.current + 1;
-    historyDetailRequestIdRef.current = requestId;
-    setMessages([{ kind: "loading", text: "正在加载历史详情…" }]);
-    try {
-      const result: DetectResult = await fetchHistoryItem(normalized);
-      if (historyDetailRequestIdRef.current !== requestId) return;
-      showHistoryResult(result);
-    } catch (error) {
-      if (historyDetailRequestIdRef.current !== requestId) return;
-      setMessages([
-        {
-          kind: "user",
-          text: `历史详情加载失败：${friendlyMessage(error instanceof Error ? error.message : "", "历史详情暂不可用")}`,
-          fileName: "",
-        },
-      ]);
-    }
-  }, [showHistoryResult]);
-
   useEffect(() => {
-    loadHealth();
-  }, [loadHealth]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const params = new URLSearchParams(window.location.search);
-    if (historyQuery.trim()) params.set("historyQuery", historyQuery.trim());
-    else params.delete("historyQuery");
-    if (historyFilter !== "all") params.set("historyFilter", historyFilter);
-    else params.delete("historyFilter");
-    const next = params.toString();
-    window.history.replaceState({}, "", `${window.location.pathname}${next ? `?${next}` : ""}${window.location.hash}`);
-  }, [historyFilter, historyQuery]);
-
-  useEffect(() => {
-    void loadHistory({ preserveOnError: false, reset: true });
-  }, [historyFilter, historyQuery, loadHistory]);
-
-  useEffect(() => {
-    setHistoryLimit(HISTORY_PAGE_SIZE);
-  }, [historyFilter, historyQuery]);
-
-  useEffect(() => {
-    if (restoredHistoryItemRef.current) return;
-    restoredHistoryItemRef.current = true;
-    const initialHistoryItem = getInitialHistoryItem();
-    if (initialHistoryItem) void openHistoryItem(initialHistoryItem);
-  }, [openHistoryItem]);
-
-  useEffect(() => {
-    const onHash = () => {
-      if (window.location.hash === "#monitor") {
-        window.history.replaceState({}, "", `${window.location.pathname}${window.location.search}`);
-      }
-      setView("detect");
+    let active = true;
+    fetchHealth().then((value) => active && setHealth(value)).catch(() => active && setHealth(null));
+    fetchCurrentUser()
+      .then((response) => {
+        if (!active) return;
+        userIdRef.current = response.user.Userid;
+        setUser(response.user);
+        void loadHistoryForUser(response.user);
+      })
+      .catch(() => {
+        if (!active) return;
+        userIdRef.current = null;
+        setUser(null);
+      })
+      .finally(() => active && setAuthReady(true));
+    return () => {
+      active = false;
+      runControllerRef.current?.abort();
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
     };
-    onHash();
-    window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
+  }, [loadHistoryForUser]);
+
+  useEffect(() => {
+    if (!progress && !outcome && !errorMessage) return;
+    window.requestAnimationFrame(() => {
+      if (outcome) {
+        resultRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+        return;
+      }
+      workspaceRef.current?.scrollTo({ top: workspaceRef.current.scrollHeight, behavior: "smooth" });
+    });
+  }, [errorMessage, outcome, progress]);
+
+  const resetTask = useCallback(() => {
+    runTokenRef.current += 1;
+    detailTokenRef.current += 1;
+    runControllerRef.current?.abort();
+    runControllerRef.current = null;
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    previewUrlRef.current = null;
+    setPendingFile(null);
+    setProgress(null);
+    setOutcome(null);
+    setErrorMessage("");
+    setBusy(false);
+    setActiveKey(undefined);
   }, []);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (!activeId && !restoredHistoryItemRef.current) return;
-    const params = new URLSearchParams(window.location.search);
-    if (activeId) params.set("historyItem", activeId);
-    else params.delete("historyItem");
-    const next = params.toString();
-    window.history.replaceState({}, "", `${window.location.pathname}${next ? `?${next}` : ""}${window.location.hash}`);
-  }, [activeId]);
+  function authenticated(nextUser: AccountUser) {
+    resetTask();
+    historyTokenRef.current += 1;
+    userIdRef.current = nextUser.Userid;
+    setHistory([]);
+    setUser(nextUser);
+    setAuthOpen(false);
+    setAuthReady(true);
+    void loadHistoryForUser(nextUser);
+  }
 
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages]);
+  function logout() {
+    resetTask();
+    historyTokenRef.current += 1;
+    userIdRef.current = null;
+    setUser(null);
+    setHistory([]);
+    setHistoryMessage("");
+    setHistoryQuery("");
+    setMobileHistoryOpen(false);
+    void logoutAccount().catch(() => undefined);
+  }
 
-  const runDetect = async (file: File) => {
-    const type = inferType(file.name);
-    const previewUrl = type === "image" ? URL.createObjectURL(file) : undefined;
-
-    setMessages((m) => [
-      ...m,
-      { kind: "progress", stage: 0 },
-    ]);
-    setBusy(true);
-
+  async function runImage(file: File, previewUrl: string | undefined, token: number, controller: AbortController) {
     try {
-      setMessages((m) => m.map((msg) => (msg.kind === "progress" ? { ...msg, stage: 1 } : msg)));
-      const result = await detect(file, type);
-      if (result.provenance) {
-        setProvenanceByTask((prev) => ({ ...prev, [result.taskId]: result.provenance! }));
+      const started = await startImageAgent(file, controller.signal);
+      if (runTokenRef.current !== token) return;
+      let job = started.job;
+      setProgress(progressFromJob(job));
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < 180_000) {
+        if (job.status === "success") {
+          const result = job.result?.result;
+          if (!result) throw new Error("任务已完成，但没有返回可展示的鉴伪结果");
+          setProgress({ title: "鉴伪完成", detail: "综合结论与证据已经整理完成", percent: 100, stage: "report", experts: job.experts });
+          setOutcome({ kind: "image", id: `image:${result.itemid}`, result, file, previewUrl });
+          return;
+        }
+        if (job.status === "failed") throw new Error(job.error || "多源鉴伪暂不可用");
+        await wait(760, controller.signal);
+        const polled = await fetchImageAgentJob(job.id, controller.signal);
+        if (runTokenRef.current !== token) return;
+        job = polled.job;
+        setProgress(progressFromJob(job));
       }
-      setMessages((m) => [
-        ...m.filter((msg) => msg.kind !== "progress"),
-        { kind: "result", result, previewUrl, file: type === "image" ? file : undefined },
-      ]);
-      setActiveId(result.taskId);
-      void loadHistory({ preserveOnError: true });
-    } catch (e) {
-      setMessages((m) => [
-        ...m.filter((msg) => msg.kind !== "progress"),
-        {
-          kind: "user",
-          text: `检测失败：${friendlyMessage(e instanceof Error ? e.message : "", "检测暂未完成，请稍后重试")}`,
-          fileName: "",
-        },
-      ]);
-    } finally {
-      setBusy(false);
+      throw new Error("多源鉴伪超时，请稍后重试");
+    } catch (error) {
+      if (isAbort(error) || runTokenRef.current !== token) throw error;
+      const message = error instanceof Error ? error.message : "多源鉴伪暂不可用";
+      if (message.includes("登录") || message.includes("次数")) throw error;
+      setProgress({ title: "正在切换可用检测链路", detail: "多源服务未完成，改用可信视觉模型继续分析", percent: 46, stage: "dispatch", fallback: true });
+      const result = await detect(file, "image");
+      if (runTokenRef.current !== token) return;
+      setProgress({ title: "鉴伪完成", detail: "检测结果与内容凭证已整理完成", percent: 100, stage: "report", fallback: true });
+      setOutcome({ kind: "evidence", id: `evidence:${result.taskId}`, result, file, previewUrl, provenance: result.provenance || undefined });
     }
-  };
+  }
 
-  const onForensics = async (file: File, taskId: string) => {
-    if (forensicsBusy) return;
-    setForensicsBusy(true);
-    setMessages((m) => [
-      ...m,
-      { kind: "loading", text: "正在生成 7 项取证可视化证据并逐项判读…" },
-    ]);
+  async function analyzeFile(file: File) {
+    resetTask();
+    const kind = inferKind(file.name);
+    if (kind === "unknown") {
+      setPendingFile({ name: file.name, size: file.size, typeLabel: kindLabel(kind) });
+      setErrorMessage("暂不支持这个文件格式。可上传常见图片、MP4/MOV/WEBM 视频，以及 TXT、MD、CSV、JSON、LOG、DOCX 文档。");
+      return;
+    }
+    if (kind === "audio") {
+      setPendingFile({ name: file.name, size: file.size, typeLabel: kindLabel(kind) });
+      setErrorMessage("音频鉴伪模型尚未部署，本次不会生成模拟结论。请先上传图像、视频或可提取正文的文档。");
+      return;
+    }
+    const maxBytes = kind === "video" ? MAX_VIDEO_BYTES : Number(health?.limits?.maxUploadBytes || MAX_DOCUMENT_BYTES);
+    if (file.size > maxBytes) {
+      setPendingFile({ name: file.name, size: file.size, typeLabel: kindLabel(kind) });
+      setErrorMessage(`${kindLabel(kind)}文件不能超过 ${formatBytes(maxBytes)}，当前文件为 ${formatBytes(file.size)}。`);
+      return;
+    }
+
+    const controller = new AbortController();
+    runControllerRef.current = controller;
+    const token = ++runTokenRef.current;
+    const previewUrl = kind === "image" || kind === "video" ? URL.createObjectURL(file) : undefined;
+    if (previewUrl) previewUrlRef.current = previewUrl;
+    setPendingFile({ name: file.name, size: file.size, typeLabel: kindLabel(kind), previewUrl: kind === "image" ? previewUrl : undefined });
+    setBusy(true);
+    setErrorMessage("");
+    setProgress({ title: "正在校验文件", detail: "确认格式、大小与可用检测能力", percent: 12, stage: "validate" });
+
     try {
-      const report = await runForensics(file);
-      setForensicsByTask((prev) => ({ ...prev, [taskId]: report }));
-      try {
-        await persistArtifacts(taskId, { forensics: report });
-      } catch {
-        // Keep the current analysis result visible even if persistence fails.
+      if (kind === "image") {
+        await runImage(file, previewUrl, token, controller);
+      } else if (kind === "video") {
+        setProgress({ title: "正在分析视频", detail: "抽取关键帧并检查时序合成线索", percent: 42, stage: "evidence" });
+        const response = await detectVideoWithAgent(file);
+        if (runTokenRef.current !== token) return;
+        setProgress({ title: "鉴伪完成", detail: "视频风险与关键指标已经整理完成", percent: 100, stage: "report" });
+        setOutcome({ kind: "video", id: `video:${response.result.itemid}`, result: response.result, file, previewUrl });
+      } else {
+        setProgress({ title: "正在分析文档", detail: "提取正文并检查生成式写作线索", percent: 48, stage: "evidence" });
+        const result = await detect(file, "document");
+        if (runTokenRef.current !== token) return;
+        setProgress({ title: "鉴伪完成", detail: "文本结论与证据维度已经整理完成", percent: 100, stage: "report" });
+        setOutcome({ kind: "evidence", id: `evidence:${result.taskId}`, result, file });
       }
-      setMessages((m) => [
-        ...m.filter((msg) => msg.kind !== "loading"),
-        { kind: "forensics", report },
-      ]);
-    } catch (e) {
-      setMessages((m) => [
-        ...m.filter((msg) => msg.kind !== "loading"),
-        { kind: "user", text: `取证分析失败：${friendlyMessage(e instanceof Error ? e.message : "", "取证分析暂未完成，请稍后重试")}`, fileName: "" },
-      ]);
+      if (user && userIdRef.current === user.Userid) void loadHistoryForUser(user);
+    } catch (error) {
+      if (isAbort(error) || runTokenRef.current !== token) return;
+      const message = error instanceof Error ? error.message : "鉴伪任务未完成，请稍后重试";
+      setProgress(null);
+      setErrorMessage(message);
+      if (message.includes("登录") || message.includes("次数")) setAuthOpen(true);
+    } finally {
+      if (runTokenRef.current === token) setBusy(false);
+    }
+  }
+
+  function chooseFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (file) void analyzeFile(file);
+  }
+
+  function dropFile(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    setDragging(false);
+    if (busy) return;
+    const file = event.dataTransfer.files?.[0];
+    if (file) void analyzeFile(file);
+  }
+
+  async function selectHistory(entry: AgentHistoryEntry) {
+    if (!user) {
+      setAuthOpen(true);
+      return;
+    }
+    const requestToken = ++detailTokenRef.current;
+    const expectedUserId = user.Userid;
+    runControllerRef.current?.abort();
+    setBusy(true);
+    setMobileHistoryOpen(false);
+    setActiveKey(entry.key);
+    setPendingFile({ name: entry.title, size: 0, typeLabel: entry.typeLabel, previewUrl: entry.thumbnail || undefined });
+    setOutcome(null);
+    setErrorMessage("");
+    setProgress({ title: "正在读取个人归档", detail: "校验任务归属并恢复检测结果", percent: 64, stage: "report" });
+    try {
+      if (entry.origin === "image") {
+        const response = await fetchImageAgentResult(Number(entry.recordId));
+        if (detailTokenRef.current !== requestToken || userIdRef.current !== expectedUserId) return;
+        setOutcome({ kind: "image", id: entry.key, result: response.result });
+      } else if (entry.origin === "video") {
+        const response = await fetchVideoAgentResult(Number(entry.recordId));
+        if (detailTokenRef.current !== requestToken || userIdRef.current !== expectedUserId) return;
+        setOutcome({ kind: "video", id: entry.key, result: response.result });
+      } else {
+        const result = await fetchHistoryItem(entry.recordId);
+        if (detailTokenRef.current !== requestToken || userIdRef.current !== expectedUserId) return;
+        setOutcome({ kind: "evidence", id: entry.key, result, forensics: result.forensics || undefined, provenance: result.provenance || undefined });
+      }
+      setProgress(null);
+    } catch (error) {
+      if (detailTokenRef.current !== requestToken || userIdRef.current !== expectedUserId) return;
+      setProgress(null);
+      setErrorMessage(error instanceof Error ? error.message : "历史任务暂时无法读取");
+    } finally {
+      if (detailTokenRef.current === requestToken) setBusy(false);
+    }
+  }
+
+  async function createForensics() {
+    if (!outcome?.file || forensicsBusy) return;
+    const outcomeId = outcome.id;
+    setForensicsBusy(true);
+    try {
+      const report = await runForensics(outcome.file);
+      setOutcome((current) => current && current.id === outcomeId && (current.kind === "image" || current.kind === "evidence") ? { ...current, forensics: report } : current);
+      if (outcome.kind === "evidence") await persistArtifacts(outcome.result.taskId, { forensics: report });
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "取证图谱生成失败");
     } finally {
       setForensicsBusy(false);
     }
-  };
+  }
 
-  const onProvenance = async (file: File, taskId: string) => {
-    if (provenanceBusy) return;
+  async function verifyProvenance() {
+    if (!outcome?.file || provenanceBusy) return;
+    const outcomeId = outcome.id;
     setProvenanceBusy(true);
-    setMessages((m) => [
-      ...m,
-      { kind: "loading", text: "正在核验内容凭证与文件信息…" },
-    ]);
     try {
-      const report = await runProvenance(file);
-      setProvenanceByTask((prev) => ({ ...prev, [taskId]: report }));
-      try {
-        await persistArtifacts(taskId, { provenance: report });
-      } catch {
-        // Keep the current analysis result visible even if persistence fails.
-      }
-      setMessages((m) => m.filter((msg) => msg.kind !== "loading"));
-    } catch (e) {
-      setMessages((m) => [
-        ...m.filter((msg) => msg.kind !== "loading"),
-        { kind: "user", text: `凭证验证失败：${friendlyMessage(e instanceof Error ? e.message : "", "凭证验证暂未完成，请稍后重试")}`, fileName: "" },
-      ]);
+      const report = await runProvenance(outcome.file);
+      setOutcome((current) => current && current.id === outcomeId && (current.kind === "image" || current.kind === "evidence") ? { ...current, provenance: report } : current);
+      if (outcome.kind === "evidence") await persistArtifacts(outcome.result.taskId, { provenance: report });
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "内容凭证验证失败");
     } finally {
       setProvenanceBusy(false);
     }
-  };
-
-  const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (f) {
-      const type = inferType(f.name);
-      const ext = f.name.split(".").pop()?.toLowerCase() || "";
-      if (type === "video" || type === "audio" || ["pdf", "doc"].includes(ext)) {
-        setMessages((m) => [
-          ...m,
-          {
-            kind: "user",
-            text: "该文件类型的真实检测能力尚未部署，本次不会生成模拟结论。请选择图片、TXT、MD、CSV、JSON、LOG 或 DOCX 文件。",
-            fileName: f.name,
-          },
-        ]);
-      } else if (f.size > uploadLimit) {
-        setMessages((m) => [
-          ...m,
-          {
-            kind: "user",
-            text: `检测失败：文件不能超过 ${formatBytes(uploadLimit)}，当前文件为 ${formatBytes(f.size)}。`,
-            fileName: f.name,
-          },
-        ]);
-      } else {
-        runDetect(f);
-      }
-    }
-    e.target.value = "";
-  };
-
-  const onSelectHistory = async (item: HistoryItem) => {
-    await openHistoryItem(item.taskId);
-  };
-
-  const onDelete = async (taskId: string) => {
-    try {
-      await deleteHistory(taskId);
-      if (activeId === taskId) {
-        setMessages([]);
-        setActiveId(undefined);
-      }
-      setHistory((items) => items.filter((item) => item.taskId !== taskId));
-      void loadHistory({ preserveOnError: true });
-    } catch (error) {
-      setHistoryMessage(friendlyMessage(error instanceof Error ? error.message : "", "删除历史失败"));
-    }
-  };
-
-  const capabilitySummary = formatCapabilitySummary(health);
-  const uploadLimit = health?.limits?.maxUploadBytes || MAX_UPLOAD_BYTES;
-  const accessAttention = isAuthRequiredMessage(historyMessage);
-  const requestUpload = () => {
-    if (accessAttention) {
-      window.location.href = "/";
-      return;
-    }
-    fileInputRef.current?.click();
-  };
-
-  const newChat = () => {
-    setMessages([]);
-    setActiveId(undefined);
-  };
-
-  if (view === "monitor") {
-    return (
-      <div className="h-full flex">
-        <AdminDashboard
-          onBack={() => {
-            window.location.hash = "";
-            setView("detect");
-          }}
-          onHome={() => {
-            window.location.href = "/";
-          }}
-          reloadKey={monitorReloadKey}
-        />
-      </div>
-    );
   }
 
+  async function downloadOutcome() {
+    if (!outcome || downloadBusy) return;
+    setDownloadBusy(true);
+    try {
+      if (outcome.kind === "evidence") {
+        await downloadReport(outcome.result.reportId, { forensics: outcome.forensics, provenance: outcome.provenance || outcome.result.provenance });
+      } else {
+        const link = document.createElement("a");
+        link.href = outcome.kind === "image" ? imageReportUrl(outcome.result.itemid) : videoReportUrl(outcome.result.itemid);
+        link.rel = "noopener";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      }
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "报告下载失败");
+    } finally {
+      setDownloadBusy(false);
+    }
+  }
+
+  const serviceAvailable = health?.vlmEnabled === true;
+  const screenTitle = pendingFile?.name || "新建鉴伪任务";
+
   return (
-    <div className="h-full flex flex-col md:flex-row bg-[#f4f7f4] text-ink-950">
-      <Sidebar
-        history={history}
-        historyBusy={historyBusy}
-        totalCount={historyTotal}
-        filterCounts={historyFilterCounts}
-        message={historyMessage}
+    <div className="agent-app">
+      <AgentHistory
+        entries={history}
+        activeKey={activeKey}
         query={historyQuery}
-        filter={historyFilter}
-        activeId={activeId}
-        activeItem={history.find((item) => item.taskId === activeId)}
-        onSelect={onSelectHistory}
+        loading={historyLoading}
+        message={historyMessage}
+        user={user}
+        mobileOpen={mobileHistoryOpen}
         onQueryChange={setHistoryQuery}
-        onFilterChange={setHistoryFilter}
-        onNew={newChat}
-        onDelete={onDelete}
-        onClearSelection={newChat}
-        onRetryHistory={() => loadHistory({ preserveOnError: false })}
-        onRefreshHistory={() => loadHistory({ preserveOnError: true })}
-        onLoadMore={history.length < historyTotal ? () => {
-          setHistoryLimit((value) => value + HISTORY_PAGE_SIZE);
-          void loadHistory({ preserveOnError: true, append: true });
-        } : undefined}
-        className="hidden md:flex"
+        onSelect={(entry) => void selectHistory(entry)}
+        onNew={resetTask}
+        onLogin={() => setAuthOpen(true)}
+        onLogout={logout}
+        onCloseMobile={() => setMobileHistoryOpen(false)}
       />
 
-      {historyOpen && (
-        <div className="fixed inset-0 z-50 md:hidden">
-          <button
-            className="absolute inset-0 bg-black/35"
-            onClick={() => setHistoryOpen(false)}
-            aria-label="关闭历史记录遮罩"
-          />
-          <Sidebar
-            history={history}
-            historyBusy={historyBusy}
-            totalCount={historyTotal}
-            filterCounts={historyFilterCounts}
-            message={historyMessage}
-            query={historyQuery}
-            filter={historyFilter}
-            activeId={activeId}
-            activeItem={history.find((item) => item.taskId === activeId)}
-            onSelect={onSelectHistory}
-            onQueryChange={setHistoryQuery}
-            onFilterChange={setHistoryFilter}
-            onNew={newChat}
-            onDelete={onDelete}
-            onClearSelection={newChat}
-            onRetryHistory={() => loadHistory({ preserveOnError: false })}
-            onRefreshHistory={() => loadHistory({ preserveOnError: true })}
-            onLoadMore={history.length < historyTotal ? () => {
-              setHistoryLimit((value) => value + HISTORY_PAGE_SIZE);
-              void loadHistory({ preserveOnError: true, append: true });
-            } : undefined}
-            onClose={() => setHistoryOpen(false)}
-            className="relative h-full w-[86vw] max-w-80"
-          />
-        </div>
-      )}
-
-      <main className="flex-1 flex flex-col min-w-0 min-h-0">
-        <header className="px-4 sm:px-6 py-3 border-b border-ink-700 bg-white/95 backdrop-blur flex items-center justify-between gap-3 shadow-sm">
-          <div className="min-w-0">
-            <h1 className="text-lg sm:text-xl font-semibold text-rice truncate">深度证据分析</h1>
-            <p className="text-[11px] sm:text-xs text-ink-500 truncate">上传文件后汇总鉴伪结论、取证线索、内容凭证与报告归档</p>
+      <main className="agent-main">
+        <header className="agent-topbar">
+          <div className="topbar-title">
+            <MobileHistoryButton onClick={() => setMobileHistoryOpen(true)} />
+            <div>
+              <h1><span className="desktop-task-title">{screenTitle}</span><span className="mobile-task-title">{pendingFile?.name || "慧鉴AI"}</span></h1>
+              <p>{pendingFile ? "慧鉴AI 正在为这份内容整理可信证据" : "一个入口完成检测、取证、凭证核验与报告归档"}</p>
+            </div>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              onClick={() => setHistoryOpen(true)}
-              className="md:hidden h-9 px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950 inline-flex items-center gap-1.5"
-            >
-              <IconfontIcon name="history" size={14} />
-              历史
-            </button>
-            <span
-              className={`hidden sm:inline text-xs px-2.5 py-1 rounded-full border ${
-                health == null
-                  ? "bg-ink-900 text-ink-500 border-ink-600"
-                  : health.vlmEnabled
-                  ? "bg-jade/10 text-jade border-jade/30"
-                  : "bg-cinnabar/10 text-cinnabar border-cinnabar/30"
-              }`}
-            >
-              ● {health == null ? "状态待确认" : health.vlmEnabled ? "检测服务可用" : "部分能力暂不可用"}
+          <div className="topbar-actions">
+            <span className={`service-pill ${health == null ? "checking" : serviceAvailable ? "online" : "limited"}`}>
+              <i /> {health == null ? "服务检查中" : serviceAvailable ? "检测服务可用" : "部分能力受限"}
             </span>
-            <button
-              onClick={() => {
-                window.location.href = "/";
-              }}
-              className="hidden sm:inline-flex h-9 items-center gap-1.5 px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950 hover:border-brand-cyan/50"
-            >
-              <IconfontIcon name="home" size={14} />
-              首页
-            </button>
-            <button
-              onClick={newChat}
-              className="hidden sm:inline-flex h-9 items-center gap-1.5 px-3 rounded-lg border border-ink-600 bg-ink-900 text-xs text-ink-950 hover:border-jade/50"
-            >
-              <IconfontIcon name="plus" size={14} />
-              新建检测
-            </button>
+            {authReady && (user ? (
+              <button type="button" className="user-pill" onClick={() => setMobileHistoryOpen(true)} aria-label={`打开${user.username || "慧鉴用户"}的个人任务`}><UserRound size={16} /><span>{user.username || "慧鉴用户"}</span></button>
+            ) : (
+              <button type="button" className="secondary-button topbar-login" onClick={() => setAuthOpen(true)}><LogIn size={16} /> 登录</button>
+            ))}
           </div>
         </header>
 
-        <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto bg-grid px-3 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-5">
-          {accessAttention && (
-            <AccessPanel />
-          )}
-          {messages.length === 0 && (
-            <EmptyState
-              capabilitySummary={capabilitySummary}
+        <div className="agent-workspace" ref={workspaceRef}>
+          {!pendingFile && !outcome && !errorMessage && (
+            <WelcomeWorkspace
+              busy={busy}
+              dragging={dragging}
+              user={user}
+              onOpenFile={() => fileInputRef.current?.click()}
+              onDragEnter={() => setDragging(true)}
+              onDragLeave={() => setDragging(false)}
+              onDrop={dropFile}
+              onLogin={() => setAuthOpen(true)}
             />
           )}
 
-          {messages.map((m, i) => {
-            if (m.kind === "user") {
-              return (
-                <div key={i} className="flex justify-end">
-                  <div className="max-w-[88%] sm:max-w-[70%] rounded-lg bg-cinnabar/10 border border-cinnabar/25 px-3 sm:px-4 py-2.5 shadow-sm">
-                    <p className="text-sm text-ink-950">{m.text}</p>
-                    {m.fileName && (
-                      <div className="mt-2 flex items-center gap-2 min-w-0">
-                        {m.previewUrl && (
-                          <img src={m.previewUrl} className="h-16 w-16 object-cover rounded-md" />
-                        )}
-                        <span className="text-xs text-ink-500 truncate">文件：{m.fileName}</span>
-                      </div>
-                    )}
-                  </div>
+          {pendingFile && (
+            <div className="conversation-flow">
+              <div className="user-file-message">
+                <div className="file-message-copy"><span>请帮我鉴别这份内容</span><strong>{pendingFile.name}</strong><small>{pendingFile.typeLabel}{pendingFile.size ? ` · ${formatBytes(pendingFile.size)}` : " · 已归档任务"}</small></div>
+                {pendingFile.previewUrl ? <img src={pendingFile.previewUrl} alt="待检测文件预览" /> : <span className="file-message-icon"><Paperclip size={20} /></span>}
+              </div>
+              {(progress || busy) && !outcome && <AgentProgressPanel progress={progress} />}
+              {errorMessage && (
+                <div className="agent-error-message" role="alert">
+                  <span><Bot size={18} /></span>
+                  <div><strong>这次任务没有完成</strong><p>{errorMessage}</p><button type="button" className="text-button" onClick={() => fileInputRef.current?.click()}><RefreshCw size={15} /> 重新选择文件</button></div>
                 </div>
-              );
-            }
-            if (m.kind === "progress") {
-              return (
-                <div key={i} className="flex gap-2 sm:gap-3">
-                  <AgentAvatar />
-                  <div className="min-w-0 flex-1 rounded-lg bg-ink-800 border border-ink-600 px-3 sm:px-4 py-3 space-y-1.5 shadow-sm">
-                    {PROGRESS_STEPS.map((step, idx) => (
-                      <div
-                        key={idx}
-                        className={`flex items-center gap-2 text-sm ${
-                          idx < m.stage
-                            ? "text-ink-500"
-                            : idx === m.stage
-                            ? "text-brand-cyan"
-                            : "text-ink-500/60"
-                        }`}
-                      >
-                        <span
-                          className={`h-2 w-2 rounded-full ${
-                            idx < m.stage
-                              ? "bg-jade"
-                              : idx === m.stage
-                              ? "bg-brand-cyan animate-pulse"
-                              : "bg-ink-600"
-                          }`}
-                        />
-                        {step}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            }
-            if (m.kind === "loading") {
-              return (
-                <div key={i} className="flex gap-2 sm:gap-3">
-                  <AgentAvatar />
-                  <div className="min-w-0 flex-1 rounded-lg bg-ink-800 border border-ink-600 px-3 sm:px-4 py-3 flex items-center gap-2 text-sm text-brand-cyan shadow-sm">
-                    <span className="h-2 w-2 rounded-full bg-brand-cyan animate-pulse" /> {m.text}
-                  </div>
-                </div>
-              );
-            }
-            if (m.kind === "forensics") {
-              return (
-                <div key={i} className="mx-auto w-full max-w-6xl">
-                  <div className="min-w-0">
-                    <ForensicGallery report={m.report} />
-                  </div>
-                </div>
-              );
-            }
-            return (
-              <div key={i} className="mx-auto w-full max-w-6xl">
-                <div className="min-w-0">
-                  <ResultCard
-                    result={m.result}
-                    previewUrl={m.previewUrl}
-                    forensicsReport={forensicsByTask[m.result.taskId]}
-                    provenanceReport={provenanceByTask[m.result.taskId] || m.result.provenance || undefined}
-                    onForensics={
-                      m.file && m.result.fileMeta?.type === "image"
-                        ? () => onForensics(m.file!, m.result.taskId)
-                        : undefined
-                    }
+              )}
+              {outcome && (
+                <div ref={resultRef} className="result-anchor">
+                  <AgentResult
+                    outcome={outcome}
                     forensicsBusy={forensicsBusy}
-                    onProvenance={
-                      m.file && m.result.fileMeta?.type === "image"
-                        ? () => onProvenance(m.file!, m.result.taskId)
-                        : undefined
-                    }
                     provenanceBusy={provenanceBusy}
+                    downloadBusy={downloadBusy}
+                    onForensics={() => void createForensics()}
+                    onProvenance={() => void verifyProvenance()}
+                    onDownload={() => void downloadOutcome()}
                   />
                 </div>
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="border-t border-ink-700 bg-ink-800/95 px-3 sm:px-6 py-3 sm:py-4">
-          {accessAttention ? (
-            <div className="rounded-lg bg-ink-900 border border-ink-600 px-3 sm:px-4 py-3">
-              <a
-                href="/"
-                className="flex w-full items-center justify-center rounded-lg bg-brand-blue px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-brand-cyan"
-              >
-                登录后开始检测
-              </a>
-              <p className="mt-2 text-center text-xs text-ink-500">
-                登录后可上传单个 {formatBytes(uploadLimit)} 以内的文件并查看完整检测结果。
-              </p>
+              )}
             </div>
-          ) : (
-            <>
-              <div className={`${messages.length > 0 ? "hidden sm:flex" : "flex"} gap-2 mb-3 flex-wrap`} aria-label="当前可用检测能力">
-                {AVAILABLE_CAPABILITIES.map((label) => (
-                  <span key={label} className="inline-flex min-h-8 items-center rounded-md border border-ink-600 bg-ink-900 px-3 text-xs text-ink-500">
-                    <IconfontIcon name="shield-check" size={13} className="mr-1.5 text-jade" />{label}
-                  </span>
-                ))}
-              </div>
-              <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 rounded-lg bg-ink-900 border border-ink-600 px-3 sm:px-4 py-3">
-                <button
-                  disabled={busy}
-                  onClick={requestUpload}
-                  className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-brand-blue text-white font-medium text-sm disabled:opacity-50 shadow-sm hover:bg-brand-cyan"
-                >
-                  {!busy && <IconfontIcon name="upload" size={16} />}
-                  {busy ? "检测中…" : "选择文件开始鉴伪"}
-                </button>
-                <span className="text-xs sm:text-sm text-ink-500 leading-relaxed truncate">
-                  单文件上限 {formatBytes(uploadLimit)} · {capabilitySummary}
-                </span>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  className="hidden"
-                  accept="image/*,.txt,.md,.csv,.json,.log,.docx"
-                  onChange={onFile}
-                />
-              </div>
-            </>
           )}
         </div>
+
+        {(pendingFile || outcome || errorMessage) && (
+          <div className="composer-dock">
+            <button type="button" className="composer-compact" disabled={busy} onClick={() => fileInputRef.current?.click()}>
+              <span className="composer-attach"><Paperclip size={18} /></span>
+              <span><strong>{busy ? "小鉴正在分析，请稍候" : "继续上传新的内容"}</strong><small>图片、视频或文档会自动选择合适的鉴伪能力</small></span>
+              <span className="composer-send"><Send size={17} /></span>
+            </button>
+            <p>检测结果仅作辅助判断，高风险场景请结合原始来源和人工复核。</p>
+          </div>
+        )}
       </main>
+
+      <input ref={fileInputRef} className="sr-only" type="file" accept={ACCEPTED_FILES} onChange={chooseFile} />
+      <AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} onAuthenticated={authenticated} />
     </div>
   );
 }
 
-function AgentAvatar() {
-  return (
-    <div className="h-8 w-8 shrink-0 rounded-lg bg-ink-800 border border-ink-600 flex items-center justify-center shadow-sm">
-      <Logo size={26} idSuffix="avatar" />
-    </div>
-  );
-}
-
-function getInitialHistoryItem() {
-  if (typeof window === "undefined") return "";
-  return new URLSearchParams(window.location.search).get("historyItem") || "";
-}
-
-function AccessPanel() {
-  return (
-    <section className="mx-auto w-full max-w-5xl rounded-lg border border-gold/30 bg-gold/10 px-4 py-2.5 shadow-sm">
-      <div className="text-xs leading-relaxed text-ink-500">
-        当前会话需要登录后使用。登录后可上传文件并查看历史记录。
-      </div>
-    </section>
-  );
-}
-
-function EmptyState({
-  capabilitySummary,
+function WelcomeWorkspace({
+  busy,
+  dragging,
+  user,
+  onOpenFile,
+  onDragEnter,
+  onDragLeave,
+  onDrop,
+  onLogin,
 }: {
-  capabilitySummary: string;
+  busy: boolean;
+  dragging: boolean;
+  user: AccountUser | null;
+  onOpenFile: () => void;
+  onDragEnter: () => void;
+  onDragLeave: () => void;
+  onDrop: (event: DragEvent<HTMLElement>) => void;
+  onLogin: () => void;
 }) {
   return (
-    <div className="mx-auto grid w-full max-w-6xl gap-4 py-6 sm:py-10 lg:grid-cols-[minmax(0,1fr)_320px]">
-      <section className="min-h-[320px] rounded-lg border border-dashed border-brand-blue/35 bg-white/90 p-5 sm:p-7 shadow-sm">
-        <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0">
-            <div className="inline-flex items-center gap-2 rounded-full border border-brand-cyan/25 bg-brand-cyan/10 px-3 py-1 text-[11px] font-medium text-brand-cyan">
-              <IconfontIcon name="deep-analysis" size={14} />
-              深度证据分析
-            </div>
-            <h2 className="mt-4 text-2xl sm:text-3xl font-semibold leading-tight text-rice">新建鉴伪任务</h2>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-500">
-              检测结论、取证线索、内容凭证和报告编号会汇总到同一张结果卡，方便后续复核与归档。
-            </p>
-            <div className="mt-4 flex flex-wrap gap-2 text-xs text-ink-500">
-              <span className="rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1">服务状态同步</span>
-              <span className="rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1">历史记录已接入</span>
-              <span className="rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1">{capabilitySummary}</span>
-            </div>
-          </div>
-          <div className="flex shrink-0 items-end gap-2">
-            <img src="/v2/brand/huijian-mascot.webp" alt="慧鉴 AI 品牌助手小鉴" className="h-28 w-20 object-contain drop-shadow-md" />
-          </div>
+    <div className="welcome-workspace">
+      <div className="welcome-copy">
+        <div className="welcome-agent">
+          <img src="/brand/huijian-mascot.webp" alt="慧鉴AI 品牌助手小鉴" />
+          <span><Sparkles size={14} /> 小鉴已就绪</span>
         </div>
+        <p className="welcome-eyebrow">可信内容，从看清证据开始</p>
+        <h2>把内容交给小鉴，<br />一起看清真假。</h2>
+        <p className="welcome-description">上传待核验内容，小鉴会把结论、关键证据与报告整理在同一个任务里。</p>
+        {!user && <button type="button" className="welcome-login-link" onClick={onLogin}><BadgeCheck size={16} /> 登录后，历史记录只对你本人可见</button>}
+      </div>
+
+      <section
+        className={`upload-stage ${dragging ? "dragging" : ""}`}
+        onDragEnter={(event) => { event.preventDefault(); onDragEnter(); }}
+        onDragOver={(event) => event.preventDefault()}
+        onDragLeave={(event) => { if (event.currentTarget === event.target) onDragLeave(); }}
+        onDrop={onDrop}
+      >
+        <div className="upload-stage-icon"><UploadCloud size={28} /></div>
+        <h3>{dragging ? "松开即可开始鉴伪" : "上传或拖放待鉴别内容"}</h3>
+        <p>系统会自动识别内容类型并选择合适的分析链路</p>
+        <button type="button" className="primary-button upload-button" onClick={onOpenFile} disabled={busy}><Paperclip size={17} /> 选择文件</button>
+        <div className="capability-strip" aria-label="支持的内容类型">
+          <div><ImageIcon size={18} /><span><strong>图像</strong><small>多源鉴伪</small></span><Check size={14} /></div>
+          <div><Video size={18} /><span><strong>视频</strong><small>抽帧分析</small></span><Check size={14} /></div>
+          <div><FileText size={18} /><span><strong>文档</strong><small>正文检测</small></span><Check size={14} /></div>
+          <div className="unavailable"><Volume2 size={18} /><span><strong>音频</strong><small>尚未部署</small></span><CircleDashed size={14} /></div>
+        </div>
+        <small className="upload-limits">图片/文档不超过 25 MB · 视频不超过 100 MB</small>
       </section>
-      <aside className="rounded-lg border border-ink-700 bg-ink-900 p-4 shadow-sm">
-        <div className="flex items-center gap-2 text-sm font-semibold text-ink-950">
-          <IconfontIcon name="shield-check" size={17} />
-          任务流程
+
+      <div className="trust-notes">
+        <span><ShieldCheck size={16} /> 不生成随机结论</span>
+        <span><BadgeCheck size={16} /> 个人任务严格隔离</span>
+        <span><FileText size={16} /> 支持报告归档</span>
+      </div>
+    </div>
+  );
+}
+
+function AgentProgressPanel({ progress }: { progress: AgentProgress | null }) {
+  const current = progress || { title: "正在准备鉴伪任务", detail: "请稍候", percent: 8, stage: "validate" as const };
+  const stages = [
+    { key: "validate", label: "文件校验" },
+    { key: "dispatch", label: "能力调度" },
+    { key: "evidence", label: "证据核验" },
+    { key: "report", label: "结论整理" },
+  ] as const;
+  const stageIndex = stages.findIndex((stage) => stage.key === current.stage);
+  return (
+    <div className="agent-progress-message">
+      <div className="agent-avatar"><img src="/brand/huijian-mascot.webp" alt="" /></div>
+      <div className="progress-panel">
+        <div className="progress-heading"><span><LoaderCircle size={17} className={current.percent < 100 ? "spin" : ""} /></span><div><strong>{current.title}</strong><p>{current.detail}</p></div><b>{Math.round(current.percent)}%</b></div>
+        <div className="progress-track"><i style={{ width: `${current.percent}%` }} /></div>
+        <div className="progress-stages">
+          {stages.map((stage, index) => <span key={stage.key} className={index < stageIndex ? "done" : index === stageIndex ? "active" : ""}><i>{index < stageIndex ? <Check size={11} /> : index + 1}</i>{stage.label}</span>)}
         </div>
-        <div className="mt-4 space-y-3 text-xs text-ink-500">
-          {[
-            ["01", "上传文件", "图像或可提取正文的文档"],
-            ["02", "查看证据", "结论、置信度与取证线索"],
-            ["03", "归档报告", "历史记录与报告编号"],
-          ].map((item) => (
-            <div key={item[0]} className="rounded-lg border border-ink-700 bg-white px-3 py-3">
-              <div className="flex items-center gap-2">
-                <span className="rounded-md bg-brand-blue/10 px-2 py-1 font-mono text-[10px] text-brand-blue">{item[0]}</span>
-                <strong className="text-ink-950">{item[1]}</strong>
-              </div>
-              <p className="mt-1 pl-11 leading-relaxed">{item[2]}</p>
-            </div>
-          ))}
-        </div>
-      </aside>
+        {current.experts && current.experts.length > 0 && (
+          <div className="progress-experts">
+            {current.experts.slice(0, 6).map((expert, index) => <span key={expert.publicId || expert.id || index} className={expert.status || "queued"}><i />{expert.publicName || `复核角色 ${index + 1}`}</span>)}
+          </div>
+        )}
+        {current.fallback && <div className="fallback-note"><ShieldCheck size={14} /> 已切换至可用的可信检测链路，不会返回模拟结论。</div>}
+      </div>
     </div>
   );
 }

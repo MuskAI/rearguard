@@ -10,10 +10,10 @@ from urllib.parse import quote
 
 import requests
 from PIL import Image
-from flask import Blueprint, jsonify, make_response, redirect, request, send_file, session
+from flask import Blueprint, Response, jsonify, make_response, request, send_file, session, stream_with_context
 
 from imagedetection.views.detection import image_detect_for_actor
-from imagedetection.views.historical_record import DETECTION_BACKEND_BASE_URL, _detection_static_url
+from imagedetection.views.historical_record import DETECTION_BACKEND_BASE_URL
 from imagedetection.views.login import (
     _authenticate_password_user,
     _find_user_by_phone,
@@ -105,6 +105,7 @@ def _ensure_user_account_columns():
 
 def _set_session_user(user, phone):
     _sync_detection_user(phone, user.get("username") or phone, user.get("openid", "") or phone)
+    session.clear()
     session.permanent = True
     session["user_info"] = {
         "Userid": user["Userid"],
@@ -516,15 +517,15 @@ def _history_actor_where(actor):
     params = []
     user_id = (actor or {}).get("user_id")
     if user_id not in (None, ""):
-        clauses.append("Userid = %s")
+        clauses.append("(Userid = %s)")
         params.append(user_id)
     phone = str((actor or {}).get("phone") or "").strip()
     if phone:
-        clauses.append("phone = %s")
+        clauses.append("(Userid IS NULL AND phone = %s)")
         params.append(phone)
     openid = str((actor or {}).get("openid") or "").strip()
     if openid:
-        clauses.append("openid = %s")
+        clauses.append("(Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s)")
         params.append(openid)
     if not clauses:
         return "1 = 0", ()
@@ -623,7 +624,7 @@ def _image_history_record(item):
     return {
         "itemid": item.get("itemid"),
         "filename": item.get("filename", ""),
-        "image_url": _detection_static_url("image", item),
+        "image_url": f"/api/media/image/{item.get('itemid')}",
         "thumbnail_url": _thumbnail_url(item),
         "real_prob": round(100 - fake_pct, 1),
         "fake_prob": fake_pct,
@@ -668,7 +669,7 @@ def _video_history_record(item):
     return {
         "itemid": item.get("itemid"),
         "filename": item.get("filename", ""),
-        "video_url": _detection_static_url("video", item),
+        "video_url": f"/api/media/video/{item.get('itemid')}",
         "real_percentage": round(100 - fake_pct, 1),
         "fake_percentage": fake_pct,
         "final_label": item.get("final_label", ""),
@@ -1047,7 +1048,10 @@ def image_detection_history():
         return jsonify({"status": "error", "message": "filter 不受支持"}), 400
 
     if actor["mode"] == "guest":
-        rows = excute_detection_sql("SELECT * FROM data WHERE openid = %s ORDER BY createtime DESC", (actor["openid"],))
+        rows = excute_detection_sql(
+            "SELECT * FROM data WHERE Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s ORDER BY createtime DESC",
+            (actor["openid"],),
+        )
     elif actor["mode"] == "anonymous":
         rows = []
     else:
@@ -1080,7 +1084,7 @@ def image_detection_thumbnail(itemid):
 
     if actor["mode"] == "guest":
         rows = excute_detection_sql(
-            "SELECT * FROM data WHERE itemid = %s AND openid = %s LIMIT 1",
+            "SELECT * FROM data WHERE itemid = %s AND Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s LIMIT 1",
             (itemid, actor["openid"]),
         )
     else:
@@ -1116,7 +1120,93 @@ def image_detection_thumbnail(itemid):
         image.save(cache_path, "WEBP", quality=THUMBNAIL_QUALITY, method=6)
         return send_file(cache_path, mimetype="image/webp", max_age=86400, conditional=True)
     except Exception:
-        return redirect(_detection_static_url("image", item), code=302)
+        return _serve_owned_media("image", itemid)
+
+
+def _serve_owned_media(kind, itemid):
+    if kind not in {"image", "video"}:
+        return jsonify({"status": "error", "message": "媒体类型不受支持"}), 404
+    actor, error = _history_identity()
+    if error:
+        return error
+    table = "data" if kind == "image" else "video_data"
+    if actor["mode"] == "guest":
+        rows = excute_detection_sql(
+            f"SELECT * FROM {table} WHERE itemid = %s AND Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s LIMIT 1",
+            (itemid, actor["openid"]),
+        )
+    else:
+        history_where, history_params = _history_actor_where(actor)
+        rows = excute_detection_sql(
+            f"SELECT * FROM {table} WHERE itemid = %s AND ({history_where}) LIMIT 1",
+            (itemid, *history_params),
+        )
+    if not rows:
+        return jsonify({"status": "error", "message": "媒体不存在"}), 404
+
+    item = rows[0]
+    filename = str(item.get("filename") or "").strip()
+    folder = str(item.get("openid") or item.get("phone") or "guest").strip()
+    if not filename or not folder:
+        return jsonify({"status": "error", "message": "媒体不存在"}), 404
+
+    media_root = (Path(__file__).resolve().parents[1] / "static" / "uploads").resolve()
+    local_path = (media_root / folder / kind / filename).resolve()
+    try:
+        local_path.relative_to(media_root)
+    except ValueError:
+        return jsonify({"status": "error", "message": "媒体路径无效"}), 404
+    if local_path.is_file():
+        response = send_file(local_path, conditional=True, max_age=0)
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
+
+    source_url = _backend_media_url(kind, item)
+    if not source_url:
+        return jsonify({"status": "error", "message": "媒体不存在"}), 404
+    upstream_session = requests.Session()
+    upstream_session.trust_env = False
+    forwarded_headers = {}
+    if request.headers.get("Range"):
+        forwarded_headers["Range"] = request.headers["Range"]
+    try:
+        upstream = upstream_session.get(source_url, headers=forwarded_headers, timeout=30, stream=True)
+    except requests.RequestException:
+        upstream_session.close()
+        return jsonify({"status": "error", "message": "媒体服务暂不可用"}), 502
+    if upstream.status_code not in {200, 206}:
+        upstream.close()
+        upstream_session.close()
+        return jsonify({"status": "error", "message": "媒体不存在"}), 404
+
+    def stream():
+        try:
+            yield from upstream.iter_content(chunk_size=64 * 1024)
+        finally:
+            upstream.close()
+            upstream_session.close()
+
+    headers = {"Cache-Control": "private, no-store"}
+    for name in ("Content-Length", "Content-Range", "Accept-Ranges"):
+        value = upstream.headers.get(name)
+        if value:
+            headers[name] = value
+    return Response(
+        stream_with_context(stream()),
+        status=upstream.status_code,
+        content_type=upstream.headers.get("Content-Type") or "application/octet-stream",
+        headers=headers,
+    )
+
+
+@api_blueprint.route("/media/image/<int:itemid>")
+def image_detection_media(itemid):
+    return _serve_owned_media("image", itemid)
+
+
+@api_blueprint.route("/media/video/<int:itemid>")
+def video_detection_media(itemid):
+    return _serve_owned_media("video", itemid)
 
 
 @api_blueprint.route("/history/video-detections")
@@ -1136,7 +1226,10 @@ def video_detection_history():
         return jsonify({"status": "error", "message": "filter 不受支持"}), 400
 
     if actor["mode"] == "guest":
-        rows = excute_detection_sql("SELECT * FROM video_data WHERE openid = %s ORDER BY createtime DESC", (actor["openid"],))
+        rows = excute_detection_sql(
+            "SELECT * FROM video_data WHERE Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s ORDER BY createtime DESC",
+            (actor["openid"],),
+        )
     elif actor["mode"] == "anonymous":
         rows = []
     else:

@@ -9,7 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from imagedetection import creat_app  # noqa: E402
-from imagedetection.views import api, detection, login  # noqa: E402
+from imagedetection.views import api, detection, login, profile  # noqa: E402
 
 
 @pytest.fixture
@@ -64,7 +64,7 @@ def test_image_result_api_queries_with_user_phone(client, monkeypatch):
 
     def fake_detection_sql(sql, params=None, fetch=True):
         calls.append((sql, params))
-        if sql == "SELECT * FROM data WHERE itemid = %s AND (Userid = %s OR phone = %s OR openid = %s) LIMIT 1":
+        if sql == "SELECT * FROM data WHERE itemid = %s AND ((Userid = %s) OR (Userid IS NULL AND phone = %s) OR (Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s)) LIMIT 1":
             assert params == ("7", 1, "13800000000", "openid-1")
             return [{
                 "itemid": 7,
@@ -90,6 +90,150 @@ def test_image_result_api_queries_with_user_phone(client, monkeypatch):
     payload = response.get_json()
     assert payload["result"]["itemid"] == 7
     assert any(params == ("7", 1, "13800000000", "openid-1") for _, params in calls)
+
+
+def test_owner_query_never_uses_loose_identity_or_conditions():
+    where, params = detection._detection_owner_where(7, "13800000007", "openid-7")
+
+    assert where == "(Userid = %s) OR (Userid IS NULL AND phone = %s) OR (Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s)"
+    assert params == (7, "13800000007", "openid-7")
+
+
+def test_profile_counts_use_stable_identity_fallbacks(client, monkeypatch):
+    calls = []
+
+    def fake_detection_sql(sql, params=None, fetch=True):
+        calls.append((sql, params))
+        return [{"cnt": 0}]
+
+    monkeypatch.setattr(profile, "excute_detection_sql", fake_detection_sql)
+    _login_session(client)
+
+    response = client.get("/profile")
+
+    assert response.status_code == 200
+    assert len(calls) == 2
+    for sql, params in calls:
+        assert "(Userid = %s)" in sql
+        assert "Userid IS NULL AND phone = %s" in sql
+        assert "Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s" in sql
+        assert params == (1, "13800000000", "openid-1")
+
+
+def test_legacy_login_clears_previous_account_state(client, monkeypatch):
+    monkeypatch.setattr(
+        login,
+        "_authenticate_password_user",
+        lambda phone, secret: {"Userid": 9, "username": "next-user", "phone": phone, "openid": "openid-9"},
+    )
+    monkeypatch.setattr(login, "_record_terms_acceptance", lambda phone: True)
+    monkeypatch.setattr(login, "_sync_detection_user", lambda *args, **kwargs: None)
+    with client.session_transaction() as sess:
+        sess["user_info"] = {"Userid": 1, "phone": "13800000001"}
+        sess["guest_openid"] = "guest-stale"
+        sess["unrelated_account_cache"] = "must-disappear"
+
+    response = client.post(
+        "/login_verify",
+        data={"phone": "13800000009", "secret": "Password123", "accepted_terms": "1"},
+    )
+
+    assert response.status_code == 302
+    with client.session_transaction() as sess:
+        assert sess["user_info"]["Userid"] == 9
+        assert "guest_openid" not in sess
+        assert "unrelated_account_cache" not in sess
+
+
+def test_profile_password_change_rejects_accounts_without_phone(client, monkeypatch):
+    def fail_query(*args, **kwargs):
+        pytest.fail("an account without a phone must not query the empty-phone user row")
+
+    monkeypatch.setattr(profile, "excute_sql", fail_query)
+    with client.session_transaction() as sess:
+        sess["user_info"] = {"Userid": 5, "username": "wechat-user", "phone": "", "openid": "openid-5"}
+
+    response = client.post(
+        "/profile/change_password",
+        json={"old_password": "OldPassword1", "new_password": "NewPassword2"},
+    )
+
+    assert response.status_code == 400
+    assert "未绑定手机号" in response.get_json()["message"]
+
+
+def test_runtime_job_owner_conflict_prefers_stable_user_id():
+    owner = {"Userid": 22, "phone": "13800000000", "openid": "openid-1"}
+
+    assert detection._runtime_owner_matches(owner, 1, "13800000000", "openid-1", False) is False
+
+
+def test_guest_runtime_job_cannot_access_a_bound_account_job():
+    owner = {"Userid": 22, "phone": "", "openid": "guest-shared"}
+
+    assert detection._runtime_owner_matches(owner, None, "", "guest-shared", True) is False
+
+
+def test_image_result_hides_foreign_record(client, monkeypatch):
+    calls = []
+
+    def fake_detection_sql(sql, params=None, fetch=True):
+        calls.append((sql, params))
+        return []
+
+    monkeypatch.setattr(detection, "excute_detection_sql", fake_detection_sql)
+    _login_session(client)
+
+    response = client.get("/image_upload/result?itemid=88")
+
+    assert response.status_code == 404
+    assert "Userid IS NULL AND phone" in calls[0][0]
+    assert calls[0][1] == ("88", 1, "13800000000", "openid-1")
+
+
+def test_full_media_endpoint_checks_owner_before_backend_fetch(client, monkeypatch):
+    monkeypatch.setattr(api, "excute_detection_sql", lambda *args, **kwargs: [])
+
+    def fail_fetch(*args, **kwargs):
+        pytest.fail("foreign media must not be fetched from the detector backend")
+
+    monkeypatch.setattr(api.requests.Session, "get", fail_fetch)
+    _login_session(client)
+
+    response = client.get("/api/media/image/99")
+
+    assert response.status_code == 404
+    assert response.get_json()["message"] == "媒体不存在"
+    assert response.headers["Cache-Control"].startswith("private, no-store")
+
+
+def test_public_video_url_validation_rejects_private_networks(monkeypatch):
+    monkeypatch.setattr(
+        detection.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (detection.socket.AF_INET, detection.socket.SOCK_STREAM, 6, "", ("127.0.0.1", 80)),
+        ],
+    )
+
+    assert detection._validate_public_video_url("http://example.com/video.mp4") is False
+    assert detection._validate_public_video_url("http://user:pass@example.com/video.mp4") is False
+    assert detection._validate_public_video_url("http://example.com:8080/video.mp4") is False
+
+
+def test_remote_video_urls_are_disabled_by_default(client, monkeypatch):
+    monkeypatch.setattr(detection, "ALLOW_REMOTE_VIDEO_URLS", False)
+
+    def fail_backend(*args, **kwargs):
+        pytest.fail("disabled remote URLs must never reach the detector backend")
+
+    monkeypatch.setattr(detection, "_backend_post", fail_backend)
+    _login_session(client)
+
+    response = client.post("/video_upload/detect", data={"video_url": "https://example.com/video.mp4"})
+
+    assert response.status_code == 400
+    assert "已禁用" in response.get_json()["message"]
 
 
 def test_login_password_requires_terms_acceptance(client, monkeypatch):

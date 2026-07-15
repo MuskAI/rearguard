@@ -1,4 +1,6 @@
 import { Component, ReactNode, useState } from "react";
+import { AlertTriangle, Clipboard, RefreshCw, RotateCcw } from "lucide-react";
+import HuijianBrand from "./components/HuijianBrand";
 
 type Props = {
   children: ReactNode;
@@ -40,36 +42,35 @@ export function StartupError({ error }: { error: unknown }) {
   }
 
   return (
-    <div className="grid min-h-screen place-items-center bg-[#f2f7f4] px-4 text-[#201813]">
-      <div className="w-full max-w-lg rounded-lg border border-[#c8d8d1] bg-white p-6 shadow-sm">
-        <div className="text-sm font-semibold text-[#c7392f]">页面加载失败</div>
-        <h1 className="mt-2 text-2xl font-semibold">慧鉴 AI 鉴伪工作台未能启动</h1>
-        <p className="mt-3 text-sm leading-7 text-[#5f6d66]">
+    <div className="startup-error-screen">
+      <section className="startup-error-panel" role="alert">
+        <HuijianBrand />
+        <div className="startup-error-icon"><AlertTriangle size={22} /></div>
+        <p className="startup-error-kicker">页面加载失败</p>
+        <h1>慧鉴AI 暂时没有启动成功</h1>
+        <p className="startup-error-copy">
           当前页面暂时没有启动成功。请刷新页面；如果仍然失败，换用最新版 Chrome、Edge 或 Safari 后重试。
         </p>
-        <p className="mt-3 rounded-md bg-[#f5f8f6] p-3 text-xs leading-6 text-[#40534a]">
-          如需反馈问题，可以复制诊断信息发送给维护人员。
-        </p>
-        <div className="mt-5 flex flex-wrap gap-2">
+        <div className="startup-error-actions">
           <button
             type="button"
             onClick={() => window.location.reload()}
-            className="rounded-lg bg-[#23648c] px-4 py-2 text-sm font-medium text-white"
+            className="primary-button"
           >
-            刷新页面
+            <RefreshCw size={17} /> 刷新页面
           </button>
-          <a className="rounded-lg border border-[#b8cbc2] px-4 py-2 text-sm text-[#201813]" href="/v2/?force=1">
-            重新进入工作台
+          <a className="secondary-button" href="/">
+            <RotateCcw size={17} /> 返回新任务
           </a>
           <button
             type="button"
             onClick={copyDiagnostics}
-            className="rounded-lg border border-[#b8cbc2] px-4 py-2 text-sm text-[#201813]"
+            className="secondary-button"
           >
-            {copied ? "诊断信息已复制" : "复制诊断信息"}
+            <Clipboard size={17} /> {copied ? "诊断信息已复制" : "复制诊断信息"}
           </button>
         </div>
-      </div>
+      </section>
     </div>
   );
 }
@@ -82,7 +83,7 @@ export default class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error) {
-    console.error("V2 frontend crashed", messageOf(error));
+    console.error("Unified Agent frontend crashed", messageOf(error));
   }
 
   render() {

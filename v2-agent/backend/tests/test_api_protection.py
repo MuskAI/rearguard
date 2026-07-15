@@ -113,7 +113,7 @@ def test_metrics_requires_token(client):
     assert auth.status_code == 200
 
 
-def test_v1_session_unlocks_protected_v2_endpoints(client, monkeypatch):
+def test_v1_session_unlocks_own_v2_history_but_not_admin_metrics(client, monkeypatch):
     import app.main as main  # noqa: WPS433
 
     def fake_session_user(request):
@@ -123,12 +123,96 @@ def test_v1_session_unlocks_protected_v2_endpoints(client, monkeypatch):
 
     monkeypatch.setattr(main, "_verify_session_user_sync", fake_session_user)
 
-    unauth = client.get("/api/metrics")
+    unauth = client.get("/api/history")
     client.cookies.set("session", "valid")
-    auth = client.get("/api/metrics")
+    auth = client.get("/api/history")
+    metrics = client.get("/api/metrics")
 
     assert unauth.status_code == 401
     assert auth.status_code == 200
+    assert metrics.status_code == 403
+
+
+def test_session_history_is_strictly_isolated_by_user(client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    def fake_session_user(request):
+        cookie = request.headers.get("cookie", "")
+        if "session=user-a" in cookie:
+            return {"mode": "session", "userId": 101, "phone": "13800000101"}
+        if "session=user-b" in cookie:
+            return {"mode": "session", "userId": 202, "phone": "13800000202"}
+        return None
+
+    monkeypatch.setattr(main, "_verify_session_user_sync", fake_session_user)
+
+    client.cookies.set("session", "user-a")
+    first = client.post(
+        "/api/detect",
+        files={"file": ("owner-a.txt", b"owner-a-private-content", "text/plain")},
+    )
+    first_payload = first.json()
+
+    client.cookies.set("session", "user-b")
+    second = client.post(
+        "/api/detect",
+        files={"file": ("owner-b.txt", b"owner-b-private-content", "text/plain")},
+    )
+    second_payload = second.json()
+    listing = client.get("/api/history")
+    foreign_detail = client.get(f"/api/history/{first_payload['taskId']}")
+    foreign_artifacts = client.post(
+        f"/api/history/{first_payload['taskId']}/artifacts",
+        json={"forensics": {"summary": "tampered"}},
+    )
+    foreign_delete = client.delete(f"/api/history/{first_payload['taskId']}")
+    foreign_report = client.get(f"/api/report/{first_payload['reportId']}/download")
+    foreign_share = client.post(f"/api/report/{first_payload['reportId']}/share", json={})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert listing.status_code == 200
+    assert [item["taskId"] for item in listing.json()["items"]] == [second_payload["taskId"]]
+    assert foreign_detail.status_code == 404
+    assert foreign_artifacts.status_code == 404
+    assert foreign_delete.status_code == 404
+    assert foreign_report.status_code == 404
+    assert foreign_share.status_code == 404
+
+    client.cookies.set("session", "user-a")
+    owner_listing = client.get("/api/history")
+    owner_detail = client.get(f"/api/history/{first_payload['taskId']}")
+    other_detail = client.get(f"/api/history/{second_payload['taskId']}")
+    owner_delete = client.delete(f"/api/history/{first_payload['taskId']}")
+
+    assert [item["taskId"] for item in owner_listing.json()["items"]] == [first_payload["taskId"]]
+    assert owner_detail.status_code == 200
+    assert other_detail.status_code == 404
+    assert owner_delete.status_code == 200
+
+
+def test_unowned_guest_history_is_not_claimed_by_logged_in_user(client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    guest = client.post(
+        "/api/detect",
+        files={"file": ("guest.txt", b"guest-private-content", "text/plain")},
+    )
+    guest_payload = guest.json()
+
+    monkeypatch.setattr(
+        main,
+        "_verify_session_user_sync",
+        lambda request: {"mode": "session", "userId": 303, "phone": "13800000303"},
+    )
+    client.cookies.set("session", "logged-in")
+    listing = client.get("/api/history")
+    detail = client.get(f"/api/history/{guest_payload['taskId']}")
+
+    assert guest.status_code == 200
+    assert listing.status_code == 200
+    assert listing.json()["items"] == []
+    assert detail.status_code == 404
 
 
 def test_health_exposes_access_protection(client):
@@ -422,7 +506,7 @@ def test_developer_key_report_access_is_scoped_to_owner(developer_key_client):
 
     assert detect.status_code == 200
     assert owner.status_code == 200
-    assert other_user.status_code == 403
+    assert other_user.status_code == 404
     assert admin.status_code == 200
 
 
@@ -452,7 +536,7 @@ def test_developer_key_report_share_is_scoped_to_owner(developer_key_client):
     assert owner.status_code == 200
     assert owner.json()["publicPath"].startswith("/api/report/")
     assert parsed.path == owner.json()["publicPath"].split("?", 1)[0]
-    assert other_user.status_code == 403
+    assert other_user.status_code == 404
     assert public.status_code == 200
     assert "text/html" in public.headers["content-type"]
     assert "content-disposition" not in public.headers

@@ -23,13 +23,13 @@ def _session_history_where(user_info):
     phone = str((user_info or {}).get('phone') or '').strip()
     openid = str((user_info or {}).get('openid') or '').strip()
     if user_id not in (None, ''):
-        clauses.append('Userid = %s')
+        clauses.append('(Userid = %s)')
         params.append(user_id)
     if phone:
-        clauses.append('phone = %s')
+        clauses.append("(Userid IS NULL AND phone = %s)")
         params.append(phone)
     if openid:
-        clauses.append('openid = %s')
+        clauses.append("(Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s)")
         params.append(openid)
     if not clauses:
         return '1 = 0', ()
@@ -37,6 +37,9 @@ def _session_history_where(user_info):
 
 
 def _detection_static_url(kind, item):
+    itemid = (item or {}).get('itemid')
+    if itemid:
+        return f"/api/media/{kind}/{itemid}"
     filename = (item or {}).get('filename') or ''
     folder = (item or {}).get('openid') or (item or {}).get('phone') or 'guest'
     if not filename:
