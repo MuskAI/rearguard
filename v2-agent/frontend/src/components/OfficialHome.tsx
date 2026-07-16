@@ -1,7 +1,6 @@
 import {
   ArrowRight,
   BadgeCheck,
-  Check,
   ChevronDown,
   FileCheck2,
   FileText,
@@ -66,14 +65,13 @@ export default function OfficialHome({ authReady, health, user, onEnterWorkspace
             </button>
           ))}
           <button type="button" className="official-workspace-button" onClick={onEnterWorkspace}>
-            进入工作台 <ArrowRight size={17} />
+            开始鉴伪 <ArrowRight size={17} />
           </button>
         </div>
       </header>
 
       <main>
         <section className="official-hero" id="home" aria-labelledby="official-home-title">
-          <div className="official-hero-grid" aria-hidden="true" />
           <div className="official-hero-scene" aria-hidden="true">
             <div className="official-scan-frame">
               <span className="scan-corner corner-a" />
@@ -82,72 +80,69 @@ export default function OfficialHome({ authReady, health, user, onEnterWorkspace
               <span className="scan-corner corner-d" />
               <div className="official-mascot-halo" />
               <img src="/brand/huijian-mascot.webp" alt="" width="594" height="800" />
-              <span className="evidence-node evidence-node-source"><Fingerprint size={18} /><b>来源线索</b><small>Origin</small></span>
-              <span className="evidence-node evidence-node-model"><ScanSearch size={18} /><b>模型痕迹</b><small>Signal</small></span>
-              <span className="evidence-node evidence-node-structure"><Layers3 size={18} /><b>内容结构</b><small>Structure</small></span>
-              <span className="evidence-connection connection-a" />
-              <span className="evidence-connection connection-b" />
-              <span className="evidence-connection connection-c" />
             </div>
           </div>
 
           <div className="official-hero-inner">
             <div className="official-hero-copy">
               <p className="official-eyebrow"><Sparkles size={16} /> 数字内容鉴伪智能体</p>
-              <h1 id="official-home-title">慧鉴AI</h1>
-              <p className="official-hero-statement">让每一份判断，<br />都有证据可循。</p>
+              <h1 id="official-home-title"><span>慧鉴AI</span>让判断有证据可循</h1>
               <p className="official-hero-description">
-                面向图像、视频与文档的内容鉴伪平台。慧鉴AI 组织模型判断、来源核验与内容证据，形成可理解、可追溯的辅助结论。
+                汇集模型判断、来源核验与内容证据，给出可理解、可追溯的辅助结论。
               </p>
               <div className="official-hero-actions">
                 <button type="button" className="official-primary-cta" onClick={onEnterWorkspace}>
-                  进入鉴伪工作台 <ArrowRight size={19} />
+                  开始鉴伪 <ArrowRight size={19} />
                 </button>
                 <a className="official-secondary-cta" href="#capabilities">了解产品能力 <ChevronDown size={18} /></a>
               </div>
-              <p className="official-privacy-note"><LockKeyhole size={15} /> 登录后任务按账号隔离保存，游客也可先体验检测。</p>
             </div>
           </div>
+        </section>
 
-          <div className="official-hero-ledger" aria-label="慧鉴AI核心原则">
-            <span><b>01</b><strong>真实检测链路</strong><small>服务异常时明确提示</small></span>
-            <span><b>02</b><strong>多源证据组织</strong><small>结论与依据同步呈现</small></span>
-            <span><b>03</b><strong>个人任务隔离</strong><small>历史记录按账户访问</small></span>
-          </div>
+        <section className="official-proof-rail" aria-label="慧鉴AI核心原则">
+          <article><ShieldCheck size={21} /><div><strong>真实服务链路</strong><span>异常时明确提示</span></div></article>
+          <article><Waypoints size={21} /><div><strong>多源证据组织</strong><span>结论与依据同步呈现</span></div></article>
+          <article><LockKeyhole size={21} /><div><strong>个人任务隔离</strong><span>历史记录按账户访问</span></div></article>
         </section>
 
         <section className="official-section capabilities-section" id="capabilities" aria-labelledby="capabilities-title">
           <div className="official-section-heading">
-            <div><span>01 · PRODUCT</span><h2 id="capabilities-title">不止识别真假，<br />更重要的是说明依据。</h2></div>
-            <p>慧鉴AI 不把判断压缩成一个孤立数字，而是沿着模型、来源和内容三个方向整理证据，让结果更适合复核与沟通。</p>
+            <h2 id="capabilities-title">不止回答真假，<br />还要讲清楚为什么。</h2>
+            <p>慧鉴AI 沿着模型、来源与内容三个方向整理证据，让每个结论都更适合复核与沟通。</p>
           </div>
-          <div className="capability-ledger">
-            <article>
-              <span className="capability-number">01</span>
-              <div className="capability-icon blue"><ScanSearch size={24} /></div>
+          <div className="capability-mosaic">
+            <figure className="capability-visual">
+              <img
+                src="/brand/huijian-evidence-studio.webp"
+                alt="小鉴正在核验图像、文档与视频内容"
+                width="1536"
+                height="1024"
+                loading="lazy"
+              />
+            </figure>
+            <article className="capability-model">
+              <div className="capability-icon"><ScanSearch size={24} /></div>
               <h3>模型痕迹分析</h3>
-              <p>发现生成内容中的统计异常、局部纹理和模型特征，并呈现风险信息。</p>
-              <small><ImageIcon size={14} /> 图像内容</small>
+              <p>发现统计异常、局部纹理与生成模型特征，呈现可复核的风险线索。</p>
+              <small><ImageIcon size={14} /> 图像检测</small>
             </article>
-            <article>
-              <span className="capability-number">02</span>
-              <div className="capability-icon teal"><Fingerprint size={24} /></div>
+            <article className="capability-origin">
+              <div className="capability-icon"><Fingerprint size={24} /></div>
               <h3>来源与凭证核验</h3>
-              <p>结合元数据、内容凭证和可用来源线索，为模型判断补充上下文。</p>
+              <p>结合元数据、内容凭证与可用来源线索，为模型判断补充必要上下文。</p>
               <small><FileCheck2 size={14} /> 来源证据</small>
             </article>
-            <article>
-              <span className="capability-number">03</span>
-              <div className="capability-icon coral"><Layers3 size={24} /></div>
+            <article className="capability-multimodal">
+              <div className="capability-icon"><Layers3 size={24} /></div>
               <h3>多模态证据组织</h3>
-              <p>统一承载图像、视频与文档任务，让不同能力在同一条分析链路中协作。</p>
-              <small><Video size={14} /> 多类内容</small>
+              <p>图像、视频与文档进入同一条分析链路，不再分散在不同版本与入口。</p>
+              <small><Video size={14} /> 统一入口</small>
             </article>
-            <article>
-              <span className="capability-number">04</span>
-              <div className="capability-icon amber"><FileText size={24} /></div>
+            <article className="capability-report">
+              <div className="capability-icon"><FileText size={24} /></div>
               <h3>报告与任务归档</h3>
-              <p>保留关键依据、处理信息与结论，便于后续复核、下载和留档。</p>
+              <p>保留关键依据、处理信息与结论，便于后续复核、下载与留档。</p>
               <small><FileText size={14} /> 可追溯报告</small>
             </article>
           </div>
@@ -156,42 +151,40 @@ export default function OfficialHome({ authReady, health, user, onEnterWorkspace
         <section className="workflow-section" id="workflow" aria-labelledby="official-workflow-title">
           <div className="official-section workflow-inner">
             <div className="workflow-intro">
-              <span>02 · WORKFLOW</span>
-              <h2 id="official-workflow-title">把复杂的鉴伪能力，<br />组织成一条清晰路径。</h2>
-              <p>用户只需提交内容，其余步骤由慧鉴AI 根据文件类型与当前可用能力完成调度。</p>
-              <button type="button" onClick={onEnterWorkspace}>开始一次鉴伪 <ArrowRight size={18} /></button>
+              <h2 id="official-workflow-title">提交一份内容，<br />沿着证据链走完。</h2>
+              <p>系统根据文件类型与当前可用能力完成调度，并把每一步保留在同一份任务中。</p>
             </div>
             <ol className="official-workflow-list">
-              <li><span>01</span><Waypoints size={22} /><div><strong>识别任务</strong><p>确认内容类型、文件信息和分析条件。</p></div></li>
-              <li><span>02</span><Layers3 size={22} /><div><strong>调度能力</strong><p>选择当前可用的模型与证据核验链路。</p></div></li>
-              <li><span>03</span><ScanSearch size={22} /><div><strong>交叉核验</strong><p>把模型信号、来源线索与内容结构放在一起分析。</p></div></li>
-              <li><span>04</span><FileCheck2 size={22} /><div><strong>形成报告</strong><p>呈现结论、依据和必要的不确定性说明。</p></div></li>
+              <li><Waypoints size={24} /><div><strong>识别任务</strong><p>确认内容类型、文件信息与分析条件。</p></div></li>
+              <li><Layers3 size={24} /><div><strong>调度能力</strong><p>选择当前可用的模型与证据核验链路。</p></div></li>
+              <li><ScanSearch size={24} /><div><strong>交叉核验</strong><p>综合模型信号、来源线索与内容结构。</p></div></li>
+              <li><FileCheck2 size={24} /><div><strong>形成报告</strong><p>呈现结论、依据与必要的不确定性。</p></div></li>
             </ol>
           </div>
         </section>
 
         <section className="official-section trust-section" id="trust" aria-labelledby="trust-title">
           <div className="trust-heading">
-            <span>03 · TRUST</span>
-            <h2 id="trust-title">可信，不是说得更肯定。<br />而是把边界讲清楚。</h2>
+            <h2 id="trust-title">可信的系统，<br />先把边界讲清楚。</h2>
+            <p>面对高风险内容，清楚说明能力范围与不确定性，比给出一个过度肯定的数字更重要。</p>
+            <aside className="trust-mascot-note">
+              <img src="/brand/huijian-mascot.webp" alt="慧鉴AI品牌助手小鉴" width="82" height="110" />
+              <div><span>小鉴的原则</span><strong>证据不足时，诚实地说“不确定”。</strong></div>
+            </aside>
           </div>
           <div className="trust-principles">
-            <article><ShieldCheck size={23} /><div><h3>拒绝模拟结果</h3><p>检测服务不可用时明确提示，不使用随机数字或伪造结论代替真实响应。</p></div><Check size={18} /></article>
-            <article><LockKeyhole size={23} /><div><h3>账户数据隔离</h3><p>登录用户只能访问自己的任务与历史记录，减少敏感内容的暴露风险。</p></div><Check size={18} /></article>
-            <article><BadgeCheck size={23} /><div><h3>保留人工判断</h3><p>系统提供辅助证据；新闻、司法等高风险场景仍应结合原始来源与人工复核。</p></div><Check size={18} /></article>
+            <article><ShieldCheck size={25} /><div><h3>拒绝模拟结果</h3><p>检测服务不可用时明确提示，不用随机数字或伪造结论代替真实响应。</p></div></article>
+            <article><LockKeyhole size={25} /><div><h3>账户数据隔离</h3><p>登录用户只能访问自己的任务与历史记录，减少敏感内容暴露风险。</p></div></article>
+            <article><BadgeCheck size={25} /><div><h3>保留人工复核</h3><p>新闻、司法等高风险场景仍应结合原始来源与专业人员判断。</p></div></article>
           </div>
-          <aside className="trust-mascot-note">
-            <img src="/brand/huijian-mascot.webp" alt="慧鉴AI品牌助手小鉴" width="82" height="110" />
-            <div><span>小鉴的原则</span><strong>证据不足时，诚实地说“不确定”。</strong></div>
-          </aside>
         </section>
 
         <section className="official-final-cta" aria-labelledby="final-cta-title">
           <div>
-            <span>READY TO VERIFY</span>
-            <h2 id="final-cta-title">从一份内容开始，<br />看见判断背后的证据。</h2>
+            <h2 id="final-cta-title">把第一份内容交给小鉴。</h2>
+            <p>从上传到报告，在一个任务中看见判断背后的证据。</p>
           </div>
-          <button type="button" onClick={onEnterWorkspace}>进入慧鉴AI工作台 <ArrowRight size={20} /></button>
+          <button type="button" onClick={onEnterWorkspace}>开始鉴伪 <ArrowRight size={20} /></button>
         </section>
       </main>
 
