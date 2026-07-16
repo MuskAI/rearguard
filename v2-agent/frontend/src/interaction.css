@@ -1,0 +1,423 @@
+.analysis-mode-control {
+  width: 100%;
+  padding: 14px 0 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.analysis-mode-heading {
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  text-align: left;
+}
+
+.analysis-mode-heading strong {
+  color: var(--ink-strong);
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.analysis-mode-heading small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.analysis-mode-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding: 4px;
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.analysis-mode-option {
+  min-width: 0;
+  position: relative;
+  display: block;
+  cursor: pointer;
+}
+
+.analysis-mode-frame {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 9px;
+  text-align: left;
+  color: var(--muted-strong);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+
+.analysis-mode-option:hover .analysis-mode-frame {
+  color: var(--ink-strong);
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.analysis-mode-option.is-selected .analysis-mode-frame {
+  color: var(--primary-strong);
+  background: var(--surface);
+  border-color: #9ecac7;
+  box-shadow: 0 2px 8px rgba(16, 69, 78, 0.08);
+}
+
+.analysis-mode-option > input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.analysis-mode-option.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.analysis-mode-option > input:focus-visible + .analysis-mode-frame {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.analysis-mode-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.analysis-mode-copy strong {
+  color: currentColor;
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.analysis-mode-copy small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.analysis-mode-marker {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  color: var(--border-strong);
+}
+
+.analysis-mode-option.is-selected .analysis-mode-marker {
+  color: var(--primary);
+}
+
+.analysis-mode-marker em {
+  color: var(--blue);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 760;
+}
+
+.upload-stage-core {
+  border: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.upload-stage-core:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 4px;
+  border-radius: 6px;
+}
+
+.pending-mode-chip {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 1px 5px;
+  color: var(--primary-strong);
+  background: rgba(255, 255, 255, 0.64);
+  border: 1px solid rgba(20, 125, 124, 0.18);
+  border-radius: 4px;
+  font-weight: 700;
+}
+
+.result-feedback {
+  width: 100%;
+  margin-top: 12px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--primary);
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+}
+
+.result-feedback.has-concern {
+  border-left-color: var(--amber);
+}
+
+.result-feedback-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.result-feedback-copy {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.result-feedback-copy > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.result-feedback-copy strong {
+  color: var(--ink-strong);
+  font-size: 13px;
+  font-weight: 740;
+}
+
+.result-feedback-copy small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.result-mode-label {
+  min-height: 26px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  color: var(--primary-strong);
+  background: var(--primary-soft);
+  border: 1px solid #bfdddb;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 760;
+}
+
+.result-mode-label.is-swarm {
+  color: #865716;
+  background: var(--amber-soft);
+  border-color: #e4ce9f;
+}
+
+.result-feedback-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 7px;
+}
+
+.result-feedback-actions button {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  color: var(--muted-strong);
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.result-feedback-actions button:hover:not(:disabled) {
+  color: var(--blue);
+  background: var(--blue-soft);
+  border-color: #b9d2e6;
+  transform: translateY(-1px);
+}
+
+.result-feedback-actions button.is-positive {
+  color: var(--green);
+  background: var(--green-soft);
+  border-color: #acd7c4;
+}
+
+.result-feedback-actions button.is-negative {
+  color: #a76412;
+  background: var(--amber-soft);
+  border-color: #e2c98e;
+}
+
+.feedback-status {
+  min-height: 0;
+  color: var(--green);
+  font-size: 11px;
+}
+
+.feedback-status > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.feedback-status .is-error {
+  color: var(--coral);
+}
+
+.swarm-upgrade {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  margin-top: 13px;
+  padding-top: 13px;
+  color: #8c5b15;
+  border-top: 1px solid #ead6a8;
+  animation: feedback-reveal 180ms ease-out both;
+}
+
+.swarm-upgrade > div {
+  min-width: 0;
+}
+
+.swarm-upgrade strong {
+  color: var(--ink-strong);
+  font-size: 13px;
+}
+
+.swarm-upgrade p {
+  margin: 2px 0 0;
+  color: var(--muted-strong);
+  font-size: 11px;
+}
+
+.swarm-upgrade-button {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 13px;
+  color: #fff;
+  background: #9b6519;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 720;
+  white-space: nowrap;
+}
+
+.swarm-upgrade-button:hover:not(:disabled) {
+  background: #805112;
+  transform: translateY(-1px);
+}
+
+.fallback-result-notice .swarm-upgrade {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.fallback-result-notice .swarm-upgrade > div {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+
+.fallback-result-notice .result-mode-label {
+  margin-bottom: 3px;
+}
+
+@keyframes feedback-reveal {
+  from { opacity: 0; transform: translateY(-5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 720px) {
+  .analysis-mode-frame {
+    grid-template-columns: 20px minmax(0, 1fr) 18px;
+    min-height: 64px;
+    padding: 7px;
+  }
+
+  .analysis-mode-copy strong {
+    font-size: 12px;
+  }
+
+  .analysis-mode-copy small {
+    font-size: 10px;
+  }
+
+  .analysis-mode-marker em {
+    display: none;
+  }
+
+  .result-feedback-main,
+  .result-feedback-copy {
+    align-items: flex-start;
+  }
+
+  .result-feedback-main {
+    gap: 10px;
+  }
+
+  .result-feedback-copy {
+    flex-direction: column;
+    gap: 7px;
+  }
+
+  .swarm-upgrade {
+    grid-template-columns: 24px minmax(0, 1fr);
+  }
+
+  .swarm-upgrade-button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .analysis-mode-option:hover .analysis-mode-frame {
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  .analysis-mode-option.is-selected .analysis-mode-frame {
+    border-color: #477c79;
+  }
+
+  .pending-mode-chip {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .result-mode-label.is-swarm,
+  .result-feedback-actions button.is-negative,
+  .swarm-upgrade {
+    color: #f3c56d;
+  }
+
+  .result-mode-label.is-swarm,
+  .result-feedback-actions button.is-negative {
+    background: rgba(183, 121, 31, 0.2);
+    border-color: rgba(243, 197, 109, 0.52);
+  }
+
+  .swarm-upgrade-button {
+    color: #14262a;
+    background: #f0bd5f;
+  }
+
+  .swarm-upgrade-button:hover:not(:disabled) {
+    background: #ffd47f;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .swarm-upgrade {
+    animation: none;
+  }
+}

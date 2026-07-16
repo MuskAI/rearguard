@@ -2129,7 +2129,11 @@ def _run_swarm_detection_payload(image_bytes, filename, mimetype, user_info, *, 
 
 
 def _run_async_image_job(job_id, image_bytes, filename, mimetype, user_info, is_guest):
-    admin_state.update_detection_job(job_id, {"status": "running"})
+    admin_state.update_detection_job(job_id, {
+        "status": "running",
+        "progress": 44,
+        "summary": "主鉴伪模型正在 GPU 推理",
+    })
     try:
         payload, status_code = _run_image_detection_payload(
             image_bytes,
@@ -2144,11 +2148,17 @@ def _run_async_image_job(job_id, image_bytes, filename, mimetype, user_info, is_
                 "status": "failed",
                 "error": payload.get("message") or f"HTTP {status_code}",
                 "result": payload,
+                "progress": 100,
             })
             return
-        admin_state.update_detection_job(job_id, {"status": "success", "result": payload})
+        admin_state.update_detection_job(job_id, {
+            "status": "success",
+            "result": payload,
+            "progress": 100,
+            "summary": "主模型检测完成",
+        })
     except Exception as exc:
-        admin_state.update_detection_job(job_id, {"status": "failed", "error": str(exc)})
+        admin_state.update_detection_job(job_id, {"status": "failed", "error": str(exc), "progress": 100})
 
 
 def _run_swarm_image_job(job_id, image_bytes, filename, mimetype, user_info, is_guest):
@@ -2249,8 +2259,9 @@ def image_detection_job(job_id):
 @image_upload_blueprint.route('/image_upload/feedback', methods=['POST'])
 def image_detection_feedback():
     """用户对检测结果点赞/点踩/取消，写入 data.feedback（1 / -1 / NULL）"""
-    if 'user_info' not in session or session['user_info'] is None:
-        return jsonify({'status': 'error', 'message': '用户未登录'}), 401
+    user_id, phone, openid, is_guest = _detection_owner()
+    if is_guest and not openid:
+        return jsonify({'status': 'error', 'message': '当前访客会话已失效，请重新提交检测'}), 401
 
     payload = request.get_json(silent=True) or {}
     itemid = payload.get('itemid')
@@ -2271,10 +2282,6 @@ def image_detection_feedback():
         return jsonify({'status': 'error', 'message': 'feedback 须为 1（满意）、-1（不满意）或 0（取消）'}), 400
     db_feedback = None if feedback in (0, None) else feedback
 
-    user_info = session['user_info']
-    user_id = user_info.get('Userid') or user_info.get('userId') or user_info.get('id')
-    phone = str(user_info.get('phone') or '').strip()
-    openid = str(user_info.get('openid') or '').strip()
     db_text = None
     if db_feedback == 1:
         db_text = '满意'
@@ -2311,7 +2318,7 @@ def image_result_api():
 
     final_label = 'AI生成图像' if fake_pct >= 50 else '真实图像'
     feedback_raw = item.get('feedback')
-    feedback = 1 if feedback_raw == '满意' else (-1 if feedback_raw == '不满意' else None)
+    feedback = 1 if feedback_raw in (1, '1', '满意') else (-1 if feedback_raw in (-1, '-1', '不满意') else None)
 
     explanation = item.get('explantation') or _to_user_explanation(final_label, item.get('clarity', ''), has_metadata=bool(all_metadata))
     split_explanation, split_issues = _split_reasoning_sections(explanation)

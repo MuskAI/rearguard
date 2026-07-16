@@ -48,12 +48,16 @@ import {
   startImageAgent,
   videoReportUrl,
 } from "./api";
-import type { AgentHistoryEntry, AgentOutcome, AgentProgress, PendingFile } from "./agentTypes";
+import type { AgentHistoryEntry, AgentOutcome, AgentProgress, ImageAnalysisMode, PendingFile } from "./agentTypes";
 import { generateForensicPreview } from "./clientForensics";
+import { startFastImageAgent, submitImageFeedback } from "./imageInteractionApi";
 import AgentHistory, { MobileHistoryButton } from "./components/AgentHistory";
+import AnalysisModeSwitch from "./components/AnalysisModeSwitch";
 import AgentResult from "./components/AgentResult";
 import AuthDialog from "./components/AuthDialog";
 import OfficialHome from "./components/OfficialHome";
+import ResultFeedback from "./components/ResultFeedback";
+import "./interaction.css";
 
 const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
@@ -161,11 +165,16 @@ function wait(ms: number, signal: AbortSignal) {
   });
 }
 
-function progressFromJob(job: ImageAgentJob): AgentProgress {
-  const progress = Math.max(8, Math.min(Number(job.progress || 0), 98));
-  if (progress >= 78) return { title: "正在形成综合意见", detail: job.summary || "汇总共识、分歧与关键证据", percent: progress, stage: "report", experts: job.experts };
-  if (progress >= 42) return { title: "正在交叉核验证据", detail: job.summary || "比对模型、元数据与内容凭证", percent: progress, stage: "evidence", experts: job.experts };
-  return { title: "已调度鉴伪角色", detail: job.summary || "多源检测正在并行执行", percent: progress, stage: "dispatch", experts: job.experts };
+function progressFromJob(job: ImageAgentJob, mode: ImageAnalysisMode): AgentProgress {
+  const progress = Math.max(mode === "fast" ? 30 : 8, Math.min(Number(job.progress || 0), 98));
+  if (mode === "fast") {
+    if (progress >= 78) return { title: "正在校验检测结果", detail: job.summary || "核对主模型输出与文件信息", percent: progress, stage: "report", analysisMode: mode };
+    if (progress >= 42) return { title: "主模型正在 GPU 推理", detail: job.summary || "正在提取图像鉴伪特征", percent: progress, stage: "evidence", analysisMode: mode };
+    return { title: "快速检测任务已启动", detail: job.summary || "主鉴伪模型正在接收图像", percent: progress, stage: "dispatch", analysisMode: mode };
+  }
+  if (progress >= 78) return { title: "正在形成综合意见", detail: job.summary || "汇总共识、分歧与关键证据", percent: progress, stage: "report", experts: job.experts, analysisMode: mode };
+  if (progress >= 42) return { title: "正在交叉核验证据", detail: job.summary || "比对模型、元数据与内容凭证", percent: progress, stage: "evidence", experts: job.experts, analysisMode: mode };
+  return { title: "已调度鉴伪角色", detail: job.summary || "多源检测正在并行执行", percent: progress, stage: "dispatch", experts: job.experts, analysisMode: mode };
 }
 
 export default function App() {
@@ -190,6 +199,9 @@ export default function App() {
   const [provenanceBusy, setProvenanceBusy] = useState(false);
   const [downloadBusy, setDownloadBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [imageAnalysisMode, setImageAnalysisMode] = useState<ImageAnalysisMode>("fast");
+  const [feedbackBusy, setFeedbackBusy] = useState(false);
+  const [feedbackError, setFeedbackError] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const resultRef = useRef<HTMLDivElement>(null);
@@ -202,6 +214,9 @@ export default function App() {
   const userIdRef = useRef<number | null>(null);
   const previewUrlRef = useRef<string | null>(null);
   const retryFileRef = useRef<File | null>(null);
+  const retryModeRef = useRef<ImageAnalysisMode>("fast");
+  const feedbackTokenRef = useRef(0);
+  const pendingSwarmFileRef = useRef<File | null>(null);
 
   const loadHistoryForUser = useCallback(async (account: AccountUser) => {
     const requestToken = ++historyTokenRef.current;
@@ -276,6 +291,7 @@ export default function App() {
     runControllerRef.current?.abort();
     runControllerRef.current = null;
     forensicsTokenRef.current += 1;
+    feedbackTokenRef.current += 1;
     forensicsControllerRef.current?.request.abort();
     forensicsControllerRef.current?.preview.abort();
     forensicsControllerRef.current = null;
@@ -289,6 +305,8 @@ export default function App() {
     setBusy(false);
     setForensicsBusy(false);
     setForensicsPreviewState("idle");
+    setFeedbackBusy(false);
+    setFeedbackError("");
     setActiveKey(undefined);
   }, []);
 
@@ -306,6 +324,8 @@ export default function App() {
   }, []);
 
   function authenticated(nextUser: AccountUser) {
+    const pendingSwarmFile = pendingSwarmFileRef.current;
+    pendingSwarmFileRef.current = null;
     resetTask();
     historyTokenRef.current += 1;
     userIdRef.current = nextUser.Userid;
@@ -314,6 +334,7 @@ export default function App() {
     setAuthOpen(false);
     setAuthReady(true);
     void loadHistoryForUser(nextUser);
+    if (pendingSwarmFile) void analyzeFile(pendingSwarmFile, "swarm", nextUser);
   }
 
   function logout() {
@@ -328,12 +349,14 @@ export default function App() {
     void logoutAccount().catch(() => undefined);
   }
 
-  async function runImage(file: File, previewUrl: string | undefined, token: number, controller: AbortController) {
+  async function runImage(file: File, previewUrl: string | undefined, token: number, controller: AbortController, mode: ImageAnalysisMode) {
     try {
-      const started = await startImageAgent(file, controller.signal);
+      const started = mode === "swarm"
+        ? await startImageAgent(file, controller.signal)
+        : await startFastImageAgent(file, controller.signal);
       if (runTokenRef.current !== token) return;
       let job = started.job;
-      setProgress(progressFromJob(job));
+      setProgress(progressFromJob(job, mode));
       const startedAt = Date.now();
       let pollDelay = AGENT_POLL_INITIAL_MS;
       let rateLimitRetries = 0;
@@ -341,11 +364,18 @@ export default function App() {
         if (job.status === "success") {
           const result = job.result?.result;
           if (!result) throw new Error("任务已完成，但没有返回可展示的鉴伪结果");
-          setProgress({ title: "鉴伪完成", detail: "综合结论与证据已经整理完成", percent: 100, stage: "report", experts: job.experts });
-          setOutcome({ kind: "image", id: `image:${result.itemid}`, result, file, previewUrl });
+          setProgress({
+            title: "鉴伪完成",
+            detail: mode === "swarm" ? "综合结论与证据已经整理完成" : "主模型结论已经整理完成",
+            percent: 100,
+            stage: "report",
+            experts: job.experts,
+            analysisMode: mode,
+          });
+          setOutcome({ kind: "image", id: `image:${result.itemid}`, result, file, previewUrl, analysisMode: mode });
           return;
         }
-        if (job.status === "failed") throw new Error(job.error || "多源鉴伪暂不可用");
+        if (job.status === "failed") throw new Error(job.error || (mode === "swarm" ? "Swarm 复核暂不可用" : "快速检测暂不可用"));
         await wait(pollDelay, controller.signal);
         let polled: Awaited<ReturnType<typeof fetchImageAgentJob>>;
         try {
@@ -355,7 +385,7 @@ export default function App() {
           rateLimitRetries += 1;
           const cooldown = Math.max(error.retryAfterMs, Math.min(6_000, 1_800 * rateLimitRetries));
           setProgress({
-            ...progressFromJob(job),
+            ...progressFromJob(job, mode),
             title: "任务仍在运行",
             detail: "查询较多，已自动放慢进度刷新，不会重新提交文件",
           });
@@ -367,28 +397,48 @@ export default function App() {
         rateLimitRetries = 0;
         pollDelay = Math.min(AGENT_POLL_MAX_MS, pollDelay + 150);
         job = polled.job;
-        setProgress(progressFromJob(job));
+        setProgress(progressFromJob(job, mode));
       }
-      throw new Error("多源鉴伪超时，请稍后重试");
+      throw new Error(`${mode === "swarm" ? "Swarm 复核" : "快速检测"}超时，请稍后重试`);
     } catch (error) {
       if (isAbort(error) || runTokenRef.current !== token) throw error;
-      const message = error instanceof Error ? error.message : "多源鉴伪暂不可用";
+      const message = error instanceof Error ? error.message : (mode === "swarm" ? "Swarm 复核暂不可用" : "快速检测暂不可用");
       if (message.includes("登录") || message.includes("次数")) throw error;
       if (isRateLimitedError(error)) {
         throw new Error("当前提交任务较多，请稍候几秒后重试当前文件");
       }
-      setProgress({ title: "正在切换可用检测链路", detail: "多源服务未完成，改用可信视觉模型继续分析", percent: 46, stage: "dispatch", fallback: true });
+      setProgress({
+        title: "正在切换可用检测链路",
+        detail: `${mode === "swarm" ? "Swarm 复核" : "主模型服务"}未完成，改用可信视觉模型继续分析`,
+        percent: 46,
+        stage: "dispatch",
+        fallback: true,
+        analysisMode: mode,
+      });
       const result = await detect(file, "image");
       if (runTokenRef.current !== token) return;
-      setProgress({ title: "鉴伪完成", detail: "检测结果与内容凭证已整理完成", percent: 100, stage: "report", fallback: true });
-      setOutcome({ kind: "evidence", id: `evidence:${result.taskId}`, result, file, previewUrl, provenance: result.provenance || undefined });
+      setProgress({ title: "鉴伪完成", detail: "检测结果与内容凭证已整理完成", percent: 100, stage: "report", fallback: true, analysisMode: mode });
+      setOutcome({
+        kind: "evidence",
+        id: `evidence:${result.taskId}`,
+        result,
+        file,
+        previewUrl,
+        provenance: result.provenance || undefined,
+        analysisMode: mode,
+        fallbackFromImage: true,
+      });
     }
   }
 
-  async function analyzeFile(file: File) {
+  async function analyzeFile(file: File, modeOverride = imageAnalysisMode, accountOverride?: AccountUser) {
     resetTask();
     retryFileRef.current = file;
     const kind = inferKind(file.name);
+    if (kind === "image") {
+      retryModeRef.current = modeOverride;
+      setImageAnalysisMode(modeOverride);
+    }
     if (kind === "unknown") {
       setPendingFile({ name: file.name, size: file.size, typeLabel: kindLabel(kind) });
       setErrorMessage("暂不支持这个文件格式。可上传常见图片、MP4/MOV/WEBM 视频，以及 TXT、MD、CSV、JSON、LOG、DOCX 文档。");
@@ -411,14 +461,20 @@ export default function App() {
     const token = ++runTokenRef.current;
     const previewUrl = kind === "image" || kind === "video" ? URL.createObjectURL(file) : undefined;
     if (previewUrl) previewUrlRef.current = previewUrl;
-    setPendingFile({ name: file.name, size: file.size, typeLabel: kindLabel(kind), previewUrl: kind === "image" ? previewUrl : undefined });
+    setPendingFile({
+      name: file.name,
+      size: file.size,
+      typeLabel: kindLabel(kind),
+      previewUrl: kind === "image" ? previewUrl : undefined,
+      analysisMode: kind === "image" ? modeOverride : undefined,
+    });
     setBusy(true);
     setErrorMessage("");
-    setProgress({ title: "正在校验文件", detail: "确认格式、大小与可用检测能力", percent: 12, stage: "validate" });
+    setProgress({ title: "正在校验文件", detail: "确认格式、大小与可用检测能力", percent: 12, stage: "validate", analysisMode: kind === "image" ? modeOverride : undefined });
 
     try {
       if (kind === "image") {
-        await runImage(file, previewUrl, token, controller);
+        await runImage(file, previewUrl, token, controller, modeOverride);
       } else if (kind === "video") {
         setProgress({ title: "正在分析视频", detail: "抽取关键帧并检查时序合成线索", percent: 42, stage: "evidence" });
         const response = await detectVideoWithAgent(file);
@@ -432,7 +488,8 @@ export default function App() {
         setProgress({ title: "鉴伪完成", detail: "文本结论与证据维度已经整理完成", percent: 100, stage: "report" });
         setOutcome({ kind: "evidence", id: `evidence:${result.taskId}`, result, file });
       }
-      if (user && userIdRef.current === user.Userid) void loadHistoryForUser(user);
+      const historyUser = accountOverride || user;
+      if (historyUser && userIdRef.current === historyUser.Userid) void loadHistoryForUser(historyUser);
     } catch (error) {
       if (isAbort(error) || runTokenRef.current !== token) return;
       const message = error instanceof Error ? error.message : "鉴伪任务未完成，请稍后重试";
@@ -461,7 +518,7 @@ export default function App() {
   function retryCurrentFile() {
     const file = retryFileRef.current;
     if (file) {
-      void analyzeFile(file);
+      void analyzeFile(file, retryModeRef.current);
       return;
     }
     fileInputRef.current?.click();
@@ -476,11 +533,14 @@ export default function App() {
     const expectedUserId = user.Userid;
     runControllerRef.current?.abort();
     forensicsTokenRef.current += 1;
+    feedbackTokenRef.current += 1;
     forensicsControllerRef.current?.request.abort();
     forensicsControllerRef.current?.preview.abort();
     forensicsControllerRef.current = null;
     setForensicsBusy(false);
     setForensicsPreviewState("idle");
+    setFeedbackBusy(false);
+    setFeedbackError("");
     setBusy(true);
     setMobileHistoryOpen(false);
     setActiveKey(entry.key);
@@ -492,7 +552,8 @@ export default function App() {
       if (entry.origin === "image") {
         const response = await fetchImageAgentResult(Number(entry.recordId));
         if (detailTokenRef.current !== requestToken || userIdRef.current !== expectedUserId) return;
-        setOutcome({ kind: "image", id: entry.key, result: response.result });
+        const analysisMode: ImageAnalysisMode = response.result.swarm?.enabled ? "swarm" : "fast";
+        setOutcome({ kind: "image", id: entry.key, result: response.result, analysisMode });
       } else if (entry.origin === "video") {
         const response = await fetchVideoAgentResult(Number(entry.recordId));
         if (detailTokenRef.current !== requestToken || userIdRef.current !== expectedUserId) return;
@@ -635,6 +696,53 @@ export default function App() {
     }
   }
 
+  async function recordImageFeedback(value: 1 | -1) {
+    if (!outcome || outcome.kind !== "image" || feedbackBusy) return;
+    const requestToken = ++feedbackTokenRef.current;
+    const targetId = outcome.id;
+    const itemId = outcome.result.itemid;
+    const previous = outcome.result.feedback ?? null;
+    const next: 1 | -1 | 0 = previous === value ? 0 : value;
+    setFeedbackBusy(true);
+    setFeedbackError("");
+    setOutcome((current) => current?.kind === "image" && current.id === targetId
+      ? { ...current, result: { ...current.result, feedback: next === 0 ? null : next } }
+      : current);
+    try {
+      const response = await submitImageFeedback(itemId, next);
+      setOutcome((current) => current?.kind === "image" && current.id === targetId
+        ? { ...current, result: { ...current.result, feedback: response.feedback } }
+        : current);
+    } catch (error) {
+      if (feedbackTokenRef.current !== requestToken) return;
+      if (next !== -1) {
+        setOutcome((current) => current?.kind === "image" && current.id === targetId
+          ? { ...current, result: { ...current.result, feedback: previous } }
+          : current);
+      }
+      setFeedbackError(next === -1 ? "反馈未保存，不影响重新复核" : (error instanceof Error ? error.message : "反馈暂时无法提交"));
+    } finally {
+      if (feedbackTokenRef.current === requestToken) setFeedbackBusy(false);
+    }
+  }
+
+  function upgradeToSwarm() {
+    if (!outcome || (outcome.kind !== "image" && !(outcome.kind === "evidence" && outcome.fallbackFromImage))) return;
+    setFeedbackError("");
+    if (!user) {
+      pendingSwarmFileRef.current = outcome.file || null;
+      setAuthOpen(true);
+      return;
+    }
+    setImageAnalysisMode("swarm");
+    retryModeRef.current = "swarm";
+    if (outcome.file) {
+      void analyzeFile(outcome.file, "swarm");
+      return;
+    }
+    fileInputRef.current?.click();
+  }
+
   const reportedCapabilities = Object.values(health?.capabilities || {});
   const serviceAvailable = health?.status === "ok"
     && health.vlmEnabled === true
@@ -699,6 +807,8 @@ export default function App() {
               busy={busy}
               dragging={dragging}
               user={user}
+              analysisMode={imageAnalysisMode}
+              onAnalysisModeChange={setImageAnalysisMode}
               onOpenFile={() => fileInputRef.current?.click()}
               onDragEnter={() => setDragging(true)}
               onDragLeave={() => setDragging(false)}
@@ -710,7 +820,7 @@ export default function App() {
           {pendingFile && (
             <div className="conversation-flow">
               <div className="user-file-message">
-                <div className="file-message-copy"><span>请帮我鉴别这份内容</span><strong>{pendingFile.name}</strong><small>{pendingFile.typeLabel}{pendingFile.size ? ` · ${formatBytes(pendingFile.size)}` : " · 已归档任务"}</small></div>
+                <div className="file-message-copy"><span>请帮我鉴别这份内容</span><strong>{pendingFile.name}</strong><small>{pendingFile.typeLabel}{pendingFile.size ? ` · ${formatBytes(pendingFile.size)}` : " · 已归档任务"}{pendingFile.analysisMode ? <span className="pending-mode-chip">{pendingFile.analysisMode === "swarm" ? "Swarm 复核" : "快速检测"}</span> : null}</small></div>
                 {pendingFile.previewUrl ? <img src={pendingFile.previewUrl} alt="待检测文件预览" /> : <span className="file-message-icon"><Paperclip size={20} /></span>}
               </div>
               {(progress || busy) && !outcome && <AgentProgressPanel progress={progress} />}
@@ -732,6 +842,15 @@ export default function App() {
                     onProvenance={() => void verifyProvenance()}
                     onDownload={() => void downloadOutcome()}
                   />
+                  <ResultFeedback
+                    outcome={outcome}
+                    submitting={feedbackBusy}
+                    upgradeBusy={busy}
+                    requiresLogin={!user}
+                    error={feedbackError}
+                    onFeedback={(value) => void recordImageFeedback(value)}
+                    onUpgrade={upgradeToSwarm}
+                  />
                 </div>
               )}
             </div>
@@ -742,7 +861,7 @@ export default function App() {
           <div className="composer-dock">
             <button type="button" className="composer-compact" disabled={busy} onClick={() => fileInputRef.current?.click()}>
               <span className="composer-attach"><Paperclip size={18} /></span>
-              <span><strong>{busy ? "小鉴正在分析，请稍候" : "继续上传新的内容"}</strong><small>图片、视频或文档会自动选择合适的鉴伪能力</small></span>
+              <span><strong>{busy ? "小鉴正在分析，请稍候" : "继续上传新的内容"}</strong><small>图片使用{imageAnalysisMode === "swarm" ? " Swarm 复核" : "快速检测"}，视频与文档自动分流</small></span>
               <span className="composer-send"><Send size={17} /></span>
             </button>
             <p>检测结果仅作辅助判断，高风险场景请结合原始来源和人工复核。</p>
@@ -753,7 +872,7 @@ export default function App() {
       )}
 
       <input ref={fileInputRef} className="sr-only" type="file" accept={ACCEPTED_FILES} onChange={chooseFile} tabIndex={-1} aria-hidden="true" />
-      <AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} onAuthenticated={authenticated} />
+      <AuthDialog open={authOpen} onClose={() => { pendingSwarmFileRef.current = null; setAuthOpen(false); }} onAuthenticated={authenticated} />
     </>
   );
 }
@@ -762,6 +881,8 @@ function WelcomeWorkspace({
   busy,
   dragging,
   user,
+  analysisMode,
+  onAnalysisModeChange,
   onOpenFile,
   onDragEnter,
   onDragLeave,
@@ -771,6 +892,8 @@ function WelcomeWorkspace({
   busy: boolean;
   dragging: boolean;
   user: AccountUser | null;
+  analysisMode: ImageAnalysisMode;
+  onAnalysisModeChange: (mode: ImageAnalysisMode) => void;
   onOpenFile: () => void;
   onDragEnter: () => void;
   onDragLeave: () => void;
@@ -802,30 +925,22 @@ function WelcomeWorkspace({
           onDragOver={(event) => event.preventDefault()}
           onDragLeave={(event) => { if (event.currentTarget === event.target) onDragLeave(); }}
           onDrop={onDrop}
-          onClick={() => { if (!busy) onOpenFile(); }}
-          onKeyDown={(event) => {
-            if (!busy && (event.key === "Enter" || event.key === " ")) {
-              event.preventDefault();
-              onOpenFile();
-            }
-          }}
-          role="button"
-          tabIndex={busy ? -1 : 0}
           aria-disabled={busy}
-          aria-label="统一鉴伪上传入口"
+          aria-label="统一鉴伪上传区域"
         >
           <div className="upload-stage-topline">
             <span><i /> 统一鉴伪入口</span>
-            <small>自动调度可用能力</small>
+            <small>按所选模式调度</small>
           </div>
-          <div className="upload-stage-core">
+          <AnalysisModeSwitch mode={analysisMode} disabled={busy} onChange={onAnalysisModeChange} />
+          <button type="button" className="upload-stage-core" disabled={busy} onClick={onOpenFile}>
             <div className="upload-stage-icon"><UploadCloud size={28} /></div>
             <h3>{dragging ? "松开即可开始鉴伪" : "上传或拖放待鉴别内容"}</h3>
             <p>图片、视频或文档，会自动进入对应的分析链路</p>
             <span className="primary-button upload-button"><Paperclip size={17} /> 选择文件</span>
-          </div>
+          </button>
           <div className="capability-strip" aria-label="支持的内容类型">
-            <div><ImageIcon size={18} /><span><strong>图像</strong><small>多源鉴伪</small></span><Check size={14} /></div>
+            <div><ImageIcon size={18} /><span><strong>图像</strong><small>智能鉴伪</small></span><Check size={14} /></div>
             <div><Video size={18} /><span><strong>视频</strong><small>抽帧分析</small></span><Check size={14} /></div>
             <div><FileText size={18} /><span><strong>文档</strong><small>正文检测</small></span><Check size={14} /></div>
             <div className="unavailable"><Volume2 size={18} /><span><strong>音频</strong><small>尚未部署</small></span><CircleDashed size={14} /></div>
@@ -845,7 +960,17 @@ function WelcomeWorkspace({
 
 function AgentProgressPanel({ progress }: { progress: AgentProgress | null }) {
   const current = progress || { title: "正在准备鉴伪任务", detail: "请稍候", percent: 8, stage: "validate" as const };
-  const stages = [
+  const stages = current.analysisMode === "fast" ? [
+    { key: "validate", label: "文件校验" },
+    { key: "dispatch", label: "模型准备" },
+    { key: "evidence", label: "GPU 推理" },
+    { key: "report", label: "结果校验" },
+  ] as const : current.analysisMode === "swarm" ? [
+    { key: "validate", label: "文件校验" },
+    { key: "dispatch", label: "角色调度" },
+    { key: "evidence", label: "证据核验" },
+    { key: "report", label: "综合意见" },
+  ] as const : [
     { key: "validate", label: "文件校验" },
     { key: "dispatch", label: "能力调度" },
     { key: "evidence", label: "证据核验" },

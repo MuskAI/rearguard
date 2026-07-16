@@ -7,6 +7,8 @@ import type {
   VideoAgentResult,
 } from "./api";
 
+export type ImageAnalysisMode = "fast" | "swarm";
+
 export type AgentOutcome =
   | {
       kind: "image";
@@ -16,6 +18,7 @@ export type AgentOutcome =
       previewUrl?: string;
       forensics?: ForensicReport;
       provenance?: ProvenanceReport;
+      analysisMode?: ImageAnalysisMode;
     }
   | {
       kind: "video";
@@ -32,6 +35,8 @@ export type AgentOutcome =
       previewUrl?: string;
       forensics?: ForensicReport;
       provenance?: ProvenanceReport;
+      analysisMode?: ImageAnalysisMode;
+      fallbackFromImage?: boolean;
     };
 
 export type HistoryOrigin = "image" | "video" | "evidence";
@@ -55,6 +60,7 @@ export interface AgentProgress {
   stage: "validate" | "dispatch" | "evidence" | "report";
   experts?: ImageAgentExpert[];
   fallback?: boolean;
+  analysisMode?: ImageAnalysisMode;
 }
 
 export interface PendingFile {
@@ -62,4 +68,5 @@ export interface PendingFile {
   size: number;
   typeLabel: string;
   previewUrl?: string;
+  analysisMode?: ImageAnalysisMode;
 }
