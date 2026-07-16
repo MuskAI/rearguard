@@ -10,6 +10,7 @@ import io
 import json
 import os
 import re
+import time
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -21,7 +22,8 @@ load_dotenv()
 API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
 BASE_URL = os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
 VLM_MODEL = os.getenv("VLM_MODEL", "qwen3-vl-flash")
-FORENSIC_MAPS_VERSION = "huijian-forensic-maps-v1"
+FORENSICS_PIPELINE_VERSION = "huijian-forensics-v2-png-prompt1"
+FORENSIC_MAPS_VERSION = "huijian-forensic-maps-v2"
 IMAGE_SUSPECT_THRESHOLD = float(os.getenv("JIANZHEN_IMAGE_SUSPECT_THRESHOLD", "0.62"))
 IMAGE_HIGH_THRESHOLD = float(os.getenv("JIANZHEN_IMAGE_HIGH_THRESHOLD", "0.82"))
 IMAGE_REGION_THRESHOLD = float(os.getenv("JIANZHEN_IMAGE_REGION_THRESHOLD", "0.72"))
@@ -85,12 +87,17 @@ REGION_LABELS = ["面部边缘异常", "光照方向不一致", "频域生成指
 # ---------------------------------------------------------------------------
 # 工具
 # ---------------------------------------------------------------------------
+def image_dimensions(data: bytes) -> tuple[int, int]:
+    from PIL import Image
+
+    with Image.open(io.BytesIO(data)) as im:
+        return im.width, im.height
+
+
 def image_size(data: bytes) -> str:
     try:
-        from PIL import Image
-
-        with Image.open(io.BytesIO(data)) as im:
-            return f"{im.width}x{im.height}"
+        width, height = image_dimensions(data)
+        return f"{width}x{height}"
     except Exception:
         return "未知"
 
@@ -417,7 +424,9 @@ ELA、噪声成分、噪声一致性、多次 JPEG 曲线只作为辅助线索�
 
 def explainable(data: bytes) -> dict:
     """生成 7 项取证可视化 + 视觉模型逐项判读，返回完整可解释报告。"""
+    started = time.perf_counter()
     suite, jpeg_points = forensics.build_suite(data)
+    maps_ms = int((time.perf_counter() - started) * 1000)
 
     keys_desc = "\n".join(f"- {it['key']}（{it['title']}）：{it['explanation']}" for it in suite)
     prompt = f"""下面依次给出【原图】和 7 张取证图。各分析项含义：
@@ -442,6 +451,7 @@ status 含义：ok=正常 / warn=可疑 / danger=高危。confidence 与 verdict
     verdict, confidence, summary = None, None, ""
     source = "maps-only"
     token_usage = {"promptTokens": 0, "completionTokens": 0, "totalTokens": 0}
+    model_ms = 0
 
     if client is not None:
         content_parts: list[dict] = [{"type": "text", "text": "【原图】"}]
@@ -459,6 +469,7 @@ status 含义：ok=正常 / warn=可疑 / danger=高危。confidence 与 verdict
             })
         content_parts.append({"type": "text", "text": prompt})
 
+        model_started = time.perf_counter()
         try:
             resp = client.chat.completions.create(
                 model=VLM_MODEL,
@@ -481,6 +492,8 @@ status 含义：ok=正常 / warn=可疑 / danger=高危。confidence 与 verdict
                         findings[item["key"]] = item
         except Exception as e:
             print(f"[VLM] forensic call failed: {e}")
+        finally:
+            model_ms = int((time.perf_counter() - model_started) * 1000)
 
     items = []
     for it in suite:
@@ -527,7 +540,53 @@ status 含义：ok=正常 / warn=可疑 / danger=高危。confidence 与 verdict
         "modelVersion": VLM_MODEL if source == "vlm" else FORENSIC_MAPS_VERSION,
         "source": source,
         "tokenUsage": token_usage,
+        "timings": {
+            "mapsMs": maps_ms,
+            "modelMs": model_ms,
+            "totalMs": int((time.perf_counter() - started) * 1000),
+        },
     }
+
+
+def compact_explainable_for_cache(report: dict) -> dict:
+    """Keep model findings in SQLite while leaving regenerated PNG maps out of the cache."""
+    compact = {key: value for key, value in report.items() if key not in {"fileMeta", "elapsedMs"}}
+    compact["items"] = [
+        {key: value for key, value in item.items() if key != "image"}
+        for item in report.get("items", [])
+        if isinstance(item, dict)
+    ]
+    return compact
+
+
+def attach_forensic_images(data: bytes, cached_report: dict) -> dict:
+    """Regenerate deterministic maps for a cached model judgment."""
+    started = time.perf_counter()
+    suite, jpeg_points = forensics.build_suite(data)
+    cached_items = {
+        item.get("key"): item
+        for item in cached_report.get("items", [])
+        if isinstance(item, dict) and item.get("key")
+    }
+    items = []
+    for item in suite:
+        cached = cached_items.get(item["key"], {})
+        items.append({
+            "key": item["key"],
+            "title": item["title"],
+            "explanation": item["explanation"],
+            "status": cached.get("status", "ok"),
+            "finding": cached.get("finding", "未生成模型判读"),
+            "image": "data:image/png;base64," + base64.b64encode(item["png"]).decode(),
+        })
+
+    report = dict(cached_report)
+    report["items"] = items
+    report["jpegPoints"] = jpeg_points
+    timings = dict(report.get("timings") or {})
+    timings["cacheMapsMs"] = int((time.perf_counter() - started) * 1000)
+    report["timings"] = timings
+    return report
 
 
 def _normalize(parsed: dict, file_type: str, source: str, model: str, token_usage: dict | None = None) -> dict:

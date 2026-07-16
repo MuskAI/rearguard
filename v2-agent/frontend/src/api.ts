@@ -614,10 +614,10 @@ export interface ForensicReport {
   fileMeta: { name: string; type: FileType; size: string };
 }
 
-export async function runForensics(file: File): Promise<ForensicReport> {
+export async function runForensics(file: File, signal?: AbortSignal): Promise<ForensicReport> {
   const fd = new FormData();
   fd.append("file", file);
-  const res = await fetch("/v2-api/forensics", withSession({ method: "POST", body: fd }));
+  const res = await fetch("/v2-api/forensics", withSession({ method: "POST", body: fd, signal }));
   return parseJson(res, `取证分析失败 (${res.status})`);
 }
 

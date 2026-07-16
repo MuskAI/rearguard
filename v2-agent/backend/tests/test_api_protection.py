@@ -60,6 +60,19 @@ def _stable_vlm_analyze(file_type: str, _filename: str, _data: bytes) -> dict:
     return _vlm_analysis(file_type=file_type)
 
 
+def _forensic_analysis() -> dict:
+    return {
+        "verdict": "real",
+        "confidence": 0.41,
+        "summary": "pytest 取证判读",
+        "items": [],
+        "jpegPoints": [],
+        "modelVersion": "pytest-forensics",
+        "source": "vlm",
+        "tokenUsage": {"promptTokens": 12, "completionTokens": 5, "totalTokens": 17},
+    }
+
+
 @pytest.fixture
 def client(monkeypatch, tmp_path):
     monkeypatch.setenv("JIANZHEN_ACCESS_TOKEN", "test-token")
@@ -111,6 +124,76 @@ def test_metrics_requires_token(client):
 
     assert unauth.status_code == 401
     assert auth.status_code == 200
+
+
+def test_forensics_cache_is_scoped_by_user_and_does_not_leak_filename(developer_key_client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    calls = 0
+
+    def fake_explainable(_data):
+        nonlocal calls
+        calls += 1
+        return _forensic_analysis()
+
+    monkeypatch.setattr(main.detector, "image_dimensions", lambda _data: (10, 10))
+    monkeypatch.setattr(main.detector, "explainable", fake_explainable)
+    monkeypatch.setattr(main.detector, "attach_forensic_images", lambda _data, report: dict(report))
+    first = developer_key_client.post(
+        "/api/forensics",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+        files={"file": ("first-owner.png", b"same-image", "image/png")},
+    )
+    other_user = developer_key_client.post(
+        "/api/forensics",
+        headers={"X-RealGuard-Key": "rg_sk_user2"},
+        files={"file": ("second-owner.png", b"same-image", "image/png")},
+    )
+    same_user = developer_key_client.post(
+        "/api/forensics",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+        files={"file": ("renamed-by-owner.png", b"same-image", "image/png")},
+    )
+    monkeypatch.setattr(main.detector, "VLM_MODEL", "pytest-forensics-next")
+    new_model = developer_key_client.post(
+        "/api/forensics",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+        files={"file": ("new-model.png", b"same-image", "image/png")},
+    )
+
+    assert first.status_code == 200
+    assert other_user.status_code == 200
+    assert same_user.status_code == 200
+    assert new_model.status_code == 200
+    assert calls == 3
+    assert "cacheHit" not in first.json()
+    assert "cacheHit" not in other_user.json()
+    assert "cacheHit" not in same_user.json()
+    assert same_user.json()["fileMeta"]["name"] == "renamed-by-owner.png"
+    assert same_user.json()["tokenUsage"] == {"promptTokens": 0, "completionTokens": 0, "totalTokens": 0}
+
+
+def test_image_endpoints_reject_excessive_pixel_count(client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    monkeypatch.setattr(main.detector, "image_dimensions", lambda _data: (6000, 5000))
+    monkeypatch.setattr(main.detector, "explainable", lambda _data: pytest.fail("oversized image reached forensics"))
+    monkeypatch.setattr(main.detector, "analyze", lambda *_args: pytest.fail("oversized image reached detector"))
+
+    forensics = client.post("/api/forensics", files={"file": ("oversized.png", b"header-only", "image/png")})
+    detect = client.post("/api/detect", files={"file": ("oversized.png", b"header-only", "image/png")})
+
+    assert forensics.status_code == 413
+    assert detect.status_code == 413
+
+
+def test_analysis_cache_can_enforce_max_age(client):
+    import app.storage as storage  # noqa: WPS433
+
+    storage.put_cached_analysis("ttl-test", "ttl-sha", _forensic_analysis())
+
+    assert storage.get_cached_analysis("ttl-test", "ttl-sha", max_age_seconds=60) is not None
+    assert storage.get_cached_analysis("ttl-test", "ttl-sha", max_age_seconds=0) is None
 
 
 def test_v1_session_unlocks_own_v2_history_but_not_admin_metrics(client, monkeypatch):

@@ -7,12 +7,7 @@ from __future__ import annotations
 
 import io
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib import colormaps
 from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 
 
@@ -46,7 +41,13 @@ def _norm01(a: np.ndarray) -> np.ndarray:
 
 
 def _colorize(gray01: np.ndarray, cmap: str = "jet") -> Image.Image:
-    rgb = (colormaps[cmap](gray01)[..., :3] * 255).astype(np.uint8)
+    if cmap != "jet":
+        raise ValueError(f"unsupported color map: {cmap}")
+    values = np.clip(gray01, 0.0, 1.0)
+    red = np.clip(1.5 - np.abs(4 * values - 3), 0.0, 1.0)
+    green = np.clip(1.5 - np.abs(4 * values - 2), 0.0, 1.0)
+    blue = np.clip(1.5 - np.abs(4 * values - 1), 0.0, 1.0)
+    rgb = (np.dstack([red, green, blue]) * 255).astype(np.uint8)
     return Image.fromarray(rgb)
 
 
@@ -137,16 +138,30 @@ def jpeg_curve_png(im: Image.Image) -> tuple[bytes, list[dict]]:
         re = np.asarray(Image.open(buf).convert("RGB"), dtype=np.float32)
         errs.append(float(np.abs(base - re).mean()))
 
-    fig, ax = plt.subplots(figsize=(4, 3), dpi=110)
-    ax.plot(qs, errs, color="#3b82f6", linewidth=2)
-    ax.set_title("multiple jpeg compression")
-    ax.set_xlabel("quality")
-    ax.set_ylabel("mean error")
-    ax.grid(alpha=0.3)
-    fig.tight_layout()
+    canvas = Image.new("RGB", (440, 330), "#f8fbfc")
+    draw = ImageDraw.Draw(canvas)
+    left, top, right, bottom = 58, 42, 418, 284
+    chart_width, chart_height = right - left, bottom - top
+    min_error, max_error = min(errs), max(errs)
+    error_range = max(max_error - min_error, 0.1)
+
+    for step in range(5):
+        y = round(top + chart_height * step / 4)
+        draw.line((left, y, right, y), fill="#d6e0e3", width=1)
+    draw.line((left, top, left, bottom, right, bottom), fill="#73848a", width=1)
+    draw.text((left, 16), "multiple JPEG compression", fill="#263b42")
+    draw.text((left + chart_width // 2 - 18, 304), "quality", fill="#687b82")
+    draw.text((left - 8, bottom + 7), "50", fill="#687b82")
+    draw.text((right - 8, bottom + 7), "95", fill="#687b82")
+
+    line_points = []
+    for index, error in enumerate(errs):
+        x = round(left + chart_width * index / (len(errs) - 1))
+        y = round(bottom - ((error - min_error) / error_range) * chart_height)
+        line_points.append((x, y))
+    draw.line(line_points, fill="#196b8f", width=3, joint="curve")
     out = io.BytesIO()
-    fig.savefig(out, format="png")
-    plt.close(fig)
+    canvas.save(out, "PNG", optimize=True)
     points = [{"quality": q, "error": round(e, 2)} for q, e in zip(qs, errs)]
     return out.getvalue(), points
 

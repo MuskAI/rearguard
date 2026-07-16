@@ -148,18 +148,44 @@ def is_publishable_analysis(analysis: Any) -> bool:
     )
 
 
-def get_cached_analysis(file_type: str, sha256: str) -> dict[str, Any] | None:
+def get_cached_analysis(file_type: str, sha256: str, max_age_seconds: int | None = None) -> dict[str, Any] | None:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT analysis_json FROM analysis_cache WHERE cache_key = ?",
+            "SELECT analysis_json, created_at FROM analysis_cache WHERE cache_key = ?",
             (cache_key(file_type, sha256),),
         ).fetchone()
     if not row:
         return None
+    if max_age_seconds is not None:
+        try:
+            created_at = datetime.fromisoformat(row["created_at"])
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) - created_at > timedelta(seconds=max(0, max_age_seconds)):
+                with _connect() as conn:
+                    conn.execute(
+                        "DELETE FROM analysis_cache WHERE cache_key = ? AND created_at = ?",
+                        (cache_key(file_type, sha256), row["created_at"]),
+                    )
+                    conn.commit()
+                return None
+        except (TypeError, ValueError):
+            return None
     analysis = json.loads(row["analysis_json"])
     if not is_publishable_analysis(analysis):
         return None
     return analysis
+
+
+def prune_cached_analyses(file_type_prefix: str, max_age_seconds: int) -> int:
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=max(0, max_age_seconds))).isoformat()
+    with _connect() as conn:
+        cursor = conn.execute(
+            "DELETE FROM analysis_cache WHERE file_type LIKE ? AND created_at < ?",
+            (f"{file_type_prefix}%", cutoff),
+        )
+        conn.commit()
+    return max(0, int(cursor.rowcount))
 
 
 def put_cached_analysis(file_type: str, sha256: str, analysis: dict[str, Any]) -> None:

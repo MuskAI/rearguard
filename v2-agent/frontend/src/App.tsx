@@ -48,6 +48,7 @@ import {
   videoReportUrl,
 } from "./api";
 import type { AgentHistoryEntry, AgentOutcome, AgentProgress, PendingFile } from "./agentTypes";
+import { generateForensicPreview } from "./clientForensics";
 import AgentHistory, { MobileHistoryButton } from "./components/AgentHistory";
 import AgentResult from "./components/AgentResult";
 import AuthDialog from "./components/AuthDialog";
@@ -181,6 +182,7 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [forensicsBusy, setForensicsBusy] = useState(false);
+  const [forensicsPreviewState, setForensicsPreviewState] = useState<"idle" | "running" | "complete" | "skipped">("idle");
   const [provenanceBusy, setProvenanceBusy] = useState(false);
   const [downloadBusy, setDownloadBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -188,7 +190,9 @@ export default function App() {
   const workspaceRef = useRef<HTMLDivElement>(null);
   const resultRef = useRef<HTMLDivElement>(null);
   const runControllerRef = useRef<AbortController | null>(null);
+  const forensicsControllerRef = useRef<{ request: AbortController; preview: AbortController } | null>(null);
   const runTokenRef = useRef(0);
+  const forensicsTokenRef = useRef(0);
   const historyTokenRef = useRef(0);
   const detailTokenRef = useRef(0);
   const userIdRef = useRef<number | null>(null);
@@ -236,6 +240,9 @@ export default function App() {
     return () => {
       active = false;
       runControllerRef.current?.abort();
+      forensicsTokenRef.current += 1;
+      forensicsControllerRef.current?.request.abort();
+      forensicsControllerRef.current?.preview.abort();
       if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
     };
   }, [loadHistoryForUser]);
@@ -246,22 +253,27 @@ export default function App() {
     return () => window.removeEventListener("popstate", syncViewFromUrl);
   }, []);
 
+  const outcomeId = outcome?.id;
   useEffect(() => {
-    if (!progress && !outcome && !errorMessage) return;
+    if (!progress && !outcomeId && !errorMessage) return;
     window.requestAnimationFrame(() => {
-      if (outcome) {
+      if (outcomeId) {
         resultRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
         return;
       }
       workspaceRef.current?.scrollTo({ top: workspaceRef.current.scrollHeight, behavior: "smooth" });
     });
-  }, [errorMessage, outcome, progress]);
+  }, [errorMessage, outcomeId, progress]);
 
   const resetTask = useCallback(() => {
     runTokenRef.current += 1;
     detailTokenRef.current += 1;
     runControllerRef.current?.abort();
     runControllerRef.current = null;
+    forensicsTokenRef.current += 1;
+    forensicsControllerRef.current?.request.abort();
+    forensicsControllerRef.current?.preview.abort();
+    forensicsControllerRef.current = null;
     if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
     previewUrlRef.current = null;
     setPendingFile(null);
@@ -269,6 +281,8 @@ export default function App() {
     setOutcome(null);
     setErrorMessage("");
     setBusy(false);
+    setForensicsBusy(false);
+    setForensicsPreviewState("idle");
     setActiveKey(undefined);
   }, []);
 
@@ -423,6 +437,12 @@ export default function App() {
     const requestToken = ++detailTokenRef.current;
     const expectedUserId = user.Userid;
     runControllerRef.current?.abort();
+    forensicsTokenRef.current += 1;
+    forensicsControllerRef.current?.request.abort();
+    forensicsControllerRef.current?.preview.abort();
+    forensicsControllerRef.current = null;
+    setForensicsBusy(false);
+    setForensicsPreviewState("idle");
     setBusy(true);
     setMobileHistoryOpen(false);
     setActiveKey(entry.key);
@@ -457,14 +477,86 @@ export default function App() {
   async function createForensics() {
     if (!outcome?.file || forensicsBusy) return;
     const outcomeId = outcome.id;
+    const targetKind = outcome.kind;
+    const targetTaskId = outcome.kind === "evidence" ? outcome.result.taskId : null;
+    const file = outcome.file;
+    const requestController = new AbortController();
+    const previewController = new AbortController();
+    const requestToken = ++forensicsTokenRef.current;
+    forensicsControllerRef.current?.request.abort();
+    forensicsControllerRef.current?.preview.abort();
+    forensicsControllerRef.current = { request: requestController, preview: previewController };
+    let authoritativeReady = false;
+    let previewRendered = false;
+    const isCurrent = () => forensicsTokenRef.current === requestToken && !requestController.signal.aborted;
+
+    const updateReport = (report: Awaited<ReturnType<typeof runForensics>>) => {
+      if (!isCurrent()) return;
+      setOutcome((current) => current && current.id === outcomeId && (current.kind === "image" || current.kind === "evidence")
+        ? { ...current, forensics: report }
+        : current);
+    };
+
     setForensicsBusy(true);
-    try {
-      const report = await runForensics(outcome.file);
-      setOutcome((current) => current && current.id === outcomeId && (current.kind === "image" || current.kind === "evidence") ? { ...current, forensics: report } : current);
-      if (outcome.kind === "evidence") await persistArtifacts(outcome.result.taskId, { forensics: report });
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "取证图谱生成失败");
-    } finally {
+    setForensicsPreviewState("running");
+    setErrorMessage("");
+
+    const serverRequest = runForensics(file, requestController.signal);
+    const previewTask = generateForensicPreview(file, (report) => {
+      if (authoritativeReady || !isCurrent()) return;
+      previewRendered = true;
+      updateReport(report);
+    }, previewController.signal).then(
+      (report) => {
+        if (isCurrent()) setForensicsPreviewState("complete");
+        return { ok: true as const, report };
+      },
+      (error: unknown) => {
+        if (isCurrent() && !isAbort(error)) setForensicsPreviewState("skipped");
+        return { ok: false as const, error };
+      },
+    );
+    const serverTask = serverRequest.then(async (report) => {
+      if (!isCurrent()) return { ok: false as const, cancelled: true as const };
+      authoritativeReady = true;
+      previewController.abort();
+      updateReport(report);
+      if (targetKind === "evidence" && targetTaskId) {
+        try {
+          await persistArtifacts(targetTaskId, { forensics: report });
+        } catch {
+          if (isCurrent()) setErrorMessage("模型判读已完成，但取证图谱暂时无法写入历史归档。");
+        }
+      }
+      return { ok: true as const, report };
+    }).catch((error: unknown) => ({
+      ok: false as const,
+      error,
+      cancelled: isAbort(error) || forensicsTokenRef.current !== requestToken,
+    }));
+
+    const [serverResult, previewResult] = await Promise.all([serverTask, previewTask]);
+    if (!isCurrent()) return;
+    if (!serverResult.ok && !("cancelled" in serverResult && serverResult.cancelled)) {
+      if (previewResult.ok || previewRendered) {
+        setOutcome((current) => {
+          if (!current || current.id !== outcomeId || (current.kind !== "image" && current.kind !== "evidence")) return current;
+          if (current.forensics?.source !== "browser-preview") return current;
+          return {
+            ...current,
+            forensics: {
+              ...current.forensics,
+              summary: "低分辨率预览已在浏览器本地生成；服务端模型判读暂时不可用，当前预览不作为最终鉴伪结论。",
+            },
+          };
+        });
+        setErrorMessage("本地预览已生成，但服务端模型判读失败，请稍后重试。");
+      } else {
+        setErrorMessage(serverResult.error instanceof Error ? serverResult.error.message : "取证图谱生成失败");
+      }
+    }
+    if (forensicsTokenRef.current === requestToken) {
+      forensicsControllerRef.current = null;
       setForensicsBusy(false);
     }
   }
@@ -595,6 +687,7 @@ export default function App() {
                   <AgentResult
                     outcome={outcome}
                     forensicsBusy={forensicsBusy}
+                    forensicsPreviewState={forensicsPreviewState}
                     provenanceBusy={provenanceBusy}
                     downloadBusy={downloadBusy}
                     onForensics={() => void createForensics()}

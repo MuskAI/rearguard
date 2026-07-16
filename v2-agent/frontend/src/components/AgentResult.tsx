@@ -23,10 +23,12 @@ import type { AgentOutcome } from "../agentTypes";
 import type { ForensicReport, ProvenanceReport } from "../api";
 
 type ResultTab = "summary" | "evidence" | "file";
+type ForensicsPreviewState = "idle" | "running" | "complete" | "skipped";
 
 interface Props {
   outcome: AgentOutcome;
   forensicsBusy: boolean;
+  forensicsPreviewState: ForensicsPreviewState;
   provenanceBusy: boolean;
   downloadBusy: boolean;
   onForensics: () => void;
@@ -125,16 +127,41 @@ function EvidenceList({ items }: { items: string[] }) {
   );
 }
 
-function ForensicsSection({ report }: { report?: ForensicReport }) {
-  if (!report) return null;
+function ForensicsSection({ report, busy, previewState }: { report?: ForensicReport; busy: boolean; previewState: ForensicsPreviewState }) {
+  if (!report && !busy) return null;
+  const isBrowserPreview = report?.source === "browser-preview";
+  const completed = report?.items.length || 0;
+  const pending = busy && previewState === "running" && (!report || isBrowserPreview) ? Math.max(0, 7 - completed) : 0;
+  const status = !report
+    ? previewState === "skipped" ? "本地预览已跳过，服务端无损图谱判读中" : "浏览器正在生成第 1 组本地预览"
+    : isBrowserPreview && busy
+      ? previewState === "skipped"
+        ? `本地预览停在 ${completed}/7，服务端无损图谱判读中`
+        : `本地预览 ${completed}/7，服务端无损图谱判读中`
+      : isBrowserPreview
+        ? "本地预览已完成，服务端判读暂时不可用"
+        : report.source === "vlm"
+          ? "服务端模型判读完成"
+          : "服务端取证分析完成";
   return (
     <section className="result-band forensic-band">
-      <div className="section-title"><Microscope size={18} /><div><h3>取证图谱</h3><p>{report.summary}</p></div></div>
+      <div className="section-title"><Microscope size={18} /><div><h3>{isBrowserPreview || !report ? "取证图谱预览" : "取证图谱"}</h3><p>{report?.summary || "低分辨率预览在本机逐项生成，服务端同时判读无损图谱。"}</p></div></div>
+      <div className={`forensic-progress ${busy ? "is-running" : "is-complete"}`} role="status" aria-live="polite" aria-atomic="true">
+        {busy ? <LoaderCircle size={14} className="spin" /> : <CheckCircle2 size={14} />}
+        <span>{status}</span>
+        {report?.elapsedMs ? <time>{(report.elapsedMs / 1000).toFixed(1)}s</time> : null}
+      </div>
       <div className="forensic-grid">
-        {report.items.map((item) => (
+        {report?.items.map((item) => (
           <figure key={item.key}>
             <img src={item.image} alt={item.title} />
             <figcaption><strong>{item.title}</strong><span>{item.finding}</span></figcaption>
+          </figure>
+        ))}
+        {Array.from({ length: pending }, (_, index) => (
+          <figure className="forensic-pending" key={`forensic-pending-${completed + index}`} aria-hidden="true">
+            <div className="forensic-placeholder" />
+            <figcaption><strong>正在生成图谱</strong><span>本地信号计算进行中</span></figcaption>
           </figure>
         ))}
       </div>
@@ -170,6 +197,9 @@ export default function AgentResult(props: Props) {
   const provenance = props.outcome.kind === "image" || props.outcome.kind === "evidence"
     ? props.outcome.provenance || (props.outcome.kind === "evidence" ? props.outcome.result.provenance || undefined : undefined)
     : undefined;
+  const forensicsActionLabel = props.forensicsBusy
+    ? props.forensicsPreviewState === "skipped" ? "服务端判读中" : forensics?.source === "browser-preview" ? "模型判读中" : forensics?.source === "vlm" ? "正在归档" : "本地图谱生成中"
+    : forensics ? "重新生成取证图谱" : "生成取证图谱";
 
   const evidenceItems = props.outcome.kind === "image"
     ? [...(props.outcome.result.swarm?.evidence || []), ...(props.outcome.result.visual_issues || [])]
@@ -234,14 +264,14 @@ export default function AgentResult(props: Props) {
             </button>
             <button type="button" className="secondary-button" onClick={props.onForensics} disabled={!canDeepAnalyze || props.forensicsBusy} title={canDeepAnalyze ? "生成像素级取证图谱" : "历史任务需重新上传原文件后生成取证图谱"}>
               {props.forensicsBusy ? <LoaderCircle size={17} className="spin" /> : <Microscope size={17} />}
-              {forensics ? "重新生成取证图谱" : "生成取证图谱"}
+              {forensicsActionLabel}
             </button>
             <button type="button" className="secondary-button" onClick={props.onProvenance} disabled={!canDeepAnalyze || props.provenanceBusy} title={canDeepAnalyze ? "验证 C2PA 与文件元数据" : "历史任务需重新上传原文件后验证内容凭证"}>
               {props.provenanceBusy ? <LoaderCircle size={17} className="spin" /> : <Fingerprint size={17} />}
               {provenance ? "重新验证内容凭证" : "验证内容凭证"}
             </button>
           </div>
-          <ForensicsSection report={forensics} />
+          <ForensicsSection report={forensics} busy={props.forensicsBusy} previewState={props.forensicsPreviewState} />
           <ProvenanceSection report={provenance} />
         </div>
       )}
@@ -278,7 +308,7 @@ export default function AgentResult(props: Props) {
               </div>
             </section>
           )}
-          <ForensicsSection report={forensics} />
+          <ForensicsSection report={forensics} busy={props.forensicsBusy} previewState={props.forensicsPreviewState} />
           <ProvenanceSection report={provenance} />
         </div>
       )}

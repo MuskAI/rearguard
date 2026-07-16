@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import secrets
@@ -43,6 +44,10 @@ DEVELOPER_API_KEY_REQUIRED = REQUIRE_DEVELOPER_API_KEY
 REPORT_SHARE_SECRET = os.getenv("JIANZHEN_REPORT_SHARE_SECRET", "").strip()
 REPORT_SHARE_DEFAULT_SECONDS = int(os.getenv("JIANZHEN_REPORT_SHARE_DEFAULT_SECONDS", str(7 * 24 * 60 * 60)))
 REPORT_SHARE_MAX_SECONDS = int(os.getenv("JIANZHEN_REPORT_SHARE_MAX_SECONDS", str(30 * 24 * 60 * 60)))
+FORENSICS_CACHE_MAX_AGE_SECONDS = int(os.getenv("JIANZHEN_FORENSICS_CACHE_MAX_AGE_SECONDS", str(7 * 24 * 60 * 60)))
+FORENSICS_MAX_SOURCE_PIXELS = int(os.getenv("JIANZHEN_FORENSICS_MAX_SOURCE_PIXELS", "24000000"))
+FORENSICS_MAX_CONCURRENCY = max(1, int(os.getenv("JIANZHEN_FORENSICS_MAX_CONCURRENCY", "2")))
+_FORENSICS_SEMAPHORE = asyncio.Semaphore(FORENSICS_MAX_CONCURRENCY)
 PROTECTED_ENDPOINTS = [
     "/api/admin/health",
     "/api/history",
@@ -269,6 +274,18 @@ async def _require_developer_access(request: Request) -> dict:
     return await run_in_threadpool(_verify_developer_key_sync, api_key, request)
 
 
+def _forensics_cache_scope(actor: dict) -> str | None:
+    if actor.get("userId") is not None:
+        raw_scope = f"user:{actor['userId']}"
+    elif actor.get("keyId") is not None:
+        raw_scope = f"key:{actor['keyId']}"
+    elif actor.get("mode") == "admin":
+        raw_scope = "admin"
+    else:
+        return None
+    return hashlib.sha256(raw_scope.encode("utf-8")).hexdigest()[:16]
+
+
 def _require_internal_developer_auth(request: Request) -> None:
     if not DEVELOPER_AUTH_SECRET:
         raise HTTPException(status_code=503, detail="内部开发者接口未配置")
@@ -352,6 +369,25 @@ async def _read_upload(file: UploadFile) -> bytes:
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail=f"文件超过 {MAX_UPLOAD_BYTES // (1024 * 1024)}MB 上限")
     return data
+
+
+async def _validate_image_pixels(data: bytes) -> tuple[int, int]:
+    try:
+        width, height = await run_in_threadpool(detector.image_dimensions, data)
+    except Exception as exc:
+        if "DecompressionBomb" in type(exc).__name__:
+            raise HTTPException(status_code=413, detail="图片像素数量过高，无法安全处理") from exc
+        # This preflight only enforces the resource ceiling. The detector keeps
+        # ownership of malformed-file validation and its existing error shape.
+        return 0, 0
+    if width <= 0 or height <= 0:
+        return 0, 0
+    if width * height > FORENSICS_MAX_SOURCE_PIXELS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"图片像素不能超过 {FORENSICS_MAX_SOURCE_PIXELS}，当前为 {width}x{height}",
+        )
+    return width, height
 
 
 def _public_capabilities() -> dict:
@@ -536,6 +572,8 @@ async def detect(request: Request, file: UploadFile = File(...), fileType: str |
     if ftype in {"video", "audio"}:
         label = "视频" if ftype == "video" else "音频"
         raise HTTPException(status_code=422, detail=f"{label}检测能力尚未部署，本次不会生成模拟结论")
+    if ftype == "image":
+        await _validate_image_pixels(data)
     if not detector.API_KEY:
         raise HTTPException(status_code=503, detail="真实模型服务未配置，暂时无法生成检测结论")
     sha256 = hashlib.sha256(data).hexdigest()
@@ -609,19 +647,71 @@ async def forensics(request: Request, file: UploadFile = File(...)) -> dict:
     ftype = _detect_type(filename, None)
     if ftype != "image":
         raise HTTPException(status_code=400, detail="可解释性取证分析目前仅支持图像")
+    await _validate_image_pixels(data)
 
     started = time.perf_counter()
-    report = await run_in_threadpool(detector.explainable, data)
+    sha256 = hashlib.sha256(data).hexdigest()
+    cache_scope = _forensics_cache_scope(actor)
+    cache_type = (
+        f"image-forensics:{detector.FORENSICS_PIPELINE_VERSION}:{detector.VLM_MODEL}:{cache_scope}"
+        if cache_scope
+        else None
+    )
+    cached = (
+        await run_in_threadpool(storage.get_cached_analysis, cache_type, sha256, FORENSICS_CACHE_MAX_AGE_SECONDS)
+        if cache_type
+        else None
+    )
+    cache_hit = cached is not None
+    async with _FORENSICS_SEMAPHORE:
+        if await request.is_disconnected():
+            raise HTTPException(status_code=499, detail="客户端已停止等待取证结果")
+        report = (
+            await run_in_threadpool(detector.attach_forensic_images, data, cached)
+            if cached
+            else await run_in_threadpool(detector.explainable, data)
+        )
+
     report["elapsedMs"] = int((time.perf_counter() - started) * 1000)
     report["fileMeta"] = {"name": filename, "type": ftype, "size": f"{len(data) / 1024:.1f}KB"}
-    report["tokenUsage"] = _token_usage_from_payload(report)
-    storage.record_token_usage(
+    report["tokenUsage"] = (
+        {"promptTokens": 0, "completionTokens": 0, "totalTokens": 0}
+        if cache_hit
+        else _token_usage_from_payload(report)
+    )
+    if cache_type and not cache_hit:
+        await run_in_threadpool(
+            storage.prune_cached_analyses,
+            "image-forensics:",
+            FORENSICS_CACHE_MAX_AGE_SECONDS,
+        )
+        await run_in_threadpool(
+            storage.put_cached_analysis,
+            cache_type,
+            sha256,
+            detector.compact_explainable_for_cache(report),
+        )
+    await run_in_threadpool(
+        storage.record_token_usage,
         actor=actor,
         endpoint="/api/forensics",
         file_type=ftype,
         result=report,
         usage=report["tokenUsage"],
-        cache_hit=False,
+        cache_hit=cache_hit,
+    )
+    await run_in_threadpool(
+        storage.record_event,
+        "forensics",
+        client_ip=_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+        method="POST",
+        path="/api/forensics",
+        status=200,
+        elapsed_ms=report["elapsedMs"],
+        file_type=ftype,
+        verdict=report.get("verdict"),
+        cache_hit=cache_hit,
     )
     return report
 
