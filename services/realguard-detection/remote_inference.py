@@ -3,8 +3,10 @@ import os
 import sys
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import requests
 from flask import Blueprint, jsonify, request
 from werkzeug.utils import secure_filename
 
@@ -21,6 +23,28 @@ from tools.AIGC_Detection.inference_onnx import analyze_image, get_model_status 
 model_inference_blueprint = Blueprint("model_inference", __name__)
 ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "bmp", "gif"}
 MAX_UPLOAD_BYTES = int(os.environ.get("REALGUARD_MODEL_MAX_UPLOAD_BYTES", str(32 * 1024 * 1024)))
+VISIBLE_PRECHECK_URL = os.environ.get(
+    "REALGUARD_MODEL_VISIBLE_PRECHECK_URL",
+    "http://127.0.0.1:5066/v1/precheck",
+).strip()
+VISIBLE_PRECHECK_TOKEN = (
+    os.environ.get("REALGUARD_MODEL_VISIBLE_PRECHECK_TOKEN")
+    or os.environ.get("WATERMARK_PRECHECK_TOKEN")
+    or ""
+).strip()
+VISIBLE_PRECHECK_TIMEOUT = float(os.environ.get("REALGUARD_MODEL_VISIBLE_PRECHECK_TIMEOUT", "12"))
+_PRECHECK_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="visible-precheck")
+_PRECHECK_FIELDS = (
+    "status",
+    "elapsedMs",
+    "engine",
+    "engineVersion",
+    "detections",
+    "visibleHits",
+    "genericVisibleWatermark",
+    "decision",
+    "report",
+)
 
 
 def _configured_token():
@@ -45,6 +69,24 @@ def _optional_int(name, minimum, maximum):
     if value < minimum or value > maximum:
         raise ValueError(f"{name} must be between {minimum} and {maximum}")
     return value
+
+
+def _run_visible_precheck(image_bytes, filename, mimetype):
+    if not VISIBLE_PRECHECK_URL or not VISIBLE_PRECHECK_TOKEN:
+        return None
+    with requests.Session() as session:
+        session.trust_env = False
+        response = session.post(
+            VISIBLE_PRECHECK_URL,
+            headers={"Authorization": f"Bearer {VISIBLE_PRECHECK_TOKEN}"},
+            files={"file": (filename, image_bytes, mimetype or "application/octet-stream")},
+            timeout=(2, VISIBLE_PRECHECK_TIMEOUT),
+        )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict) or payload.get("status") != "ok":
+        raise ValueError("Visible watermark precheck returned an invalid response")
+    return {key: payload.get(key) for key in _PRECHECK_FIELDS if key in payload}
 
 
 @model_inference_blueprint.get("/internal/model/health")
@@ -80,35 +122,58 @@ def model_predict():
         chunk_size = _optional_int("chunk_size", 64, 4096)
         max_tiles = _optional_int("max_tiles", 1, 256)
         top_k = _optional_int("top_k", 1, 128)
+        image_bytes = image_file.read()
+        if not image_bytes:
+            return jsonify({"code": 400, "msg": "Image is empty"}), 400
+        if len(image_bytes) > MAX_UPLOAD_BYTES:
+            return jsonify({"code": 413, "msg": "Image is too large"}), 413
+
         with tempfile.NamedTemporaryFile(
             prefix="realguard-model-",
             suffix=f".{extension}",
             delete=False,
         ) as temp_file:
             temp_path = temp_file.name
-            image_file.save(temp_file)
+            temp_file.write(image_bytes)
 
+        precheck_future = _PRECHECK_EXECUTOR.submit(
+            _run_visible_precheck,
+            image_bytes,
+            safe_name,
+            image_file.mimetype,
+        )
         result = analyze_image(
             temp_path,
             chunk_size=chunk_size,
             max_tiles=max_tiles,
             top_k=top_k,
         )
+        precheck_payload = None
+        precheck_status = "disabled"
+        try:
+            precheck_payload = precheck_future.result(timeout=VISIBLE_PRECHECK_TIMEOUT + 2)
+            precheck_status = "success" if precheck_payload else "disabled"
+        except Exception as exc:
+            precheck_status = f"failed:{type(exc).__name__}"
         runtime = dict(result.get("runtime") or {})
         runtime["endpointMs"] = round((time.perf_counter() - endpoint_started) * 1000.0, 2)
+        runtime["visiblePrecheckStatus"] = precheck_status
+        data = {
+            "model": result.get("model"),
+            "fakeProbability": result.get("fakeProbability"),
+            "realProbability": result.get("realProbability"),
+            "finalLabel": result.get("finalLabel"),
+            "originalSize": result.get("originalSize"),
+            "chunkCount": result.get("chunkCount"),
+            "parameters": result.get("parameters"),
+            "runtime": runtime,
+        }
+        if precheck_payload:
+            data["visibleWatermarkPrecheck"] = precheck_payload
         return jsonify({
             "code": 200,
             "msg": "success",
-            "data": {
-                "model": result.get("model"),
-                "fakeProbability": result.get("fakeProbability"),
-                "realProbability": result.get("realProbability"),
-                "finalLabel": result.get("finalLabel"),
-                "originalSize": result.get("originalSize"),
-                "chunkCount": result.get("chunkCount"),
-                "parameters": result.get("parameters"),
-                "runtime": runtime,
-            },
+            "data": data,
         })
     except ValueError as exc:
         return jsonify({"code": 400, "msg": str(exc)}), 400

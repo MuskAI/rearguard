@@ -13,6 +13,7 @@ contention. The independent YOLO watermark service remains on physical GPU 0.
 - `inference_onnx.py` -> `/home/ymk/RealGuard/AIGC_image_detection_system/imagedetection/Agent/tools/AIGC_Detection/inference_onnx.py`
 - `remote_inference.py` -> `/home/ymk/RealGuard/AIGC_image_detection_system/imagedetection/views/remote_inference.py`
 - `realguard-detection-gpu.conf` -> `/etc/systemd/system/realguard-detection.service.d/gpu.conf`
+- `realguard-detection-shared-precheck.conf` -> `/etc/systemd/system/realguard-detection.service.d/shared-precheck.conf`
 - `realguard-web-tunnel.service` -> `/etc/systemd/system/realguard-web-tunnel.service`
 - `public-detector-remote.conf` -> `/etc/systemd/system/realguard-detector-backend.service.d/remote.conf` on the public server
 
@@ -30,6 +31,39 @@ the GPU model and therefore requires ExifTool:
 ```bash
 sudo apt-get install libimage-exiftool-perl
 ```
+
+## Shared-upload precheck
+
+`remote_inference.py` starts the local visible-watermark precheck while the
+resident GPU model processes the same request body. The compact precheck result
+is returned as `visibleWatermarkPrecheck`, so the public Swarm orchestrator does
+not upload the image to the private network a second time.
+
+The watermark service environment file is loaded by
+`realguard-detection-shared-precheck.conf`. Keep the precheck URL loopback-only:
+
+```text
+REALGUARD_MODEL_VISIBLE_PRECHECK_URL=http://127.0.0.1:5066/v1/precheck
+REALGUARD_MODEL_VISIBLE_PRECHECK_TIMEOUT=12
+```
+
+On the public server, the persisted `v1-legacy-tunnel` model route must use
+`http://127.0.0.1:15001/image` with health endpoint
+`http://127.0.0.1:15001/health`. A remote endpoint saved in
+`model_registry.json` overrides the environment default and bypasses shared
+evidence reuse.
+
+Swarm starts the V2 network expert after an upload-size-aware delay to avoid
+making two large uploads compete for the same private-network link. Defaults:
+
+```text
+REALGUARD_SWARM_V2_STAGGER_BYTES_PER_SECOND=800000
+REALGUARD_SWARM_V2_MAX_STAGGER_SECONDS=8
+```
+
+Set either value only after an end-to-end benchmark with production-size
+images. Starting both uploads immediately increased the main model latency in
+the current deployment.
 
 After installing both files, run:
 

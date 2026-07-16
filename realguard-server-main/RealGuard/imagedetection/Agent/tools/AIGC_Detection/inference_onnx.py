@@ -1,4 +1,5 @@
 import os
+import threading
 
 import numpy as np
 import onnxruntime as ort
@@ -21,6 +22,14 @@ REMOTE_REQUIRE_CUDA = os.environ.get("REALGUARD_REMOTE_REQUIRE_CUDA", "1").strip
     "yes",
     "on",
 }
+_REMOTE_EVIDENCE = threading.local()
+
+
+def consume_remote_evidence():
+    evidence = getattr(_REMOTE_EVIDENCE, "value", None)
+    if hasattr(_REMOTE_EVIDENCE, "value"):
+        del _REMOTE_EVIDENCE.value
+    return dict(evidence) if isinstance(evidence, dict) else {}
 
 
 def _lazy_init():
@@ -63,6 +72,7 @@ def preprocess(img_path):
 
 
 def _predict_remote(img_path):
+    consume_remote_evidence()
     headers = {}
     if REMOTE_INFERENCE_TOKEN:
         headers["X-RealGuard-Internal-Token"] = REMOTE_INFERENCE_TOKEN
@@ -93,6 +103,10 @@ def _predict_remote(img_path):
             "Remote inference is not using CUDAExecutionProvider: "
             f"{runtime.get('activeProvider') or 'unknown'}"
         )
+
+    precheck = data.get("visibleWatermarkPrecheck")
+    if isinstance(precheck, dict):
+        _REMOTE_EVIDENCE.value = {"visibleWatermarkPrecheck": precheck}
 
     try:
         probability = float(data["fakeProbability"])

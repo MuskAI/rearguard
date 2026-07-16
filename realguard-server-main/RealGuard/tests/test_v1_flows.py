@@ -2,6 +2,7 @@ from io import BytesIO
 from pathlib import Path
 import json
 import sys
+import threading
 
 import pytest
 
@@ -16,8 +17,8 @@ import detector_backend  # noqa: E402
 
 OWNER_WHERE = "(Userid = %s) OR (Userid IS NULL AND phone = %s) OR (Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s)"
 GUEST_OWNER_WHERE = "Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s"
-IMAGE_HISTORY_QUERY = f"SELECT * FROM data WHERE {OWNER_WHERE} ORDER BY createtime DESC"
-VIDEO_HISTORY_QUERY = f"SELECT * FROM video_data WHERE {OWNER_WHERE} ORDER BY createtime DESC"
+IMAGE_HISTORY_QUERY = f"SELECT * FROM data WHERE {OWNER_WHERE} ORDER BY {api.HISTORY_ORDER_BY}"
+VIDEO_HISTORY_QUERY = f"SELECT * FROM video_data WHERE {OWNER_WHERE} ORDER BY {api.HISTORY_ORDER_BY}"
 
 
 class _FakeResponse:
@@ -285,6 +286,7 @@ def test_guest_image_detect_returns_rewritten_url_and_then_blocks(client, monkey
         lambda model_id: {"id": "v1", "enabled": True, "endpoint": detection.IMAGE_DETECT_API, "timeoutSeconds": 180},
     )
     monkeypatch.setattr(detection, "_metadata_for_item", lambda itemid: {})
+    monkeypatch.setattr(detection, "_ensure_local_primary_record", lambda *args, **kwargs: 11)
     monkeypatch.setattr(
         detection,
         "_backend_post",
@@ -326,6 +328,143 @@ def test_guest_image_detect_returns_rewritten_url_and_then_blocks(client, monkey
 
     assert second.status_code == 401
     assert "请登录后继续检测" in second.get_json()["message"]
+
+
+def test_remote_primary_result_is_imported_into_local_user_history(monkeypatch):
+    inserted = {}
+    api_json = {
+        "code": 200,
+        "data": {
+            "data_itemid": 713,
+            "filename": "remote-result.png",
+            "fake_percentage": 66.1,
+            "detector_probability": 0.61,
+            "final_label": "AI生成图像",
+            "confidence": "中",
+            "explanation": "远端模型完成检测。",
+            "visual_issues": ["局部纹理异常"],
+        },
+    }
+    monkeypatch.setattr(detection, "_local_detection_record", lambda itemid: None)
+    monkeypatch.setattr(
+        detection,
+        "_save_local_upload",
+        lambda image_bytes, folder, filename: ("local-result.png", "/tmp/local-result.png"),
+    )
+    monkeypatch.setattr(detection, "get_image_info", lambda path: ("PNG", "640x480"))
+    monkeypatch.setattr(detection, "get_file_size_str", lambda path: "12KB")
+
+    def fake_lastid(sql, params=None):
+        inserted["sql"] = " ".join(sql.split())
+        inserted["params"] = params
+        return 648
+
+    monkeypatch.setattr(detection, "excute_detection_sql_lastid", fake_lastid)
+
+    itemid = detection._ensure_local_primary_record(
+        api_json,
+        b"image-bytes",
+        "upload.png",
+        "openid-1",
+        "13800000000",
+        {"Userid": 1},
+    )
+
+    assert itemid == 648
+    assert "INSERT INTO data" in inserted["sql"]
+    assert inserted["params"][-1] == 1
+    assert api_json["data"]["data_itemid"] == 648
+    assert api_json["data"]["filename"] == "local-result.png"
+    assert api_json["data"]["image_url"] == "/api/media/image/648"
+
+
+def test_existing_local_primary_record_is_bound_to_current_user(monkeypatch):
+    updates = []
+    api_json = {
+        "code": 200,
+        "data": {
+            "data_itemid": 22,
+            "filename": "stored.png",
+        },
+    }
+    monkeypatch.setattr(
+        detection,
+        "_local_detection_record",
+        lambda itemid: {
+            "itemid": itemid,
+            "filename": "stored.png",
+            "Userid": None,
+            "phone": "13800000000",
+            "openid": "openid-1",
+        },
+    )
+    monkeypatch.setattr(
+        detection,
+        "excute_detection_sql",
+        lambda sql, params=None, fetch=True: updates.append((sql, params, fetch)) or 1,
+    )
+    monkeypatch.setattr(
+        detection,
+        "_insert_local_detection_record",
+        lambda *args, **kwargs: pytest.fail("matching local records must not be duplicated"),
+    )
+
+    itemid = detection._ensure_local_primary_record(
+        api_json,
+        b"image-bytes",
+        "upload.png",
+        "openid-1",
+        "13800000000",
+        {"Userid": 1},
+    )
+
+    assert itemid == 22
+    assert updates[0][1] == (1, 22)
+    assert updates[0][2] is False
+
+
+def test_swarm_final_result_updates_the_same_history_record(monkeypatch):
+    updates = []
+    final_result = {
+        "itemid": 648,
+        "filename": "local-result.png",
+        "probability": 0.7612,
+        "detector_probability": 0.61,
+        "final_label": "AI生成图像",
+        "confidence": "中",
+        "explanation": "多路证据融合完成。",
+    }
+    monkeypatch.setattr(
+        detection,
+        "_local_detection_record",
+        lambda itemid: {
+            "itemid": itemid,
+            "filename": "local-result.png",
+            "Userid": 1,
+            "phone": "13800000000",
+            "openid": "openid-1",
+        },
+    )
+    monkeypatch.setattr(
+        detection,
+        "excute_detection_sql",
+        lambda sql, params=None, fetch=True: updates.append((" ".join(sql.split()), params, fetch)) or 1,
+    )
+
+    itemid = detection._persist_swarm_history_result(
+        final_result,
+        b"image-bytes",
+        "upload.png",
+        "openid-1",
+        "13800000000",
+        {"Userid": 1},
+    )
+
+    assert itemid == 648
+    assert updates[0][0].startswith("UPDATE data SET fake")
+    assert updates[0][1][0] == pytest.approx(76.12)
+    assert updates[0][1][-1] == 648
+    assert updates[0][2] is False
 
 
 def test_image_detect_falls_back_to_v2_when_v1_backend_is_down(client, monkeypatch):
@@ -546,9 +685,19 @@ def test_swarm_detect_async_job_returns_expert_consensus(client, monkeypatch, tm
         def start(self):
             self.target(*self.args, **self.kwargs)
 
-    monkeypatch.setattr(detection.threading, "Thread", ImmediateThread)
+    monkeypatch.setattr(detection, "BACKGROUND_THREAD_CLASS", ImmediateThread)
+    monkeypatch.setattr(detection, "_persist_swarm_history_result", lambda *args, **kwargs: 321)
 
-    def fake_primary(image_bytes, filename, mimetype, user_info, *, is_guest=False, mark_guest=True):
+    def fake_primary(
+        image_bytes,
+        filename,
+        mimetype,
+        user_info,
+        *,
+        is_guest=False,
+        mark_guest=True,
+        include_internal_evidence=False,
+    ):
         return {
             "status": "success",
             "result": {
@@ -588,7 +737,7 @@ def test_swarm_detect_async_job_returns_expert_consensus(client, monkeypatch, tm
     assert job["progress"] == 100
     result = job["result"]["result"]
     assert result["itemid"] == 321
-    assert result["probability"] == pytest.approx(0.7219)
+    assert result["probability"] == pytest.approx(0.76)
     assert result["swarm"]["enabled"] is True
     assert result["swarm"]["effectiveExperts"] == 2
     assert any(expert["publicName"] == "主鉴伪专家" and expert["status"] == "success" for expert in result["swarm"]["experts"])
@@ -608,6 +757,131 @@ def test_swarm_detect_async_job_returns_expert_consensus(client, monkeypatch, tm
     assert all(not expert["id"].startswith(("primary", "v2", "aliyun")) for expert in result["swarm"]["experts"])
     assert all("主路由" not in item for item in result["swarm"]["evidence"])
     assert all("风险评分" not in item for item in result["swarm"]["evidence"])
+
+
+def test_swarm_defers_network_experts_until_primary_finishes(monkeypatch):
+    primary_finished = threading.Event()
+    v2_started = threading.Event()
+    ordering = []
+    specs = [
+        {'id': 'primary', 'name': '主检测', 'role': '主检测', 'provider': 'internal', 'weight': 0.7},
+        {'id': 'metadata', 'name': '元数据', 'role': '元数据', 'provider': 'local', 'weight': 0.1},
+        {'id': 'v2', 'name': '语义复核', 'role': '语义复核', 'provider': 'internal', 'weight': 0.2},
+    ]
+    monkeypatch.setattr(detection, '_swarm_specs', lambda include_disabled=False: specs)
+    monkeypatch.setattr(detection, '_swarm_config', lambda: {'enabled': True, 'minExperts': 2})
+    monkeypatch.setattr(detection, '_swarm_v2_stagger_seconds', lambda image_bytes: 60.0)
+    monkeypatch.setattr(detection, '_persist_swarm_history_result', lambda *args, **kwargs: 123)
+
+    primary_result = {
+        'itemid': 123,
+        'filename': 'parallel.png',
+        'probability': 0.8,
+        'detector_probability': 0.8,
+        'final_label': 'AI生成图像',
+        'confidence': '高',
+        'all_metadata': {},
+    }
+
+    def fake_primary(*args, **kwargs):
+        ordering.append(('primary_saw_v2', v2_started.is_set()))
+        primary_finished.set()
+        return primary_result, {
+            'status': 'success', 'score': 0.8, 'verdict': 'AI生成图像',
+            'confidence': '高', 'evidence': [], 'message': '完成', 'latencyMs': 1,
+        }
+
+    def fake_v2(*args, **kwargs):
+        v2_started.set()
+        ordering.append(('v2_saw_primary_finished', primary_finished.is_set()))
+        return {
+            'status': 'success', 'score': 0.75, 'verdict': '疑似伪造',
+            'confidence': '高', 'evidence': [], 'message': '完成', 'latencyMs': 1,
+        }
+
+    monkeypatch.setattr(detection, '_swarm_primary_expert', fake_primary)
+    monkeypatch.setattr(detection, '_swarm_v2_expert', fake_v2)
+
+    payload, status = detection._run_swarm_detection_payload(
+        b'image-bytes',
+        'parallel.png',
+        'image/png',
+        {'Userid': 1, 'openid': 'parallel-test'},
+    )
+
+    assert status == 200
+    assert payload['status'] == 'success'
+    assert ordering == [
+        ('primary_saw_v2', False),
+        ('v2_saw_primary_finished', True),
+    ]
+
+
+def test_swarm_v2_stagger_scales_with_upload_size(monkeypatch):
+    monkeypatch.setattr(detection, 'SWARM_V2_STAGGER_BYTES_PER_SECOND', 800_000)
+    monkeypatch.setattr(detection, 'SWARM_V2_MAX_STAGGER_SECONDS', 8.0)
+
+    assert detection._swarm_v2_stagger_seconds(b'x' * 80_000) == pytest.approx(0.1)
+    assert detection._swarm_v2_stagger_seconds(b'x' * 4_800_000) == pytest.approx(6.0)
+    assert detection._swarm_v2_stagger_seconds(b'x' * 20_000_000) == pytest.approx(8.0)
+
+
+def test_swarm_reuses_primary_visible_precheck(monkeypatch):
+    specs = [
+        {'id': 'primary', 'name': '主检测', 'role': '主检测', 'provider': 'internal', 'weight': 0.8},
+        {'id': 'metadata', 'name': '元数据', 'role': '元数据', 'provider': 'local', 'weight': 0.2},
+        {
+            'id': 'visible_watermark', 'name': '平台水印', 'role': '平台水印复核',
+            'provider': 'hybrid', 'weight': 0.0,
+        },
+    ]
+    monkeypatch.setattr(detection, '_swarm_specs', lambda include_disabled=False: specs)
+    monkeypatch.setattr(detection, '_swarm_config', lambda: {'enabled': True, 'minExperts': 2})
+    monkeypatch.setattr(detection, '_persist_swarm_history_result', lambda *args, **kwargs: 123)
+    monkeypatch.setattr(
+        detection.swarm_visible_watermark_expert,
+        'run_visible_watermark_expert',
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError('must not upload the image twice')),
+    )
+    monkeypatch.setattr(
+        detection,
+        '_swarm_primary_expert',
+        lambda *args, **kwargs: (
+            {
+                'itemid': 123, 'filename': 'shared.png', 'probability': 0.8,
+                'detector_probability': 0.8, 'final_label': 'AI生成图像',
+                'confidence': '高', 'all_metadata': {},
+            },
+            {
+                'status': 'success', 'score': 0.8, 'verdict': 'AI生成图像',
+                'confidence': '高', 'evidence': [], 'message': '完成', 'latencyMs': 1,
+                'remoteEvidence': {
+                    'visibleWatermarkPrecheck': {
+                        'status': 'ok',
+                        'elapsedMs': 12,
+                        'visibleHits': [],
+                        'genericVisibleWatermark': {'available': True, 'elapsedMs': 12},
+                    },
+                },
+            },
+        ),
+    )
+
+    payload, status = detection._run_swarm_detection_payload(
+        b'image-bytes',
+        'shared.png',
+        'image/png',
+        {'Userid': 1, 'openid': 'shared-test'},
+    )
+
+    assert status == 200
+    assert payload['status'] == 'success'
+    visible = next(
+        expert for expert in payload['result']['swarm']['experts']
+        if expert.get('id') == 'visible_watermark'
+    )
+    assert visible['status'] == 'success'
+    assert visible['message'].endswith('source=shared-upload')
 
 
 def test_swarm_detect_get_is_friendly(client):
@@ -769,6 +1043,11 @@ def test_detector_backend_image_endpoint_returns_v1_contract(monkeypatch):
     monkeypatch.setattr(detector_backend, "get_image_info", lambda path: ("PNG", "320x240"))
     monkeypatch.setattr(detector_backend, "get_file_size_str", lambda path: "1KB")
     monkeypatch.setattr(detector_backend, "excute_detection_sql_lastid", lambda sql, params=None: 91)
+    monkeypatch.setattr(
+        detector_backend,
+        "_consume_remote_inference_evidence",
+        lambda: {"visibleWatermarkPrecheck": {"status": "ok", "visibleHits": []}},
+    )
     app = detector_backend.create_app()
     app.config.update(TESTING=True)
 
@@ -790,6 +1069,7 @@ def test_detector_backend_image_endpoint_returns_v1_contract(monkeypatch):
     assert payload["data"]["final_label"] == "真实图像"
     assert payload["data"]["image_url"].endswith("/static/uploads/openid-1/image/stored-demo.png")
     assert payload["data"]["agent_reasoning"] == "native-v1"
+    assert payload["data"]["remote_evidence"]["visibleWatermarkPrecheck"]["status"] == "ok"
 
 
 def test_video_detect_logged_in_builds_public_media_url(client, monkeypatch):
@@ -880,7 +1160,7 @@ def test_guest_history_returns_guest_image_records(client, monkeypatch):
         sess["guest_openid"] = "guest-abc"
 
     def fake_detection_sql(sql, params=None, fetch=True):
-        if sql == f"SELECT * FROM data WHERE {GUEST_OWNER_WHERE} ORDER BY createtime DESC":
+        if sql == f"SELECT * FROM data WHERE {GUEST_OWNER_WHERE} ORDER BY {api.HISTORY_ORDER_BY}":
             assert params == ("guest-abc",)
             return [{
                 "itemid": 35,

@@ -1,0 +1,3 @@
+Flask==3.1.2
+gunicorn==23.0.0
+remove-ai-watermarks==0.15.3

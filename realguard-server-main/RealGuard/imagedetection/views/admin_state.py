@@ -1,15 +1,23 @@
 import json
 import os
+import threading
 import time
 import uuid
+from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback for local development
+    fcntl = None
 
 
 CURRENT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = CURRENT_DIR.parents[1]
 DEFAULT_STATE_PATH = PROJECT_ROOT / "admin_state.json"
 STATE_PATH = Path(os.environ.get("REALGUARD_ADMIN_STATE_PATH", str(DEFAULT_STATE_PATH)))
+_STATE_THREAD_LOCK = threading.RLock()
 
 
 def _default_state():
@@ -54,7 +62,7 @@ def _merge_defaults(saved):
     return state
 
 
-def load_state():
+def _load_state_unlocked():
     try:
         if STATE_PATH.exists():
             return _merge_defaults(json.loads(STATE_PATH.read_text(encoding="utf-8")))
@@ -63,13 +71,51 @@ def load_state():
     return _default_state()
 
 
-def save_state(state):
+def load_state():
+    with _STATE_THREAD_LOCK:
+        return _load_state_unlocked()
+
+
+def _save_state_unlocked(state):
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     data = _merge_defaults(deepcopy(state))
-    tmp_path = STATE_PATH.with_suffix(STATE_PATH.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp_path.replace(STATE_PATH)
+    tmp_path = STATE_PATH.with_name(
+        f".{STATE_PATH.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp"
+    )
+    try:
+        tmp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp_path.replace(STATE_PATH)
+    finally:
+        tmp_path.unlink(missing_ok=True)
     return data
+
+
+@contextmanager
+def _state_write_lock():
+    with _STATE_THREAD_LOCK:
+        STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = STATE_PATH.with_name(f".{STATE_PATH.name}.lock")
+        with lock_path.open("a+", encoding="utf-8") as lock_file:
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def save_state(state):
+    with _state_write_lock():
+        return _save_state_unlocked(state)
+
+
+def _update_state(mutator):
+    with _state_write_lock():
+        state = _load_state_unlocked()
+        result = mutator(state)
+        _save_state_unlocked(state)
+        return result
 
 
 def alerts():
@@ -77,17 +123,19 @@ def alerts():
 
 
 def update_alerts(updates):
-    state = load_state()
-    current = state.setdefault("alerts", _default_state()["alerts"])
-    for key in ("enabled", "webhookUrl", "smsPhones", "notes"):
-        if key in updates:
-            current[key] = updates.get(key)
-    if isinstance(updates.get("rules"), dict):
-        rules = current.setdefault("rules", {})
-        for key in ("v1Offline", "artifactMissing", "fallbackEnabled", "probeFailed"):
-            if key in updates["rules"]:
-                rules[key] = bool(updates["rules"][key])
-    return save_state(state)["alerts"]
+    def mutate(state):
+        current = state.setdefault("alerts", _default_state()["alerts"])
+        for key in ("enabled", "webhookUrl", "smsPhones", "notes"):
+            if key in updates:
+                current[key] = updates.get(key)
+        if isinstance(updates.get("rules"), dict):
+            rules = current.setdefault("rules", {})
+            for key in ("v1Offline", "artifactMissing", "fallbackEnabled", "probeFailed"):
+                if key in updates["rules"]:
+                    rules[key] = bool(updates["rules"][key])
+        return deepcopy(current)
+
+    return _update_state(mutate)
 
 
 def _db_state_enabled():
@@ -162,11 +210,9 @@ def list_audit(limit=100):
 
 
 def append_audit(actor, action, target, before=None, after=None, meta=None):
-    state = load_state()
-    audit = state.setdefault("audit", [])
     actor = actor or {}
     entry = {
-        "id": f"{int(time.time() * 1000)}-{len(audit) % 1000}",
+        "id": f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}",
         "createdAt": time.strftime("%Y-%m-%d %H:%M:%S"),
         "actor": {
             "id": actor.get("Userid"),
@@ -199,9 +245,13 @@ def append_audit(actor, action, target, before=None, after=None, meta=None):
     )
     if inserted is not None:
         return entry
-    audit.insert(0, entry)
-    state["audit"] = audit[:500]
-    save_state(state)
+
+    def mutate(state):
+        audit = state.setdefault("audit", [])
+        audit.insert(0, entry)
+        state["audit"] = audit[:500]
+
+    _update_state(mutate)
     return entry
 
 
@@ -229,12 +279,10 @@ def _model_run_from_row(row):
 
 
 def append_model_run(itemid, model, route="primary", status="success", actor=None, meta=None):
-    state = load_state()
-    runs = state.setdefault("modelRuns", [])
     model = model or {}
     actor = actor or {}
     entry = {
-        "id": f"{int(time.time() * 1000)}-{len(runs) % 1000}",
+        "id": f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}",
         "createdAt": time.strftime("%Y-%m-%d %H:%M:%S"),
         "itemid": itemid,
         "route": route,
@@ -279,9 +327,13 @@ def append_model_run(itemid, model, route="primary", status="success", actor=Non
     )
     if inserted is not None:
         return entry
-    runs.insert(0, entry)
-    state["modelRuns"] = runs[:1000]
-    save_state(state)
+
+    def mutate(state):
+        runs = state.setdefault("modelRuns", [])
+        runs.insert(0, entry)
+        state["modelRuns"] = runs[:1000]
+
+    _update_state(mutate)
     return entry
 
 
@@ -340,8 +392,6 @@ def model_runs_by_itemids(itemids):
 
 
 def create_detection_job(actor, filename, kind="image", mode=None, experts=None):
-    state = load_state()
-    jobs = state.setdefault("detectionJobs", {})
     actor = actor or {}
     job_id = f"job_{uuid.uuid4().hex[:20]}"
     entry = {
@@ -364,25 +414,28 @@ def create_detection_job(actor, filename, kind="image", mode=None, experts=None)
         "experts": experts or [],
         "summary": "",
     }
-    jobs[job_id] = entry
-    save_state(state)
+    def mutate(state):
+        state.setdefault("detectionJobs", {})[job_id] = entry
+
+    _update_state(mutate)
     return entry
 
 
 def update_detection_job(job_id, updates):
-    state = load_state()
-    jobs = state.setdefault("detectionJobs", {})
-    entry = jobs.get(str(job_id))
-    if not entry:
-        return None
-    for key in ("status", "result", "error", "mode", "progress", "experts", "summary"):
-        if key in updates:
-            entry[key] = updates.get(key)
-    entry["updatedAt"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    jobs[str(job_id)] = entry
-    state["detectionJobs"] = dict(list(jobs.items())[-500:])
-    save_state(state)
-    return entry
+    def mutate(state):
+        jobs = state.setdefault("detectionJobs", {})
+        entry = jobs.get(str(job_id))
+        if not entry:
+            return None
+        for key in ("status", "result", "error", "mode", "progress", "experts", "summary"):
+            if key in updates:
+                entry[key] = updates.get(key)
+        entry["updatedAt"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        jobs[str(job_id)] = entry
+        state["detectionJobs"] = dict(list(jobs.items())[-500:])
+        return deepcopy(entry)
+
+    return _update_state(mutate)
 
 
 def get_detection_job(job_id):
@@ -405,13 +458,14 @@ def get_api_key_quota(key_id):
 
 
 def set_api_key_quota(key_id, quota):
-    state = load_state()
-    quotas = state.setdefault("apiKeyQuotas", {})
-    key = str(key_id)
-    existing = quotas.get(key, {})
-    for field in ("dailyLimit", "rateLimitPerMinute", "scopes", "notes"):
-        if field in quota:
-            existing[field] = quota.get(field)
-    quotas[key] = existing
-    save_state(state)
-    return existing
+    def mutate(state):
+        quotas = state.setdefault("apiKeyQuotas", {})
+        key = str(key_id)
+        existing = quotas.get(key, {})
+        for field in ("dailyLimit", "rateLimitPerMinute", "scopes", "notes"):
+            if field in quota:
+                existing[field] = quota.get(field)
+        quotas[key] = existing
+        return deepcopy(existing)
+
+    return _update_state(mutate)

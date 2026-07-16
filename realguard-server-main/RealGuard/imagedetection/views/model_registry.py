@@ -24,6 +24,7 @@ DEFAULT_SWARM_EXPERTS = [
     {"id": "aliyun_ultra", "name": "局部编辑专家", "role": "局部伪造", "provider": "aliyun", "enabled": True, "weight": 0.09, "modelId": "aliyun-aigc-ultra"},
     {"id": "aliyun_ps", "name": "篡改痕迹专家", "role": "PS篡改", "provider": "aliyun", "enabled": True, "weight": 0.05, "modelId": "aliyun-ps-detector"},
     {"id": "aliyun_recap", "name": "翻拍风险专家", "role": "翻拍检测", "provider": "aliyun", "enabled": True, "weight": 0.02, "modelId": "aliyun-recap-detector"},
+    {"id": "visible_watermark", "name": "AI 平台水印识别专家", "role": "平台水印复核", "provider": "hybrid", "enabled": True, "weight": 0.0},
 ]
 
 

@@ -1,0 +1,16 @@
+[Unit]
+Description=RealGuard provenance-first watermark precheck
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ymk
+WorkingDirectory=/home/ymk/services/watermark-precheck
+EnvironmentFile=/home/ymk/services/watermark-precheck/.env
+ExecStart=/home/ymk/services/watermark-precheck/.venv/bin/gunicorn --bind 127.0.0.1:5066 --workers 1 --threads 2 --timeout 40 yolo_adapter:app
+Restart=always
+RestartSec=3s
+
+[Install]
+WantedBy=multi-user.target

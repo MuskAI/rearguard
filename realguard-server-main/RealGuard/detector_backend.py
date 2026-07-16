@@ -1,6 +1,7 @@
 import importlib
 import json
 import os
+import sys
 import threading
 import time
 import uuid
@@ -255,6 +256,21 @@ def _run_v1_detect(image_path):
     return detect(image_path)
 
 
+def _consume_remote_inference_evidence():
+    module_names = (
+        "tools.AIGC_Detection.inference_onnx",
+        "imagedetection.Agent.tools.AIGC_Detection.inference_onnx",
+    )
+    for module_name in module_names:
+        module = sys.modules.get(module_name)
+        consume = getattr(module, "consume_remote_evidence", None) if module else None
+        if callable(consume):
+            evidence = consume()
+            if evidence:
+                return evidence
+    return {}
+
+
 def _persist_result(payload, image_bytes, filename, openid, phone):
     folder = openid or phone or "guest"
     stored_name, file_path = _save_upload(image_bytes, folder, filename)
@@ -347,6 +363,7 @@ def _persist_result(payload, image_bytes, filename, openid, phone):
         "visual_issues": visual_issues,
         "agent_reasoning": payload.get("agent_reasoning") or payload.get("raw_response") or "",
         "full_exif_info": all_metadata,
+        "remote_evidence": payload.get("remote_evidence") or {},
         "meta": {
             "file_size": file_size,
             "img_format": img_format,
@@ -402,6 +419,9 @@ def create_app():
             _ensure_capability_ready()
             _, temp_path = _save_upload(image_bytes, openid or phone or "guest", safe_name)
             payload = _run_v1_detect(temp_path)
+            remote_evidence = _consume_remote_inference_evidence()
+            if remote_evidence:
+                payload["remote_evidence"] = remote_evidence
             data = _persist_result(payload, image_bytes, safe_name, openid, phone)
             return jsonify({"code": 200, "msg": "success", "data": data})
         except RuntimeError as exc:

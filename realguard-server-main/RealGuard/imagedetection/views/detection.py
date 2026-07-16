@@ -8,6 +8,7 @@ import requests
 import socket
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 
 from flask import Blueprint, render_template, request, session, jsonify, Response, redirect
@@ -17,8 +18,10 @@ from imagedetection.views import (
     admin_state,
     aliyun_green,
     model_registry,
+    probability_fusion,
     reporting,
     swarm_c2pa_expert,
+    swarm_visible_watermark_expert,
     swarm_wam_expert,
     swarm_watermark_expert,
 )
@@ -61,6 +64,20 @@ V2_DETECT_TIMEOUT = int(os.environ.get('REALGUARD_V2_DETECT_TIMEOUT', '180'))
 ALLOW_REMOTE_VIDEO_URLS = str(os.environ.get('REALGUARD_ALLOW_REMOTE_VIDEO_URLS', '0')).strip().lower() in ('1', 'true', 'yes')
 GUEST_DETECTION_SESSION_KEY = 'guest_detection_count'
 GUEST_DETECTION_LIMIT = int(os.environ.get('REALGUARD_GUEST_DETECTION_LIMIT', '1'))
+SWARM_PARALLEL_WORKERS = max(1, min(12, int(os.environ.get('REALGUARD_SWARM_PARALLEL_WORKERS', '6'))))
+SWARM_V2_STAGGER_BYTES_PER_SECOND = max(
+    1,
+    int(os.environ.get('REALGUARD_SWARM_V2_STAGGER_BYTES_PER_SECOND', '800000')),
+)
+SWARM_V2_MAX_STAGGER_SECONDS = max(
+    0.0,
+    float(os.environ.get('REALGUARD_SWARM_V2_MAX_STAGGER_SECONDS', '8')),
+)
+SWARM_EXPERT_EXECUTOR = ThreadPoolExecutor(
+    max_workers=SWARM_PARALLEL_WORKERS,
+    thread_name_prefix='swarm-expert',
+)
+BACKGROUND_THREAD_CLASS = threading.Thread
 STATIC_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'static'))
 SWARM_EXPERT_SPECS = [
     {
@@ -137,6 +154,13 @@ SWARM_EXPERT_SPECS = [
         'role': '生成水印',
         'provider': 'watermark',
         'weight': 0.10,
+    },
+    {
+        'id': 'visible_watermark',
+        'name': 'AI 平台水印识别专家',
+        'role': '平台水印复核',
+        'provider': 'hybrid',
+        'weight': 0.0,
     },
     {
         'id': 'wam',
@@ -550,6 +574,116 @@ def _save_local_upload(image_bytes, folder, filename):
     return stored_name, file_path
 
 
+def _local_detection_record(itemid):
+    if itemid in (None, ''):
+        return None
+    rows = excute_detection_sql(
+        "SELECT itemid, filename, Userid, phone, openid FROM data WHERE itemid = %s LIMIT 1",
+        (itemid,),
+    )
+    return rows[0] if rows else None
+
+
+def _record_matches_detection_actor(record, source_filename, backend_openid, phone):
+    if not record:
+        return False
+    record_phone = str(record.get('phone') or '').strip()
+    record_openid = str(record.get('openid') or '').strip()
+    actor_matches = record_phone == phone if phone else record_openid == backend_openid
+    filename_matches = bool(source_filename) and str(record.get('filename') or '') == str(source_filename)
+    return actor_matches and filename_matches
+
+
+def _bind_detection_record_to_user(itemid, record, user_info):
+    user_id = (user_info or {}).get('Userid')
+    if user_id in (None, '') or (record or {}).get('Userid') not in (None, ''):
+        return
+    updated = excute_detection_sql(
+        "UPDATE data SET Userid = %s WHERE itemid = %s AND Userid IS NULL",
+        (user_id, itemid),
+        fetch=False,
+    )
+    if updated is None:
+        raise RuntimeError('检测结果用户归属写入失败')
+
+
+def _insert_local_detection_record(data, image_bytes, filename, backend_openid, phone, user_info):
+    stored_name, file_path = _save_local_upload(
+        image_bytes,
+        backend_openid or phone or 'guest',
+        filename,
+    )
+    img_format, resolution = get_image_info(file_path)
+    file_size = get_file_size_str(file_path)
+    fake_pct = max(0.0, min(100.0, _to_float(data.get('fake_percentage'), 0.0)))
+    detector_value = data.get('detector_probability')
+    if detector_value is None:
+        detector_value = (data.get('meta') or {}).get('detector_probability')
+    detector_probability = _clamp01(
+        detector_value,
+        fake_pct / 100.0,
+    )
+    final_label = data.get('final_label') or ('AI生成图像' if fake_pct >= 50 else '真实图像')
+    confidence = data.get('confidence') or data.get('clarity') or _conf_level_from_score(fake_pct / 100.0)
+    explanation = str(data.get('explanation') or data.get('explantation') or '').strip()
+    visual_issues = [str(item).strip() for item in (data.get('visual_issues') or []) if str(item).strip()]
+    if visual_issues and '视觉可疑点' not in explanation:
+        explanation = f"{explanation}\n视觉可疑点\n" + "\n".join(f"- {item}" for item in visual_issues)
+
+    itemid = excute_detection_sql_lastid(
+        """
+        INSERT INTO data
+            (createtime, filename, fake, detector_probability, openid, phone, aigc,
+             file_size, img_format, resolution, clarity, explantation, Userid)
+        VALUES (NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            stored_name,
+            fake_pct,
+            detector_probability,
+            backend_openid,
+            phone,
+            final_label,
+            file_size,
+            img_format,
+            resolution,
+            confidence,
+            safe_truncate(explanation, 145),
+            (user_info or {}).get('Userid'),
+        ),
+    )
+    if not itemid:
+        raise RuntimeError('检测完成，但历史归档写入失败')
+
+    data.update({
+        'data_itemid': itemid,
+        'filename': stored_name,
+        'image_url': f"/api/media/image/{itemid}",
+        'file_size': file_size,
+        'img_format': img_format,
+        'resolution': resolution,
+    })
+    return itemid
+
+
+def _ensure_local_primary_record(api_json, image_bytes, filename, backend_openid, phone, user_info):
+    data = (api_json or {}).get('data') or {}
+    remote_itemid = data.get('data_itemid')
+    remote_filename = str(data.get('filename') or '').strip()
+    local_record = _local_detection_record(remote_itemid)
+    if _record_matches_detection_actor(local_record, remote_filename, backend_openid, phone):
+        _bind_detection_record_to_user(remote_itemid, local_record, user_info)
+        return remote_itemid
+    return _insert_local_detection_record(
+        data,
+        image_bytes,
+        filename,
+        backend_openid,
+        phone,
+        user_info,
+    )
+
+
 def _extract_v2_visual_issues(payload):
     issues = []
     for region in payload.get('regions') or []:
@@ -895,7 +1029,16 @@ def image_detect():
     return image_detect_for_actor(user_info, is_guest=is_guest)
 
 
-def _run_image_detection_payload(image_bytes, filename, mimetype, user_info, *, is_guest=False, mark_guest=True):
+def _run_image_detection_payload(
+    image_bytes,
+    filename,
+    mimetype,
+    user_info,
+    *,
+    is_guest=False,
+    mark_guest=True,
+    include_internal_evidence=False,
+):
     backend_openid, phone = _backend_identity(user_info)
     safe_name = secure_filename(filename) or filename
     if not image_bytes:
@@ -953,6 +1096,15 @@ def _run_image_detection_payload(image_bytes, filename, mimetype, user_info, *, 
             )
             api_resp.raise_for_status()
             api_json = api_resp.json()
+            if api_json.get('code') == 200:
+                _ensure_local_primary_record(
+                    api_json,
+                    image_bytes,
+                    safe_name,
+                    backend_openid,
+                    phone,
+                    user_info,
+                )
             api_json.setdefault('data', {}).update(_route_data(primary_model, 'primary'))
         except requests.RequestException as e:
             try:
@@ -1024,6 +1176,11 @@ def _run_image_detection_payload(image_bytes, filename, mimetype, user_info, *, 
                 'resolution': data.get('resolution') or (data.get('meta') or {}).get('resolution', ''),
                 'all_metadata': metadata,
                 'feedback': None,
+                **(
+                    {'_remote_evidence': data.get('remote_evidence')}
+                    if include_internal_evidence and isinstance(data.get('remote_evidence'), dict)
+                    else {}
+                ),
             }
         }, 200
     except Exception as e:
@@ -1093,6 +1250,8 @@ def _public_swarm_expert_name(expert, index=0):
         return 'C2PA 凭证专家'
     if expert_id == 'wam' or 'wam' in role or '通用水印' in role:
         return 'WAM 通用水印专家'
+    if expert_id == 'visible_watermark' or '可见水印定位' in role or '平台水印' in role:
+        return 'AI 平台水印专家'
     if expert_id == 'watermark' or 'watermark' in role or '水印' in role:
         return '隐式水印专家'
     return f'复核专家 {index + 1}'
@@ -1117,6 +1276,9 @@ def _public_swarm_verdict(expert):
         return '该专家暂不可用'
     if status == 'skipped':
         return '已跳过'
+    if str((expert or {}).get('id') or '') == 'visible_watermark' and status == 'success':
+        count = int((expert or {}).get('watermarkCount') or 0)
+        return f'检出 {count} 处 AI 平台水印' if count else '未检出 AI 平台水印'
     if status != 'success' or (expert or {}).get('score') is None:
         return '等待复核'
     score = _clamp01((expert or {}).get('score'), 0.5)
@@ -1257,6 +1419,55 @@ def _swarm_finish_expert(experts, expert_id, started_at, **updates):
     return _swarm_set_expert(experts, expert_id, **updates)
 
 
+def _run_swarm_expert(runner):
+    try:
+        return runner()
+    except Exception as exc:
+        return {
+            'status': 'failed',
+            'score': None,
+            'verdict': '调用失败',
+            'confidence': '',
+            'evidence': [],
+            'message': safe_truncate(str(exc), 120),
+            'latencyMs': None,
+        }
+
+
+def _swarm_v2_stagger_seconds(image_bytes):
+    return min(
+        SWARM_V2_MAX_STAGGER_SECONDS,
+        len(image_bytes or b'') / SWARM_V2_STAGGER_BYTES_PER_SECOND,
+    )
+
+
+def _swarm_visible_update_from_precheck(payload):
+    if not isinstance(payload, dict) or payload.get('status') != 'ok':
+        return None
+    try:
+        visible = swarm_visible_watermark_expert._visible_result(payload)
+    except Exception:
+        return None
+    count = len(visible.get('hits') or [])
+    provenance_decision = payload.get('decision') if isinstance(payload.get('decision'), dict) else {}
+    provenance_report = payload.get('report') if isinstance(payload.get('report'), dict) else {}
+    return {
+        'status': 'success',
+        'score': None,
+        'verdict': f'检出 {count} 处 AI 平台水印' if count else '未检出 AI 平台水印',
+        'confidence': '高' if _to_float(visible.get('confidence'), 0.0) >= 0.8 else ('中' if count else '无'),
+        'evidence': [visible.get('note') or 'AI 平台水印识别完成。'],
+        'message': f"detected={str(bool(count)).lower()}|count={count}|source=shared-upload",
+        'watermarkDetected': bool(count),
+        'watermarkCount': count,
+        'visibleWatermark': visible,
+        'provenanceDecision': provenance_decision,
+        'provenanceReport': provenance_report,
+        'probabilityModel': provenance_decision.get('probabilityModel'),
+        'latencyMs': int(_to_float(payload.get('elapsedMs'), 0.0)),
+    }
+
+
 def _clamp01(value, default=0.5):
     try:
         return max(0.0, min(1.0, float(value)))
@@ -1281,6 +1492,7 @@ def _swarm_primary_expert(image_bytes, filename, mimetype, user_info, is_guest):
         user_info,
         is_guest=is_guest,
         mark_guest=False,
+        include_internal_evidence=True,
     )
     if status_code >= 400 or payload.get('status') == 'error':
         return None, {
@@ -1293,6 +1505,7 @@ def _swarm_primary_expert(image_bytes, filename, mimetype, user_info, is_guest):
             'latencyMs': int((time.time() - started_at) * 1000),
         }
     result = payload.get('result') or {}
+    remote_evidence = result.pop('_remote_evidence', {})
     score = _clamp01(result.get('probability'), 0.5)
     evidence = []
     if result.get('visual_issues'):
@@ -1308,7 +1521,44 @@ def _swarm_primary_expert(image_bytes, filename, mimetype, user_info, is_guest):
         'evidence': evidence[:3] or ['主路由完成基础图像鉴伪。'],
         'message': '主路由检测完成',
         'latencyMs': int((time.time() - started_at) * 1000),
+        'remoteEvidence': remote_evidence if isinstance(remote_evidence, dict) else {},
     }
+
+
+_AI_METADATA_VALUE_MARKERS = (
+    'midjourney', 'stable diffusion', 'automatic1111', 'comfyui', 'fooocus',
+    'invokeai', 'novelai', 'dall-e', 'dalle', 'adobe firefly', 'generative fill',
+    'dreamstudio', 'ideogram', 'leonardo ai', 'playground ai', 'flux.1',
+    'trainedalgorithmicmedia', 'ai generated', 'generated by ai', 'aigc生成', 'ai生成',
+)
+_AI_METADATA_FIELD_HINTS = (
+    'software', 'creatortool', 'usercomment', 'description', 'comment',
+    'parameters', 'prompt', 'workflow', 'generator', 'digital_source_type',
+)
+_NEGATED_METADATA_VALUES = (
+    '未检测到', '未发现', '无明显', 'not detected', 'not found', 'negative', 'false',
+)
+
+
+def _explicit_ai_metadata_markers(metadata):
+    """Return only high-specificity generator declarations from structured fields."""
+    matches = []
+    for raw_key, raw_value in (metadata or {}).items():
+        key = str(raw_key or '').strip()
+        value = str(raw_value or '').strip()
+        if not key or not value:
+            continue
+        normalized_key = key.lower().replace(':', '_').replace('-', '_')
+        normalized_value = value.lower()[:6000]
+        if any(marker in normalized_value for marker in _NEGATED_METADATA_VALUES):
+            continue
+        field_is_relevant = any(hint in normalized_key for hint in _AI_METADATA_FIELD_HINTS)
+        generator_is_named = any(marker in normalized_value for marker in _AI_METADATA_VALUE_MARKERS)
+        dedicated_key = normalized_key.startswith(('aigc_', 'jumbf_'))
+        dedicated_positive = normalized_value in {'1', 'true', 'yes', 'positive', 'detected', 'generated'}
+        if (field_is_relevant and generator_is_named) or (dedicated_key and (generator_is_named or dedicated_positive)):
+            matches.append(f'{key} = {value[:180]}')
+    return matches[:4]
 
 
 def _swarm_metadata_expert(primary_result):
@@ -1317,31 +1567,28 @@ def _swarm_metadata_expert(primary_result):
     if not metadata:
         return {
             'status': 'success',
-            'score': 0.56,
+            'score': 0.5,
             'verdict': '缺少元数据',
             'confidence': '低',
             'evidence': ['图像未提供可验证的 EXIF/拍摄设备元数据。'],
-            'message': '元数据缺失，作为弱风险信号处理',
+            'message': '元数据缺失，保持中性',
+            'details': {'verifiedAiMetadata': False, 'aiMarkers': []},
             'latencyMs': 0,
         }
-    joined = json.dumps(metadata, ensure_ascii=False)[:12000].lower()
-    ai_markers = (
-        'midjourney', 'stable diffusion', 'comfyui', 'dall-e', 'dalle',
-        'firefly', 'aigc', 'ai generated', 'generated image', 'synthetic',
-    )
-    has_ai_marker = any(marker in joined for marker in ai_markers)
+    ai_markers = _explicit_ai_metadata_markers(metadata)
+    normalized_keys = {str(key).lower().replace(':', '_') for key in keys}
     camera_keys = {
-        'EXIF:Make', 'EXIF:Model', 'EXIF:LensModel', 'EXIF:LensMake',
-        'Composite:LensID', 'Composite:LensSpec', 'Composite:FocalLength',
+        'exif_make', 'exif_model', 'exif_lensmodel', 'exif_lensmake',
+        'composite_lensid', 'composite_lensspec', 'composite_focallength',
     }
-    date_keys = {'EXIF:DateTimeOriginal', 'EXIF:CreateDate', 'File:FileModifyDate'}
-    has_camera = bool(keys.intersection(camera_keys))
-    has_date = bool(keys.intersection(date_keys))
-    if has_ai_marker:
+    date_keys = {'exif_datetimeoriginal', 'exif_createdate', 'file_filemodifydate'}
+    has_camera = bool(normalized_keys.intersection(camera_keys))
+    has_date = bool(normalized_keys.intersection(date_keys))
+    if ai_markers:
         score = 0.9
         verdict = '发现生成标识'
         confidence = '高'
-        evidence = ['元数据中出现生成式工具或 AIGC 标识。']
+        evidence = [f'元数据明确声明生成工具：{ai_markers[0]}']
     elif has_camera and has_date:
         score = 0.24
         verdict = '拍摄链路较完整'
@@ -1353,10 +1600,10 @@ def _swarm_metadata_expert(primary_result):
         confidence = '中'
         evidence = ['元数据包含相机或镜头信息，但拍摄链路不完整。']
     else:
-        score = 0.48
-        verdict = '元数据弱支撑'
+        score = 0.5
+        verdict = '无明确来源信号'
         confidence = '低'
-        evidence = ['已提取元数据，但缺少明确的设备拍摄字段。']
+        evidence = ['已提取元数据，但没有明确生成器声明或完整拍摄链路。']
     evidence.append(f'可读元数据字段数：{len(keys)}。')
     return {
         'status': 'success',
@@ -1365,6 +1612,7 @@ def _swarm_metadata_expert(primary_result):
         'confidence': confidence,
         'evidence': evidence[:3],
         'message': '元数据取证完成',
+        'details': {'verifiedAiMetadata': bool(ai_markers), 'aiMarkers': ai_markers},
         'latencyMs': 0,
     }
 
@@ -1581,12 +1829,8 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
     min_experts = max(1, int((config or {}).get('minExperts') or 2))
     if len(successful) < min_experts:
         return None, f'Swarm 有效专家数不足：{len(successful)}/{min_experts}'
-    total_weight = sum(max(0.0, _to_float(expert.get('weight'), 0.0)) for expert in successful)
-    if total_weight <= 0:
-        total_weight = float(len(successful))
-        for expert in successful:
-            expert['weight'] = 1.0
-    score = sum(_clamp01(expert.get('score'), 0.5) * max(0.0, _to_float(expert.get('weight'), 0.0)) for expert in successful) / total_weight
+    probability_model = probability_fusion.fuse(experts)
+    score = _clamp01(probability_model.get('posterior'), 0.5)
     scores = [_clamp01(expert.get('score'), 0.5) for expert in successful]
     spread = max(scores) - min(scores) if scores else 0.0
     consensus_threshold = _clamp01((config or {}).get('consensusThreshold'), 0.65)
@@ -1594,7 +1838,9 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
     consensus_score = max(0.0, min(1.0, 1.0 - spread))
     consensus_level = '高' if spread <= 0.18 and len(successful) >= 3 else ('中' if spread <= 0.35 else '低')
     confidence = _conf_level_from_score(score)
-    if spread > 0.42:
+    if probability_model.get('corroborated') and score >= 0.99:
+        confidence = '高'
+    elif spread > 0.42:
         confidence = '低'
     elif spread > 0.28 and confidence == '高':
         confidence = '中'
@@ -1616,6 +1862,10 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
     evidence = []
     if provenance_summary and provenance_summary.get('headline'):
         evidence.append(provenance_summary['headline'])
+    for factor in probability_model.get('factors') or []:
+        label = str((factor or {}).get('label') or '').strip()
+        if label and label not in evidence:
+            evidence.append(label)
     ranked = sorted(successful, key=lambda expert: abs(_clamp01(expert.get('score'), 0.5) - 0.5), reverse=True)
     for expert in ranked:
         expert_score = _clamp01(expert.get('score'), 0.5)
@@ -1633,10 +1883,13 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
             break
 
     disagreement = spread > disagreement_threshold
+    baseline_probability = _clamp01(probability_model.get('pixelBaseline'), score)
     explanation = [
-        f"Swarm 专家会诊完成：{len(successful)}/{len(experts)} 个专家给出有效结论，综合伪造风险约 {round(score * 100, 1)}%。",
-        f"专家一致性：{consensus_level}，当前置信度：{confidence}。",
+        f"Swarm 专家会诊完成：像素模型基线风险 {baseline_probability * 100:.1f}%，来源证据融合后为 {score * 100:.2f}%。",
+        f"有效像素专家 {len(probability_model.get('baselineExperts') or [])} 个，专家一致性：{consensus_level}，当前置信度：{confidence}。",
     ]
+    if probability_model.get('corroborated') and score >= 0.99:
+        explanation.append("已知 AI 水印与独立元数据/完整性证据相互印证，因此进入 99% 以上高置信区间。")
     if disagreement:
         explanation.append("部分专家意见存在分歧，建议结合原始来源或人工复核。")
     else:
@@ -1648,6 +1901,7 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
         'final_label': final_label,
         'probability': round(score, 4),
         'detector_probability': round(detector_probability, 4),
+        'probabilityModel': probability_model,
         'confidence': confidence,
         'explanation': "\n".join(explanation),
         'visual_issues': evidence[:6] or ['暂未提取到明确的视觉可疑点。'],
@@ -1656,6 +1910,7 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
             'effectiveExperts': len(successful),
             'totalExperts': len(experts),
             'score': round(score, 4),
+            'probabilityModel': probability_model,
             'consensusLevel': consensus_level,
             'disagreement': disagreement,
         }, ensure_ascii=False),
@@ -1678,6 +1933,66 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
     return base, ''
 
 
+def _persist_swarm_history_result(final_result, image_bytes, filename, backend_openid, phone, user_info):
+    itemid = (final_result or {}).get('itemid')
+    record = _local_detection_record(itemid)
+    expected_filename = str((final_result or {}).get('filename') or '').strip()
+    if _record_matches_detection_actor(record, expected_filename, backend_openid, phone):
+        fake_pct = round(_clamp01(final_result.get('probability'), 0.5) * 100.0, 2)
+        detector_probability = _clamp01(
+            final_result.get('detector_probability'),
+            fake_pct / 100.0,
+        )
+        explanation = safe_truncate(final_result.get('explanation') or '', 145)
+        updated = excute_detection_sql(
+            """
+            UPDATE data
+            SET fake = %s, detector_probability = %s, aigc = %s,
+                clarity = %s, explantation = %s, Userid = COALESCE(Userid, %s)
+            WHERE itemid = %s
+            """,
+            (
+                fake_pct,
+                detector_probability,
+                final_result.get('final_label') or ('AI生成图像' if fake_pct >= 50 else '真实图像'),
+                final_result.get('confidence') or _conf_level_from_score(fake_pct / 100.0),
+                explanation,
+                (user_info or {}).get('Userid'),
+                itemid,
+            ),
+            fetch=False,
+        )
+        if updated is None:
+            raise RuntimeError('Swarm 最终结论写入历史失败')
+        return itemid
+
+    data = {
+        'fake_percentage': round(_clamp01(final_result.get('probability'), 0.5) * 100.0, 2),
+        'detector_probability': final_result.get('detector_probability'),
+        'final_label': final_result.get('final_label'),
+        'confidence': final_result.get('confidence'),
+        'explanation': final_result.get('explanation'),
+        'visual_issues': final_result.get('visual_issues') or [],
+    }
+    local_itemid = _insert_local_detection_record(
+        data,
+        image_bytes,
+        filename,
+        backend_openid,
+        phone,
+        user_info,
+    )
+    final_result.update({
+        'itemid': local_itemid,
+        'filename': data.get('filename') or final_result.get('filename'),
+        'image_url': f"/api/media/image/{local_itemid}",
+        'file_size': data.get('file_size') or final_result.get('file_size'),
+        'img_format': data.get('img_format') or final_result.get('img_format'),
+        'resolution': data.get('resolution') or final_result.get('resolution'),
+    })
+    return local_itemid
+
+
 def _run_swarm_detection_payload(image_bytes, filename, mimetype, user_info, *, is_guest=False, job_id=None):
     backend_openid, phone = _backend_identity(user_info)
     if not image_bytes:
@@ -1692,7 +2007,49 @@ def _run_swarm_detection_payload(image_bytes, filename, mimetype, user_info, *, 
     experts = _swarm_initial_experts()
     _swarm_update_job(job_id, experts, 3, 'Swarm 专家队列已创建')
 
+    primary_finished = threading.Event()
+    if 'primary' not in enabled_ids:
+        primary_finished.set()
+
+    overlap_steps = []
+    network_steps = []
+    if 'c2pa' in enabled_ids:
+        overlap_steps.append((
+            'c2pa',
+            lambda: swarm_c2pa_expert.run_c2pa_expert(image_bytes, filename, mimetype),
+        ))
+    if 'watermark' in enabled_ids:
+        overlap_steps.append((
+            'watermark',
+            lambda: swarm_watermark_expert.run_watermark_expert(image_bytes, filename),
+        ))
+    if 'v2' in enabled_ids:
+        stagger_seconds = _swarm_v2_stagger_seconds(image_bytes)
+
+        def run_staggered_v2():
+            primary_finished.wait(timeout=stagger_seconds)
+            return _swarm_v2_expert(image_bytes, filename, mimetype)
+
+        overlap_steps.append(('v2', run_staggered_v2))
+    if 'wam' in enabled_ids:
+        network_steps.append((
+            'wam',
+            lambda: swarm_wam_expert.run_wam_expert(image_bytes, filename, mimetype),
+        ))
+    for spec in specs:
+        if spec.get('provider') == 'aliyun':
+            network_steps.append((spec['id'], lambda spec=spec: _swarm_aliyun_expert(spec, image_bytes, filename)))
+
+    future_experts = {}
+    for expert_id, runner in overlap_steps:
+        _swarm_set_expert(experts, expert_id, status='running', message='正在并行复核')
+        future = SWARM_EXPERT_EXECUTOR.submit(_run_swarm_expert, runner)
+        future_experts[future] = expert_id
+    if future_experts:
+        _swarm_update_job(job_id, experts, 8, f'{len(future_experts)} 路错峰复核已启动')
+
     primary_result = None
+    primary_update = {}
     if 'primary' in enabled_ids:
         _swarm_set_expert(experts, 'primary', status='running', message='正在调用主路由鉴伪')
         _swarm_update_job(job_id, experts, 10, '主路由鉴伪专家正在分析')
@@ -1704,6 +2061,7 @@ def _run_swarm_detection_payload(image_bytes, filename, mimetype, user_info, *, 
             is_guest,
         )
         _swarm_set_expert(experts, 'primary', **primary_update)
+        primary_finished.set()
         _swarm_update_job(job_id, experts, 24, '主路由鉴伪完成')
 
     if 'metadata' in enabled_ids:
@@ -1713,50 +2071,39 @@ def _run_swarm_detection_payload(image_bytes, filename, mimetype, user_info, *, 
         _swarm_set_expert(experts, 'metadata', **metadata_update)
         _swarm_update_job(job_id, experts, 40, '元数据取证完成')
 
-    expert_steps = []
-    if 'v2' in enabled_ids:
-        expert_steps.append(('v2', 52, lambda: _swarm_v2_expert(image_bytes, filename, mimetype)))
-    if 'c2pa' in enabled_ids:
-        expert_steps.append((
-            'c2pa',
-            None,
-            lambda: swarm_c2pa_expert.run_c2pa_expert(image_bytes, filename, mimetype),
-        ))
-    if 'watermark' in enabled_ids:
-        expert_steps.append((
-            'watermark',
-            None,
-            lambda: swarm_watermark_expert.run_watermark_expert(image_bytes, filename),
-        ))
-    if 'wam' in enabled_ids:
-        expert_steps.append((
-            'wam',
-            None,
-            lambda: swarm_wam_expert.run_wam_expert(image_bytes, filename, mimetype),
-        ))
-    for spec in specs:
-        if spec.get('provider') == 'aliyun':
-            expert_steps.append((spec['id'], None, lambda spec=spec: _swarm_aliyun_expert(spec, image_bytes, filename)))
+    if 'visible_watermark' in enabled_ids:
+        remote_evidence = primary_update.get('remoteEvidence') or {}
+        precheck_payload = remote_evidence.get('visibleWatermarkPrecheck')
+        visible_update = _swarm_visible_update_from_precheck(precheck_payload)
+        if visible_update:
+            _swarm_set_expert(experts, 'visible_watermark', **visible_update)
+            _swarm_update_job(job_id, experts, 42, 'AI 平台水印共享取证完成')
+        else:
+            network_steps.append((
+                'visible_watermark',
+                lambda: swarm_visible_watermark_expert.run_visible_watermark_expert(
+                    image_bytes,
+                    filename,
+                    mimetype,
+                ),
+            ))
 
-    dynamic_progress = [52, 64, 74, 82, 90, 95]
-    for idx, (expert_id, fixed_progress, runner) in enumerate(expert_steps):
-        progress = fixed_progress if fixed_progress is not None else dynamic_progress[min(idx, len(dynamic_progress) - 1)]
-        expert = _swarm_set_expert(experts, expert_id, status='running', message='正在复核')
-        expert_name = (expert or {}).get('name') or expert_id
-        _swarm_update_job(job_id, experts, max(42, progress - 6), f'{expert_name}正在分析')
-        try:
-            update = runner()
-        except Exception as exc:
-            update = {
-                'status': 'failed',
-                'score': None,
-                'verdict': '调用失败',
-                'confidence': '',
-                'evidence': [],
-                'message': safe_truncate(str(exc), 120),
-                'latencyMs': None,
-            }
+    for expert_id, runner in network_steps:
+        _swarm_set_expert(experts, expert_id, status='running', message='正在并行复核')
+        future = SWARM_EXPERT_EXECUTOR.submit(_run_swarm_expert, runner)
+        future_experts[future] = expert_id
+    if network_steps:
+        _swarm_update_job(job_id, experts, 44, f'{len(network_steps)} 路在线复核已并行启动')
+
+    completed = 0
+    for future in as_completed(future_experts):
+        expert_id = future_experts[future]
+        update = future.result()
         _swarm_set_expert(experts, expert_id, **update)
+        completed += 1
+        progress = 45 + round(50 * completed / max(1, len(future_experts)))
+        expert = next((item for item in experts if item.get('id') == expert_id), None)
+        expert_name = (expert or {}).get('name') or expert_id
         _swarm_update_job(job_id, experts, progress, f'{expert_name}完成')
 
     fallback_result = None
@@ -1765,6 +2112,17 @@ def _run_swarm_detection_payload(image_bytes, filename, mimetype, user_info, *, 
     final_result, error = _swarm_aggregate(experts, primary_result, fallback_result)
     if error:
         return {'status': 'error', 'message': error, 'experts': experts}, 502
+    _persist_swarm_history_result(
+        final_result,
+        image_bytes,
+        filename,
+        backend_openid,
+        phone,
+        user_info,
+    )
+    visible_expert = next((expert for expert in experts if expert.get('id') == 'visible_watermark'), None)
+    if visible_expert and isinstance(visible_expert.get('visibleWatermark'), dict):
+        final_result['visibleWatermark'] = visible_expert['visibleWatermark']
     payload = {'status': 'success', 'result': final_result}
     _swarm_update_job(job_id, experts, 100, 'Swarm 专家会诊完成', status='success', result=payload)
     return payload, 200
@@ -1831,7 +2189,7 @@ def image_detect_async():
         return jsonify({'status': 'error', 'message': '请上传非空图片文件'}), 400
     job = admin_state.create_detection_job(user_info, file.filename, kind='image')
     _mark_guest_detection_used(is_guest)
-    thread = threading.Thread(
+    thread = BACKGROUND_THREAD_CLASS(
         target=_run_async_image_job,
         args=(job['id'], image_bytes, file.filename, mimetype, dict(user_info or {}), is_guest),
         daemon=True,
@@ -1866,7 +2224,7 @@ def image_detect_swarm():
     experts = _swarm_initial_experts()
     job = admin_state.create_detection_job(user_info, file.filename, kind='swarm', mode='swarm', experts=experts)
     _mark_guest_detection_used(is_guest)
-    thread = threading.Thread(
+    thread = BACKGROUND_THREAD_CLASS(
         target=_run_swarm_image_job,
         args=(job['id'], image_bytes, file.filename, mimetype, dict(user_info or {}), is_guest),
         daemon=True,

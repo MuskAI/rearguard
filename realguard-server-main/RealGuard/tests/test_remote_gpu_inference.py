@@ -1,3 +1,5 @@
+from io import BytesIO
+
 import detector_backend
 from imagedetection.Agent.tools.AIGC_Detection import inference_onnx
 
@@ -102,4 +104,76 @@ def test_remote_predict_returns_probability(monkeypatch, tmp_path):
         "url": "http://model/predict",
         "headers": {"X-RealGuard-Internal-Token": "test-token"},
         "filename": "image.png",
+    }
+
+
+def test_remote_predict_preserves_shared_precheck_evidence(monkeypatch, tmp_path):
+    image_path = tmp_path / "image.png"
+    image_path.write_bytes(b"image")
+    precheck = {"status": "ok", "elapsedMs": 21, "visibleHits": []}
+    monkeypatch.setattr(inference_onnx, "REMOTE_INFERENCE_URL", "http://model/predict")
+    monkeypatch.setattr(inference_onnx, "REMOTE_INFERENCE_TOKEN", "test-token")
+    monkeypatch.setattr(inference_onnx, "REMOTE_REQUIRE_CUDA", True)
+    monkeypatch.setattr(
+        inference_onnx.requests,
+        "post",
+        lambda *args, **kwargs: _Response({
+            "code": 200,
+            "data": {
+                "fakeProbability": 0.625,
+                "runtime": {"activeProvider": "CUDAExecutionProvider"},
+                "visibleWatermarkPrecheck": precheck,
+            },
+        }),
+    )
+
+    assert inference_onnx.predict(image_path) == 0.625
+    assert inference_onnx.consume_remote_evidence() == {"visibleWatermarkPrecheck": precheck}
+    assert inference_onnx.consume_remote_evidence() == {}
+
+
+def test_detector_backend_forwards_remote_evidence(monkeypatch):
+    monkeypatch.setattr(detector_backend, "_ensure_capability_ready", lambda: None)
+    monkeypatch.setattr(
+        detector_backend,
+        "_run_v1_detect",
+        lambda image_path: {
+            "final_label": "真实图像",
+            "probability": 0.16,
+            "detector_probability": 0.18,
+            "confidence": "高",
+            "explanation": "V1 evidence summary",
+            "visual_issues": [],
+            "all_metadata": {},
+        },
+    )
+    monkeypatch.setattr(
+        detector_backend,
+        "_consume_remote_inference_evidence",
+        lambda: {"visibleWatermarkPrecheck": {"status": "ok", "visibleHits": []}},
+    )
+    monkeypatch.setattr(
+        detector_backend,
+        "_save_upload",
+        lambda image_bytes, folder, filename: ("stored-demo.png", "/tmp/stored-demo.png"),
+    )
+    monkeypatch.setattr(detector_backend, "get_image_info", lambda path: ("PNG", "320x240"))
+    monkeypatch.setattr(detector_backend, "get_file_size_str", lambda path: "1KB")
+    monkeypatch.setattr(detector_backend, "excute_detection_sql_lastid", lambda sql, params=None: 91)
+    app = detector_backend.create_app()
+    app.config.update(TESTING=True)
+
+    response = app.test_client().post(
+        "/image",
+        data={
+            "image_file": (BytesIO(b"fake-image"), "demo.png"),
+            "openid": "openid-1",
+            "phone": "13800000000",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["data"]["remote_evidence"] == {
+        "visibleWatermarkPrecheck": {"status": "ok", "visibleHits": []}
     }

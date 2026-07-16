@@ -32,6 +32,12 @@ THUMBNAIL_MAX_SIZE = (
     int(os.environ.get("REALGUARD_THUMBNAIL_MAX_HEIGHT", "165")),
 )
 THUMBNAIL_QUALITY = int(os.environ.get("REALGUARD_THUMBNAIL_QUALITY", "45"))
+HISTORY_ORDER_BY = (
+    "CASE WHEN CAST(createtime AS CHAR) REGEXP '^[0-9]{14}$' "
+    "THEN STR_TO_DATE(CAST(createtime AS CHAR), '%%Y%%m%%d%%H%%i%%s') "
+    "ELSE STR_TO_DATE(CAST(createtime AS CHAR), '%%Y-%%m-%%d %%H:%%i:%%s') "
+    "END DESC, itemid DESC"
+)
 DEVELOPER_API_KEY_PREFIX = "rg_sk_"
 DEVELOPER_API_KEY_MAX_ACTIVE = int(os.environ.get("REALGUARD_DEVELOPER_API_KEY_MAX_ACTIVE", "5"))
 DEVELOPER_API_KEY_DEFAULT_SCOPES = "detect,forensics,provenance,reports"
@@ -1049,7 +1055,7 @@ def image_detection_history():
 
     if actor["mode"] == "guest":
         rows = excute_detection_sql(
-            "SELECT * FROM data WHERE Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s ORDER BY createtime DESC",
+            f"SELECT * FROM data WHERE Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s ORDER BY {HISTORY_ORDER_BY}",
             (actor["openid"],),
         )
     elif actor["mode"] == "anonymous":
@@ -1057,7 +1063,7 @@ def image_detection_history():
     else:
         history_where, history_params = _history_actor_where(actor)
         rows = excute_detection_sql(
-            f"SELECT * FROM data WHERE {history_where} ORDER BY createtime DESC",
+            f"SELECT * FROM data WHERE {history_where} ORDER BY {HISTORY_ORDER_BY}",
             history_params,
         )
     query_records = []
@@ -1227,7 +1233,7 @@ def video_detection_history():
 
     if actor["mode"] == "guest":
         rows = excute_detection_sql(
-            "SELECT * FROM video_data WHERE Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s ORDER BY createtime DESC",
+            f"SELECT * FROM video_data WHERE Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s ORDER BY {HISTORY_ORDER_BY}",
             (actor["openid"],),
         )
     elif actor["mode"] == "anonymous":
@@ -1235,7 +1241,7 @@ def video_detection_history():
     else:
         history_where, history_params = _history_actor_where(actor)
         rows = excute_detection_sql(
-            f"SELECT * FROM video_data WHERE {history_where} ORDER BY createtime DESC",
+            f"SELECT * FROM video_data WHERE {history_where} ORDER BY {HISTORY_ORDER_BY}",
             history_params,
         )
     query_records = []
