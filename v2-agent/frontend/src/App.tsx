@@ -505,7 +505,10 @@ export default function App() {
     }
   }
 
-  const serviceAvailable = health?.vlmEnabled === true;
+  const reportedCapabilities = Object.values(health?.capabilities || {});
+  const serviceAvailable = health?.status === "ok"
+    && health.vlmEnabled === true
+    && reportedCapabilities.every((state) => state === "available");
   const screenTitle = pendingFile?.name || "新建鉴伪任务";
 
   return (
