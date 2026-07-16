@@ -4,18 +4,13 @@ import {
   Bot,
   Check,
   CircleDashed,
-  FileCheck2,
   FileText,
-  Fingerprint,
+  Home,
   Image as ImageIcon,
-  Layers3,
   LoaderCircle,
-  LockKeyhole,
   LogIn,
   Paperclip,
   RefreshCw,
-  Route,
-  ScanSearch,
   Send,
   ShieldCheck,
   Sparkles,
@@ -23,7 +18,6 @@ import {
   UserRound,
   Video,
   Volume2,
-  Waypoints,
 } from "lucide-react";
 import {
   AccountUser,
@@ -57,12 +51,18 @@ import type { AgentHistoryEntry, AgentOutcome, AgentProgress, PendingFile } from
 import AgentHistory, { MobileHistoryButton } from "./components/AgentHistory";
 import AgentResult from "./components/AgentResult";
 import AuthDialog from "./components/AuthDialog";
+import OfficialHome from "./components/OfficialHome";
 
 const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 const ACCEPTED_FILES = "image/jpeg,image/png,image/webp,image/bmp,image/gif,video/mp4,video/quicktime,video/webm,.txt,.md,.csv,.json,.log,.docx,.mp4,.mov,.webm";
 
 type UploadKind = "image" | "video" | "audio" | "document" | "unknown";
+type AppView = "home" | "workspace";
+
+function initialAppView(): AppView {
+  return new URLSearchParams(window.location.search).get("workspace") === "1" ? "workspace" : "home";
+}
 
 function inferKind(name: string): UploadKind {
   const ext = name.split(".").pop()?.toLowerCase() || "";
@@ -164,6 +164,7 @@ function progressFromJob(job: ImageAgentJob): AgentProgress {
 }
 
 export default function App() {
+  const [view, setView] = useState<AppView>(initialAppView);
   const [user, setUser] = useState<AccountUser | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
@@ -240,6 +241,12 @@ export default function App() {
   }, [loadHistoryForUser]);
 
   useEffect(() => {
+    const syncViewFromUrl = () => setView(initialAppView());
+    window.addEventListener("popstate", syncViewFromUrl);
+    return () => window.removeEventListener("popstate", syncViewFromUrl);
+  }, []);
+
+  useEffect(() => {
     if (!progress && !outcome && !errorMessage) return;
     window.requestAnimationFrame(() => {
       if (outcome) {
@@ -263,6 +270,19 @@ export default function App() {
     setErrorMessage("");
     setBusy(false);
     setActiveKey(undefined);
+  }, []);
+
+  const navigateToView = useCallback((nextView: AppView) => {
+    const url = new URL(window.location.href);
+    if (nextView === "workspace") {
+      url.searchParams.set("workspace", "1");
+      url.hash = "";
+    } else {
+      url.searchParams.delete("workspace");
+      url.hash = "home";
+    }
+    window.history.pushState({ view: nextView }, "", url);
+    setView(nextView);
   }, []);
 
   function authenticated(nextUser: AccountUser) {
@@ -489,7 +509,17 @@ export default function App() {
   const screenTitle = pendingFile?.name || "新建鉴伪任务";
 
   return (
-    <div className="agent-app">
+    <>
+      {view === "home" ? (
+        <OfficialHome
+          authReady={authReady}
+          health={health}
+          user={user}
+          onEnterWorkspace={() => navigateToView("workspace")}
+          onLogin={() => setAuthOpen(true)}
+        />
+      ) : (
+      <div className="agent-app">
       <AgentHistory
         entries={history}
         activeKey={activeKey}
@@ -510,6 +540,9 @@ export default function App() {
         <header className="agent-topbar">
           <div className="topbar-title">
             <MobileHistoryButton onClick={() => setMobileHistoryOpen(true)} />
+            <button type="button" className="workspace-home-button" onClick={() => navigateToView("home")} aria-label="返回慧鉴AI官网首页" title="官网首页">
+              <Home size={16} /><span>官网首页</span>
+            </button>
             <div>
               <h1><span className="desktop-task-title">{screenTitle}</span><span className="mobile-task-title">{pendingFile?.name || "慧鉴AI"}</span></h1>
               <p>{pendingFile ? "慧鉴AI 正在为这份内容整理可信证据" : "一个入口完成检测、取证、凭证核验与报告归档"}</p>
@@ -582,10 +615,12 @@ export default function App() {
           </div>
         )}
       </main>
+      </div>
+      )}
 
-      <input ref={fileInputRef} className="sr-only" type="file" accept={ACCEPTED_FILES} onChange={chooseFile} />
+      <input ref={fileInputRef} className="sr-only" type="file" accept={ACCEPTED_FILES} onChange={chooseFile} tabIndex={-1} aria-hidden="true" />
       <AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} onAuthenticated={authenticated} />
-    </div>
+    </>
   );
 }
 
@@ -611,21 +646,14 @@ function WelcomeWorkspace({
   return (
     <div className="welcome-page">
       <section className="welcome-workspace" aria-labelledby="welcome-title">
-        <div className="welcome-copy">
-          <div className="welcome-agent-scene">
-            <div className="welcome-agent">
-              <img src="/brand/huijian-mascot.webp" alt="慧鉴AI 品牌助手小鉴" width="96" height="126" />
-              <span><Sparkles size={14} /> 小鉴已就绪</span>
-            </div>
-            <div className="evidence-stack" aria-label="小鉴会核验的三类证据">
-              <span><Fingerprint size={15} /> 来源线索</span>
-              <span><ScanSearch size={15} /> 模型痕迹</span>
-              <span><Layers3 size={15} /> 内容结构</span>
-            </div>
+        <div className="welcome-copy workspace-welcome-copy">
+          <div className="workspace-agent-badge">
+            <img src="/brand/huijian-mascot.webp" alt="慧鉴AI 品牌助手小鉴" width="72" height="96" />
+            <span><Sparkles size={14} /> 工作台已就绪</span>
           </div>
-          <p className="welcome-eyebrow">可信内容，从看清证据开始</p>
-          <h2 id="welcome-title">把内容交给小鉴，<br />一起看清真假。</h2>
-          <p className="welcome-description">慧鉴AI 将模型判断、来源核验与关键证据放进同一个任务，给出可理解、可追溯的辅助结论。</p>
+          <p className="welcome-eyebrow">新建鉴伪任务</p>
+          <h2 id="welcome-title">上传内容，<br />开始证据分析。</h2>
+          <p className="welcome-description">选择一份图片、视频或文档，慧鉴AI 会根据内容类型进入相应的检测与证据核验链路。</p>
           <div className="hero-proof-row" aria-label="慧鉴AI 分析链路">
             <span><i>01</i> 自动识别</span>
             <span><i>02</i> 多路核验</span>
@@ -640,6 +668,16 @@ function WelcomeWorkspace({
           onDragOver={(event) => event.preventDefault()}
           onDragLeave={(event) => { if (event.currentTarget === event.target) onDragLeave(); }}
           onDrop={onDrop}
+          onClick={() => { if (!busy) onOpenFile(); }}
+          onKeyDown={(event) => {
+            if (!busy && (event.key === "Enter" || event.key === " ")) {
+              event.preventDefault();
+              onOpenFile();
+            }
+          }}
+          role="button"
+          tabIndex={busy ? -1 : 0}
+          aria-disabled={busy}
           aria-label="统一鉴伪上传入口"
         >
           <div className="upload-stage-topline">
@@ -650,7 +688,7 @@ function WelcomeWorkspace({
             <div className="upload-stage-icon"><UploadCloud size={28} /></div>
             <h3>{dragging ? "松开即可开始鉴伪" : "上传或拖放待鉴别内容"}</h3>
             <p>图片、视频或文档，会自动进入对应的分析链路</p>
-            <button type="button" className="primary-button upload-button" onClick={onOpenFile} disabled={busy}><Paperclip size={17} /> 选择文件</button>
+            <span className="primary-button upload-button"><Paperclip size={17} /> 选择文件</span>
           </div>
           <div className="capability-strip" aria-label="支持的内容类型">
             <div><ImageIcon size={18} /><span><strong>图像</strong><small>多源鉴伪</small></span><Check size={14} /></div>
@@ -666,60 +704,6 @@ function WelcomeWorkspace({
           <span><BadgeCheck size={16} /> 个人任务严格隔离</span>
           <span><FileText size={16} /> 支持报告归档</span>
         </div>
-      </section>
-
-      <section className="home-introduction" aria-label="慧鉴AI 产品介绍">
-        <section className="intro-band intro-overview" aria-labelledby="overview-title">
-          <div className="intro-heading">
-            <span>WHAT · 慧鉴AI</span>
-            <h3 id="overview-title">不止给一个概率，<br />还要说明依据来自哪里。</h3>
-            <p>面向图像、视频与文档的统一内容鉴伪 Agent。小鉴会组织可用检测能力，把不同证据放在同一条分析链路中呈现。</p>
-          </div>
-          <div className="intro-pillars">
-            <article>
-              <span><ScanSearch size={20} /> 01</span>
-              <h4>模型判断</h4>
-              <p>识别生成痕迹与异常模式，并展示风险分数和置信信息。</p>
-            </article>
-            <article>
-              <span><Fingerprint size={20} /> 02</span>
-              <h4>来源核验</h4>
-              <p>结合元数据、内容凭证与可用来源线索，补足单一模型的盲区。</p>
-            </article>
-            <article>
-              <span><FileCheck2 size={20} /> 03</span>
-              <h4>证据报告</h4>
-              <p>把关键依据和结论整理成可下载报告，方便复核与归档。</p>
-            </article>
-          </div>
-        </section>
-
-        <section className="intro-band workflow-band" aria-labelledby="workflow-title">
-          <div className="section-kicker"><Route size={17} /> HOW · 一次任务如何完成</div>
-          <div className="workflow-heading">
-            <h3 id="workflow-title">从一份内容，到一份可复核结论</h3>
-            <p>复杂能力留在系统内部，用户只需要完成一次上传。</p>
-          </div>
-          <ol className="workflow-steps">
-            <li><span>01</span><UploadCloud size={21} /><div><strong>提交内容</strong><p>自动识别文件类型并完成基础校验。</p></div></li>
-            <li><span>02</span><Waypoints size={21} /><div><strong>能力调度</strong><p>选择当前可用的模型与核验链路。</p></div></li>
-            <li><span>03</span><Layers3 size={21} /><div><strong>证据交叉</strong><p>统一整理模型、来源和内容层证据。</p></div></li>
-            <li><span>04</span><FileCheck2 size={21} /><div><strong>结论归档</strong><p>呈现风险说明，并生成可追溯报告。</p></div></li>
-          </ol>
-        </section>
-
-        <section className="intro-band boundary-band" aria-labelledby="boundary-title">
-          <div className="boundary-mark"><LockKeyhole size={28} /></div>
-          <div className="boundary-copy">
-            <span>TRUST · 能力边界</span>
-            <h3 id="boundary-title">让系统负责找证据，<br />把最终判断留给人。</h3>
-          </div>
-          <div className="boundary-list">
-            <span><ShieldCheck size={17} /><b>真实链路</b> 服务不可用时明确提示，不用模拟结果代替。</span>
-            <span><LockKeyhole size={17} /><b>账户隔离</b> 登录用户只能访问自己的任务与历史。</span>
-            <span><BadgeCheck size={17} /><b>辅助决策</b> 高风险场景仍应结合原始来源与人工复核。</span>
-          </div>
-        </section>
       </section>
     </div>
   );
