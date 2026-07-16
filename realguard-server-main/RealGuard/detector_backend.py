@@ -1,11 +1,14 @@
 import importlib
 import json
 import os
+import threading
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, jsonify, request
+import requests
 from werkzeug.utils import secure_filename
 
 from imagedetection.views.utils import (
@@ -24,7 +27,12 @@ V1_ARTIFACT_DIR = PROJECT_ROOT / "imagedetection" / "Agent" / "tools" / "AIGC_De
 V1_ONNX_PATH = V1_ARTIFACT_DIR / "model_deploy.onnx"
 V1_EXTERNAL_DATA_PATH = V1_ARTIFACT_DIR / "model_deploy.onnx.data"
 V1_EXTERNAL_MIN_BYTES = int(os.environ.get("REALGUARD_V1_EXTERNAL_MIN_BYTES", str(100 * 1024 * 1024)))
-REQUIRED_MODULES = ("onnxruntime", "numpy", "PIL", "openai")
+REMOTE_INFERENCE_URL = os.environ.get("REALGUARD_REMOTE_INFERENCE_URL", "").strip()
+REMOTE_INFERENCE_TOKEN = os.environ.get("REALGUARD_MODEL_INTERNAL_TOKEN", "").strip()
+REMOTE_HEALTH_CACHE_SECONDS = float(os.environ.get("REALGUARD_REMOTE_HEALTH_CACHE_SECONDS", "3"))
+REQUIRED_MODULES = ("onnxruntime", "numpy", "PIL", "openai", "requests")
+_REMOTE_HEALTH_CACHE = {"expiresAt": 0.0, "value": None}
+_REMOTE_HEALTH_LOCK = threading.Lock()
 
 
 def _load_env_file(path=".env"):
@@ -95,16 +103,88 @@ def _artifact_status():
     }
 
 
+def _remote_health_url():
+    if not REMOTE_INFERENCE_URL:
+        return ""
+    if REMOTE_INFERENCE_URL.endswith("/predict"):
+        return REMOTE_INFERENCE_URL[:-len("/predict")] + "/health"
+    return REMOTE_INFERENCE_URL.rstrip("/") + "/health"
+
+
+def _remote_inference_status():
+    if not REMOTE_INFERENCE_URL:
+        return {"configured": False, "ready": False, "error": "not configured"}
+
+    now = time.monotonic()
+    cached = _REMOTE_HEALTH_CACHE.get("value")
+    if cached is not None and now < _REMOTE_HEALTH_CACHE.get("expiresAt", 0.0):
+        return dict(cached)
+
+    with _REMOTE_HEALTH_LOCK:
+        now = time.monotonic()
+        cached = _REMOTE_HEALTH_CACHE.get("value")
+        if cached is not None and now < _REMOTE_HEALTH_CACHE.get("expiresAt", 0.0):
+            return dict(cached)
+
+        headers = {}
+        if REMOTE_INFERENCE_TOKEN:
+            headers["X-RealGuard-Internal-Token"] = REMOTE_INFERENCE_TOKEN
+        started = time.perf_counter()
+        try:
+            response = requests.get(
+                _remote_health_url(),
+                headers=headers,
+                timeout=(2, 4),
+            )
+            payload = response.json()
+            data = payload.get("data") or {}
+            provider = data.get("activeProvider")
+            ready = (
+                response.status_code == 200
+                and payload.get("code") == 200
+                and provider == "CUDAExecutionProvider"
+            )
+            result = {
+                "configured": True,
+                "ready": ready,
+                "activeProvider": provider,
+                "cudaDeviceId": data.get("cudaDeviceId"),
+                "latencyMs": round((time.perf_counter() - started) * 1000.0, 2),
+                "error": "" if ready else (payload.get("msg") or f"HTTP {response.status_code}"),
+            }
+        except Exception as exc:
+            result = {
+                "configured": True,
+                "ready": False,
+                "activeProvider": None,
+                "cudaDeviceId": None,
+                "latencyMs": round((time.perf_counter() - started) * 1000.0, 2),
+                "error": str(exc),
+            }
+        _REMOTE_HEALTH_CACHE["value"] = result
+        _REMOTE_HEALTH_CACHE["expiresAt"] = time.monotonic() + max(0.0, REMOTE_HEALTH_CACHE_SECONDS)
+        return dict(result)
+
+
 def _capability_status():
     artifacts = _artifact_status()
     dependencies = _dependency_status()
-    warnings = list(artifacts["warnings"])
+    remote = _remote_inference_status()
+    using_remote = bool(REMOTE_INFERENCE_URL)
+    warnings = [] if using_remote else list(artifacts["warnings"])
     warnings.extend(f"missing runtime dependency: {item}" for item in dependencies["missing"])
+    if using_remote and not remote["ready"]:
+        warnings.append(f"remote CUDA inference unavailable: {remote.get('error') or 'unknown error'}")
+    capability_ready = dependencies["ready"] and (
+        remote["ready"] if using_remote else artifacts["ready"]
+    )
     return {
         "serviceOk": True,
         "artifactReady": artifacts["ready"],
         "dependencyReady": dependencies["ready"],
-        "capabilityReady": artifacts["ready"] and dependencies["ready"],
+        "capabilityReady": capability_ready,
+        "inferenceMode": "remote-cuda" if using_remote else "local-onnx",
+        "remoteInference": remote,
         "artifacts": {
             "artifact": artifacts["artifact"],
             "externalData": artifacts["externalData"],
@@ -118,7 +198,7 @@ def _ensure_capability_ready():
     status = _capability_status()
     if status["capabilityReady"]:
         return
-    raise RuntimeError("V1 原生检测模型未就绪：" + "；".join(status["warnings"]))
+    raise RuntimeError("主鉴伪模型未就绪：" + "；".join(status["warnings"]))
 
 
 def _allowed_file(filename):
@@ -271,7 +351,7 @@ def _persist_result(payload, image_bytes, filename, openid, phone):
             "file_size": file_size,
             "img_format": img_format,
             "resolution": resolution,
-            "model": "realguard-v1-onnx-mil",
+            "model": "realguard-v2-onnx-cuda" if REMOTE_INFERENCE_URL else "realguard-v1-onnx-mil",
             "detector_probability": detector_probability,
         },
     }
@@ -287,7 +367,7 @@ def create_app():
         return jsonify({
             "status": status,
             "service": "realguard-v1-detector",
-            "model": "v1-onnx-mil",
+            "model": "realguard-v2-onnx-cuda" if REMOTE_INFERENCE_URL else "v1-onnx-mil",
             **capability,
         })
 
@@ -298,7 +378,7 @@ def create_app():
         return jsonify({
             "status": "ok" if capability["capabilityReady"] else "error",
             "service": "realguard-v1-detector",
-            "model": "v1-onnx-mil",
+            "model": "realguard-v2-onnx-cuda" if REMOTE_INFERENCE_URL else "v1-onnx-mil",
             **capability,
         }), http_status
 
