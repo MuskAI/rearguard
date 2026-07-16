@@ -40,6 +40,7 @@ import {
   fetchVideoAgentResult,
   fetchVideoHistory,
   imageReportUrl,
+  isRateLimitedError,
   logoutAccount,
   persistArtifacts,
   runForensics,
@@ -56,6 +57,9 @@ import OfficialHome from "./components/OfficialHome";
 
 const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
+const AGENT_POLL_INITIAL_MS = 1_200;
+const AGENT_POLL_MAX_MS = 2_400;
+const AGENT_POLL_RATE_LIMIT_RETRIES = 8;
 const ACCEPTED_FILES = "image/jpeg,image/png,image/webp,image/bmp,image/gif,video/mp4,video/quicktime,video/webm,.txt,.md,.csv,.json,.log,.docx,.mp4,.mov,.webm";
 
 type UploadKind = "image" | "video" | "audio" | "document" | "unknown";
@@ -197,6 +201,7 @@ export default function App() {
   const detailTokenRef = useRef(0);
   const userIdRef = useRef<number | null>(null);
   const previewUrlRef = useRef<string | null>(null);
+  const retryFileRef = useRef<File | null>(null);
 
   const loadHistoryForUser = useCallback(async (account: AccountUser) => {
     const requestToken = ++historyTokenRef.current;
@@ -276,6 +281,7 @@ export default function App() {
     forensicsControllerRef.current = null;
     if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
     previewUrlRef.current = null;
+    retryFileRef.current = null;
     setPendingFile(null);
     setProgress(null);
     setOutcome(null);
@@ -329,6 +335,8 @@ export default function App() {
       let job = started.job;
       setProgress(progressFromJob(job));
       const startedAt = Date.now();
+      let pollDelay = AGENT_POLL_INITIAL_MS;
+      let rateLimitRetries = 0;
       while (Date.now() - startedAt < 180_000) {
         if (job.status === "success") {
           const result = job.result?.result;
@@ -338,9 +346,26 @@ export default function App() {
           return;
         }
         if (job.status === "failed") throw new Error(job.error || "多源鉴伪暂不可用");
-        await wait(760, controller.signal);
-        const polled = await fetchImageAgentJob(job.id, controller.signal);
+        await wait(pollDelay, controller.signal);
+        let polled: Awaited<ReturnType<typeof fetchImageAgentJob>>;
+        try {
+          polled = await fetchImageAgentJob(job.id, controller.signal);
+        } catch (error) {
+          if (!isRateLimitedError(error) || rateLimitRetries >= AGENT_POLL_RATE_LIMIT_RETRIES) throw error;
+          rateLimitRetries += 1;
+          const cooldown = Math.max(error.retryAfterMs, Math.min(6_000, 1_800 * rateLimitRetries));
+          setProgress({
+            ...progressFromJob(job),
+            title: "任务仍在运行",
+            detail: "查询较多，已自动放慢进度刷新，不会重新提交文件",
+          });
+          pollDelay = Math.min(AGENT_POLL_MAX_MS, pollDelay + 300);
+          await wait(cooldown, controller.signal);
+          continue;
+        }
         if (runTokenRef.current !== token) return;
+        rateLimitRetries = 0;
+        pollDelay = Math.min(AGENT_POLL_MAX_MS, pollDelay + 150);
         job = polled.job;
         setProgress(progressFromJob(job));
       }
@@ -349,6 +374,9 @@ export default function App() {
       if (isAbort(error) || runTokenRef.current !== token) throw error;
       const message = error instanceof Error ? error.message : "多源鉴伪暂不可用";
       if (message.includes("登录") || message.includes("次数")) throw error;
+      if (isRateLimitedError(error)) {
+        throw new Error("当前提交任务较多，请稍候几秒后重试当前文件");
+      }
       setProgress({ title: "正在切换可用检测链路", detail: "多源服务未完成，改用可信视觉模型继续分析", percent: 46, stage: "dispatch", fallback: true });
       const result = await detect(file, "image");
       if (runTokenRef.current !== token) return;
@@ -359,6 +387,7 @@ export default function App() {
 
   async function analyzeFile(file: File) {
     resetTask();
+    retryFileRef.current = file;
     const kind = inferKind(file.name);
     if (kind === "unknown") {
       setPendingFile({ name: file.name, size: file.size, typeLabel: kindLabel(kind) });
@@ -427,6 +456,15 @@ export default function App() {
     if (busy) return;
     const file = event.dataTransfer.files?.[0];
     if (file) void analyzeFile(file);
+  }
+
+  function retryCurrentFile() {
+    const file = retryFileRef.current;
+    if (file) {
+      void analyzeFile(file);
+      return;
+    }
+    fileInputRef.current?.click();
   }
 
   async function selectHistory(entry: AgentHistoryEntry) {
@@ -679,7 +717,7 @@ export default function App() {
               {errorMessage && (
                 <div className="agent-error-message" role="alert">
                   <span><Bot size={18} /></span>
-                  <div><strong>这次任务没有完成</strong><p>{errorMessage}</p><button type="button" className="text-button" onClick={() => fileInputRef.current?.click()}><RefreshCw size={15} /> 重新选择文件</button></div>
+                  <div><strong>这次任务没有完成</strong><p>{errorMessage}</p><button type="button" className="text-button" onClick={retryCurrentFile}><RefreshCw size={15} /> {retryFileRef.current ? "重试当前文件" : "重新选择文件"}</button></div>
                 </div>
               )}
               {outcome && (

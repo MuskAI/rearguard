@@ -91,7 +91,7 @@ function HistoryContent(props: Props) {
                 onClick={() => props.onSelect(entry)}
               >
                 <span className="history-thumb">
-                  {entry.thumbnail ? <img src={entry.thumbnail} alt="" /> : entryIcon(entry)}
+                  {entry.thumbnail ? <img src={entry.thumbnail} alt="" loading="lazy" decoding="async" fetchPriority="low" /> : entryIcon(entry)}
                 </span>
                 <span className="history-entry-copy">
                   <strong>{entry.title}</strong>

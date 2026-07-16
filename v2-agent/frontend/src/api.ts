@@ -1,6 +1,31 @@
 export type Verdict = "real" | "suspected_fake" | "highly_suspected_fake" | "unknown";
 export type FileType = "image" | "video" | "audio" | "document";
 
+export class ApiRequestError extends Error {
+  readonly status: number;
+  readonly retryAfterMs: number;
+
+  constructor(message: string, status: number, retryAfterMs = 0) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+export function isRateLimitedError(error: unknown): error is ApiRequestError {
+  return error instanceof ApiRequestError && error.status === 429;
+}
+
+function retryAfterMs(response: Response): number {
+  const value = response.headers.get("Retry-After")?.trim();
+  if (!value) return 0;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : 0;
+}
+
 function withAuthHeaders(init?: HeadersInit): Headers {
   return new Headers(init);
 }
@@ -15,14 +40,14 @@ function withSession(init: RequestInit = {}): RequestInit {
 
 async function parseJson<T>(res: Response, fallback: string): Promise<T> {
   if (!res.ok) {
-    let message = fallback;
+    let message = res.status === 429 ? "当前请求较多，系统已启动短时保护，请稍候重试" : fallback;
     try {
       const data = await res.json();
-      message = data.detail || data.message || fallback;
+      if (res.status !== 429) message = data.detail || data.message || message;
     } catch {
       // Keep the user-facing fallback when the server returns HTML, empty text, or a proxy error.
     }
-    throw new Error(message);
+    throw new ApiRequestError(message, res.status, retryAfterMs(res));
   }
   try {
     return await res.json();
