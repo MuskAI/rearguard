@@ -196,9 +196,19 @@ const WATERMARK_PROVIDER_LABELS: Record<string, string> = {
   yolo11x_watermark: "通用可见水印",
 };
 
-function WatermarkSection({ report }: { report?: VisibleWatermarkResult }) {
+function watermarkBox(hit: VisibleWatermarkResult["hits"][number]) {
+  const x = clamp01(Number(hit.bbox?.x || 0));
+  const y = clamp01(Number(hit.bbox?.y || 0));
+  const w = Math.min(1 - x, clamp01(Number(hit.bbox?.w || 0)));
+  const h = Math.min(1 - y, clamp01(Number(hit.bbox?.h || 0)));
+  return { x, y, w, h };
+}
+
+function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult; preview?: string }) {
+  const [selectedHit, setSelectedHit] = useState(0);
   if (!report) return null;
   const hits = report.hits || [];
+  const activeHit = Math.min(selectedHit, Math.max(0, hits.length - 1));
   const status = !report.supported
     ? "暂不可用"
     : report.detected
@@ -209,28 +219,72 @@ function WatermarkSection({ report }: { report?: VisibleWatermarkResult }) {
     : report.supported
       ? "平台规则与通用定位"
       : "无可用引擎";
-  const evidence = hits.slice(0, 4).map((hit) => {
-    const provider = WATERMARK_PROVIDER_LABELS[hit.provider] || "可见水印";
-    const confidence = Math.round(clamp01(Number(hit.confidence || 0)) * 100);
-    const x = Math.round(clamp01(Number(hit.bbox?.x || 0)) * 100);
-    const y = Math.round(clamp01(Number(hit.bbox?.y || 0)) * 100);
-    return `${provider}，置信度 ${confidence}%，位置约为横向 ${x}%、纵向 ${y}%`;
-  });
 
   return (
-    <section className="result-band">
+    <section className="result-band watermark-section">
       <div className="section-title">
         <ScanLine size={18} />
-        <div><h3>可见水印检测</h3><p>与主模型并行完成，作为独立证据展示。</p></div>
+        <div><h3>可见水印定位</h3><p>检测框按原始图像坐标绘制，可逐项查看定位证据。</p></div>
       </div>
-      <dl className="fact-grid compact">
-        <div><dt>检测状态</dt><dd>{status}</dd></div>
-        <div><dt>证据类型</dt><dd>{report.detected ? "来源或定位线索" : "扫描完成"}</dd></div>
-        <div><dt>识别来源</dt><dd>{source}</dd></div>
-        <div><dt>检测耗时</dt><dd>{report.elapsedMs ? `${Math.round(report.elapsedMs)} ms` : "已完成"}</dd></div>
-      </dl>
+      <div className={`watermark-status ${report.detected ? "is-detected" : ""}`} role="status">
+        <strong>{status}</strong>
+        <span>{source}</span>
+        <span>{report.elapsedMs ? `${Math.round(report.elapsedMs)} ms` : "扫描完成"}</span>
+      </div>
+      {preview && hits.length > 0 && (
+        <div className="watermark-layout">
+          <figure className="watermark-visual">
+            <div className="watermark-canvas">
+              <img src={preview} alt="带有可见水印定位框的原图" />
+              {hits.map((hit, index) => {
+                const box = watermarkBox(hit);
+                const provider = WATERMARK_PROVIDER_LABELS[hit.provider] || hit.label || "可见水印";
+                const generic = hit.provider === "yolo11x_watermark";
+                return (
+                  <button
+                    type="button"
+                    key={`${hit.provider}-${index}`}
+                    className={`watermark-box ${generic ? "is-generic" : "is-platform"} ${box.y < 0.08 ? "is-label-inside" : ""} ${index === activeHit ? "is-active" : ""}`}
+                    style={{ left: `${box.x * 100}%`, top: `${box.y * 100}%`, width: `${box.w * 100}%`, height: `${box.h * 100}%` }}
+                    aria-label={`定位 ${index + 1}：${provider}`}
+                    onMouseEnter={() => setSelectedHit(index)}
+                    onFocus={() => setSelectedHit(index)}
+                    onClick={() => setSelectedHit(index)}
+                  >
+                    <span>{index + 1}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <figcaption>原图坐标映射，点击框或右侧条目可交叉定位</figcaption>
+          </figure>
+          <ol className="watermark-hit-list" aria-label="水印定位结果">
+            {hits.map((hit, index) => {
+              const box = watermarkBox(hit);
+              const provider = WATERMARK_PROVIDER_LABELS[hit.provider] || hit.label || "可见水印";
+              const confidence = Math.round(clamp01(Number(hit.confidence || 0)) * 100);
+              return (
+                <li key={`${hit.provider}-detail-${index}`}>
+                  <button
+                    type="button"
+                    className={index === activeHit ? "is-active" : ""}
+                    onMouseEnter={() => setSelectedHit(index)}
+                    onFocus={() => setSelectedHit(index)}
+                    onClick={() => setSelectedHit(index)}
+                  >
+                    <span className="watermark-hit-index">{index + 1}</span>
+                    <span className="watermark-hit-copy">
+                      <strong>{provider}</strong>
+                      <small>置信度 {confidence}% · x {Math.round(box.x * 100)}% · y {Math.round(box.y * 100)}%</small>
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+      )}
       <p className="result-explanation">{report.note || "水印结果仅用于辅助复核，不会单独改写主鉴伪结论。"}</p>
-      {evidence.length > 0 && <EvidenceList items={evidence} />}
     </section>
   );
 }
@@ -308,7 +362,7 @@ export default function AgentResult(props: Props) {
               <div className="consensus-track"><i style={{ width: `${Math.round(Number(props.outcome.result.swarm.consensusScore || 0) * 100)}%` }} /></div>
             </section>
           )}
-          <WatermarkSection report={visibleWatermark} />
+          <WatermarkSection report={visibleWatermark} preview={preview} />
           <div className="result-actions">
             <button type="button" className="primary-button" onClick={props.onDownload} disabled={props.downloadBusy}>
               {props.downloadBusy ? <LoaderCircle size={17} className="spin" /> : <Download size={17} />}
@@ -334,7 +388,7 @@ export default function AgentResult(props: Props) {
             <div className="section-title"><Layers3 size={18} /><div><h3>证据摘要</h3><p>证据条目用于解释模型判断，不应脱离原始文件单独使用。</p></div></div>
             <EvidenceList items={evidenceItems} />
           </section>
-          <WatermarkSection report={visibleWatermark} />
+          <WatermarkSection report={visibleWatermark} preview={preview} />
           {props.outcome.kind === "image" && props.outcome.result.swarm?.experts && (
             <section className="result-band">
               <div className="section-title"><ScanLine size={18} /><div><h3>复核队列</h3><p>仅展示匿名角色与公开状态。</p></div></div>

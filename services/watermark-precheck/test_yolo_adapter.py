@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+import threading
 
 
 ROOT = Path(__file__).resolve().parent
@@ -51,3 +52,25 @@ def test_unmatched_watermark_candidate_is_returned_as_non_decisive():
 
     assert yolo_adapter._merge_visible_hits([], candidates) == candidates
     assert yolo_adapter._merge_visible_hits([], candidates)[0]["decisive"] is False
+
+
+def test_registry_and_yolo_branches_start_in_parallel(monkeypatch):
+    rendezvous = threading.Barrier(2)
+
+    def registry(_path):
+        rendezvous.wait(timeout=2)
+        return []
+
+    def yolo(_path):
+        rendezvous.wait(timeout=2)
+        return [], {"available": True, "detected": False, "count": 0}
+
+    monkeypatch.setattr(yolo_adapter, "_registry_visible_hits", registry)
+    monkeypatch.setattr(yolo_adapter, "_generic_yolo_hits", yolo)
+
+    with yolo_adapter.base.app.test_request_context("/v1/precheck"):
+        assert yolo_adapter._visible_hits_with_yolo(Path("unused.png")) == []
+        status = yolo_adapter.g.generic_visible_watermark_status
+
+    assert status["branchesParallel"] is True
+    assert status["registryElapsedMs"] >= 0

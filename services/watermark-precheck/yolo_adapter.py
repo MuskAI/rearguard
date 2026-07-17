@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,14 @@ YOLO_URL = os.getenv("YOLO_WATERMARK_URL", "http://127.0.0.1:5067/v1/detect")
 YOLO_HEALTH_URL = os.getenv("YOLO_WATERMARK_HEALTH_URL", "http://127.0.0.1:5067/health")
 YOLO_TOKEN = os.getenv("YOLO_WATERMARK_TOKEN", "")
 YOLO_TIMEOUT_SECONDS = float(os.getenv("YOLO_WATERMARK_TIMEOUT_SECONDS", "20"))
+VISIBLE_BRANCH_WORKERS = max(
+    2,
+    min(16, int(os.getenv("WATERMARK_VISIBLE_BRANCH_WORKERS", "8"))),
+)
+_VISIBLE_EXECUTOR = ThreadPoolExecutor(
+    max_workers=VISIBLE_BRANCH_WORKERS,
+    thread_name_prefix="visible-watermark",
+)
 _registry_visible_hits = base._visible_hits
 _base_health = base.app.view_functions["health"]
 _base_precheck = base.app.view_functions["precheck"]
@@ -144,14 +153,25 @@ def _generic_yolo_hits(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]
     }
 
 
+def _timed_registry_hits(path: Path) -> tuple[list[dict[str, Any]], int]:
+    started = time.perf_counter()
+    hits = _registry_visible_hits(path)
+    return hits, int((time.perf_counter() - started) * 1000)
+
+
 def _visible_hits_with_yolo(path: Path) -> list[dict[str, Any]]:
-    registry_hits = _registry_visible_hits(path)
+    registry_future = _VISIBLE_EXECUTOR.submit(_timed_registry_hits, path)
+    yolo_future = _VISIBLE_EXECUTOR.submit(_generic_yolo_hits, path)
+    registry_hits, registry_elapsed_ms = registry_future.result()
     try:
-        yolo_candidates, status = _generic_yolo_hits(path)
+        yolo_candidates, status = yolo_future.result()
         hits = _merge_visible_hits(registry_hits, yolo_candidates)
         confirmed = sum(1 for hit in hits if hit.get("yoloCorroborated") is True)
         status["knownPlatformCount"] = len(registry_hits)
         status["platformConfirmedCount"] = confirmed
+        status["registryElapsedMs"] = registry_elapsed_ms
+        status["branchesParallel"] = True
+        status["branchWorkerLimit"] = VISIBLE_BRANCH_WORKERS
         g.generic_visible_watermark_status = status
     except (requests.RequestException, ValueError, TypeError) as exc:
         base.app.logger.warning("YOLO watermark detector unavailable: %s", type(exc).__name__)
@@ -160,6 +180,9 @@ def _visible_hits_with_yolo(path: Path) -> list[dict[str, Any]]:
             "error": type(exc).__name__,
             "model": "corzent/yolo11x_watermark_detection",
             "mode": "visible_watermark_detection_with_platform_attribution",
+            "registryElapsedMs": registry_elapsed_ms,
+            "branchesParallel": True,
+            "branchWorkerLimit": VISIBLE_BRANCH_WORKERS,
         }
         hits = [dict(hit, yoloCorroborated=False) for hit in registry_hits]
     return hits
@@ -197,6 +220,7 @@ def health_with_yolo():
     except (requests.RequestException, ValueError, TypeError) as exc:
         yolo["error"] = type(exc).__name__
     payload["genericVisibleWatermark"] = yolo
+    payload["visibleBranchWorkers"] = VISIBLE_BRANCH_WORKERS
     return payload
 
 

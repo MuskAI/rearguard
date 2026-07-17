@@ -1619,6 +1619,183 @@ video {
   white-space: pre-wrap;
 }
 
+.watermark-status {
+  min-height: 38px;
+  margin: 14px 0 0 28px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  font-size: 9px;
+}
+
+.watermark-status strong {
+  color: var(--muted-strong);
+  font-size: 10px;
+}
+
+.watermark-status span:last-child {
+  margin-left: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.watermark-status.is-detected strong {
+  color: #b44c32;
+}
+
+.watermark-layout {
+  margin: 14px 0 0 28px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(176px, 0.7fr);
+  align-items: start;
+  gap: 14px;
+}
+
+.watermark-visual {
+  min-width: 0;
+  margin: 0;
+}
+
+.watermark-canvas {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  background: #edf2f1;
+  border: 1px solid #c9d7d5;
+  border-radius: 7px;
+  line-height: 0;
+}
+
+.watermark-canvas img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.watermark-box {
+  position: absolute;
+  z-index: 1;
+  min-width: 2px;
+  min-height: 2px;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.04);
+  border: 2px solid #ed7458;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(20, 38, 44, 0.3), inset 0 0 0 1px rgba(255, 255, 255, 0.42);
+  cursor: crosshair;
+  transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.watermark-box.is-generic {
+  border-color: #f09b35;
+}
+
+.watermark-box.is-active,
+.watermark-box:hover,
+.watermark-box:focus-visible {
+  z-index: 2;
+  background: rgba(240, 155, 53, 0.18);
+  border-color: #fff;
+  outline: 2px solid #e96145;
+  outline-offset: 1px;
+  box-shadow: 0 0 0 4px rgba(233, 97, 69, 0.2);
+}
+
+.watermark-box > span {
+  position: absolute;
+  top: -20px;
+  left: -2px;
+  min-width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  padding: 0 4px;
+  color: #fff;
+  background: #bc5036;
+  border-radius: 3px 3px 3px 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+  font-weight: 760;
+  line-height: 1;
+}
+
+.watermark-box.is-label-inside > span {
+  top: 0;
+}
+
+.watermark-visual figcaption {
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.5;
+}
+
+.watermark-hit-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--border);
+}
+
+.watermark-hit-list li {
+  border-bottom: 1px solid var(--border);
+}
+
+.watermark-hit-list button {
+  width: 100%;
+  min-height: 54px;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  padding: 8px 6px;
+  color: var(--muted-strong);
+  background: transparent;
+  text-align: left;
+}
+
+.watermark-hit-list button:hover,
+.watermark-hit-list button:focus-visible,
+.watermark-hit-list button.is-active {
+  color: var(--ink-strong);
+  background: #f4f8f7;
+  outline: none;
+}
+
+.watermark-hit-index {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: #bc5036;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+  font-weight: 760;
+}
+
+.watermark-hit-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.watermark-hit-copy strong {
+  overflow-wrap: anywhere;
+  color: inherit;
+  font-size: 10px;
+}
+
+.watermark-hit-copy small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
 .consensus-line {
   margin: 15px 0 8px 28px;
   display: flex;
@@ -2680,6 +2857,8 @@ video {
   }
 
   .result-explanation,
+  .watermark-status,
+  .watermark-layout,
   .evidence-list,
   .expert-list,
   .forensic-grid,
@@ -2688,6 +2867,10 @@ video {
   .consensus-track,
   .evidence-empty {
     margin-left: 0;
+  }
+
+  .watermark-layout {
+    grid-template-columns: 1fr;
   }
 
   .result-explanation {
@@ -2846,6 +3029,17 @@ video {
 
   .fact-grid > div {
     background: #1a2c33;
+  }
+
+  .watermark-canvas {
+    background: #101c22;
+    border-color: #3b555d;
+  }
+
+  .watermark-hit-list button:hover,
+  .watermark-hit-list button:focus-visible,
+  .watermark-hit-list button.is-active {
+    background: #1b3037;
   }
 }
 

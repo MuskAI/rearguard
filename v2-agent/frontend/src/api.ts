@@ -181,6 +181,7 @@ export interface SynthIDResult {
 
 export interface VisibleWatermarkHit {
   provider: string;
+  label?: string;
   confidence: number;
   bbox: { x: number; y: number; w: number; h: number };
   method: string;

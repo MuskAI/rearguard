@@ -33,7 +33,14 @@ VISIBLE_PRECHECK_TOKEN = (
     or ""
 ).strip()
 VISIBLE_PRECHECK_TIMEOUT = float(os.environ.get("REALGUARD_MODEL_VISIBLE_PRECHECK_TIMEOUT", "12"))
-_PRECHECK_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="visible-precheck")
+VISIBLE_PRECHECK_WORKERS = max(
+    1,
+    min(8, int(os.environ.get("REALGUARD_MODEL_VISIBLE_PRECHECK_WORKERS", "4"))),
+)
+_PRECHECK_EXECUTOR = ThreadPoolExecutor(
+    max_workers=VISIBLE_PRECHECK_WORKERS,
+    thread_name_prefix="visible-precheck",
+)
 _PRECHECK_FIELDS = (
     "status",
     "elapsedMs",
@@ -95,6 +102,7 @@ def model_health():
     if unauthorized:
         return unauthorized
     status = get_model_status()
+    status["visiblePrecheckWorkers"] = VISIBLE_PRECHECK_WORKERS
     ready = bool(status.get("initialized")) and status.get("activeProvider") == "CUDAExecutionProvider"
     return jsonify({"code": 200 if ready else 503, "data": status}), 200 if ready else 503
 

@@ -5,6 +5,7 @@ import hmac
 import os
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -18,6 +19,14 @@ from policy import VISIBLE_ONLY_THRESHOLDS, build_decision, visible_hit_is_decis
 MAX_UPLOAD_BYTES = int(os.getenv("WATERMARK_PRECHECK_MAX_BYTES", str(30 * 1024 * 1024)))
 API_TOKEN = os.getenv("WATERMARK_PRECHECK_TOKEN", "")
 SUPPORTED_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".avif", ".heic", ".heif", ".tif", ".tiff"}
+PRECHECK_BRANCH_WORKERS = max(
+    2,
+    min(8, int(os.getenv("WATERMARK_PRECHECK_BRANCH_WORKERS", "8"))),
+)
+_PRECHECK_EXECUTOR = ThreadPoolExecutor(
+    max_workers=PRECHECK_BRANCH_WORKERS,
+    thread_name_prefix="watermark-precheck",
+)
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
@@ -97,6 +106,12 @@ def _report(path: Path) -> dict[str, Any]:
     }
 
 
+def _collect_evidence(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    report_future = _PRECHECK_EXECUTOR.submit(_report, path)
+    visible_future = _PRECHECK_EXECUTOR.submit(_visible_hits, path)
+    return report_future.result(), visible_future.result()
+
+
 @app.get("/health")
 def health():
     return {
@@ -107,6 +122,7 @@ def health():
         "visibleProviders": ["gemini", "doubao", "jimeng", "jimeng_pill", "samsung"],
         "visibleOnlyThresholds": VISIBLE_ONLY_THRESHOLDS,
         "maxUploadBytes": MAX_UPLOAD_BYTES,
+        "precheckBranchWorkers": PRECHECK_BRANCH_WORKERS,
     }
 
 
@@ -134,8 +150,7 @@ def precheck():
             temporary.write(data)
             temporary.flush()
             path = Path(temporary.name)
-            report = _report(path)
-            visible_hits = _visible_hits(path)
+            report, visible_hits = _collect_evidence(path)
         decision = build_decision(report, visible_hits)
     except Exception as exc:
         app.logger.exception("provenance precheck failed")
@@ -149,6 +164,10 @@ def precheck():
         "decision": decision,
         "report": report,
         "visibleHits": visible_hits,
+        "parallelism": {
+            "enabled": True,
+            "workers": PRECHECK_BRANCH_WORKERS,
+        },
     }
 
 

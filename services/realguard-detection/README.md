@@ -5,8 +5,9 @@ the systemd GPU configuration used on the `10.1.20.66` detection server.
 
 The systemd drop-in exposes only physical GPU 1 to the detection process. It
 loads one ONNX Runtime CUDA session during process startup, warms the dynamic
-26-view input shape, and keeps one inference in flight to avoid GPU memory
-contention. The independent YOLO watermark service remains on physical GPU 0.
+26-view input shape, and allows up to two in-flight requests on physical GPU 1.
+The independent YOLO watermark service remains on physical GPU 0, so visible
+watermark localization does not consume the main model's GPU queue.
 
 ## Deployment targets
 
@@ -45,7 +46,12 @@ The watermark service environment file is loaded by
 ```text
 REALGUARD_MODEL_VISIBLE_PRECHECK_URL=http://127.0.0.1:5066/v1/precheck
 REALGUARD_MODEL_VISIBLE_PRECHECK_TIMEOUT=12
+REALGUARD_MODEL_VISIBLE_PRECHECK_WORKERS=4
 ```
+
+The precheck service runs provenance reporting, known-platform matching, and
+YOLO localization concurrently. Its production unit uses four request threads;
+the YOLO unit uses two single-threaded worker processes on physical GPU 0.
 
 On the public server, the persisted `v1-legacy-tunnel` model route must use
 `http://127.0.0.1:15001/image` with health endpoint
