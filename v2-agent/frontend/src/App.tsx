@@ -251,6 +251,11 @@ export default function App() {
     fetchCurrentUser()
       .then((response) => {
         if (!active) return;
+        if (!response.authenticated || !response.user) {
+          userIdRef.current = null;
+          setUser(null);
+          return;
+        }
         userIdRef.current = response.user.Userid;
         setUser(response.user);
         void loadHistoryForUser(response.user);

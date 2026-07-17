@@ -881,7 +881,12 @@ def _video_history_matches_filter(record, filter_key):
 def me():
     user, error = _auth_required()
     if error:
-        return error
+        return jsonify({
+            "status": "success",
+            "authenticated": False,
+            "user": None,
+            "counters": {"image_detect": 0, "video_detect": 0},
+        })
 
     phone = user.get("phone", "")
     actor = {
@@ -902,7 +907,7 @@ def me():
     if rows:
         counters["video_detect"] = rows[0].get("cnt", 0)
 
-    return jsonify({"status": "success", "user": user, "counters": counters})
+    return jsonify({"status": "success", "authenticated": True, "user": user, "counters": counters})
 
 
 @api_blueprint.route("/login/password", methods=["POST"])

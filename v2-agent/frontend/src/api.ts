@@ -748,7 +748,12 @@ async function accountJson<T>(path: string, init: RequestInit = {}, fallback = "
   return parseJson<T>(res, fallback);
 }
 
-export function fetchCurrentUser(): Promise<{ status: string; user: AccountUser; counters: AccountCounters }> {
+export function fetchCurrentUser(): Promise<{
+  status: string;
+  authenticated: boolean;
+  user: AccountUser | null;
+  counters: AccountCounters;
+}> {
   return accountJson("/api/me", {}, "用户状态暂不可用");
 }
 

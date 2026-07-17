@@ -75,6 +75,18 @@ def test_api_password_login_sets_session(client, monkeypatch):
         assert sess["user_info"]["phone"] == "13800000000"
 
 
+def test_api_me_returns_anonymous_state_without_session(client):
+    response = client.get("/api/me")
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "status": "success",
+        "authenticated": False,
+        "user": None,
+        "counters": {"image_detect": 0, "video_detect": 0},
+    }
+
+
 def test_developer_api_key_lifecycle(client, monkeypatch):
     _login_session(client)
     monkeypatch.setattr(api, "_ensure_developer_api_key_table", lambda: True)
