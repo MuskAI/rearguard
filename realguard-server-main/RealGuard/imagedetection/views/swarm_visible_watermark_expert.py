@@ -1,7 +1,8 @@
 """Known-platform attribution plus generic visible-watermark localization.
 
-Registry matches remain provenance evidence. Unmatched YOLO boxes are exposed
-for review, but remain non-decisive and never enter the authenticity vote.
+Registry matches remain provenance evidence. Every valid visible-watermark box
+is exposed for review; the final aggregator applies the configured high-risk
+watermark policy after preserving the pixel model's original score.
 """
 from __future__ import annotations
 
@@ -208,12 +209,12 @@ def _visible_result(payload: Dict[str, Any]) -> Dict[str, Any]:
         notes.append(
             f"YOLO11x 检测到 {len(generic_hits)} 处平台待确认的可见水印，"
             f"并对 {len(confirmed_hits)} 处已知平台标记完成区域复核；"
-            "待确认线索不单独改变 AI 鉴伪结论。"
+            "有效定位框将按当前策略提升最终 AI 风险。"
         )
     elif generic_hits:
         notes.append(
             f"YOLO11x 检测到 {len(generic_hits)} 处可见水印，平台归属尚未确认；"
-            "该定位线索不单独改变 AI 鉴伪结论。"
+            "有效定位框将按当前策略提升最终 AI 风险。"
         )
     elif confirmed_hits:
         notes.append(f"YOLO11x 已对其中 {len(confirmed_hits)} 处平台标记完成区域复核。")

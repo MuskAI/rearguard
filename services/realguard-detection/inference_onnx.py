@@ -11,6 +11,11 @@ from PIL import Image
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 
+try:
+    from .image_preprocessing import downsample_for_analysis
+except ImportError:  # Standalone deployment keeps both files in one directory.
+    from image_preprocessing import downsample_for_analysis
+
 
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name)
@@ -27,6 +32,7 @@ ONNX_PATH = os.environ.get(
 TILE_SIZE = int(os.environ.get("REALGUARD_V2_TILE_SIZE", "224"))
 MAX_TILES = int(os.environ.get("REALGUARD_V2_MAX_TILES", "16"))
 TOP_K = int(os.environ.get("REALGUARD_V2_TOP_K", "3"))
+MAX_ANALYSIS_SIDE = max(256, int(os.environ.get("REALGUARD_V2_MAX_ANALYSIS_SIDE", "2048")))
 DEVICE = os.environ.get("REALGUARD_V2_DEVICE", "cuda").strip().lower()
 CUDA_DEVICE_ID = int(os.environ.get("REALGUARD_V2_CUDA_DEVICE_ID", "0"))
 REQUIRE_CUDA = _env_bool("REALGUARD_V2_REQUIRE_CUDA", False)
@@ -161,6 +167,7 @@ def initialize_model(warmup=None) -> Dict[str, Any]:
             "warmupMs": round(warmup_ms, 2),
             "warmupViews": WARMUP_VIEWS if should_warmup else 0,
             "maxConcurrentInferences": MAX_CONCURRENT_INFERENCES,
+            "maxAnalysisSide": MAX_ANALYSIS_SIDE,
         }
         print(
             "  [模型加载] RealGuard v2 ONNX 已常驻 "
@@ -262,6 +269,7 @@ def analyze_image(
     analysis_started = time.perf_counter()
     _lazy_init()
     image = Image.open(img_path).convert("RGB")
+    image, resize_meta = downsample_for_analysis(image, MAX_ANALYSIS_SIDE)
     requested_max_tiles = int(max_tiles or MAX_TILES)
     requested_top_k = int(top_k or TOP_K)
     derived_chunk_size, effective_tiles = _max_tiles_to_chunk_size(requested_max_tiles)
@@ -326,7 +334,9 @@ def analyze_image(
     return {
         "model": "RealGuard v2 INT8 ONNX",
         "onnxPath": ONNX_PATH,
-        "originalSize": {"width": int(image.width), "height": int(image.height)},
+        "originalSize": resize_meta["originalSize"],
+        "processedSize": resize_meta["processedSize"],
+        "downsample": resize_meta,
         "parameters": {
             "chunkSize": int(actual_chunk_size),
             "derivedChunkSize": int(derived_chunk_size),
@@ -335,9 +345,15 @@ def analyze_image(
             "tileSize": int(TILE_SIZE),
             "topK": int(requested_top_k),
             "usedTopK": int(used_k),
+            "maxAnalysisSide": int(MAX_ANALYSIS_SIDE),
         },
         "processing": [
-            "原图不整体缩放，先按 chunkSize 在原始像素坐标上切块。",
+            (
+                f"原图最长边超过 {MAX_ANALYSIS_SIDE} 像素，已按比例缩放至 "
+                f"{image.width}x{image.height} 后切块。"
+                if resize_meta["downsampled"]
+                else f"原图最长边未超过 {MAX_ANALYSIS_SIDE} 像素，不进行整体缩放。"
+            ),
             "每个 chunk 会生成 1 张全局视图，并按 tileSize 生成局部 tile 视图。",
             "所有视图进入 RealGuard v2 ONNX，输出 level1、level2 和 fusion 三组 logits。",
             "最终 AI 概率取 fusionProbability 最高的 Top-K chunk 均值。",

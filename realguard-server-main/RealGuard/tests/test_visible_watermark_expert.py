@@ -130,7 +130,7 @@ def test_visible_watermark_expert_exposes_generic_yolo_box_without_ai_score(monk
     assert hit["decisive"] is False
     assert hit["evidenceRole"] == "localization"
     assert result["visibleWatermark"]["evidenceLevel"] == "medium"
-    assert "不单独改变 AI 鉴伪结论" in result["visibleWatermark"]["note"]
+    assert "提升最终 AI 风险" in result["visibleWatermark"]["note"]
 
 
 def test_visible_watermark_expert_skips_without_token(monkeypatch):

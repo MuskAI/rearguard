@@ -571,7 +571,7 @@ def test_image_report_marks_borderline_result_for_human_review():
 
     assert "需人工复核 · 66.1%" in html
     assert "缺失本身不代表伪造" in html
-    assert reporting.image_report_filename(9) == "huijian-image-report-9.html"
+    assert reporting.image_report_filename(9) == "huijian-image-report-9.pdf"
 
 
 def test_image_detect_can_use_aliyun_primary_and_records_backend_model(client, monkeypatch, tmp_path):
@@ -699,6 +699,10 @@ def test_fast_image_detect_exposes_parallel_visible_watermark(client, monkeypatc
     assert result["visibleWatermark"]["detected"] is True
     assert result["visibleWatermark"]["hits"][0]["confidence"] == pytest.approx(0.91)
     assert result["visibleWatermark"]["elapsedMs"] == 24
+    assert result["final_label"] == "AI生成图像"
+    assert result["probability"] == pytest.approx(0.95)
+    assert result["detector_probability"] == pytest.approx(0.21)
+    assert result["confidence"] == "高"
     assert "_remote_evidence" not in result
 
 
@@ -1284,8 +1288,9 @@ def test_guest_image_report_downloads_attachment(client, monkeypatch):
 
     assert response.status_code == 200
     assert "attachment;" in response.headers["Content-Disposition"]
-    assert "图像鉴伪报告" in response.get_data(as_text=True)
-    assert "guest.png" in response.get_data(as_text=True)
+    assert response.mimetype == "application/pdf"
+    assert ".pdf" in response.headers["Content-Disposition"]
+    assert response.data.startswith(b"%PDF-")
 
 
 def test_guest_history_returns_guest_image_records(client, monkeypatch):
@@ -1390,8 +1395,9 @@ def test_video_report_downloads_attachment_for_logged_user(client, monkeypatch):
 
     assert response.status_code == 200
     assert "attachment;" in response.headers["Content-Disposition"]
-    assert "视频鉴伪报告" in response.get_data(as_text=True)
-    assert "clip.mp4" in response.get_data(as_text=True)
+    assert response.mimetype == "application/pdf"
+    assert ".pdf" in response.headers["Content-Disposition"]
+    assert response.data.startswith(b"%PDF-")
 
 
 def test_history_detection_records_include_report_urls(client, monkeypatch):

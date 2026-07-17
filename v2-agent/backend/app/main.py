@@ -443,10 +443,17 @@ def _image_data_uri(data: bytes, file_type: str, *, max_side: int, quality: int)
     if file_type != "image":
         return None
     try:
-        from PIL import Image
+        from PIL import Image, ImageOps
 
         with Image.open(io.BytesIO(data)) as im:
-            im = im.convert("RGB")
+            im = ImageOps.exif_transpose(im)
+            if im.mode in {"RGBA", "LA"} or "transparency" in im.info:
+                rgba = im.convert("RGBA")
+                background = Image.new("RGB", rgba.size, "white")
+                background.paste(rgba, mask=rgba.getchannel("A"))
+                im = background
+            else:
+                im = im.convert("RGB")
             im.thumbnail((max_side, max_side))
             out = io.BytesIO()
             im.save(out, format="WEBP", quality=quality, method=4)
@@ -831,14 +838,14 @@ def report_download(report_id: str, request: Request) -> Response:
     _require_report_access(request, item)
     clean_item = _strip_internal_history_fields(item)
     filename = reporting.download_filename(clean_item)
-    html = reporting.build_report_html(
+    pdf = reporting.build_report_pdf(
         clean_item,
         forensics=clean_item.get("forensics"),
         provenance=clean_item.get("provenance"),
     )
     return Response(
-        content=html,
-        media_type="text/html; charset=utf-8",
+        content=pdf,
+        media_type="application/pdf",
         headers={
             "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
         },
@@ -854,14 +861,14 @@ def report_export(report_id: str, request: Request, payload: dict | None = Body(
     clean_item = _strip_internal_history_fields(item)
     filename = reporting.download_filename(clean_item)
     body = payload or {}
-    html = reporting.build_report_html(
+    pdf = reporting.build_report_pdf(
         clean_item,
         forensics=body.get("forensics") or clean_item.get("forensics"),
         provenance=body.get("provenance") or clean_item.get("provenance"),
     )
     return Response(
-        content=html,
-        media_type="text/html; charset=utf-8",
+        content=pdf,
+        media_type="application/pdf",
         headers={
             "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
         },

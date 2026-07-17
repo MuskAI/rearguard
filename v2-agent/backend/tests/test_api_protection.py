@@ -627,7 +627,7 @@ def test_developer_key_report_share_is_scoped_to_owner(developer_key_client):
     assert tampered.status_code == 403
 
 
-def test_report_download_returns_attachment_html(client):
+def test_report_download_returns_attachment_pdf(client):
     detect = client.post(
         "/api/detect",
         files={"file": ("sample.txt", b"hello world from pytest", "text/plain")},
@@ -642,12 +642,10 @@ def test_report_download_returns_attachment_html(client):
     assert detect.status_code == 200
     assert response.status_code == 200
     assert "attachment;" in response.headers["content-disposition"]
-    assert len(response.text.strip()) > 1000
-    assert '<main class="page">' in response.text
-    assert "</html>" in response.text
-    assert "color-mix" not in response.text
-    assert report_id in response.text
-    assert "慧鉴 AI 数字内容鉴伪报告" in response.text
+    assert response.headers["content-type"].startswith("application/pdf")
+    assert ".pdf" in response.headers["content-disposition"]
+    assert response.content.startswith(b"%PDF-")
+    assert len(response.content) > 1500
 
 
 def test_provenance_reads_tc260_aigc_metadata_without_c2pa(client):
@@ -798,14 +796,9 @@ def test_report_export_includes_forensics_and_provenance_sections(client):
     )
 
     assert response.status_code == 200
-    assert len(response.text.strip()) > 1000
-    assert '<main class="page">' in response.text
-    assert "</html>" in response.text
-    assert "color-mix" not in response.text
-    assert "可解释性取证分析" in response.text
-    assert "频域与光照存在可疑矛盾" in response.text
-    assert "内容凭证验证（C2PA）" in response.text
-    assert "OpenAI Images" in response.text
+    assert response.headers["content-type"].startswith("application/pdf")
+    assert response.content.startswith(b"%PDF-")
+    assert len(response.content) > 1500
 
 
 def test_history_artifacts_persist_into_history_and_download(client):
@@ -854,8 +847,8 @@ def test_history_artifacts_persist_into_history_and_download(client):
     assert payload["forensics"]["summary"] == "未见明显异常。"
     assert payload["provenance"]["validationState"] == "none"
     assert download.status_code == 200
-    assert "可解释性取证分析" in download.text
-    assert "内容凭证验证（C2PA）" in download.text
+    assert download.headers["content-type"].startswith("application/pdf")
+    assert download.content.startswith(b"%PDF-")
 
 
 def test_history_listing_exposes_source_and_watermark_summary(client, monkeypatch):

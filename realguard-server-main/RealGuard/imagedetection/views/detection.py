@@ -24,6 +24,7 @@ from imagedetection.views import (
     swarm_visible_watermark_expert,
     swarm_wam_expert,
     swarm_watermark_expert,
+    watermark_verdict,
 )
 from imagedetection.views.utils import (
     create_folder,
@@ -704,6 +705,24 @@ def _ensure_local_primary_record(api_json, image_bytes, filename, backend_openid
     local_record = _local_detection_record(remote_itemid)
     if _record_matches_detection_actor(local_record, remote_filename, backend_openid, phone):
         _bind_detection_record_to_user(remote_itemid, local_record, user_info)
+        if (data.get('watermark_verdict_override') or {}).get('applied'):
+            updated = excute_detection_sql(
+                """
+                UPDATE data
+                SET fake = %s, aigc = %s, clarity = %s, explantation = %s
+                WHERE itemid = %s
+                """,
+                (
+                    data.get('fake_percentage'),
+                    data.get('final_label'),
+                    data.get('confidence') or data.get('clarity') or '高',
+                    safe_truncate(data.get('explanation') or data.get('explantation') or '', 145),
+                    remote_itemid,
+                ),
+                fetch=False,
+            )
+            if updated is None:
+                raise RuntimeError('水印高置信度结论写入历史失败')
         return remote_itemid
     return _insert_local_detection_record(
         data,
@@ -1127,15 +1146,6 @@ def _run_image_detection_payload(
             )
             api_resp.raise_for_status()
             api_json = api_resp.json()
-            if api_json.get('code') == 200:
-                _ensure_local_primary_record(
-                    api_json,
-                    image_bytes,
-                    safe_name,
-                    backend_openid,
-                    phone,
-                    user_info,
-                )
             api_json.setdefault('data', {}).update(_route_data(primary_model, 'primary'))
         except requests.RequestException as e:
             try:
@@ -1164,9 +1174,20 @@ def _run_image_detection_payload(
 
     try:
         data = api_json.get('data') or {}
-        data_itemid = data.get('data_itemid')
+        visible_watermark = _visible_watermark_from_backend_data(data)
+        if isinstance(visible_watermark, dict):
+            watermark_verdict.apply_to_backend_data(data, visible_watermark)
+        data_itemid = _ensure_local_primary_record(
+            api_json,
+            image_bytes,
+            safe_name,
+            backend_openid,
+            phone,
+            user_info,
+        )
         fake_pct = _to_float(data.get('fake_percentage', 0), 0.0)
         probability = _prob01_from_percent(fake_pct)
+        detector_probability = _clamp01(data.get('detector_probability'), probability)
         final_label = data.get('final_label') or ('AI生成图像' if fake_pct >= 50 else '真实图像')
         confidence = data.get('confidence') or data.get('clarity') or ''
         metadata = _metadata_for_item(data_itemid) if data_itemid else {}
@@ -1182,7 +1203,6 @@ def _run_image_detection_payload(
         visual_issues = _normalize_visual_issues(visual_issues_source, final_label=final_label)
         agent_reasoning = data.get('agent_reasoning') or ''
         public_agent_reasoning = _public_agent_reasoning(agent_reasoning)
-        visible_watermark = _visible_watermark_from_backend_data(data)
         _record_model_run(data_itemid, data, user_info)
 
         if mark_guest:
@@ -1193,7 +1213,7 @@ def _run_image_detection_payload(
                 'itemid': data_itemid,
                 'final_label': final_label,
                 'probability': probability,
-                'detector_probability': probability,
+                'detector_probability': detector_probability,
                 'p_visual': None,
                 'p_metadata': None,
                 'confidence': confidence,
@@ -2149,6 +2169,17 @@ def _run_swarm_detection_payload(image_bytes, filename, mimetype, user_info, *, 
     final_result, error = _swarm_aggregate(experts, primary_result, fallback_result)
     if error:
         return {'status': 'error', 'message': error, 'experts': experts}, 502
+    visible_expert = next((expert for expert in experts if expert.get('id') == 'visible_watermark'), None)
+    if visible_expert and isinstance(visible_expert.get('visibleWatermark'), dict):
+        final_result['visibleWatermark'] = visible_expert['visibleWatermark']
+        if watermark_verdict.apply_to_result(final_result, visible_expert['visibleWatermark']):
+            swarm = final_result.get('swarm') or {}
+            swarm.update({
+                'score': final_result['probability'],
+                'finalLabel': final_result['final_label'],
+                'confidence': final_result['confidence'],
+            })
+            final_result['swarm'] = swarm
     _persist_swarm_history_result(
         final_result,
         image_bytes,
@@ -2157,9 +2188,6 @@ def _run_swarm_detection_payload(image_bytes, filename, mimetype, user_info, *, 
         phone,
         user_info,
     )
-    visible_expert = next((expert for expert in experts if expert.get('id') == 'visible_watermark'), None)
-    if visible_expert and isinstance(visible_expert.get('visibleWatermark'), dict):
-        final_result['visibleWatermark'] = visible_expert['visibleWatermark']
     payload = {'status': 'success', 'result': final_result}
     _swarm_update_job(job_id, experts, 100, 'Swarm 专家会诊完成', status='success', result=payload)
     return payload, 200
@@ -2383,6 +2411,7 @@ def image_result_api():
     visible_watermark = _stored_visible_watermark_for_item(item.get('itemid'))
     if isinstance(visible_watermark, dict):
         result['visibleWatermark'] = visible_watermark
+        watermark_verdict.apply_to_result(result, visible_watermark)
     return jsonify({'status': 'success', 'result': result})
 
 
@@ -2415,10 +2444,14 @@ def image_report_api():
         'visual_issues': _normalize_visual_issues([], final_label='AI生成图像' if fake_pct >= 50 else '真实图像'),
         'all_metadata': _metadata_for_item(itemid),
     }
-    html = reporting.image_report_content(item, result)
+    visible_watermark = _stored_visible_watermark_for_item(item.get('itemid'))
+    if isinstance(visible_watermark, dict):
+        result['visibleWatermark'] = visible_watermark
+        watermark_verdict.apply_to_result(result, visible_watermark)
+    pdf = reporting.image_report_pdf(item, result)
     return Response(
-        html,
-        mimetype='text/html',
+        pdf,
+        mimetype='application/pdf',
         headers={'Content-Disposition': reporting.attachment_header(reporting.image_report_filename(itemid))},
     )
 
@@ -2591,9 +2624,9 @@ def video_report_api():
             'video_format': item.get('video_format', ''),
         },
     }
-    html = reporting.video_report_content(item, result)
+    pdf = reporting.video_report_pdf(item, result)
     return Response(
-        html,
-        mimetype='text/html',
+        pdf,
+        mimetype='application/pdf',
         headers={'Content-Disposition': reporting.attachment_header(reporting.video_report_filename(itemid))},
     )

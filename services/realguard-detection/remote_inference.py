@@ -172,8 +172,11 @@ def model_predict():
             "realProbability": result.get("realProbability"),
             "finalLabel": result.get("finalLabel"),
             "originalSize": result.get("originalSize"),
+            "processedSize": result.get("processedSize"),
+            "downsample": result.get("downsample"),
             "chunkCount": result.get("chunkCount"),
             "parameters": result.get("parameters"),
+            "processing": result.get("processing"),
             "runtime": runtime,
         }
         if precheck_payload:

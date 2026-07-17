@@ -15,7 +15,7 @@ import time
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from . import document_utils, forensics, synthid_detector, visible_watermark_detector
+from . import document_utils, forensics, synthid_detector, visible_watermark_detector, watermark_verdict
 
 load_dotenv()
 
@@ -173,8 +173,6 @@ def _merge_visible_watermark(result: dict, file_type: str, filename: str, data: 
     result["visibleWatermark"] = visible
     score = float(visible.get("confidence") or 0.0)
     detected = bool(visible.get("detected"))
-    provider = str(visible.get("provider") or "")
-    is_known_platform = provider in {"gemini"}
 
     result.setdefault("dimensions", []).append({
         "key": "visible_watermark",
@@ -198,23 +196,7 @@ def _merge_visible_watermark(result: dict, file_type: str, filename: str, data: 
             except (KeyError, TypeError, ValueError):
                 continue
 
-    if detected and is_known_platform and score >= 0.82:
-        result["confidence"] = round(max(float(result.get("confidence", 0.0)), score), 2)
-        result["verdict"] = "highly_suspected_fake"
-        result["explanation"] = (
-            f"{result.get('explanation', '')}\n"
-            "可见水印检测发现高置信度 AI 平台导出水印，这是直接的平台生成/导出痕迹，"
-            "已作为强证据纳入最终判定。"
-        ).strip()
-    elif detected and is_known_platform and score >= 0.6 and result.get("verdict") == "real":
-        result["confidence"] = round(max(float(result.get("confidence", 0.0)), score), 2)
-        result["verdict"] = "suspected_fake"
-        result["explanation"] = (
-            f"{result.get('explanation', '')}\n"
-            "可见水印检测发现中等置信度角标水印信号，当前结论上调为疑似伪造。"
-        ).strip()
-
-    return result
+    return watermark_verdict.apply(result, visible)
 
 
 def _extract_json(text: str) -> dict | None:

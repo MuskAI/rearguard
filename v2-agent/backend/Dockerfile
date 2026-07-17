@@ -1,6 +1,10 @@
 # 鉴真后端 — FastAPI + uv
 FROM python:3.12-slim
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends fonts-wqy-zenhei \
+    && rm -rf /var/lib/apt/lists/*
+
 # uv 二进制
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 

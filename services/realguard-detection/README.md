@@ -9,6 +9,11 @@ loads one ONNX Runtime CUDA session during process startup, warms the dynamic
 The independent YOLO watermark service remains on physical GPU 0, so visible
 watermark localization does not consume the main model's GPU queue.
 
+Images whose longest side exceeds 2048 pixels are downsampled proportionally
+before chunk generation. The response preserves `originalSize`, adds
+`processedSize` and `downsample`, and keeps visible-watermark localization on
+the untouched upload so normalized watermark boxes still map to the original.
+
 ## Deployment targets
 
 - `inference_onnx.py` -> `/home/ymk/RealGuard/AIGC_image_detection_system/imagedetection/Agent/tools/AIGC_Detection/inference_onnx.py`

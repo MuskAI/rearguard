@@ -4,6 +4,8 @@ from datetime import datetime
 from html import escape
 from urllib.parse import quote
 
+from .report_pdf import image_report_pdf, video_report_pdf
+
 
 def _safe_text(value: object, default: str = "—") -> str:
     text = str(value or "").strip()
@@ -75,11 +77,11 @@ def _html_page(title: str, accent: str, body: str) -> str:
 
 
 def image_report_filename(itemid: int | str) -> str:
-    return f"huijian-image-report-{itemid}.html"
+    return f"huijian-image-report-{itemid}.pdf"
 
 
 def video_report_filename(itemid: int | str) -> str:
-    return f"huijian-video-report-{itemid}.html"
+    return f"huijian-video-report-{itemid}.pdf"
 
 
 def image_report_content(item: dict, result: dict) -> str:

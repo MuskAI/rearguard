@@ -811,7 +811,7 @@ export async function downloadReport(
   reportId: string,
   extras?: { forensics?: ForensicReport | null; provenance?: ProvenanceReport | null },
 ): Promise<string> {
-  const fallbackName = `jianzhen-report-${reportId}.html`;
+  const fallbackName = `huijian-report-${reportId}.pdf`;
   const hasExtras = Boolean(extras?.forensics || extras?.provenance);
   const res = await fetch(
     `/v2-api/report/${encodeURIComponent(reportId)}${hasExtras ? "/export" : "/download"}`,
@@ -833,12 +833,11 @@ export async function downloadReport(
   if (!res.ok) {
     await parseJson<Record<string, never>>(res, "下载报告失败");
   }
-  const html = await res.text();
-  if (!html.trim()) {
+  const blob = await res.blob();
+  if (blob.size === 0) {
     throw new Error("下载报告失败：服务端返回了空报告");
   }
   const filename = filenameFromDisposition(res.headers.get("content-disposition"), fallbackName);
-  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
   const url = window.URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;

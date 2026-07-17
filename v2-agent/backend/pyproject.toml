@@ -17,6 +17,7 @@ dependencies = [
     "scipy>=1.11",
     "PyWavelets>=1.5",
     "scikit-learn>=1.4",
+    "reportlab>=4.2,<5",
 ]
 
 [tool.uv]

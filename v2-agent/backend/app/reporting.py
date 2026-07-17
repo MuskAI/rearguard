@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from html import escape
 
+from .pdf_report import build_report_pdf
+
 
 VERDICT_META = {
     "real": {"label": "真实内容", "color": "#3fb6a8"},
@@ -259,7 +261,7 @@ def _render_provenance_block(provenance: dict | None) -> str:
 
 def download_filename(result: dict) -> str:
     report_id = _safe_text(result.get("reportId"), "report")
-    return f"jianzhen-report-{report_id}.html"
+    return f"huijian-report-{report_id}.pdf"
 
 
 def build_report_html(result: dict, *, forensics: dict | None = None, provenance: dict | None = None) -> str:
