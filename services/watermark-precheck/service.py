@@ -21,7 +21,7 @@ API_TOKEN = os.getenv("WATERMARK_PRECHECK_TOKEN", "")
 SUPPORTED_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".avif", ".heic", ".heif", ".tif", ".tiff"}
 PRECHECK_BRANCH_WORKERS = max(
     2,
-    min(8, int(os.getenv("WATERMARK_PRECHECK_BRANCH_WORKERS", "8"))),
+    min(8, int(os.getenv("WATERMARK_PRECHECK_BRANCH_WORKERS", "4"))),
 )
 _PRECHECK_EXECUTOR = ThreadPoolExecutor(
     max_workers=PRECHECK_BRANCH_WORKERS,
@@ -108,8 +108,8 @@ def _report(path: Path) -> dict[str, Any]:
 
 def _collect_evidence(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     report_future = _PRECHECK_EXECUTOR.submit(_report, path)
-    visible_future = _PRECHECK_EXECUTOR.submit(_visible_hits, path)
-    return report_future.result(), visible_future.result()
+    visible_hits = _visible_hits(path)
+    return report_future.result(), visible_hits
 
 
 @app.get("/health")
