@@ -24,6 +24,7 @@ interface Props {
   health: HealthStatus | null;
   user: AccountUser | null;
   onEnterWorkspace: () => void;
+  onDeveloper: () => void;
   onLogin: () => void;
 }
 
@@ -37,7 +38,7 @@ function getServiceState(health: HealthStatus | null) {
   return { tone: "limited", label: "部分能力受限" };
 }
 
-export default function OfficialHome({ authReady, health, user, onEnterWorkspace, onLogin }: Props) {
+export default function OfficialHome({ authReady, health, user, onEnterWorkspace, onDeveloper, onLogin }: Props) {
   const service = getServiceState(health);
 
   return (
@@ -50,6 +51,7 @@ export default function OfficialHome({ authReady, health, user, onEnterWorkspace
           <a href="#capabilities">产品能力</a>
           <a href="#workflow">工作方式</a>
           <a href="#trust">可信机制</a>
+          <button type="button" onClick={onDeveloper}>开发者平台</button>
         </nav>
         <div className="official-header-actions">
           <span className={`official-service-state ${service.tone}`}><i />{service.label}</span>

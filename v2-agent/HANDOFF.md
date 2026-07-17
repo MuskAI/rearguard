@@ -2,6 +2,15 @@
 
 > 给部署方（Codex / 运维）的完整说明。目标：把本项目作为一个 Web 服务跑起来。
 
+> 2026-07-17 说明：本文件只描述 `v2-agent` 证据子服务。统一产品架构、生产路径、账号隔离、开发者 API 与完整发布顺序以仓库根目录 `README.md` 和 `docs/DEVELOPER_PLATFORM.md` 为准。生产环境不允许返回 Mock 鉴伪结论；模型不可用时必须明确失败。历史已持久化到 `JIANZHEN_DATA_DIR/jianzhen-v2.sqlite3`，并按登录账号 `Userid` 隔离。
+
+## 0. 与开发者平台的边界
+
+- 外部调用统一进入 Flask 计费网关 `/api/openapi/v1/image-detections`，不能直接调用本服务绕过额度与账本。
+- 生产保持 `JIANZHEN_ALLOW_DIRECT_DEVELOPER_KEYS=false`。
+- 本服务继续负责文档、取证、内容凭证与证据增强；一期对外开发者 API 只开放图像 `fast` / `swarm`。
+- API Key 创建、轮换、IP 白名单、100 次赠送额度、调价和结算都由账户服务维护。
+
 ## 1. 这是什么
 
 「鉴真」是一个 AI 鉴伪 / 内容取证 Web 应用，两条能力线：
@@ -11,7 +20,7 @@
   取证可视化（ELA / 噪声 / 频域 / 光照梯度 / 光照一致性 / 多次 JPEG 压缩曲线）。
   视频/音频及模型不可用时回退到确定性 Mock。
 - **凭证验真**：读取并验证图片内嵌的 **C2PA 内容凭证**（对标 OpenAI Verify 的 C2PA 部分），
-  报告生成器、签发者、签名校验、编辑历史、是否声明 AI 生成。SynthID 为 Google 专有水印，未实现（如实标注）。
+  报告生成器、签发者、签名校验、编辑历史、是否声明 AI 生成。SynthID 官方解码器未开放；系统另提供带明确实验标识的社区频谱档案核验。
 - **报告导出**：可按报告号导出自包含 HTML 鉴定报告，保留结论、维度评分、局部区域和水印辅助证据；若前端已执行取证分析或 C2PA 验证，还会一并写入报告。
 
 ## 2. 架构 & 技术栈
@@ -60,7 +69,11 @@ lingjian/
 | `SYNTHID_ENABLED` | 否 | 是否启用 Gemini SynthID 水印取证增强。只调用检测逻辑，不调用去水印/绕过逻辑。 | `false` |
 | `SYNTHID_REPO_PATH` | 否 | `reverse-SynthID` 仓库部署路径。 | `/opt/reverse-SynthID` |
 | `SYNTHID_CODEBOOK_PATH` | 否 | V4 codebook 路径。 | `/opt/reverse-SynthID/artifacts/spectral_codebook_v4.npz` |
-| `SYNTHID_MODEL_PROFILE` | 否 | 使用的 SynthID 模型配置。 | `gemini-3.1-flash-image-preview` |
+| `SYNTHID_MODEL_PROFILES` | 否 | 逗号分隔的 SynthID 频谱档案；`auto` 自动使用 codebook 内全部非 union 档案。 | `auto` |
+| `SYNTHID_POSSIBLE_THRESHOLD` | 否 | 进入“疑似信号”的最低匹配分数，不参与自动定案。 | `0.53` |
+| `SYNTHID_DETECTION_THRESHOLD` | 否 | 进入“检出”的最低匹配分数。 | `0.75` |
+| `SYNTHID_ATTRIBUTION_MARGIN` | 否 | 第一、第二模型档案分差达到该值才展示候选归属。 | `0.08` |
+| `SYNTHID_PROFILE_CACHE_SIZE` | 否 | 按需展开并缓存的分辨率档案数；生产机建议保持 2。 | `2` |
 
 `backend/.env` 内容模板：
 
@@ -72,6 +85,7 @@ JIANZHEN_ACCESS_TOKEN=
 SYNTHID_ENABLED=false
 SYNTHID_REPO_PATH=/opt/reverse-SynthID
 SYNTHID_CODEBOOK_PATH=/opt/reverse-SynthID/artifacts/spectral_codebook_v4.npz
+SYNTHID_MODEL_PROFILES=auto
 SYNTHID_MODEL_PROFILE=gemini-3.1-flash-image-preview
 ```
 

@@ -20,7 +20,7 @@ import {
   Video,
 } from "lucide-react";
 import type { AgentOutcome } from "../agentTypes";
-import type { ForensicReport, ProvenanceReport, VisibleWatermarkResult } from "../api";
+import type { ForensicReport, ProbabilityModel, ProvenanceReport, SynthIDResult, VisibleWatermarkResult } from "../api";
 import { buildEvidenceExplanation, hasLocalizedWatermark } from "../evidenceExplanation";
 
 type ResultTab = "summary" | "evidence" | "file";
@@ -89,7 +89,11 @@ function verdictFor(outcome: AgentOutcome): VerdictView {
     description: outcome.result.explanation || "请结合证据维度与原始来源进行判断。",
     risk,
     tone,
-    confidence: outcome.result.source === "vlm" ? "模型分析完成" : "证据有限",
+    confidence: outcome.result.source === "vlm"
+      ? "模型分析完成"
+      : outcome.result.source === "provenance"
+        ? "来源证据直接命中"
+        : "证据有限",
   };
 }
 
@@ -190,104 +194,229 @@ function ProvenanceSection({ report }: { report?: ProvenanceReport }) {
   );
 }
 
-const WATERMARK_PROVIDER_LABELS: Record<string, string> = {
-  gemini: "Google Gemini",
-  doubao: "豆包",
-  jimeng: "即梦",
-  jimeng_pill: "即梦",
-  samsung: "Samsung",
-  yolo11x_watermark: "通用可见水印",
-};
-
-function watermarkBox(hit: VisibleWatermarkResult["hits"][number]) {
-  const x = clamp01(Number(hit.bbox?.x || 0));
-  const y = clamp01(Number(hit.bbox?.y || 0));
-  const w = Math.min(1 - x, clamp01(Number(hit.bbox?.w || 0)));
-  const h = Math.min(1 - y, clamp01(Number(hit.bbox?.h || 0)));
-  return { x, y, w, h };
-}
-
 function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult; preview?: string }) {
-  const [selectedHit, setSelectedHit] = useState(0);
-  if (!report) return null;
-  const hits = report.hits || [];
-  const activeHit = Math.min(selectedHit, Math.max(0, hits.length - 1));
-  const status = !report.supported
-    ? "暂不可用"
-    : report.detected
-      ? `检出 ${Math.max(hits.length, 1)} 处`
-      : "未检出";
-  const source = report.provider
-    ? WATERMARK_PROVIDER_LABELS[report.provider] || "可见水印"
-    : report.supported
-      ? "平台规则与通用定位"
-      : "无可用引擎";
-
+  if (!report || !preview) return null;
+  const platformProviders = new Set(["gemini", "doubao", "jimeng", "jimeng_pill", "samsung"]);
+  const hits = (report.hits || []).slice(0, 8);
+  const platformHits = hits.filter((hit) => platformProviders.has(hit.provider));
+  const genericHits = hits.filter((hit) => !platformProviders.has(hit.provider));
+  const detector = report.detector;
+  const detected = hits.length > 0;
+  const hasPlatformHit = platformHits.length > 0;
+  const reusedFromSameFile = report.reanalysis?.reused === true;
+  const reusedLegacyResult = report.reanalysis?.basis === "legacy-unowned-exact-sha256";
+  const confirmedHits = platformHits.filter((hit) => hit.localizationConfirmed === true);
+  const providerLabels = Array.from(new Set(platformHits.map((hit) => hit.label || hit.provider))).join("、");
+  const statusText = !report.supported
+    ? "可见水印检测本次不可用，未影响主鉴伪结论"
+    : hasPlatformHit
+      ? `识别到 ${platformHits.length} 处已知 AI 平台水印`
+      : detected
+        ? `检测到 ${genericHits.length} 处可见水印，平台归属待确认`
+        : "可见水印扫描完成，本次未检出";
+  const elapsed = Number(report.elapsedMs || detector?.roundTripMs || 0);
+  const suppliedRegistry = detector?.engines?.find((engine) => engine.id === "known_ai_registry");
+  const suppliedYolo = detector?.engines?.find((engine) => engine.id.includes("yolo"));
+  const engines = [
+    {
+      ...(suppliedRegistry || {}),
+      id: "known_ai_registry",
+      label: "AI 平台水印识别",
+      available: Boolean(suppliedRegistry?.available ?? report.supported),
+      detected: hasPlatformHit,
+      count: platformHits.length,
+      model: suppliedRegistry?.model || "wiltodelta/remove-ai-watermarks",
+      version: suppliedRegistry?.version || platformHits[0]?.modelRevision,
+      role: "provenance",
+    },
+    {
+      ...(suppliedYolo || {}),
+      id: "yolo_visible_watermark",
+      label: "YOLO 可见水印检测",
+      available: Boolean(suppliedYolo?.available),
+      detected: Boolean(suppliedYolo?.detected ?? (genericHits.length > 0 || confirmedHits.length > 0)),
+      count: suppliedYolo?.count ?? (genericHits.length + confirmedHits.length),
+      model: suppliedYolo?.model || genericHits[0]?.model || platformHits[0]?.localizationModel || "corzent/yolo11x_watermark_detection",
+      version: suppliedYolo?.version || genericHits[0]?.modelRevision || platformHits[0]?.localizationModelRevision,
+      role: "localization",
+    },
+  ];
+  const displayNote = !report.supported
+    ? "检测服务不可用时不会生成替代性水印结论。"
+    : reusedFromSameFile
+      ? reusedLegacyResult
+        ? "该定位证据来自完全相同文件（SHA-256 一致）的最近一次成功扫描；系统会按当前水印规则重新计算结论。"
+        : "该定位证据来自同一账号对完全相同文件（SHA-256 一致）的最近一次成功扫描；系统会按当前水印规则重新计算结论。"
+      : hasPlatformHit
+        ? `已确认 ${platformHits.length} 处 AI 平台水印${confirmedHits.length > 0 ? `，其中 ${confirmedHits.length} 处通过 YOLO 区域复核` : ""}${genericHits.length > 0 ? `；另有 ${genericHits.length} 处可见水印的平台归属待确认` : ""}。`
+        : detected
+          ? "已定位到可见水印但尚不能确认平台归属；有效定位框按当前规则作为高置信度伪造证据。"
+          : "平台注册表与 YOLO 可见水印检测均未发现水印。";
   return (
-    <section className="result-band watermark-section">
+    <section className="result-band watermark-band">
       <div className="section-title">
         <ScanLine size={18} />
-        <div><h3>可见水印定位</h3><p>检测框按原始图像坐标绘制，可逐项查看定位证据。</p></div>
+        <div><h3>可见水印检测</h3><p>{statusText}</p></div>
       </div>
-      <div className={`watermark-status ${report.detected ? "is-detected" : ""}`} role="status">
-        <strong>{status}</strong>
-        <span>{source}</span>
-        <span>{report.elapsedMs ? `${Math.round(report.elapsedMs)} ms` : "扫描完成"}</span>
+      <div className={`watermark-status ${hasPlatformHit ? "is-detected" : detected ? "is-possible" : report.supported ? "is-clear" : "is-unavailable"}`}>
+        <span>{hasPlatformHit ? `已知平台 ${platformHits.length}` : detected ? `可见水印 ${genericHits.length}` : report.supported ? "未检出" : "暂不可用"}</span>
+        <strong>{hasPlatformHit ? `${providerLabels} · 平台规则确认` : detected ? `${reusedFromSameFile ? "同一文件复核补充 · " : ""}有效定位框，参与高风险直判` : "已完成平台规则与通用水印扫描"}</strong>
+        {elapsed > 0 ? <time>{elapsed} ms</time> : null}
       </div>
-      {preview && hits.length > 0 && (
+      {report.supported && (
         <div className="watermark-layout">
-          <figure className="watermark-visual">
+          <div className="watermark-visual">
             <div className="watermark-canvas">
-              <img src={preview} alt="带有可见水印定位框的原图" />
+              <img src={preview} alt="带有可见水印定位框的原始图像" />
               {hits.map((hit, index) => {
-                const box = watermarkBox(hit);
-                const provider = WATERMARK_PROVIDER_LABELS[hit.provider] || hit.label || "可见水印";
-                const generic = hit.provider === "yolo11x_watermark";
+                const x = clamp01(Number(hit.bbox?.x || 0));
+                const y = clamp01(Number(hit.bbox?.y || 0));
+                const width = Math.min(clamp01(Number(hit.bbox?.w || 0)), 1 - x);
+                const height = Math.min(clamp01(Number(hit.bbox?.h || 0)), 1 - y);
                 return (
-                  <button
-                    type="button"
-                    key={`${hit.provider}-${index}`}
-                    className={`watermark-box ${generic ? "is-generic" : "is-platform"} ${box.y < 0.08 ? "is-label-inside" : ""} ${index === activeHit ? "is-active" : ""}`}
-                    style={{ left: `${box.x * 100}%`, top: `${box.y * 100}%`, width: `${box.w * 100}%`, height: `${box.h * 100}%` }}
-                    aria-label={`定位 ${index + 1}：${provider}`}
-                    onMouseEnter={() => setSelectedHit(index)}
-                    onFocus={() => setSelectedHit(index)}
-                    onClick={() => setSelectedHit(index)}
+                  <span
+                    className={`watermark-box ${platformProviders.has(hit.provider) ? "is-platform" : ""}`}
+                    key={`${hit.provider}-${index}-${x}-${y}`}
+                    style={{ left: `${x * 100}%`, top: `${y * 100}%`, width: `${width * 100}%`, height: `${height * 100}%` }}
+                    aria-label={`第 ${index + 1} 处可见水印，置信度 ${Math.round(hit.confidence * 100)}%`}
                   >
-                    <span>{index + 1}</span>
-                  </button>
+                    <b>水印 {Math.round(hit.confidence * 100)}%</b>
+                  </span>
                 );
               })}
             </div>
-            <figcaption>原图坐标映射，点击框或右侧条目可交叉定位</figcaption>
-          </figure>
-          <ol className="watermark-hit-list" aria-label="水印定位结果">
-            {hits.map((hit, index) => {
-              const box = watermarkBox(hit);
-              const provider = WATERMARK_PROVIDER_LABELS[hit.provider] || hit.label || "可见水印";
-              const confidence = Math.round(clamp01(Number(hit.confidence || 0)) * 100);
-              return (
-                <li key={`${hit.provider}-detail-${index}`}>
-                  <button
-                    type="button"
-                    className={index === activeHit ? "is-active" : ""}
-                    onMouseEnter={() => setSelectedHit(index)}
-                    onFocus={() => setSelectedHit(index)}
-                    onClick={() => setSelectedHit(index)}
-                  >
-                    <span className="watermark-hit-index">{index + 1}</span>
-                    <span className="watermark-hit-copy">
-                      <strong>{provider}</strong>
-                      <small>置信度 {confidence}% · x {Math.round(box.x * 100)}% · y {Math.round(box.y * 100)}%</small>
+          </div>
+          <div className="watermark-details">
+            {hits.length > 0 ? (
+              <ol>
+                {hits.map((hit, index) => (
+                  <li className={platformProviders.has(hit.provider) ? "is-platform" : ""} key={`${hit.provider}-detail-${index}`}>
+                    <span>{String(index + 1).padStart(2, "0")}</span>
+                    <div>
+                      <strong>{hit.label || (platformProviders.has(hit.provider) ? "已知 AI 平台水印" : "可见水印（平台待确认）")}</strong>
+                      <small>
+                        {platformProviders.has(hit.provider)
+                          ? `remove-ai-watermarks 平台匹配${hit.localizationConfirmed ? " · YOLO 区域复核" : hit.decisive ? " · 来源强证据" : " · 待交叉验证"}`
+                          : "YOLO 可见水印定位 · 有效框参与高风险直判"}
+                      </small>
+                      <i><em style={{ width: `${clamp01(hit.confidence) * 100}%` }} /></i>
+                    </div>
+                    <b>{Math.round(hit.confidence * 100)}%</b>
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <div className="watermark-clear-state"><CheckCircle2 size={18} /><span><strong>未发现可见水印</strong><small>已完成平台规则与 YOLO 扫描</small></span></div>
+            )}
+            <div className="watermark-model-meta">
+              <span>检测引擎</span>
+              <div className="watermark-engine-list">
+                {engines.map((engine) => (
+                  <div key={engine.id}>
+                    <span>
+                      <strong>{engine.label}</strong>
+                      <small>{engine.model}{engine.version ? ` · ${engine.version}` : ""}</small>
                     </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ol>
+                    <b className={engine.available ? engine.detected ? "is-hit" : "is-ready" : "is-offline"}>
+                      {engine.available ? engine.detected ? `${engine.count || 0} 处` : "已扫描" : "不可用"}
+                    </b>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
         </div>
       )}
-      <p className="result-explanation">{report.note || "有效水印定位框会按当前规则作为高置信度伪造证据并参与最终结论。"}</p>
+      <div className="watermark-note"><Info size={15} /><p>{displayNote}</p></div>
+    </section>
+  );
+}
+
+function SynthIDSection({ report }: { report?: SynthIDResult }) {
+  if (!report) return null;
+  const modelResults = report.modelResults || [];
+  const state = report.detected ? "detected" : report.possiblyDetected ? "possible" : report.supported ? "clear" : "unavailable";
+  const stateLabel = state === "detected" ? "检出" : state === "possible" ? "疑似信号" : state === "clear" ? "未检出" : "暂不可用";
+  const attributed = modelResults.find((item) => item.modelProfile === report.attributedModelProfile);
+  const summary = attributed?.modelLabel
+    ? `最接近 ${attributed.modelLabel} 档案`
+    : report.candidateModelProfiles?.length
+      ? `${report.candidateModelProfiles.length} 个模型档案存在匹配`
+      : `已扫描 ${modelResults.length} 个模型档案`;
+  return (
+    <section className="result-band synthid-band">
+      <div className="section-title"><Fingerprint size={18} /><div><h3>SynthID 多模型核验</h3><p>Google 图像模型频谱档案并行比对</p></div></div>
+      <div className={`watermark-status is-${state}`}>
+        <span>{stateLabel}</span>
+        <strong>{summary}</strong>
+        {report.elapsedMs ? <time>{report.elapsedMs} ms</time> : null}
+      </div>
+      {modelResults.length > 0 && (
+        <div className="watermark-model-meta synthid-models">
+          <span>模型档案</span>
+          <div className="watermark-engine-list">
+            {modelResults.map((model) => {
+              const modelState = model.detected ? "检出" : model.possiblyDetected ? "疑似" : model.supported ? "未检出" : "不可用";
+              const stateClass = model.detected ? "is-hit" : model.possiblyDetected ? "is-possible" : model.supported ? "is-ready" : "is-offline";
+              return (
+                <div key={model.modelProfile}>
+                  <span>
+                    <strong>{model.modelLabel || model.modelProfile}</strong>
+                    <small>{model.exactResolutionMatch ? "原始分辨率档案" : "近邻分辨率档案"} · 相位 {Math.round(clamp01(model.phaseMatch) * 100)}%</small>
+                  </span>
+                  <b className={stateClass}>{modelState} · {Math.round(clamp01(model.confidence) * 100)}%</b>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      <div className="watermark-note"><Info size={15} /><p>{report.note} 实验引擎：<a href="https://github.com/aloshdenny/reverse-SynthID" target="_blank" rel="noreferrer">reverse-SynthID by Alosh Denny</a>。不等同于 Google 官方验证，也不会凭低强度信号单独定案。</p></div>
+    </section>
+  );
+}
+
+function ProbabilitySection({ model }: { model?: ProbabilityModel }) {
+  if (!model || !Array.isArray(model.factors) || model.factors.length === 0) return null;
+  const baseline = clamp01(Number(model.pixelBaseline ?? model.adjustedBaseline ?? model.baseRate ?? 0.1));
+  const posterior = clamp01(Number(model.posterior));
+  const groups = new Set(model.factors.map((factor) => factor.group).filter(Boolean)).size;
+
+  return (
+    <section className="result-band probability-band">
+      <div className="section-title">
+        <Gauge size={18} />
+        <div><h3>最终概率依据</h3><p>像素模型形成基线，独立来源证据通过似然比更新风险。</p></div>
+      </div>
+      <div className="probability-flow" aria-label={`风险从 ${Math.round(baseline * 100)}% 更新到 ${Math.round(posterior * 100)}%`}>
+        <div>
+          <span>{model.pixelBaseline != null ? "像素基线" : "基础风险"}</span>
+          <strong>{(baseline * 100).toFixed(1)}%</strong>
+        </div>
+        <i aria-hidden="true"><span /></i>
+        <div>
+          <span>独立证据组</span>
+          <strong>{Math.max(groups, 1)} 组</strong>
+        </div>
+        <i aria-hidden="true"><span /></i>
+        <div className="is-final">
+          <span>融合后风险</span>
+          <strong>{(posterior * 100).toFixed(2)}%</strong>
+        </div>
+      </div>
+      <div className="probability-factors">
+        {model.factors.slice(0, 4).map((factor, index) => (
+          <div key={`${factor.kind}-${factor.source || index}`}>
+            <span>{String(index + 1).padStart(2, "0")}</span>
+            <strong>{factor.label}</strong>
+            <small>{Number(factor.correlationExponent ?? 1) < 1 ? "同源折扣" : "有效证据"}</small>
+          </div>
+        ))}
+      </div>
+      <div className="probability-note">
+        <Info size={15} />
+        <p>该数值表示自动化伪造风险，不等同于司法鉴定置信度；普通 Logo 与缺失元数据不参与抬分。</p>
+      </div>
     </section>
   );
 }
@@ -308,6 +437,12 @@ export default function AgentResult(props: Props) {
     : undefined;
   const visibleWatermark = props.outcome.kind === "image" || props.outcome.kind === "evidence"
     ? props.outcome.result.visibleWatermark
+    : undefined;
+  const synthid = props.outcome.kind === "image" || props.outcome.kind === "evidence"
+    ? props.outcome.result.synthid
+    : undefined;
+  const probabilityModel = props.outcome.kind === "image" || props.outcome.kind === "evidence"
+    ? props.outcome.result.probabilityModel || (props.outcome.kind === "image" ? props.outcome.result.swarm?.probabilityModel : undefined)
     : undefined;
   const forensicsActionLabel = props.forensicsBusy
     ? props.forensicsPreviewState === "skipped" ? "服务端判读中" : forensics?.source === "browser-preview" ? "模型判读中" : forensics?.source === "vlm" ? "正在归档" : "本地图谱生成中"
@@ -376,6 +511,8 @@ export default function AgentResult(props: Props) {
               <div className="consensus-track"><i style={{ width: `${Math.round(Number(props.outcome.result.swarm.consensusScore || 0) * 100)}%` }} /></div>
             </section>
           )}
+          <ProbabilitySection model={probabilityModel} />
+          <SynthIDSection report={synthid} />
           <WatermarkSection report={visibleWatermark} preview={preview} />
           <div className="result-actions">
             <button type="button" className="primary-button" onClick={props.onDownload} disabled={props.downloadBusy}>
@@ -402,6 +539,8 @@ export default function AgentResult(props: Props) {
             <div className="section-title"><Layers3 size={18} /><div><h3>证据摘要</h3><p>证据条目用于解释模型判断，不应脱离原始文件单独使用。</p></div></div>
             <EvidenceList items={evidenceItems} />
           </section>
+          <ProbabilitySection model={probabilityModel} />
+          <SynthIDSection report={synthid} />
           <WatermarkSection report={visibleWatermark} preview={preview} />
           {props.outcome.kind === "image" && props.outcome.result.swarm?.experts && (
             <section className="result-band">

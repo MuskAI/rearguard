@@ -85,7 +85,7 @@ def test_developer_api_key_lifecycle(client, monkeypatch):
     def fake_lastid(sql, params=None):
         assert "INSERT INTO developer_api_keys" in sql
         next_id["value"] += 1
-        user_id, name, key_hash, key_prefix, key_last4, scopes = params
+        user_id, name, key_hash, key_prefix, key_last4, scopes, expires_at, ip_allowlist = params
         rows.append({
             "id": next_id["value"],
             "user_id": user_id,
@@ -98,6 +98,8 @@ def test_developer_api_key_lifecycle(client, monkeypatch):
             "created_at": "2026-06-02 10:00:00",
             "last_used_at": None,
             "revoked_at": None,
+            "expires_at": expires_at,
+            "ip_allowlist": ip_allowlist,
             "phone": "13800000000",
             "username": "tester",
         })
@@ -225,9 +227,7 @@ def test_developer_token_usage_proxy_uses_current_user(client, monkeypatch):
     assert summary["totalTokens"] == 19
 
 
-def test_developer_v1_detect_uses_api_key_and_records_call(client, monkeypatch):
-    recorded = {}
-
+def test_developer_v1_detect_is_retired_after_key_validation(client, monkeypatch):
     monkeypatch.setattr(
         api,
         "_developer_key_required",
@@ -239,27 +239,6 @@ def test_developer_v1_detect_uses_api_key_and_records_call(client, monkeypatch):
             "openid": "openid-1",
         }, None),
     )
-    monkeypatch.setattr(
-        api,
-        "image_detect_for_actor",
-        lambda user_info, is_guest=False: api.jsonify({
-            "status": "success",
-            "result": {
-                "itemid": 22,
-                "final_label": "AI生成图像",
-                "probability": 0.73,
-                "modelVersion": "realguard-v1-image",
-            },
-        }),
-    )
-
-    def fake_record(actor, **kwargs):
-        recorded["actor"] = actor
-        recorded["kwargs"] = kwargs
-        return True
-
-    monkeypatch.setattr(api, "_record_developer_usage_event", fake_record)
-
     response = client.post(
         "/api/developer/v1/detect",
         headers={"X-RealGuard-Key": "rg_sk_test"},
@@ -267,11 +246,8 @@ def test_developer_v1_detect_uses_api_key_and_records_call(client, monkeypatch):
         content_type="multipart/form-data",
     )
 
-    assert response.status_code == 200
-    assert response.get_json()["result"]["modelVersion"] == "realguard-v1-image"
-    assert recorded["actor"]["id"] == 9
-    assert recorded["kwargs"]["pipeline"] == "v1"
-    assert recorded["kwargs"]["endpoint"] == "/api/developer/v1/detect"
+    assert response.status_code == 410
+    assert response.get_json()["migration"] == "/api/developer/openapi.json"
 
 
 def test_guest_image_detect_returns_rewritten_url_and_then_blocks(client, monkeypatch):

@@ -81,6 +81,32 @@ export interface Region {
   score: number;
 }
 
+export interface ProbabilityFactor {
+  kind: string;
+  label: string;
+  source?: string;
+  group?: string;
+  likelihoodRatio?: number;
+  effectiveLikelihoodRatio?: number;
+  correlationExponent?: number;
+}
+
+export interface ProbabilityModel {
+  version: string;
+  method: string;
+  pixelBaseline?: number;
+  adjustedBaseline?: number;
+  baseRate?: number;
+  posterior: number;
+  effectiveLikelihoodRatio?: number;
+  crossModalExponent?: number;
+  factors: ProbabilityFactor[];
+  decisive?: boolean;
+  corroborated?: boolean;
+  calibrationStatus?: string;
+  note?: string;
+}
+
 export interface UnifiedForensicsRegion {
   modality: "image" | "video" | string;
   source: string;
@@ -158,22 +184,100 @@ export interface DetectResult {
   explanation: string;
   synthid?: SynthIDResult;
   visibleWatermark?: VisibleWatermarkResult;
+  probabilityModel?: ProbabilityModel;
+  provenancePrecheck?: ProvenancePrecheckResult;
   unifiedForensics?: UnifiedForensicsOutput;
   forensics?: ForensicReport | null;
   provenance?: ProvenanceReport | null;
   disclaimer: string;
 }
 
+export interface ProvenancePrecheckResult {
+  status: string;
+  available: boolean;
+  engine?: string;
+  engineVersion?: string;
+  elapsedMs?: number;
+  roundTripMs?: number;
+  genericVisibleWatermark?: {
+    available: boolean;
+    detected?: boolean;
+    count?: number;
+    elapsedMs?: number;
+    roundTripMs?: number;
+    model?: string;
+    modelRevision?: string;
+    confidenceThreshold?: number;
+    mode?: string;
+    error?: string;
+  };
+  visibleHits?: Array<{
+    provider: string;
+    label?: string;
+    confidence: number;
+    bbox: { x: number; y: number; w: number; h: number };
+    model?: string;
+    modelRevision?: string;
+    decisive?: boolean;
+    yoloCorroborated?: boolean;
+    yoloConfidence?: number;
+  }>;
+  decision?: {
+    shortCircuit: boolean;
+    modelRequired: boolean;
+    verdict?: Verdict | null;
+    confidence?: number;
+    reason?: string;
+    evidenceKinds?: string[];
+    summary?: string;
+  };
+  report?: {
+    isAiGenerated?: boolean | null;
+    platform?: string | null;
+    confidence?: string;
+    aiSourceKind?: string | null;
+    aiFromMetadata?: boolean;
+    watermarks?: string[];
+    integrityClashes?: string[];
+  };
+}
+
 export interface SynthIDResult {
   enabled: boolean;
   supported: boolean;
   detected: boolean | null;
+  possiblyDetected?: boolean | null;
+  detectionState?: "detected" | "possible" | "not_detected" | "unavailable";
   confidence: number;
   phaseMatch: number;
   profile: string | null;
-  modelProfile: string;
+  modelProfile: string | null;
+  modelProfiles?: string[];
+  candidateModelProfiles?: string[];
+  attributedModelProfile?: string | null;
+  modelAttribution?: "profile_candidate" | "ambiguous" | "none" | "unavailable" | string;
+  modelResults?: Array<{
+    modelProfile: string;
+    modelLabel?: string;
+    supported: boolean;
+    detected: boolean | null;
+    possiblyDetected?: boolean | null;
+    detectionState?: "detected" | "possible" | "not_detected" | "unavailable";
+    confidence: number;
+    phaseMatch: number;
+    profile: string | null;
+    exactResolutionMatch?: boolean;
+    evidenceLevel: "strong" | "medium" | "weak" | "none" | "unavailable";
+    error?: string | null;
+  }>;
   exactProfileMatch?: boolean;
+  exactResolutionMatch?: boolean;
+  detectionThreshold?: number;
+  possibleThreshold?: number;
   evidenceLevel: "strong" | "medium" | "weak" | "none" | "unavailable";
+  method?: string;
+  verificationAuthority?: string;
+  officialVerification?: boolean;
   note: string;
   error: string | null;
   elapsedMs?: number;
@@ -188,6 +292,25 @@ export interface VisibleWatermarkHit {
   frame: number | null;
   scores: Record<string, number>;
   crop?: string | null;
+  model?: string | null;
+  modelRevision?: string | null;
+  decisive?: boolean;
+  evidenceRole?: "provenance" | "localization" | string;
+  localizationConfirmed?: boolean;
+  localizationConfidence?: number;
+  localizationModel?: string | null;
+  localizationModelRevision?: string | null;
+}
+
+export interface VisibleWatermarkEngine {
+  id: string;
+  label: string;
+  available: boolean;
+  detected?: boolean;
+  count?: number;
+  model: string;
+  version?: string | null;
+  role?: "provenance" | "localization" | "corroboration" | string;
 }
 
 export interface VisibleWatermarkResult {
@@ -201,6 +324,20 @@ export interface VisibleWatermarkResult {
   temporal: { sampledFrames: number; positiveFrames: number; moving: boolean };
   note: string;
   elapsedMs?: number;
+  reanalysis?: {
+    reused: boolean;
+    basis: string;
+    sourceTaskId?: string | null;
+    sourceCreatedAt?: string | null;
+  };
+  detector?: {
+    available: boolean;
+    model?: string | null;
+    modelRevision?: string | null;
+    confidenceThreshold?: number | null;
+    roundTripMs?: number | null;
+    engines?: VisibleWatermarkEngine[];
+  };
 }
 
 export interface HistoryItem {
@@ -250,6 +387,11 @@ export interface HealthStatus {
   unifiedLoginEnabled?: boolean;
   sessionAuthEnabled?: boolean;
   capabilities?: Partial<Record<FileType, string>>;
+  provenancePrecheck?: {
+    configured?: boolean;
+    available?: boolean | null;
+    lastElapsedMs?: number | null;
+  };
   limits?: {
     maxUploadBytes?: number;
   };
@@ -383,6 +525,116 @@ export interface AccountCounters {
   video_detect: number;
 }
 
+export interface DeveloperApiKey {
+  id: number;
+  name: string;
+  preview: string;
+  scopes: string[];
+  status: "active" | "revoked" | string;
+  createdAt: string;
+  lastUsedAt?: string;
+  revokedAt?: string;
+  expiresAt?: string;
+  ipAllowlist: string[];
+}
+
+export interface DeveloperPricing {
+  mode: "fast" | "swarm";
+  name: string;
+  unitPriceFen: number;
+  unitPriceCny: string;
+  enabled: boolean;
+  updatedAt?: string;
+}
+
+export interface DeveloperAccount {
+  userId: number;
+  status: string;
+  freeTotal: number;
+  freeUsed: number;
+  freeReserved: number;
+  freeRemaining: number;
+  balanceFen: number;
+  balanceCny: string;
+  balanceReservedFen: number;
+  availableBalanceFen: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DeveloperUsageSummary {
+  totalCalls: number;
+  totalRequests: number;
+  v1Calls: number;
+  v2Calls: number;
+  billableRequests: number;
+  cacheHits: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  lastEventAt?: string | null;
+}
+
+export interface DeveloperUsage {
+  days: number;
+  summary: DeveloperUsageSummary;
+  byDay: Array<{
+    date: string;
+    requests: number;
+    billableRequests: number;
+    totalTokens: number;
+    v1Calls?: number;
+    v2Calls?: number;
+  }>;
+  byEndpoint: Array<Record<string, string | number>>;
+  byModel: Array<Record<string, string | number>>;
+  byKey: Array<Record<string, string | number>>;
+  byPipeline: Array<Record<string, string | number>>;
+}
+
+export interface DeveloperTaskSummary {
+  id: string;
+  status: string;
+  mode: "fast" | "swarm";
+  filename: string;
+  progress: number;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  billing?: {
+    source: "free" | "balance";
+    amountFen: number;
+    amountCny: string;
+    status: string;
+  } | null;
+}
+
+export interface DeveloperAccountResponse {
+  status: string;
+  account: DeveloperAccount;
+  pricing: DeveloperPricing[];
+  modeSummary: {
+    fast: { calls: number; spendFen: number };
+    swarm: { calls: number; spendFen: number };
+  };
+  usage: DeveloperUsage;
+  recentTasks: DeveloperTaskSummary[];
+}
+
+export interface DeveloperLedgerEntry {
+  id: number;
+  keyId?: number | null;
+  taskId?: string | null;
+  type: string;
+  mode?: "fast" | "swarm" | null;
+  freeCallsDelta: number;
+  balanceDeltaFen: number;
+  amountFen: number;
+  balanceAfterFen: number;
+  note: string;
+  createdAt: string;
+}
+
 export interface ImageAgentExpert {
   id: string;
   publicId?: string;
@@ -404,6 +656,7 @@ export interface ImageAgentReview {
   totalExperts?: number;
   experts?: ImageAgentExpert[];
   evidence?: string[];
+  probabilityModel?: ProbabilityModel;
 }
 
 export interface ImageAgentResult {
@@ -425,6 +678,8 @@ export interface ImageAgentResult {
   llm_used?: boolean;
   feedback?: 1 | -1 | null;
   swarm?: ImageAgentReview;
+  probabilityModel?: ProbabilityModel;
+  synthid?: SynthIDResult;
   visibleWatermark?: VisibleWatermarkResult;
 }
 
@@ -547,6 +802,67 @@ export function registerAccount(payload: {
 
 export function logoutAccount() {
   return accountJson<{ status: string }>("/api/logout", { method: "POST" }, "退出失败");
+}
+
+export function fetchDeveloperKeys() {
+  return accountJson<{ status: string; keys: DeveloperApiKey[] }>(
+    "/api/developer/keys",
+    {},
+    "API Key 暂时无法读取",
+  );
+}
+
+export function createDeveloperKey(payload: {
+  name: string;
+  scopes: string[];
+  expiresAt?: string | null;
+  ipAllowlist?: string[];
+}) {
+  return accountJson<{ status: string; apiKey: string; key: DeveloperApiKey }>(
+    "/api/developer/keys",
+    { method: "POST", body: JSON.stringify(payload) },
+    "API Key 创建失败",
+  );
+}
+
+export function revokeDeveloperKey(keyId: number) {
+  return accountJson<{ status: string; revoked: number }>(
+    `/api/developer/keys/${encodeURIComponent(String(keyId))}`,
+    { method: "DELETE" },
+    "API Key 撤销失败",
+  );
+}
+
+export function rotateDeveloperKey(keyId: number) {
+  return accountJson<{ status: string; apiKey: string; key: DeveloperApiKey; revoked: number }>(
+    `/api/developer/keys/${encodeURIComponent(String(keyId))}/rotate`,
+    { method: "POST", body: JSON.stringify({}) },
+    "API Key 轮换失败",
+  );
+}
+
+export function fetchDeveloperAccount(days: 7 | 14 | 30 | 90 = 30) {
+  return accountJson<DeveloperAccountResponse>(
+    `/api/developer/account?days=${encodeURIComponent(String(days))}`,
+    {},
+    "开发者账户暂时无法读取",
+  );
+}
+
+export function fetchDeveloperLedger(limit = 50) {
+  return accountJson<{ status: string; entries: DeveloperLedgerEntry[] }>(
+    `/api/developer/ledger?limit=${encodeURIComponent(String(limit))}`,
+    {},
+    "计费账本暂时无法读取",
+  );
+}
+
+export function fetchDeveloperOpenApi() {
+  return accountJson<Record<string, unknown>>(
+    "/api/developer/openapi.json",
+    {},
+    "OpenAPI 文档暂时无法读取",
+  );
 }
 
 export function startImageAgent(file: File, signal?: AbortSignal) {

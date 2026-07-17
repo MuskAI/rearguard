@@ -120,7 +120,8 @@ jianzhen-v2-backend.service -> FastAPI, 127.0.0.1:8848
 │   ├── deploy_converge.sh      # 按需发布两个内部服务组
 │   └── check_deploy_status.sh  # 线上状态检查
 └── skills/
-    └── realguard-forensics/    # 内部 agent skill 资料
+    ├── realguard-forensics/    # 内部取证 skill 资料
+    └── huijian-image-forensics/ # 对外图像鉴伪 Agent Skill
 ```
 
 ## 这次迁移后的重要变化
@@ -294,6 +295,40 @@ VITE_API_TARGET=http://127.0.0.1:8848 npm run dev
 npm run build
 ```
 
+## 开发者平台
+
+登录后的用户可从官网或工作台进入 `https://www.rrreal.cn/?developer=1`。一期只开放图像鉴伪，快速检测与 Swarm 多源复核使用同一套异步 API：
+
+```text
+POST /api/openapi/v1/image-detections
+GET  /api/openapi/v1/image-detections/{task_id}
+GET  /api/openapi/v1/image-detections/{task_id}/report
+```
+
+平台提供 API Key 创建、轮换和撤销，支持模式权限、有效期与 IP/CIDR 白名单。完整 Key 只在创建或轮换时显示一次，服务端只保存 SHA-256 派生哈希。所有 Key 共享账号级额度，轮换或重建 Key 不会重置赠送次数。
+
+每个开发者账号首次初始化赠送 100 次成功检测额度。提交时先原子预占，只有任务成功落库后才结算；参数错误、模型失败、调度失败和超时不会消费额度。赠送额度耗尽后，快速与 Swarm 分别按 `developer_pricing` 配置计价；一期不开在线支付，由管理员手工调整余额并写入审计账本。
+
+数据库升级：
+
+```bash
+cd realguard-server-main/RealGuard
+python -m flask --app run:app developer-db-upgrade
+```
+
+显式迁移文件位于 `realguard-server-main/RealGuard/sql/migrations/20260717_developer_platform.sql`。正式发布脚本会自动执行开发者表升级。
+
+关键环境变量：
+
+- `REALGUARD_DEVELOPER_FREE_CALLS=100`
+- `REALGUARD_DEVELOPER_MAX_IMAGE_BYTES=26214400`
+- `REALGUARD_DEVELOPER_FAST_PRICE_FEN`、`REALGUARD_DEVELOPER_SWARM_PRICE_FEN`
+- `REALGUARD_DEVELOPER_FAST_BILLING_ENABLED`、`REALGUARD_DEVELOPER_SWARM_BILLING_ENABLED`
+- `REALGUARD_TRUSTED_PROXY_CIDRS=127.0.0.0/8,::1/128`
+- `JIANZHEN_ALLOW_DIRECT_DEVELOPER_KEYS=false`，禁止绕过统一计费网关直接调用证据服务
+
+完整运维与接口说明见 `docs/DEVELOPER_PLATFORM.md`。Agent Skill 位于 `skills/huijian-image-forensics/`，使用 `HUIJIAN_API_KEY`，可提交本地图像、轮询任务、输出结构化证据并下载 PDF 报告。
+
 ## 测试和验证
 
 ### 账户与检测服务全量测试
@@ -305,7 +340,7 @@ uv pip install --python realguard-server-main/RealGuard/.venv-test/bin/python \
 realguard-server-main/RealGuard/.venv-test/bin/pytest realguard-server-main/RealGuard/tests
 ```
 
-当前基准：`120 passed`。
+当前基准以 CI 或本地全量 `pytest` 输出为准。
 
 ### 证据服务测试
 
@@ -313,7 +348,7 @@ realguard-server-main/RealGuard/.venv-test/bin/pytest realguard-server-main/Real
 v2-agent/backend/.venv/bin/pytest v2-agent/backend/tests
 ```
 
-当前基准：`39 passed`。
+当前基准以 CI 或本地全量 `pytest` 输出为准。
 
 ### 前端构建
 
@@ -359,6 +394,7 @@ DEPLOY_SSH_KEY=/path/to/private_key ./scripts/deploy_v1.sh
 - 安装生产 Nginx 配置并执行 `nginx -t`
 - 重启 `realguard-detector-backend.service`
 - 重启 `realguard-backend.service`
+- 执行 `developer-db-upgrade`，创建或升级 API Key、用量和计费表
 - 写入 `/opt/realguard-server/DEPLOYED_COMMIT`
 - 健康检查
 
@@ -583,6 +619,7 @@ WHERE Userid IS NULL AND (phone IS NULL OR phone = '');
 - 任意远程视频 URL 默认关闭；只有明确设置 `REALGUARD_ALLOW_REMOTE_VIDEO_URLS=1` 才开启，生产不建议开启。
 - 私有接口响应必须保留 `Cache-Control: private, no-store`，账户切换时前端必须取消旧请求并清空旧状态。
 - 管理员账号和大屏 token 只在服务器环境变量或数据库中维护。
+- 对外开发者请求必须经过 `/api/openapi/v1/` 计费网关；`/api/developer/v1/detect` 与证据服务直连 Key 均保持停用。
 
 ## 已知问题和待办
 

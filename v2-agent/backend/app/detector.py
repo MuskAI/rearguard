@@ -128,6 +128,7 @@ def _merge_synthid(result: dict, data: bytes) -> dict:
     if synthid.get("supported"):
         score = float(synthid.get("confidence") or 0.0)
         detected = bool(synthid.get("detected"))
+        possibly_detected = bool(synthid.get("possiblyDetected"))
         if not detected:
             score = min(score, 0.35)
         result["dimensions"].append({
@@ -135,26 +136,29 @@ def _merge_synthid(result: dict, data: bytes) -> dict:
             "label": "SynthID水印取证",
             "score": round(score, 2),
             "result": (
-                f"检测到疑似 Gemini 水印，相位匹配 {synthid.get('phaseMatch', 0)}"
+                f"实验检测命中，相位匹配 {synthid.get('phaseMatch', 0)}"
                 if detected
-                else "未检测到可靠 Gemini 水印"
+                else "发现低强度疑似信号，待交叉验证"
+                if possibly_detected
+                else "未检测到可靠 SynthID 频谱信号"
             ),
         })
 
-        if detected and float(synthid.get("confidence") or 0.0) >= 0.85:
-            result["confidence"] = round(max(float(result.get("confidence", 0.0)), float(synthid["confidence"])), 2)
-            result["verdict"] = "highly_suspected_fake"
-            result["explanation"] = (
-                f"{result.get('explanation', '')}\n"
-                "SynthID 水印取证检测到高置信度 Gemini 隐形水印信号，"
-                "该信号通常与 Google Gemini 生成图像相关，因此作为强 AI 生成辅助证据纳入最终判定。"
-            ).strip()
-        elif detected and float(synthid.get("confidence") or 0.0) >= 0.6 and result.get("verdict") == "real":
-            result["confidence"] = round(max(float(result.get("confidence", 0.0)), float(synthid["confidence"])), 2)
+        # The community spectral adapter is not Google's official verifier.
+        # Even a strong exact-resolution hit may only raise a real verdict to
+        # "suspected"; weaker/ambiguous matches remain explanatory evidence.
+        if (
+            detected
+            and synthid.get("evidenceLevel") == "strong"
+            and synthid.get("exactResolutionMatch")
+            and result.get("verdict") == "real"
+        ):
+            result["confidence"] = round(max(float(result.get("confidence", 0.0)), 0.6), 2)
             result["verdict"] = "suspected_fake"
             result["explanation"] = (
                 f"{result.get('explanation', '')}\n"
-                "SynthID 水印取证发现中等置信度 Gemini 水印信号，当前结论上调为疑似伪造。"
+                "实验性 SynthID 频谱取证发现高强度且分辨率档案精确匹配的信号，"
+                "因此将结论上调为疑似生成；该结果仍需 Google 官方验证或来源凭证交叉确认。"
             ).strip()
     else:
         result.setdefault("dimensions", []).append({

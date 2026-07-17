@@ -4,6 +4,7 @@ import {
   Bot,
   Check,
   CircleDashed,
+  Code2,
   FileText,
   Home,
   Image as ImageIcon,
@@ -55,6 +56,7 @@ import AgentHistory, { MobileHistoryButton } from "./components/AgentHistory";
 import AnalysisModeSwitch from "./components/AnalysisModeSwitch";
 import AgentResult from "./components/AgentResult";
 import AuthDialog from "./components/AuthDialog";
+import DeveloperPlatform from "./components/DeveloperPlatform";
 import OfficialHome from "./components/OfficialHome";
 import ResultFeedback from "./components/ResultFeedback";
 import "./interaction.css";
@@ -67,10 +69,12 @@ const AGENT_POLL_RATE_LIMIT_RETRIES = 8;
 const ACCEPTED_FILES = "image/jpeg,image/png,image/webp,image/bmp,image/gif,video/mp4,video/quicktime,video/webm,.txt,.md,.csv,.json,.log,.docx,.mp4,.mov,.webm";
 
 type UploadKind = "image" | "video" | "audio" | "document" | "unknown";
-type AppView = "home" | "workspace";
+type AppView = "home" | "workspace" | "developer";
 
 function initialAppView(): AppView {
-  return new URLSearchParams(window.location.search).get("workspace") === "1" ? "workspace" : "home";
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("developer") === "1") return "developer";
+  return params.get("workspace") === "1" ? "workspace" : "home";
 }
 
 function inferKind(name: string): UploadKind {
@@ -312,11 +316,15 @@ export default function App() {
 
   const navigateToView = useCallback((nextView: AppView) => {
     const url = new URL(window.location.href);
+    url.searchParams.delete("workspace");
+    url.searchParams.delete("developer");
     if (nextView === "workspace") {
       url.searchParams.set("workspace", "1");
       url.hash = "";
+    } else if (nextView === "developer") {
+      url.searchParams.set("developer", "1");
+      url.hash = "";
     } else {
-      url.searchParams.delete("workspace");
       url.hash = "home";
     }
     window.history.pushState({ view: nextView }, "", url);
@@ -757,7 +765,20 @@ export default function App() {
           health={health}
           user={user}
           onEnterWorkspace={() => navigateToView("workspace")}
+          onDeveloper={() => {
+            navigateToView("developer");
+            if (!user) setAuthOpen(true);
+          }}
           onLogin={() => setAuthOpen(true)}
+        />
+      ) : view === "developer" ? (
+        <DeveloperPlatform
+          authReady={authReady}
+          user={user}
+          onLogin={() => setAuthOpen(true)}
+          onHome={() => navigateToView("home")}
+          onWorkspace={() => navigateToView("workspace")}
+          onLogout={logout}
         />
       ) : (
       <div className="agent-app">
@@ -798,6 +819,7 @@ export default function App() {
             ) : (
               <button type="button" className="secondary-button topbar-login" onClick={() => setAuthOpen(true)}><LogIn size={16} /> 登录</button>
             ))}
+            <button type="button" className="workspace-developer-button" onClick={() => navigateToView("developer")} title="开发者平台"><Code2 size={16} /><span>开发者</span></button>
           </div>
         </header>
 

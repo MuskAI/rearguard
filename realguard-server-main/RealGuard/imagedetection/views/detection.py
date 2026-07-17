@@ -1328,8 +1328,14 @@ def _public_swarm_verdict(expert):
     if status == 'skipped':
         return '已跳过'
     if str((expert or {}).get('id') or '') == 'visible_watermark' and status == 'success':
+        visible = (expert or {}).get('visibleWatermark')
+        if isinstance(visible, dict):
+            return swarm_visible_watermark_expert._expert_verdict(visible)
+        verdict = str((expert or {}).get('verdict') or '').strip()
+        if verdict:
+            return verdict
         count = int((expert or {}).get('watermarkCount') or 0)
-        return f'检出 {count} 处 AI 平台水印' if count else '未检出 AI 平台水印'
+        return f'定位 {count} 处可见水印' if count else '未检出可见水印'
     if status != 'success' or (expert or {}).get('score') is None:
         return '等待复核'
     score = _clamp01((expert or {}).get('score'), 0.5)
@@ -1405,12 +1411,52 @@ def _public_swarm_result(result):
     return public_result
 
 
+def _visible_watermark_from_raw_experts(experts):
+    for expert in experts or []:
+        if not isinstance(expert, dict) or expert.get('id') != 'primary':
+            continue
+        remote_evidence = expert.get('remoteEvidence') or {}
+        precheck = remote_evidence.get('visibleWatermarkPrecheck')
+        update = _swarm_visible_update_from_precheck(precheck)
+        if update and isinstance(update.get('visibleWatermark'), dict):
+            return update['visibleWatermark']
+
+    for expert in experts or []:
+        if not isinstance(expert, dict) or expert.get('id') != 'visible_watermark':
+            continue
+        visible = expert.get('visibleWatermark')
+        if isinstance(visible, dict):
+            return copy.deepcopy(visible)
+    return None
+
+
+def _apply_visible_watermark_to_experts(experts, visible):
+    if not isinstance(visible, dict):
+        return
+    count = len(visible.get('hits') or [])
+    for expert in experts or []:
+        if not isinstance(expert, dict) or expert.get('id') != 'visible_watermark':
+            continue
+        expert.update({
+            'status': 'success',
+            'score': None,
+            'verdict': swarm_visible_watermark_expert._expert_verdict(visible),
+            'confidence': '高' if _to_float(visible.get('confidence'), 0.0) >= 0.8 else ('中' if count else '无'),
+            'evidence': [visible.get('note') or '可见水印检测完成。'],
+            'watermarkDetected': bool(count),
+            'watermarkCount': count,
+            'visibleWatermark': copy.deepcopy(visible),
+        })
+
+
 def _public_detection_job(job):
     if not isinstance(job, dict):
         return job
     public_job = copy.deepcopy(job)
     if public_job.get('mode') != 'swarm' and public_job.get('kind') != 'swarm':
         return public_job
+    recovered_visible = _visible_watermark_from_raw_experts(public_job.get('experts') or [])
+    _apply_visible_watermark_to_experts(public_job.get('experts') or [], recovered_visible)
     public_job['experts'] = [
         _public_swarm_expert(expert, index)
         for index, expert in enumerate(public_job.get('experts') or [])
@@ -1428,8 +1474,14 @@ def _public_detection_job(job):
     if isinstance(public_job.get('result'), dict):
         payload = public_job['result']
         if isinstance(payload.get('result'), dict):
+            if isinstance(recovered_visible, dict):
+                payload['result']['visibleWatermark'] = copy.deepcopy(recovered_visible)
+                swarm = payload['result'].get('swarm')
+                if isinstance(swarm, dict):
+                    _apply_visible_watermark_to_experts(swarm.get('experts') or [], recovered_visible)
             payload['result'] = _public_swarm_result(payload['result'])
         if isinstance(payload.get('experts'), list):
+            _apply_visible_watermark_to_experts(payload['experts'], recovered_visible)
             payload['experts'] = [
                 _public_swarm_expert(expert, index)
                 for index, expert in enumerate(payload.get('experts') or [])
@@ -1505,7 +1557,7 @@ def _swarm_visible_update_from_precheck(payload):
     return {
         'status': 'success',
         'score': None,
-        'verdict': f'检出 {count} 处 AI 平台水印' if count else '未检出 AI 平台水印',
+        'verdict': swarm_visible_watermark_expert._expert_verdict(visible),
         'confidence': '高' if _to_float(visible.get('confidence'), 0.0) >= 0.8 else ('中' if count else '无'),
         'evidence': [visible.get('note') or 'AI 平台水印识别完成。'],
         'message': f"detected={str(bool(count)).lower()}|count={count}|source=shared-upload",
@@ -1517,6 +1569,29 @@ def _swarm_visible_update_from_precheck(payload):
         'probabilityModel': provenance_decision.get('probabilityModel'),
         'latencyMs': int(_to_float(payload.get('elapsedMs'), 0.0)),
     }
+
+
+def _runtime_visible_watermark_for_item(itemid):
+    """Recover the latest visible-watermark evidence for an owned history item."""
+    target = str(itemid or '')
+    if not target:
+        return None
+    stored_visible = _stored_visible_watermark_for_item(target)
+    if isinstance(stored_visible, dict):
+        return stored_visible
+    for job in admin_state.list_detection_jobs(limit=500):
+        wrapped = job.get('result') if isinstance(job, dict) else None
+        result = wrapped.get('result') if isinstance(wrapped, dict) else None
+        if not isinstance(result, dict) or str(result.get('itemid') or '') != target:
+            continue
+
+        recovered = _visible_watermark_from_raw_experts(job.get('experts') or [])
+        if isinstance(recovered, dict):
+            return recovered
+
+        stored = result.get('visibleWatermark')
+        return stored if isinstance(stored, dict) else None
+    return None
 
 
 def _clamp01(value, default=0.5):
@@ -1714,6 +1789,7 @@ def _swarm_v2_expert(image_bytes, filename, mimetype):
         'confidence': _conf_level_from_score(_conf_score_from_api(payload.get('confidence'), score * 100)),
         'evidence': evidence[:3] or ['V2 视觉语言复核完成。'],
         'message': 'V2 复核完成',
+        'synthid': payload.get('synthid') if isinstance(payload.get('synthid'), dict) else None,
         'latencyMs': int((time.time() - started_at) * 1000),
     }
 
@@ -2163,6 +2239,9 @@ def _run_swarm_detection_payload(image_bytes, filename, mimetype, user_info, *, 
     final_result, error = _swarm_aggregate(experts, primary_result, fallback_result)
     if error:
         return {'status': 'error', 'message': error, 'experts': experts}, 502
+    v2_expert = next((expert for expert in experts if expert.get('id') == 'v2'), None)
+    if v2_expert and isinstance(v2_expert.get('synthid'), dict):
+        final_result['synthid'] = v2_expert['synthid']
     visible_expert = next((expert for expert in experts if expert.get('id') == 'visible_watermark'), None)
     if visible_expert and isinstance(visible_expert.get('visibleWatermark'), dict):
         final_result['visibleWatermark'] = visible_expert['visibleWatermark']
@@ -2402,7 +2481,7 @@ def image_result_api():
         'all_metadata': all_metadata,
         'feedback': feedback,
     }
-    visible_watermark = _stored_visible_watermark_for_item(item.get('itemid'))
+    visible_watermark = _runtime_visible_watermark_for_item(item.get('itemid'))
     if isinstance(visible_watermark, dict):
         result['visibleWatermark'] = visible_watermark
         watermark_verdict.apply_to_result(result, visible_watermark)
@@ -2439,7 +2518,7 @@ def image_report_api():
         'visual_issues': _normalize_visual_issues([], final_label='AI生成图像' if fake_pct >= 50 else '真实图像'),
         'all_metadata': _metadata_for_item(itemid),
     }
-    visible_watermark = _stored_visible_watermark_for_item(item.get('itemid'))
+    visible_watermark = _runtime_visible_watermark_for_item(item.get('itemid'))
     if isinstance(visible_watermark, dict):
         result['visibleWatermark'] = visible_watermark
         watermark_verdict.apply_to_result(result, visible_watermark)

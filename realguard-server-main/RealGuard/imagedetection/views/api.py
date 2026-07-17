@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import ipaddress
 import io
 import os
 import secrets
@@ -10,9 +11,8 @@ from urllib.parse import quote
 
 import requests
 from PIL import Image
-from flask import Blueprint, Response, jsonify, make_response, request, send_file, session, stream_with_context
+from flask import Blueprint, Response, jsonify, request, send_file, session, stream_with_context
 
-from imagedetection.views.detection import image_detect_for_actor
 from imagedetection.views.historical_record import DETECTION_BACKEND_BASE_URL
 from imagedetection.views.login import (
     _authenticate_password_user,
@@ -40,8 +40,14 @@ HISTORY_ORDER_BY = (
 )
 DEVELOPER_API_KEY_PREFIX = "rg_sk_"
 DEVELOPER_API_KEY_MAX_ACTIVE = int(os.environ.get("REALGUARD_DEVELOPER_API_KEY_MAX_ACTIVE", "5"))
-DEVELOPER_API_KEY_DEFAULT_SCOPES = "detect,forensics,provenance,reports"
+DEVELOPER_API_KEY_DEFAULT_SCOPES = "image:fast,image:swarm,reports"
+DEVELOPER_API_KEY_ALLOWED_SCOPES = frozenset({"image:fast", "image:swarm", "reports"})
 DEVELOPER_AUTH_SECRET = os.environ.get("REALGUARD_DEVELOPER_AUTH_SECRET", "").strip()
+DEVELOPER_TRUSTED_PROXY_CIDRS = tuple(
+    value.strip()
+    for value in os.environ.get("REALGUARD_TRUSTED_PROXY_CIDRS", "127.0.0.0/8,::1/128").split(",")
+    if value.strip()
+)
 DEVELOPER_USAGE_URL = os.environ.get(
     "REALGUARD_DEVELOPER_USAGE_URL",
     "http://127.0.0.1:8848/api/developer/token-usage",
@@ -155,7 +161,148 @@ def _developer_key_payload(row):
         "createdAt": format_createtime(row.get("created_at", "")),
         "lastUsedAt": format_createtime(row.get("last_used_at", "")),
         "revokedAt": format_createtime(row.get("revoked_at", "")),
+        "expiresAt": format_createtime(row.get("expires_at", "")),
+        "ipAllowlist": _developer_ip_allowlist(row.get("ip_allowlist")),
     }
+
+
+def _developer_ip_allowlist(raw):
+    if isinstance(raw, (list, tuple)):
+        values = raw
+    else:
+        values = str(raw or "").replace("\r", "\n").replace(",", "\n").split("\n")
+    return [str(item).strip() for item in values if str(item).strip()]
+
+
+def _normalize_developer_ip_allowlist(raw):
+    normalized = []
+    for value in _developer_ip_allowlist(raw):
+        try:
+            network = ipaddress.ip_network(value, strict=False)
+        except ValueError:
+            return None, f"IP 白名单格式无效: {value}"
+        canonical = str(network.network_address) if network.num_addresses == 1 else str(network)
+        if canonical not in normalized:
+            normalized.append(canonical)
+    if len(normalized) > 32:
+        return None, "IP 白名单最多支持 32 条"
+    return normalized, None
+
+
+def _developer_request_ip():
+    direct = str(request.remote_addr or "").strip()
+    try:
+        direct_ip = ipaddress.ip_address(direct)
+        trusted_proxy = any(
+            direct_ip in ipaddress.ip_network(value, strict=False)
+            for value in DEVELOPER_TRUSTED_PROXY_CIDRS
+        )
+    except ValueError:
+        trusted_proxy = False
+    if not trusted_proxy:
+        return direct
+
+    real_ip = request.headers.get("x-real-ip", "").strip()
+    try:
+        if real_ip:
+            ipaddress.ip_address(real_ip)
+            return real_ip
+    except ValueError:
+        pass
+
+    forwarded = [item.strip() for item in request.headers.get("x-forwarded-for", "").split(",") if item.strip()]
+    for candidate in reversed(forwarded):
+        try:
+            candidate_ip = ipaddress.ip_address(candidate)
+        except ValueError:
+            continue
+        if not any(candidate_ip in ipaddress.ip_network(value, strict=False) for value in DEVELOPER_TRUSTED_PROXY_CIDRS):
+            return candidate
+    return direct
+
+
+def _developer_ip_allowed(raw_allowlist):
+    allowlist = _developer_ip_allowlist(raw_allowlist)
+    if not allowlist:
+        return True
+    try:
+        client_ip = ipaddress.ip_address(_developer_request_ip())
+    except ValueError:
+        return False
+    return any(client_ip in ipaddress.ip_network(value, strict=False) for value in allowlist)
+
+
+def _normalize_developer_expiry(raw):
+    if raw in (None, ""):
+        return None, None
+    text = str(raw).strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None, "有效期格式无效，请使用 ISO 8601 时间"
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone().replace(tzinfo=None)
+    if parsed <= datetime.now():
+        return None, "有效期必须晚于当前时间"
+    return parsed.strftime("%Y-%m-%d %H:%M:%S"), None
+
+
+def _developer_key_options(payload, *, fallback_name="Default key", fallback_scopes=None, fallback_expiry=None, fallback_ips=None):
+    name = str(payload.get("name") or fallback_name).strip() or fallback_name
+    if len(name) > 120:
+        return None, "Key 名称不能超过 120 个字符"
+
+    raw_scopes = payload.get("scopes", fallback_scopes or DEVELOPER_API_KEY_DEFAULT_SCOPES)
+    if isinstance(raw_scopes, (list, tuple)):
+        scopes = [str(item).strip() for item in raw_scopes if str(item).strip()]
+    else:
+        scopes = _developer_scopes(raw_scopes)
+    scopes = list(dict.fromkeys(scopes))
+    invalid_scopes = sorted(set(scopes) - DEVELOPER_API_KEY_ALLOWED_SCOPES)
+    if invalid_scopes:
+        return None, f"不支持的权限范围: {', '.join(invalid_scopes)}"
+    if not any(scope in {"image:fast", "image:swarm"} for scope in scopes):
+        return None, "请至少启用快速检测或 Swarm 检测权限"
+    if "reports" not in scopes:
+        scopes.append("reports")
+
+    expiry_raw = payload.get("expiresAt", payload.get("expires_at", fallback_expiry))
+    expires_at, expiry_error = _normalize_developer_expiry(expiry_raw)
+    if expiry_error:
+        return None, expiry_error
+
+    ips_raw = payload.get("ipAllowlist", payload.get("ip_allowlist", fallback_ips))
+    ip_allowlist, ip_error = _normalize_developer_ip_allowlist(ips_raw)
+    if ip_error:
+        return None, ip_error
+    return {
+        "name": name,
+        "scopes": ",".join(scopes),
+        "expires_at": expires_at,
+        "ip_allowlist": ",".join(ip_allowlist),
+    }, None
+
+
+def _issue_developer_key(user_id, options):
+    api_key = f"{DEVELOPER_API_KEY_PREFIX}{secrets.token_urlsafe(32)}"
+    row_id = excute_sql_lastid(
+        """
+        INSERT INTO developer_api_keys
+            (user_id, name, key_hash, key_prefix, key_last4, scopes, status, expires_at, ip_allowlist)
+        VALUES (%s, %s, %s, %s, %s, %s, 'active', %s, %s)
+        """,
+        (
+            user_id,
+            options["name"],
+            _developer_key_hash(api_key),
+            DEVELOPER_API_KEY_PREFIX,
+            api_key[-4:],
+            options["scopes"],
+            options["expires_at"],
+            options["ip_allowlist"],
+        ),
+    )
+    return api_key, row_id
 
 
 def _ensure_developer_api_key_table():
@@ -171,11 +318,13 @@ def _ensure_developer_api_key_table():
           key_hash CHAR(64) NOT NULL,
           key_prefix VARCHAR(16) NOT NULL DEFAULT 'rg_sk_',
           key_last4 CHAR(4) NOT NULL,
-          scopes VARCHAR(255) NOT NULL DEFAULT 'detect,forensics,provenance,reports',
+          scopes VARCHAR(255) NOT NULL DEFAULT 'image:fast,image:swarm,reports',
           status VARCHAR(16) NOT NULL DEFAULT 'active',
           created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
           last_used_at DATETIME NULL,
           revoked_at DATETIME NULL,
+          expires_at DATETIME NULL,
+          ip_allowlist TEXT NULL,
           last_used_ip VARCHAR(64) NULL,
           PRIMARY KEY (id),
           UNIQUE KEY uk_developer_api_key_hash (key_hash),
@@ -188,7 +337,12 @@ def _ensure_developer_api_key_table():
         """,
         fetch=False,
     )
-    _DEVELOPER_KEY_TABLE_READY = result is not None
+    if result is not None:
+        result = all((
+            _ensure_column("developer_api_keys", "expires_at", "DATETIME NULL COMMENT '密钥有效期'"),
+            _ensure_column("developer_api_keys", "ip_allowlist", "TEXT NULL COMMENT '逗号分隔的 IP/CIDR 白名单'"),
+        ))
+    _DEVELOPER_KEY_TABLE_READY = result is not None and bool(result)
     return _DEVELOPER_KEY_TABLE_READY
 
 
@@ -254,7 +408,8 @@ def _active_developer_key(api_key, *, touch=True):
         return None, None
     rows = excute_sql(
         """
-        SELECT k.id, k.user_id, k.name, k.scopes, k.status, u.phone, u.username, u.openid
+        SELECT k.id, k.user_id, k.name, k.scopes, k.status, k.expires_at, k.ip_allowlist,
+               u.phone, u.username, u.openid
         FROM developer_api_keys k
         JOIN user u ON u.Userid = k.user_id
         WHERE k.key_hash = %s
@@ -268,6 +423,17 @@ def _active_developer_key(api_key, *, touch=True):
         return None, None
 
     row = rows[0]
+    expires_at = row.get("expires_at")
+    if expires_at:
+        if not isinstance(expires_at, datetime):
+            try:
+                expires_at = datetime.fromisoformat(str(expires_at))
+            except ValueError:
+                return None, "API Key 有效期数据异常"
+        if expires_at <= datetime.now():
+            return None, None
+    if not _developer_ip_allowed(row.get("ip_allowlist")):
+        return None, "当前来源 IP 不在该 API Key 的白名单中"
     if touch:
         excute_sql(
             """
@@ -275,7 +441,7 @@ def _active_developer_key(api_key, *, touch=True):
             SET last_used_at = NOW(), last_used_ip = %s
             WHERE id = %s
             """,
-            (request.headers.get("x-forwarded-for", request.remote_addr or "")[:64], row["id"]),
+            (_developer_request_ip()[:64], row["id"]),
             fetch=False,
         )
     return row, None
@@ -284,7 +450,8 @@ def _active_developer_key(api_key, *, touch=True):
 def _developer_key_required():
     row, error = _active_developer_key(_developer_key_from_request())
     if error:
-        return None, (jsonify({"status": "error", "message": error}), 500)
+        status_code = 403 if "IP" in error else 500
+        return None, (jsonify({"status": "error", "message": error}), status_code)
     if not row:
         return None, (jsonify({"status": "error", "message": "API Key 缺失、无效或已撤销"}), 401)
     return row, None
@@ -876,7 +1043,8 @@ def developer_api_keys():
 
     rows = excute_sql(
         """
-        SELECT id, name, key_prefix, key_last4, scopes, status, created_at, last_used_at, revoked_at
+        SELECT id, name, key_prefix, key_last4, scopes, status, created_at, last_used_at,
+               revoked_at, expires_at, ip_allowlist
         FROM developer_api_keys
         WHERE user_id = %s
         ORDER BY status = 'active' DESC, created_at DESC
@@ -897,9 +1065,9 @@ def create_developer_api_key():
         return jsonify({"status": "error", "message": "API Key 存储初始化失败"}), 500
 
     payload = request.get_json(silent=True) or {}
-    name = str(payload.get("name") or "").strip() or "Default key"
-    if len(name) > 120:
-        return jsonify({"status": "error", "message": "Key 名称不能超过 120 个字符"}), 400
+    options, options_error = _developer_key_options(payload)
+    if options_error:
+        return jsonify({"status": "error", "message": options_error}), 400
 
     rows = excute_sql(
         "SELECT COUNT(*) AS cnt FROM developer_api_keys WHERE user_id = %s AND status = 'active'",
@@ -909,28 +1077,14 @@ def create_developer_api_key():
     if active_count >= DEVELOPER_API_KEY_MAX_ACTIVE:
         return jsonify({"status": "error", "message": f"最多只能保留 {DEVELOPER_API_KEY_MAX_ACTIVE} 个 active API Key"}), 400
 
-    api_key = f"{DEVELOPER_API_KEY_PREFIX}{secrets.token_urlsafe(32)}"
-    row_id = excute_sql_lastid(
-        """
-        INSERT INTO developer_api_keys
-            (user_id, name, key_hash, key_prefix, key_last4, scopes, status)
-        VALUES (%s, %s, %s, %s, %s, %s, 'active')
-        """,
-        (
-            user["Userid"],
-            name,
-            _developer_key_hash(api_key),
-            DEVELOPER_API_KEY_PREFIX,
-            api_key[-4:],
-            DEVELOPER_API_KEY_DEFAULT_SCOPES,
-        ),
-    )
+    api_key, row_id = _issue_developer_key(user["Userid"], options)
     if not row_id:
         return jsonify({"status": "error", "message": "创建 API Key 失败，请稍后重试"}), 500
 
     rows = excute_sql(
         """
-        SELECT id, name, key_prefix, key_last4, scopes, status, created_at, last_used_at, revoked_at
+        SELECT id, name, key_prefix, key_last4, scopes, status, created_at, last_used_at,
+               revoked_at, expires_at, ip_allowlist
         FROM developer_api_keys
         WHERE id = %s AND user_id = %s
         LIMIT 1
@@ -939,6 +1093,78 @@ def create_developer_api_key():
     )
     key_payload = _developer_key_payload((rows or [{}])[0])
     return jsonify({"status": "success", "apiKey": api_key, "key": key_payload})
+
+
+@api_blueprint.route("/developer/keys/<int:key_id>/rotate", methods=["POST"])
+def rotate_developer_api_key(key_id):
+    user, error = _auth_required()
+    if error:
+        return error
+    if not _ensure_developer_api_key_table():
+        return jsonify({"status": "error", "message": "API Key 存储初始化失败"}), 500
+
+    rows = excute_sql(
+        """
+        SELECT id, name, scopes, status, expires_at, ip_allowlist
+        FROM developer_api_keys
+        WHERE id = %s AND user_id = %s AND status = 'active'
+        LIMIT 1
+        """,
+        (key_id, user["Userid"]),
+    )
+    if rows is None:
+        return jsonify({"status": "error", "message": "读取 API Key 失败"}), 500
+    if not rows:
+        return jsonify({"status": "error", "message": "API Key 不存在或已撤销"}), 404
+
+    current = rows[0]
+    payload = request.get_json(silent=True) or {}
+    options, options_error = _developer_key_options(
+        payload,
+        fallback_name=current.get("name") or "Default key",
+        fallback_scopes=current.get("scopes"),
+        fallback_expiry=current.get("expires_at"),
+        fallback_ips=current.get("ip_allowlist"),
+    )
+    if options_error:
+        return jsonify({"status": "error", "message": options_error}), 400
+
+    api_key, row_id = _issue_developer_key(user["Userid"], options)
+    if not row_id:
+        return jsonify({"status": "error", "message": "轮换 API Key 失败，请稍后重试"}), 500
+    revoked = excute_sql(
+        """
+        UPDATE developer_api_keys
+        SET status = 'revoked', revoked_at = NOW()
+        WHERE id = %s AND user_id = %s AND status = 'active'
+        """,
+        (key_id, user["Userid"]),
+        fetch=False,
+    )
+    if revoked != 1:
+        excute_sql(
+            "UPDATE developer_api_keys SET status = 'revoked', revoked_at = NOW() WHERE id = %s",
+            (row_id,),
+            fetch=False,
+        )
+        return jsonify({"status": "error", "message": "原 API Key 状态已变化，请刷新后重试"}), 409
+
+    created_rows = excute_sql(
+        """
+        SELECT id, name, key_prefix, key_last4, scopes, status, created_at, last_used_at,
+               revoked_at, expires_at, ip_allowlist
+        FROM developer_api_keys
+        WHERE id = %s AND user_id = %s
+        LIMIT 1
+        """,
+        (row_id, user["Userid"]),
+    )
+    return jsonify({
+        "status": "success",
+        "apiKey": api_key,
+        "key": _developer_key_payload((created_rows or [{}])[0]),
+        "revoked": key_id,
+    })
 
 
 @api_blueprint.route("/developer/keys/<int:key_id>", methods=["DELETE"])
@@ -990,24 +1216,14 @@ def verify_developer_api_key():
 
 @api_blueprint.route("/developer/v1/detect", methods=["POST"])
 def developer_v1_detect():
-    actor, error = _developer_key_required()
+    _, error = _developer_key_required()
     if error:
         return error
-    user_info = {
-        "Userid": actor.get("user_id"),
-        "username": actor.get("username") or actor.get("phone") or "developer",
-        "phone": actor.get("phone") or "",
-        "openid": actor.get("openid") or actor.get("phone") or f"developer-{actor.get('user_id')}",
-    }
-    response = make_response(image_detect_for_actor(user_info, is_guest=False))
-    _record_developer_usage_event(
-        actor,
-        pipeline="v1",
-        endpoint="/api/developer/v1/detect",
-        model_version="realguard-v1-image",
-        status_code=response.status_code,
-    )
-    return response
+    return jsonify({
+        "status": "error",
+        "message": "该接口已停用，请迁移到 /api/openapi/v1/image-detections",
+        "migration": "/api/developer/openapi.json",
+    }), 410
 
 
 @api_blueprint.route("/developer/usage", methods=["GET"])

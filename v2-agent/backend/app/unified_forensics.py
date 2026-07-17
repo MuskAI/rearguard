@@ -125,7 +125,7 @@ def _generator_attribution(result: dict[str, Any]) -> dict[str, Any]:
         evidence.append("synthid")
         candidates.append({
             "family": "google-gemini",
-            "model": synthid.get("modelProfile") or synthid.get("profile"),
+            "model": synthid.get("attributedModelProfile") or "google-synthid-unattributed",
             "confidence": _float01(synthid.get("confidence"), 0.0),
         })
     if visible.get("detected"):
@@ -162,6 +162,7 @@ def _provenance_signals(result: dict[str, Any]) -> dict[str, Any]:
     provenance = result.get("provenance") or {}
     ai_metadata = provenance.get("aiMetadata") or {}
     metadata_summary = provenance.get("metadataSummary") or {}
+    precheck = result.get("provenancePrecheck") or {}
     c2pa_status = "not_checked_in_detect"
     c2pa_note = "Call /api/provenance for signed credential validation."
     if provenance:
@@ -201,8 +202,15 @@ def _provenance_signals(result: dict[str, Any]) -> dict[str, Any]:
         "synthid": {
             "supported": bool(synthid.get("supported")),
             "detected": synthid.get("detected"),
+            "possibly_detected": synthid.get("possiblyDetected"),
+            "detection_state": synthid.get("detectionState"),
             "confidence": _float01(synthid.get("confidence"), 0.0),
             "evidence_level": synthid.get("evidenceLevel") or "unknown",
+            "candidate_models": synthid.get("candidateModelProfiles") or [],
+            "attributed_model": synthid.get("attributedModelProfile"),
+            "model_results": synthid.get("modelResults") or [],
+            "method": synthid.get("method"),
+            "official_verification": bool(synthid.get("officialVerification")),
             "note": synthid.get("note"),
         } if synthid else None,
         "visible_watermark": {
@@ -213,6 +221,14 @@ def _provenance_signals(result: dict[str, Any]) -> dict[str, Any]:
             "evidence_level": visible.get("evidenceLevel") or "unknown",
             "note": visible.get("note"),
         } if visible else None,
+        "precheck": {
+            "available": bool(precheck.get("available")),
+            "engine": precheck.get("engine"),
+            "engine_version": precheck.get("engineVersion"),
+            "elapsed_ms": int(precheck.get("elapsedMs") or 0),
+            "round_trip_ms": int(precheck.get("roundTripMs") or 0),
+            "decision": precheck.get("decision"),
+        } if precheck else None,
     }
 
 

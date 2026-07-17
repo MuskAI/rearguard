@@ -29,6 +29,26 @@ def _login_session(client, phone="13800000000"):
         }
 
 
+def test_developer_ip_does_not_trust_forwarded_header_from_public_client():
+    app = creat_app()
+    with app.test_request_context(
+        "/api/openapi/v1/image-detections",
+        headers={"X-Forwarded-For": "198.51.100.9", "X-Real-IP": "198.51.100.8"},
+        environ_base={"REMOTE_ADDR": "203.0.113.10"},
+    ):
+        assert api._developer_request_ip() == "203.0.113.10"
+
+
+def test_developer_ip_uses_nginx_real_ip_from_trusted_loopback():
+    app = creat_app()
+    with app.test_request_context(
+        "/api/openapi/v1/image-detections",
+        headers={"X-Forwarded-For": "198.51.100.9, 203.0.113.11", "X-Real-IP": "203.0.113.11"},
+        environ_base={"REMOTE_ADDR": "127.0.0.1"},
+    ):
+        assert api._developer_request_ip() == "203.0.113.11"
+
+
 def test_authenticate_password_user_upgrades_legacy_secret(monkeypatch):
     recorded = []
     user = {
@@ -82,6 +102,7 @@ def test_image_result_api_queries_with_user_phone(client, monkeypatch):
         raise AssertionError(f"unexpected SQL: {sql}")
 
     monkeypatch.setattr(detection, "excute_detection_sql", fake_detection_sql)
+    monkeypatch.setattr(detection.admin_state, "list_detection_jobs", lambda limit=500: [])
     _login_session(client)
 
     response = client.get("/image_upload/result?itemid=7")
@@ -90,6 +111,153 @@ def test_image_result_api_queries_with_user_phone(client, monkeypatch):
     payload = response.get_json()
     assert payload["result"]["itemid"] == 7
     assert any(params == ("7", 1, "13800000000", "openid-1") for _, params in calls)
+
+
+def test_image_result_recovers_generic_watermark_from_runtime_precheck(client, monkeypatch):
+    monkeypatch.setattr(
+        detection,
+        "_load_detection_record",
+        lambda table, itemid: {
+            "itemid": 678,
+            "filename": "doubao.png",
+            "fake": 96.5,
+            "clarity": "高",
+            "file_size": "4.6MB",
+            "img_format": "PNG",
+            "resolution": "2848x1600",
+            "feedback": None,
+        },
+    )
+    monkeypatch.setattr(detection, "_metadata_for_item", lambda itemid: {})
+    monkeypatch.setattr(detection, "_backend_static_url", lambda kind, item: "/api/media/image/678")
+    monkeypatch.setattr(
+        detection.admin_state,
+        "list_detection_jobs",
+        lambda limit=500: [{
+            "id": "job-watermark",
+            "result": {
+                "result": {
+                    "itemid": 678,
+                    "visibleWatermark": {"detected": False, "hits": []},
+                },
+            },
+            "experts": [{
+                "id": "primary",
+                "remoteEvidence": {
+                    "visibleWatermarkPrecheck": {
+                        "status": "ok",
+                        "elapsedMs": 1608,
+                        "genericVisibleWatermark": {
+                            "available": True,
+                            "detected": True,
+                            "count": 1,
+                            "model": "corzent/yolo11x_watermark_detection",
+                        },
+                        "visibleHits": [{
+                            "provider": "yolo11x_watermark",
+                            "label": "可见水印（平台待确认）",
+                            "confidence": 0.8893,
+                            "bbox": {"x": 0.8923, "y": 0.939, "w": 0.0984, "h": 0.0401},
+                        }],
+                    },
+                },
+            }],
+        }],
+    )
+    _login_session(client)
+
+    response = client.get("/image_upload/result?itemid=678")
+
+    assert response.status_code == 200
+    visible = response.get_json()["result"]["visibleWatermark"]
+    assert visible["detected"] is True
+    assert visible["confidence"] == pytest.approx(0.8893)
+    assert visible["hits"][0]["bbox"] == {
+        "x": 0.8923,
+        "y": 0.939,
+        "w": 0.0984,
+        "h": 0.0401,
+    }
+    assert visible["hits"][0]["decisive"] is False
+
+
+def test_public_swarm_job_recovers_generic_watermark_from_primary_precheck():
+    precheck = {
+        "status": "ok",
+        "elapsedMs": 1608,
+        "genericVisibleWatermark": {
+            "available": True,
+            "detected": True,
+            "count": 1,
+            "model": "corzent/yolo11x_watermark_detection",
+        },
+        "visibleHits": [{
+            "provider": "yolo11x_watermark",
+            "label": "可见水印（平台待确认）",
+            "confidence": 0.8893,
+            "bbox": {"x": 0.8923, "y": 0.939, "w": 0.0984, "h": 0.0401},
+        }],
+    }
+    stale_visible = {
+        "enabled": True,
+        "supported": True,
+        "detected": False,
+        "confidence": 0.0,
+        "hits": [],
+    }
+    job = {
+        "id": "job-watermark",
+        "mode": "swarm",
+        "status": "success",
+        "progress": 100,
+        "experts": [
+            {
+                "id": "primary",
+                "status": "success",
+                "remoteEvidence": {"visibleWatermarkPrecheck": precheck},
+            },
+            {
+                "id": "visible_watermark",
+                "status": "success",
+                "verdict": "未检出 AI 平台水印",
+                "watermarkCount": 0,
+                "visibleWatermark": stale_visible,
+            },
+        ],
+        "result": {
+            "status": "success",
+            "result": {
+                "itemid": 678,
+                "visibleWatermark": stale_visible,
+                "swarm": {
+                    "experts": [{
+                        "id": "visible_watermark",
+                        "status": "success",
+                        "verdict": "未检出 AI 平台水印",
+                        "watermarkCount": 0,
+                        "visibleWatermark": stale_visible,
+                    }],
+                },
+            },
+        },
+    }
+
+    public_job = detection._public_detection_job(job)
+
+    visible = public_job["result"]["result"]["visibleWatermark"]
+    assert visible["detected"] is True
+    assert visible["confidence"] == pytest.approx(0.8893)
+    assert visible["hits"][0]["bbox"] == {
+        "x": 0.8923,
+        "y": 0.939,
+        "w": 0.0984,
+        "h": 0.0401,
+    }
+    visible_expert = next(
+        expert for expert in public_job["experts"]
+        if expert["publicName"] == "AI 平台水印专家"
+    )
+    assert visible_expert["publicVerdict"] == "定位 1 处可见水印（平台待确认）"
 
 
 def test_owner_query_never_uses_loose_identity_or_conditions():

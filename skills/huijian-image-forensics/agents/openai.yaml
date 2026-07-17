@@ -1,0 +1,4 @@
+interface:
+  display_name: "慧鉴AI 图像鉴伪"
+  short_description: "调用慧鉴AI快速或Swarm模式核验图片并获取证据与报告"
+  default_prompt: "使用 $huijian-image-forensics 检测这张图片，并总结可复核证据。"

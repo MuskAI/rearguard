@@ -1,6 +1,7 @@
 """Lightweight persistent storage for V2 history, cache, and metrics."""
 from __future__ import annotations
 
+import copy
 import json
 import os
 import sqlite3
@@ -13,8 +14,9 @@ from typing import Any
 
 DATA_DIR = Path(os.getenv("JIANZHEN_DATA_DIR", Path(__file__).resolve().parents[1] / "data"))
 DB_PATH = DATA_DIR / "jianzhen-v2.sqlite3"
-ANALYSIS_CACHE_VERSION = os.getenv("JIANZHEN_ANALYSIS_CACHE_VERSION", "v7-real-results-only")
+ANALYSIS_CACHE_VERSION = os.getenv("JIANZHEN_ANALYSIS_CACHE_VERSION", "v8-provenance-first")
 PUBLISHABLE_VERDICTS = frozenset({"real", "suspected_fake", "highly_suspected_fake"})
+PUBLISHABLE_SOURCES = frozenset({"vlm", "provenance"})
 
 _INIT_LOCK = threading.Lock()
 _INITIALIZED = False
@@ -143,7 +145,7 @@ def is_publishable_analysis(analysis: Any) -> bool:
     """Return whether an analysis may be exposed as a detection conclusion."""
     return (
         isinstance(analysis, dict)
-        and analysis.get("source") == "vlm"
+        and analysis.get("source") in PUBLISHABLE_SOURCES
         and analysis.get("verdict") in PUBLISHABLE_VERDICTS
     )
 
@@ -247,8 +249,108 @@ def put_history(
         conn.commit()
 
 
-def _history_summary_from_row(row: sqlite3.Row) -> dict[str, Any]:
-    result = json.loads(row["result_json"])
+def _visible_watermark_has_boxes(report: Any) -> bool:
+    if not isinstance(report, dict) or not report.get("detected"):
+        return False
+    for hit in report.get("hits") or []:
+        if not isinstance(hit, dict) or not isinstance(hit.get("bbox"), dict):
+            continue
+        bbox = hit["bbox"]
+        try:
+            if float(bbox.get("w", 0)) > 0 and float(bbox.get("h", 0)) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def _watermark_reuse_key(row: sqlite3.Row) -> tuple[str, str] | None:
+    owner_user_id = str(row["developer_user_id"] or "")
+    sha256 = str(row["sha256"] or "")
+    if not sha256:
+        return None
+    owner_scope = f"user:{owner_user_id}" if owner_user_id else "legacy-unowned"
+    return owner_scope, sha256
+
+
+def _reuse_same_file_watermark(
+    result: dict[str, Any],
+    candidate: dict[str, Any] | None,
+) -> dict[str, Any]:
+    current = result.get("visibleWatermark")
+    if _visible_watermark_has_boxes(current) or not candidate:
+        return result
+    replacement = candidate.get("visibleWatermark")
+    if not _visible_watermark_has_boxes(replacement):
+        return result
+
+    replacement = copy.deepcopy(replacement)
+    basis = str(candidate.get("basis") or "same-user-exact-sha256")
+    replacement["reanalysis"] = {
+        "reused": True,
+        "basis": basis,
+        "sourceTaskId": candidate.get("taskId"),
+        "sourceCreatedAt": candidate.get("createdAt"),
+    }
+    audit_note = (
+        "该定位证据来自完全相同文件（SHA-256 一致）的最近一次成功扫描；"
+        "此记录为历史未归属数据，仅管理员可访问。"
+        if basis == "legacy-unowned-exact-sha256"
+        else "该定位证据来自同一账号对完全相同文件（SHA-256 一致）的最近一次成功扫描。"
+    )
+    existing_note = str(replacement.get("note") or "").strip()
+    replacement["note"] = f"{existing_note} {audit_note}".strip()
+    result["visibleWatermark"] = replacement
+    return result
+
+
+def _latest_same_file_watermark(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any] | None:
+    key = _watermark_reuse_key(row)
+    if key is None:
+        return None
+    owner_scope, sha256 = key
+    if owner_scope == "legacy-unowned":
+        candidates = conn.execute(
+            """
+            SELECT task_id, created_at, result_json
+            FROM history
+            WHERE developer_user_id IS NULL AND sha256 = ?
+            ORDER BY created_at DESC
+            """,
+            (sha256,),
+        ).fetchall()
+    else:
+        candidates = conn.execute(
+            """
+            SELECT task_id, created_at, result_json
+            FROM history
+            WHERE developer_user_id = ? AND sha256 = ?
+            ORDER BY created_at DESC
+            """,
+            (owner_scope.removeprefix("user:"), sha256),
+        ).fetchall()
+    for candidate_row in candidates:
+        candidate_result = json.loads(candidate_row["result_json"])
+        visible = candidate_result.get("visibleWatermark")
+        if _visible_watermark_has_boxes(visible):
+            return {
+                "taskId": candidate_row["task_id"],
+                "createdAt": candidate_row["created_at"],
+                "visibleWatermark": visible,
+                "basis": (
+                    "legacy-unowned-exact-sha256"
+                    if owner_scope == "legacy-unowned"
+                    else "same-user-exact-sha256"
+                ),
+            }
+    return None
+
+
+def _history_summary_from_row(
+    row: sqlite3.Row,
+    result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    result = result if result is not None else json.loads(row["result_json"])
     visible = result.get("visibleWatermark") or {}
     synthid = result.get("synthid") or {}
     return {
@@ -400,7 +502,8 @@ def list_history(
     with _connect() as conn:
         rows = conn.execute(
             f"""
-            SELECT h.task_id, h.report_id, h.created_at, h.file_type, h.file_name, h.result_json, h.thumbnail,
+            SELECT h.task_id, h.report_id, h.created_at, h.sha256, h.file_type, h.file_name, h.result_json, h.thumbnail,
+                   h.developer_user_id,
                    a.forensics_json, a.provenance_json
             FROM history h
             LEFT JOIN history_artifacts a ON a.task_id = h.task_id
@@ -409,7 +512,29 @@ def list_history(
             """,
             ownership_params,
         ).fetchall()
-    items = [_history_summary_from_row(row) for row in rows]
+    parsed_rows = [(row, json.loads(row["result_json"])) for row in rows]
+    watermark_candidates: dict[tuple[str, str], dict[str, Any]] = {}
+    for row, result in parsed_rows:
+        key = _watermark_reuse_key(row)
+        visible = result.get("visibleWatermark")
+        if key is not None and key not in watermark_candidates and _visible_watermark_has_boxes(visible):
+            watermark_candidates[key] = {
+                "taskId": row["task_id"],
+                "createdAt": row["created_at"],
+                "visibleWatermark": visible,
+                "basis": (
+                    "legacy-unowned-exact-sha256"
+                    if key[0] == "legacy-unowned"
+                    else "same-user-exact-sha256"
+                ),
+            }
+    items = [
+        _history_summary_from_row(
+            row,
+            _reuse_same_file_watermark(result, watermark_candidates.get(_watermark_reuse_key(row))),
+        )
+        for row, result in parsed_rows
+    ]
     normalized_query = (query or "").strip().lower()
     query_filtered = []
     for item in items:
@@ -456,7 +581,8 @@ def get_history(item_id: str) -> dict[str, Any] | None:
     with _connect() as conn:
         row = conn.execute(
             """
-            SELECT h.result_json, h.thumbnail, h.file_name, h.file_type, h.file_size, h.resolution,
+            SELECT h.task_id, h.created_at, h.sha256, h.result_json, h.thumbnail,
+                   h.file_name, h.file_type, h.file_size, h.resolution,
                    h.developer_user_id, h.developer_key_id,
                    a.forensics_json, a.provenance_json
             FROM history h
@@ -465,9 +591,11 @@ def get_history(item_id: str) -> dict[str, Any] | None:
             """,
             (item_id, item_id),
         ).fetchone()
+        watermark_candidate = _latest_same_file_watermark(conn, row) if row else None
     if not row:
         return None
     result = json.loads(row["result_json"])
+    _reuse_same_file_watermark(result, watermark_candidate)
     result["_developerUserId"] = row["developer_user_id"]
     result["_developerKeyId"] = row["developer_key_id"]
     _ensure_result_file_meta(result, row)

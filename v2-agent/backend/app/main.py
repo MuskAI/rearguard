@@ -22,7 +22,19 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import Response
 
-from . import detector, provenance, reporting, storage, synthid_detector, unified_forensics, visible_watermark_detector, watermark_verdict
+from . import (
+    detector,
+    evidence_probability,
+    provenance,
+    provenance_precheck,
+    reporting,
+    storage,
+    synthid_detector,
+    unified_forensics,
+    visible_watermark_detector,
+    watermark_verdict,
+    watermark_yolo,
+)
 
 app = FastAPI(title="慧鉴 AI 鉴伪工作台", version="0.3.0")
 ACCESS_TOKEN = os.getenv("JIANZHEN_ACCESS_TOKEN", "").strip()
@@ -39,6 +51,7 @@ DEVELOPER_AUTH_SECRET = (
     or ""
 ).strip()
 REQUIRE_DEVELOPER_API_KEY = str(os.getenv("JIANZHEN_REQUIRE_DEVELOPER_API_KEY", "0")).lower() in {"1", "true", "yes"}
+ALLOW_DIRECT_DEVELOPER_KEYS = str(os.getenv("JIANZHEN_ALLOW_DIRECT_DEVELOPER_KEYS", "0")).lower() in {"1", "true", "yes"}
 DEVELOPER_AUTH_CONFIGURED = bool(DEVELOPER_AUTH_URL and DEVELOPER_AUTH_SECRET)
 DEVELOPER_API_KEY_REQUIRED = REQUIRE_DEVELOPER_API_KEY
 REPORT_SHARE_SECRET = os.getenv("JIANZHEN_REPORT_SHARE_SECRET", "").strip()
@@ -264,14 +277,19 @@ async def _require_developer_access(request: Request) -> dict:
     actor = await run_in_threadpool(_session_access_granted, request)
     if actor:
         return actor
+    api_key = _request_developer_key(request)
+    if api_key:
+        if not ALLOW_DIRECT_DEVELOPER_KEYS:
+            raise HTTPException(
+                status_code=410,
+                detail="开发者 API 已迁移到 /api/openapi/v1/image-detections",
+            )
+        if not DEVELOPER_AUTH_CONFIGURED:
+            raise HTTPException(status_code=503, detail="API Key 校验服务未配置")
+        return await run_in_threadpool(_verify_developer_key_sync, api_key, request)
     if not DEVELOPER_API_KEY_REQUIRED:
         return {"mode": "public"}
-    if not DEVELOPER_AUTH_CONFIGURED:
-        raise HTTPException(status_code=503, detail="API Key 校验服务未配置")
-    api_key = _request_developer_key(request)
-    if not api_key:
-        raise HTTPException(status_code=401, detail="请在 X-RealGuard-Key 中提供 API Key")
-    return await run_in_threadpool(_verify_developer_key_sync, api_key, request)
+    raise HTTPException(status_code=401, detail="请先登录慧鉴 AI")
 
 
 def _forensics_cache_scope(actor: dict) -> str | None:
@@ -393,6 +411,7 @@ async def _validate_image_pixels(data: bytes) -> tuple[int, int]:
 def _public_capabilities() -> dict:
     synthid_status = synthid_detector.status()
     watermark_status = visible_watermark_detector.status()
+    precheck_status = provenance_precheck.status()
     return {
         "status": "ok",
         "vlmEnabled": bool(detector.API_KEY),
@@ -408,10 +427,18 @@ def _public_capabilities() -> dict:
         "synthid": {
             "enabled": bool(synthid_status.get("enabled")),
             "available": bool(synthid_status.get("available")),
+            "modelProfiles": synthid_status.get("modelProfiles") or [],
+            "profileCount": int(synthid_status.get("profileCount") or 0),
+            "officialVerification": False,
         },
         "visibleWatermark": {
             "enabled": bool(watermark_status.get("enabled")),
             "available": bool(watermark_status.get("available")),
+        },
+        "provenancePrecheck": {
+            "configured": bool(precheck_status.get("configured")),
+            "available": precheck_status.get("available"),
+            "lastElapsedMs": precheck_status.get("lastElapsedMs"),
         },
         "limits": {
             "maxUploadBytes": MAX_UPLOAD_BYTES,
@@ -501,6 +528,7 @@ def _build_result(
     actor: dict | None = None,
     token_usage: dict | None = None,
     provenance_report: dict | None = None,
+    provenance_precheck_report: dict | None = None,
 ) -> dict:
     now = datetime.now(timezone.utc)
     day = now.strftime("%Y%m%d")
@@ -535,7 +563,9 @@ def _build_result(
         "synthid": analysis.get("synthid"),
         "visibleWatermark": analysis.get("visibleWatermark"),
         "watermarkVerdictOverride": analysis.get("watermarkVerdictOverride"),
-        "disclaimer": "本结果由自动化检测模型生成，仅供专业复核参考，不构成司法鉴定结论。",
+        "probabilityModel": analysis.get("probabilityModel"),
+        "provenancePrecheck": provenance_precheck_report or analysis.get("provenancePrecheck"),
+        "disclaimer": "本结果由自动化来源证据与检测模型生成，仅供专业复核参考，不构成司法鉴定结论。",
     }
     if provenance_report is not None:
         result["provenance"] = provenance_report
@@ -567,6 +597,7 @@ def admin_health(request: Request) -> dict:
         "calibration": detector.calibration_status(),
         "synthid": synthid_detector.status(),
         "visibleWatermark": visible_watermark_detector.status(),
+        "provenancePrecheck": provenance_precheck.status(),
         "storage": str(storage.DB_PATH),
     }
 
@@ -584,18 +615,28 @@ async def detect(request: Request, file: UploadFile = File(...), fileType: str |
         raise HTTPException(status_code=422, detail=f"{label}检测能力尚未部署，本次不会生成模拟结论")
     if ftype == "image":
         await _validate_image_pixels(data)
-    if not detector.API_KEY:
-        raise HTTPException(status_code=503, detail="真实模型服务未配置，暂时无法生成检测结论")
     sha256 = hashlib.sha256(data).hexdigest()
     thumbnail = _image_data_uri(data, ftype, max_side=180, quality=44)
     preview = _image_data_uri(data, ftype, max_side=960, quality=72)
 
     started = time.perf_counter()
-    cached = storage.get_cached_analysis(ftype, sha256)
+    precheck_report = None
+    precheck_analysis = None
+    local_provenance_report = None
+    if ftype == "image":
+        precheck_report = await run_in_threadpool(provenance_precheck.inspect, data, filename)
+        local_provenance_report = precheck_report.pop("_provenanceReport", None)
+        precheck_analysis = provenance_precheck.build_analysis(precheck_report)
+
+    cached = None if precheck_analysis is not None else storage.get_cached_analysis(ftype, sha256)
     cache_hit = cached is not None
-    if cached is not None:
+    if precheck_analysis is not None:
+        analysis = precheck_analysis
+    elif cached is not None:
         analysis = cached
     else:
+        if not detector.API_KEY:
+            raise HTTPException(status_code=503, detail="未发现可直接判定的来源标记，且真实模型服务未配置")
         try:
             analysis = await run_in_threadpool(detector.analyze, ftype, filename, data)
         except detector.DetectionUnavailableError as exc:
@@ -604,11 +645,21 @@ async def detect(request: Request, file: UploadFile = File(...), fileType: str |
         raise HTTPException(status_code=503, detail="真实模型未返回可发布的明确结论")
     if not cache_hit:
         storage.put_cached_analysis(ftype, sha256, analysis)
+    if ftype == "image":
+        if precheck_analysis is None:
+            decision = (precheck_report or {}).get("decision") or {}
+            analysis = evidence_probability.fuse_with_analysis(analysis, decision.get("probabilityModel"))
+        analysis = watermark_yolo.merge(analysis, precheck_report)
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     token_usage = _token_usage_from_payload(analysis, cache_hit=cache_hit)
     provenance_report = None
     if ftype == "image":
-        provenance_report = await run_in_threadpool(provenance.read_provenance, data, provenance.mime_for(filename), filename)
+        provenance_report = local_provenance_report or await run_in_threadpool(
+            provenance.read_provenance,
+            data,
+            provenance.mime_for(filename),
+            filename,
+        )
 
     result = _build_result(
         filename=filename,
@@ -623,6 +674,7 @@ async def detect(request: Request, file: UploadFile = File(...), fileType: str |
         actor=actor,
         token_usage=token_usage,
         provenance_report=provenance_report,
+        provenance_precheck_report=precheck_report,
     )
     storage.record_token_usage(
         actor=actor,

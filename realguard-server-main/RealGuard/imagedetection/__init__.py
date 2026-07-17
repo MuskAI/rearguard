@@ -10,6 +10,7 @@ from .views import historical_record
 from .views import profile
 from .views import api
 from .views import admin
+from .views import developer_platform
 
 
 def creat_app():
@@ -29,6 +30,9 @@ def creat_app():
     app.register_blueprint(profile.profile_blueprint)
     app.register_blueprint(api.api_blueprint)
     app.register_blueprint(admin.admin_blueprint)
+    app.register_blueprint(developer_platform.developer_platform_blueprint)
+    app.register_blueprint(developer_platform.openapi_blueprint)
+    app.register_blueprint(developer_platform.developer_admin_blueprint)
 
     @app.after_request
     def prevent_sensitive_response_caching(response):
@@ -48,6 +52,19 @@ def creat_app():
         if not ok:
             raise click.ClickException("admin schema upgrade failed")
         click.echo("admin schema ready")
+
+    @app.cli.command("developer-db-upgrade")
+    def developer_db_upgrade():
+        """Create or update developer API and billing tables."""
+        checks = (
+            ("api keys", api._ensure_developer_api_key_table),
+            ("usage events", api._ensure_developer_usage_table),
+            ("billing", developer_platform._ensure_developer_platform_tables),
+        )
+        for label, upgrade in checks:
+            if not upgrade():
+                raise click.ClickException(f"developer schema upgrade failed: {label}")
+            click.echo(f"developer schema ready: {label}")
 
     @app.cli.command("create-admin")
     @click.option("--username", prompt=True, help="Admin username.")

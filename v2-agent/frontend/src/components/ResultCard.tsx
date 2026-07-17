@@ -26,6 +26,7 @@ function confidenceLabel(value?: string) {
 
 function sourceLabel(source?: string) {
   if (source === "vlm") return "已完成自动检测";
+  if (source === "provenance") return "来源证据直接判定";
   if (source === "mock") return "线索不足，建议复核";
   if (source === "maps-only") return "已生成证据图，建议复核";
   if (source === "heuristic") return "规则线索";
@@ -330,6 +331,8 @@ export default function ResultCard({
   const provenance = provenanceReport || result.provenance || undefined;
   const synthid = result.synthid;
   const visibleWatermark = result.visibleWatermark;
+  const visiblePlatformPending = visibleWatermark?.provider === "yolo11x_watermark";
+  const provenancePrecheck = result.provenancePrecheck;
   const dimensions = Array.isArray(result.dimensions) ? result.dimensions : [];
   const regions = Array.isArray(result.regions) ? result.regions : [];
   const topDimensions = dimensions.slice(0, 3);
@@ -474,15 +477,28 @@ export default function ResultCard({
             {visibleWatermark && (
               <EvidencePill
                 label="可见水印"
-                value={visibleWatermark.detected ? `${visibleWatermark.provider || "未知"} · ${pct(visibleWatermark.confidence)}` : "未检出"}
-                tone={visibleWatermark.detected ? "#c43d2f" : "#238f82"}
+                value={visibleWatermark.detected ? `${visiblePlatformPending ? "平台待确认" : visibleWatermark.provider || "未知"} · ${pct(visibleWatermark.confidence)}` : "未检出"}
+                tone={visibleWatermark.detected ? visiblePlatformPending ? "#9a6700" : "#c43d2f" : "#238f82"}
+              />
+            )}
+            {provenancePrecheck && (
+              <EvidencePill
+                label="判定路径"
+                value={
+                  result.source === "provenance"
+                    ? "来源标记直判，未调用模型"
+                    : provenancePrecheck.available
+                      ? "前置核验后进入模型"
+                      : "前置服务不可用，已回退模型"
+                }
+                tone={result.source === "provenance" ? "#c43d2f" : "#238f82"}
               />
             )}
             {synthid && (
               <EvidencePill
                 label="隐式水印"
-                value={synthid.supported ? (synthid.detected ? `检出 · ${pct(synthid.confidence)}` : "未检出") : "未启用"}
-                tone={synthid.detected ? "#c43d2f" : "#238f82"}
+                value={synthid.supported ? (synthid.detected ? `检出 · ${pct(synthid.confidence)}` : synthid.possiblyDetected ? `疑似 · ${pct(synthid.confidence)}` : "未检出") : "未启用"}
+                tone={synthid.detected ? "#c43d2f" : synthid.possiblyDetected ? "#9a6700" : "#238f82"}
               />
             )}
           </div>
@@ -549,12 +565,12 @@ export default function ResultCard({
                 <div className="grid gap-4 lg:grid-cols-2">
                   {synthid && (
                     <div className="rounded-lg border border-ink-700 bg-ink-800 px-3 py-3 text-sm">
-                      <div className="font-semibold text-ink-950">隐式水印（SynthID）</div>
+                      <div className="font-semibold text-ink-950">SynthID 多模型频谱核验</div>
                       <p className="mt-2 text-xs leading-relaxed text-ink-500">{synthid.note}</p>
                       {synthid.supported && (
                         <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-ink-500">
                           <span>相位匹配：{pct(synthid.phaseMatch)}</span>
-                          <span>匹配情况：{synthid.exactProfileMatch ? "完全匹配" : "已检测"}</span>
+                          <span>分辨率档案：{synthid.exactResolutionMatch ? "原始尺寸" : "近邻尺寸"}</span>
                         </div>
                       )}
                     </div>

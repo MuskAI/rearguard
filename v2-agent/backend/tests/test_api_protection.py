@@ -95,6 +95,7 @@ def developer_key_client(monkeypatch, tmp_path):
     monkeypatch.setenv("JIANZHEN_ACCESS_TOKEN", "admin-token")
     monkeypatch.setenv("JIANZHEN_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("JIANZHEN_REQUIRE_DEVELOPER_API_KEY", "true")
+    monkeypatch.setenv("JIANZHEN_ALLOW_DIRECT_DEVELOPER_KEYS", "true")
     monkeypatch.setenv("JIANZHEN_DEVELOPER_AUTH_URL", "http://realguard-v1.internal/api/developer/keys/verify")
     monkeypatch.setenv("REALGUARD_DEVELOPER_AUTH_SECRET", "internal-secret")
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-dashscope-key")
@@ -485,6 +486,20 @@ def test_developer_key_required_for_detect_when_enabled(developer_key_client):
     assert "temporal_segments" in unified
     assert "provenance_signals" in unified
     assert unified["compute_cost"]["cache_hit"] is False
+
+
+def test_direct_v2_developer_keys_are_retired_by_default(developer_key_client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    monkeypatch.setattr(main, "ALLOW_DIRECT_DEVELOPER_KEYS", False)
+    response = developer_key_client.post(
+        "/api/detect",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+        files={"file": ("sample.txt", b"use the billed gateway", "text/plain")},
+    )
+
+    assert response.status_code == 410
+    assert "/api/openapi/v1/image-detections" in response.json()["detail"]
 
 
 def test_v1_session_can_detect_when_developer_api_key_is_required(developer_key_client, monkeypatch):
@@ -1100,7 +1115,7 @@ def test_metrics_include_source_and_evidence_breakdown(client):
     assert "sources" in payload["byDay"][0]
     assert "verdicts" in payload["byDay"][0]
     assert "evidence" in payload["byDay"][0]
-    assert payload["summary"]["analysisCacheVersion"] == "v7-real-results-only"
+    assert payload["summary"]["analysisCacheVersion"] == "v8-provenance-first"
 
 
 def test_metrics_supports_window_sizes(client):
@@ -1182,9 +1197,9 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
     assert detect_b.status_code == 200
     assert detect_c.status_code == 200
     assert detect_d.status_code == 200
-    assert detect_a.json()["cacheVersion"] == "v7-real-results-only"
+    assert detect_a.json()["cacheVersion"] == "v8-provenance-first"
     assert detect_a_cached.json()["cacheHit"] is True
-    assert detect_a_cached.json()["cacheVersion"] == "v7-real-results-only"
+    assert detect_a_cached.json()["cacheVersion"] == "v8-provenance-first"
 
     task_a = detect_a.json()["taskId"]
     task_b = detect_b.json()["taskId"]
@@ -1206,7 +1221,7 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
         headers={"X-Jianzhen-Token": "test-token"},
     )
     by_model = client.get("/api/history?query=qwen3-vl-flash-watermark", headers={"X-Jianzhen-Token": "test-token"})
-    by_cache_version = client.get("/api/history?query=%E7%BC%93%E5%AD%98%E7%89%88%E6%9C%AC%20v7-real-results-only", headers={"X-Jianzhen-Token": "test-token"})
+    by_cache_version = client.get("/api/history?query=%E7%BC%93%E5%AD%98%E7%89%88%E6%9C%AC%20v8-provenance-first", headers={"X-Jianzhen-Token": "test-token"})
     by_query = client.get("/api/history?query=%E7%9C%9F%E5%AE%9E%E6%A8%A1%E5%9E%8B", headers={"X-Jianzhen-Token": "test-token"})
     by_evidence = client.get(
         "/api/history?hasWatermark=true&hasSynthid=true&query=gemini%20%E6%B0%B4%E5%8D%B0",
@@ -1239,7 +1254,7 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
 
     assert by_cache_version.status_code == 200
     assert by_cache_version.json()["total"] >= 5
-    assert {item["cacheVersion"] for item in by_cache_version.json()["items"]} == {"v7-real-results-only"}
+    assert {item["cacheVersion"] for item in by_cache_version.json()["items"]} == {"v8-provenance-first"}
 
     assert by_query.status_code == 200
     assert by_query.json()["total"] >= 1

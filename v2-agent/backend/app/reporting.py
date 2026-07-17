@@ -87,16 +87,40 @@ def _render_optional_blocks(result: dict) -> str:
     blocks: list[str] = []
     synthid = result.get("synthid") or {}
     if synthid:
+        model_rows = []
+        for model_result in synthid.get("modelResults") or []:
+            state = model_result.get("detectionState")
+            state_label = "检出" if state == "detected" else "疑似" if state == "possible" else "未检出" if state == "not_detected" else "不可用"
+            model_rows.append(
+                f"""
+                <tr>
+                  <td>{escape(_safe_text(model_result.get('modelLabel') or model_result.get('modelProfile')))}</td>
+                  <td>{state_label}</td>
+                  <td class="right">{_fmt_percent(model_result.get('confidence'))}</td>
+                  <td>{'原始分辨率档案' if model_result.get('exactResolutionMatch') else '近邻分辨率档案'}</td>
+                </tr>
+                """
+            )
+        model_table = ""
+        if model_rows:
+            model_table = f"""
+              <table>
+                <thead><tr><th>模型档案</th><th>状态</th><th class="right">匹配分数</th><th>分辨率</th></tr></thead>
+                <tbody>{''.join(model_rows)}</tbody>
+              </table>
+            """
         blocks.append(
             f"""
             <section class="card">
-              <h2>SynthID 水印取证</h2>
+              <h2>SynthID 多模型频谱取证</h2>
               <p>{escape(_safe_text(synthid.get("note")))}</p>
               <div class="meta-grid compact">
                 <div><span>支持状态</span><strong>{'已启用' if synthid.get('supported') else '未启用'}</strong></div>
-                <div><span>命中</span><strong>{'是' if synthid.get('detected') else '否'}</strong></div>
-                <div><span>置信度</span><strong>{_fmt_percent(synthid.get('confidence'))}</strong></div>
+                <div><span>检测状态</span><strong>{'检出' if synthid.get('detected') else '疑似' if synthid.get('possiblyDetected') else '未检出'}</strong></div>
+                <div><span>最高匹配分数</span><strong>{_fmt_percent(synthid.get('confidence'))}</strong></div>
               </div>
+              {model_table}
+              <p class="footnote">实验引擎：reverse-SynthID by Alosh Denny（github.com/aloshdenny/reverse-SynthID）。该模块不等同于 Google 官方 SynthID 验证。</p>
             </section>
             """
         )
