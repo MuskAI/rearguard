@@ -52,6 +52,9 @@ REALGUARD_MODEL_VISIBLE_PRECHECK_WORKERS=4
 The precheck service runs provenance reporting, known-platform matching, and
 YOLO localization concurrently. Its production unit uses four request threads;
 the YOLO unit uses two single-threaded worker processes on physical GPU 0.
+Deploy `realguard-watermark-precheck-yolo.conf` to the precheck unit's
+`yolo.conf` drop-in so the server-specific adapter override keeps the same
+four-thread limit.
 
 On the public server, the persisted `v1-legacy-tunnel` model route must use
 `http://127.0.0.1:15001/image` with health endpoint
