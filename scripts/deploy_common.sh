@@ -7,6 +7,7 @@ DEPLOY_HOST="${DEPLOY_HOST:-124.221.92.85}"
 DEPLOY_USER="${DEPLOY_USER:-ubuntu}"
 DEPLOY_SSH_KEY="${DEPLOY_SSH_KEY:-}"
 DRY_RUN="${DRY_RUN:-0}"
+SSH_CONTROL_PATH="/tmp/huijian-deploy-%C"
 
 repo_root() {
   printf '%s\n' "$REPO_ROOT"
@@ -63,14 +64,49 @@ run_tar_create() {
   env COPYFILE_DISABLE=1 tar -C "$base_dir" -czf "$archive_path" "$@"
 }
 
+run_ssh_transport() {
+  if [[ "$DRY_RUN" == "1" ]]; then
+    run_cmd "$@"
+    return 0
+  fi
+
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if "$@"; then
+      return 0
+    fi
+    if [[ "$attempt" != "5" ]]; then
+      printf 'SSH transport interrupted; retrying (%s/5)...\n' "$attempt" >&2
+      sleep "$((attempt * 2))"
+    fi
+  done
+  return 1
+}
+
 run_scp() {
-  run_cmd scp -i "$DEPLOY_SSH_KEY" -o StrictHostKeyChecking=no "$@"
+  run_ssh_transport scp \
+    -i "$DEPLOY_SSH_KEY" \
+    -o BatchMode=yes \
+    -o ConnectTimeout=15 \
+    -o ControlMaster=auto \
+    -o ControlPersist=60 \
+    -o ControlPath="$SSH_CONTROL_PATH" \
+    -o StrictHostKeyChecking=no \
+    "$@"
 }
 
 run_remote() {
   local remote
   remote="$(remote_target)"
-  run_cmd ssh -i "$DEPLOY_SSH_KEY" -o StrictHostKeyChecking=no "$remote" "$1"
+  run_ssh_transport ssh \
+    -i "$DEPLOY_SSH_KEY" \
+    -o BatchMode=yes \
+    -o ConnectTimeout=15 \
+    -o ControlMaster=auto \
+    -o ControlPersist=60 \
+    -o ControlPath="$SSH_CONTROL_PATH" \
+    -o StrictHostKeyChecking=no \
+    "$remote" "$1"
 }
 
 run_remote_capture() {
@@ -80,7 +116,15 @@ run_remote_capture() {
     printf '+ %q %q %q %q %q %q\n' ssh -i "$DEPLOY_SSH_KEY" -o StrictHostKeyChecking=no "$remote" "$1"
     return 0
   fi
-  ssh -i "$DEPLOY_SSH_KEY" -o StrictHostKeyChecking=no "$remote" "$1"
+  run_ssh_transport ssh \
+    -i "$DEPLOY_SSH_KEY" \
+    -o BatchMode=yes \
+    -o ConnectTimeout=15 \
+    -o ControlMaster=auto \
+    -o ControlPersist=60 \
+    -o ControlPath="$SSH_CONTROL_PATH" \
+    -o StrictHostKeyChecking=no \
+    "$remote" "$1"
 }
 
 write_commit_marker() {

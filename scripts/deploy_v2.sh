@@ -29,7 +29,7 @@ require_ssh_key
 ROOT_DIR="$(repo_root)"
 BACKEND_DIR="$ROOT_DIR/v2-agent/backend"
 FRONTEND_DIR="$ROOT_DIR/v2-agent/frontend"
-COMMIT_SHA="$(latest_commit_for_paths v2-agent/backend v2-agent/frontend scripts/deploy_v2.sh)"
+COMMIT_SHA="$(latest_commit_for_paths v2-agent/backend v2-agent/frontend scripts/deploy_v2.sh scripts/deploy_common.sh)"
 TMP_DIR="$(mktemp -d)"
 ARCHIVE_PATH="$TMP_DIR/jianzhen-v2-backend.tgz"
 FRONTEND_ARCHIVE_PATH="$TMP_DIR/jianzhen-v2-frontend.tgz"
