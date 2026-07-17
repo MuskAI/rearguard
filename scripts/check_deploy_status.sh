@@ -194,7 +194,9 @@ if [[ "$TARGET" == "all" || "$TARGET" == "v1" ]]; then
     "realguard-server-main/RealGuard" \
     "realguard-server-main/frontend" \
     "realguard-server-main/deploy/nginx-realguard-frontend.conf" \
-    "deploy/nginx/realguard.conf"
+    "deploy/nginx/realguard.conf" \
+    "scripts/deploy_v1.sh" \
+    "scripts/deploy_common.sh"
 fi
 
 if [[ "$TARGET" == "all" || "$TARGET" == "v2" ]]; then
@@ -204,7 +206,9 @@ if [[ "$TARGET" == "all" || "$TARGET" == "v2" ]]; then
     "http://127.0.0.1:8848/api/health" \
     "https://www.rrreal.cn/v2-api/health" \
     "v2-agent/backend" \
-    "v2-agent/frontend"
+    "v2-agent/frontend" \
+    "scripts/deploy_v2.sh" \
+    "scripts/deploy_common.sh"
 fi
 
 exit "$status"
