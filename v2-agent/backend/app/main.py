@@ -22,7 +22,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import Response
 
-from . import detector, provenance, reporting, storage, synthid_detector, unified_forensics, visible_watermark_detector
+from . import detector, provenance, reporting, storage, synthid_detector, unified_forensics, visible_watermark_detector, watermark_verdict
 
 app = FastAPI(title="慧鉴 AI 鉴伪工作台", version="0.3.0")
 ACCESS_TOKEN = os.getenv("JIANZHEN_ACCESS_TOKEN", "").strip()
@@ -534,10 +534,12 @@ def _build_result(
         "explanation": analysis["explanation"],
         "synthid": analysis.get("synthid"),
         "visibleWatermark": analysis.get("visibleWatermark"),
+        "watermarkVerdictOverride": analysis.get("watermarkVerdictOverride"),
         "disclaimer": "本结果由自动化检测模型生成，仅供专业复核参考，不构成司法鉴定结论。",
     }
     if provenance_report is not None:
         result["provenance"] = provenance_report
+    watermark_verdict.apply(result, result.get("visibleWatermark"))
     result["unifiedForensics"] = unified_forensics.build(result)
     storage.put_history(result, sha256=sha256, file_size=len(data), thumbnail=thumbnail, actor=actor)
     return result
@@ -547,6 +549,7 @@ def _strip_internal_history_fields(item: dict) -> dict:
     clean = dict(item)
     clean.pop("_developerUserId", None)
     clean.pop("_developerKeyId", None)
+    watermark_verdict.apply(clean, clean.get("visibleWatermark"))
     return clean
 
 

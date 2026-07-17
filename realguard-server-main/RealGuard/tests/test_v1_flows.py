@@ -703,6 +703,11 @@ def test_fast_image_detect_exposes_parallel_visible_watermark(client, monkeypatc
     assert result["probability"] == pytest.approx(0.95)
     assert result["detector_probability"] == pytest.approx(0.21)
     assert result["confidence"] == "高"
+    assert "决定性证据" in result["explanation"]
+    assert "可见水印（平台待确认）" in result["explanation"]
+    assert "原始 AI 风险为 21.0%" in result["explanation"]
+    assert "元数据缺失本身不作为伪造证据" in result["explanation"]
+    assert "当前置信度：高" in result["explanation"]
     assert "_remote_evidence" not in result
 
 

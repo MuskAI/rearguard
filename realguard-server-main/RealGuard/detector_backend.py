@@ -308,7 +308,7 @@ def _persist_result(payload, image_bytes, filename, openid, phone):
             img_format,
             resolution,
             confidence,
-            safe_truncate(explanation, 145),
+            safe_truncate(explanation, 500),
         ),
     )
     if not itemid:

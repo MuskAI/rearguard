@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import type { AgentOutcome } from "../agentTypes";
 import type { ForensicReport, ProvenanceReport, VisibleWatermarkResult } from "../api";
+import { buildEvidenceExplanation, hasLocalizedWatermark } from "../evidenceExplanation";
 
 type ResultTab = "summary" | "evidence" | "file";
 type ForensicsPreviewState = "idle" | "running" | "complete" | "skipped";
@@ -57,10 +58,11 @@ function riskTone(risk: number): VerdictView["tone"] {
 function verdictFor(outcome: AgentOutcome): VerdictView {
   if (outcome.kind === "image") {
     const raw = Number(outcome.result.probability || 0);
-    const risk = clamp01(raw > 1 ? raw / 100 : raw);
-    const tone = outcome.result.final_label.includes("真实") ? "real" : riskTone(risk);
+    const localizedWatermark = hasLocalizedWatermark(outcome.result.visibleWatermark);
+    const risk = Math.max(clamp01(raw > 1 ? raw / 100 : raw), localizedWatermark ? 0.95 : 0);
+    const tone = localizedWatermark ? "fake" : outcome.result.final_label.includes("真实") ? "real" : riskTone(risk);
     return {
-      label: outcome.result.final_label || (tone === "real" ? "更倾向真实" : "存在生成风险"),
+      label: localizedWatermark ? "AI生成图像" : outcome.result.final_label || (tone === "real" ? "更倾向真实" : "存在生成风险"),
       description: tone === "real" ? "本次多源分析未发现足以支持 AI 生成的强证据。" : "检测到需要关注的生成或编辑线索，建议结合原始来源复核。",
       risk,
       tone,
@@ -78,11 +80,12 @@ function verdictFor(outcome: AgentOutcome): VerdictView {
       confidence: outcome.result.confidence || "未标注",
     };
   }
-  const risk = clamp01(Number(outcome.result.confidence || 0));
-  const tone = outcome.result.verdict === "real" ? "real" : outcome.result.verdict === "highly_suspected_fake" ? "fake" : "warn";
+  const localizedWatermark = hasLocalizedWatermark(outcome.result.visibleWatermark);
+  const risk = Math.max(clamp01(Number(outcome.result.confidence || 0)), localizedWatermark ? 0.95 : 0);
+  const tone = localizedWatermark ? "fake" : outcome.result.verdict === "real" ? "real" : outcome.result.verdict === "highly_suspected_fake" ? "fake" : "warn";
   const labels = { real: "更倾向真实", suspected_fake: "疑似 AI 生成", highly_suspected_fake: "高度疑似 AI 生成", unknown: "需要人工复核" };
   return {
-    label: labels[outcome.result.verdict],
+    label: localizedWatermark ? labels.highly_suspected_fake : labels[outcome.result.verdict],
     description: outcome.result.explanation || "请结合证据维度与原始来源进行判断。",
     risk,
     tone,
@@ -284,7 +287,7 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
           </ol>
         </div>
       )}
-      <p className="result-explanation">{report.note || "水印结果仅用于辅助复核，不会单独改写主鉴伪结论。"}</p>
+      <p className="result-explanation">{report.note || "有效水印定位框会按当前规则作为高置信度伪造证据并参与最终结论。"}</p>
     </section>
   );
 }
@@ -293,6 +296,10 @@ export default function AgentResult(props: Props) {
   const [tab, setTab] = useState<ResultTab>("summary");
   useEffect(() => setTab("summary"), [props.outcome.id]);
   const verdict = useMemo(() => verdictFor(props.outcome), [props.outcome]);
+  const explanationPoints = useMemo(
+    () => buildEvidenceExplanation(props.outcome, verdict.risk, verdict.label),
+    [props.outcome, verdict.label, verdict.risk],
+  );
   const preview = filePreview(props.outcome);
   const canDeepAnalyze = hasImageFile(props.outcome);
   const forensics = props.outcome.kind === "image" || props.outcome.kind === "evidence" ? props.outcome.forensics : undefined;
@@ -349,8 +356,15 @@ export default function AgentResult(props: Props) {
       {tab === "summary" && (
         <div className="result-tab-panel">
           <section className="result-band">
-            <div className="section-title"><Sparkles size={18} /><div><h3>为什么这样判断</h3><p>结论来自已完成的模型分析与可用证据，不使用随机结果。</p></div></div>
-            <p className="result-explanation">{props.outcome.kind === "evidence" ? props.outcome.result.explanation : props.outcome.result.explanation || verdict.description}</p>
+            <div className="section-title"><Sparkles size={18} /><div><h3>为什么这样判断</h3><p>已按水印、主模型、视觉复核与文件来源证据排序。</p></div></div>
+            <div className="result-explanation result-rationale" role="list">
+              {explanationPoints.map((point, index) => (
+                <div className={point.decisive ? "is-decisive" : ""} role="listitem" key={`${point.label}-${index}`}>
+                  <strong>{point.label}</strong>
+                  <p>{point.text}</p>
+                </div>
+              ))}
+            </div>
           </section>
           {props.outcome.kind === "image" && props.outcome.result.swarm?.enabled && (
             <section className="result-band consensus-band">

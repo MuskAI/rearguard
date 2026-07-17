@@ -680,7 +680,7 @@ def _insert_local_detection_record(data, image_bytes, filename, backend_openid, 
             img_format,
             resolution,
             confidence,
-            safe_truncate(explanation, 145),
+            safe_truncate(explanation, 500),
             (user_info or {}).get('Userid'),
         ),
     )
@@ -709,14 +709,15 @@ def _ensure_local_primary_record(api_json, image_bytes, filename, backend_openid
             updated = excute_detection_sql(
                 """
                 UPDATE data
-                SET fake = %s, aigc = %s, clarity = %s, explantation = %s
+                SET fake = %s, detector_probability = %s, aigc = %s, clarity = %s, explantation = %s
                 WHERE itemid = %s
                 """,
                 (
                     data.get('fake_percentage'),
+                    data.get('detector_probability'),
                     data.get('final_label'),
                     data.get('confidence') or data.get('clarity') or '高',
-                    safe_truncate(data.get('explanation') or data.get('explantation') or '', 145),
+                    safe_truncate(data.get('explanation') or data.get('explantation') or '', 500),
                     remote_itemid,
                 ),
                 fetch=False,
@@ -801,7 +802,7 @@ def _insert_v2_fallback_record(payload, image_bytes, filename, backend_openid, p
             img_format,
             resolution,
             confidence_level,
-            safe_truncate(explanation, 145),
+            safe_truncate(explanation, 500),
             (user_info or {}).get('Userid'),
         ),
     )
@@ -936,7 +937,7 @@ def _insert_aliyun_record(model, aliyun_payload, image_bytes, filename, backend_
             img_format,
             resolution,
             confidence_level,
-            safe_truncate(explanation, 145),
+            safe_truncate(explanation, 500),
             (user_info or {}).get('Userid'),
         ),
     )
@@ -1207,39 +1208,32 @@ def _run_image_detection_payload(
 
         if mark_guest:
             _mark_guest_detection_used(is_guest)
-        return {
-            'status': 'success',
-            'result': {
-                'itemid': data_itemid,
-                'final_label': final_label,
-                'probability': probability,
-                'detector_probability': detector_probability,
-                'p_visual': None,
-                'p_metadata': None,
-                'confidence': confidence,
-                'explanation': explanation,
-                'agent_reasoning': public_agent_reasoning,
-                'llm_used': bool(public_agent_reasoning),
-                'visual_issues': visual_issues,
-                'image_url': f"/api/media/image/{data_itemid}" if data_itemid else '',
-                'filename': data.get('filename') or safe_name,
-                'file_size': data.get('file_size') or (data.get('meta') or {}).get('file_size', ''),
-                'img_format': data.get('img_format') or (data.get('meta') or {}).get('img_format', ''),
-                'resolution': data.get('resolution') or (data.get('meta') or {}).get('resolution', ''),
-                'all_metadata': metadata,
-                'feedback': None,
-                **(
-                    {'visibleWatermark': visible_watermark}
-                    if isinstance(visible_watermark, dict)
-                    else {}
-                ),
-                **(
-                    {'_remote_evidence': data.get('remote_evidence')}
-                    if include_internal_evidence and isinstance(data.get('remote_evidence'), dict)
-                    else {}
-                ),
-            }
-        }, 200
+        result = {
+            'itemid': data_itemid,
+            'final_label': final_label,
+            'probability': probability,
+            'detector_probability': detector_probability,
+            'p_visual': None,
+            'p_metadata': None,
+            'confidence': confidence,
+            'explanation': explanation,
+            'agent_reasoning': public_agent_reasoning,
+            'llm_used': bool(public_agent_reasoning),
+            'visual_issues': visual_issues,
+            'image_url': f"/api/media/image/{data_itemid}" if data_itemid else '',
+            'filename': data.get('filename') or safe_name,
+            'file_size': data.get('file_size') or (data.get('meta') or {}).get('file_size', ''),
+            'img_format': data.get('img_format') or (data.get('meta') or {}).get('img_format', ''),
+            'resolution': data.get('resolution') or (data.get('meta') or {}).get('resolution', ''),
+            'all_metadata': metadata,
+            'feedback': None,
+        }
+        if isinstance(visible_watermark, dict):
+            result['visibleWatermark'] = visible_watermark
+            watermark_verdict.apply_to_result(result, visible_watermark)
+        if include_internal_evidence and isinstance(data.get('remote_evidence'), dict):
+            result['_remote_evidence'] = data.get('remote_evidence')
+        return {'status': 'success', 'result': result}, 200
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -2000,7 +1994,7 @@ def _persist_swarm_history_result(final_result, image_bytes, filename, backend_o
             final_result.get('detector_probability'),
             fake_pct / 100.0,
         )
-        explanation = safe_truncate(final_result.get('explanation') or '', 145)
+        explanation = safe_truncate(final_result.get('explanation') or '', 500)
         updated = excute_detection_sql(
             """
             UPDATE data
@@ -2395,7 +2389,7 @@ def image_result_api():
         'itemid': item.get('itemid'),
         'final_label': final_label,
         'probability': fake,
-        'detector_probability': fake,
+        'detector_probability': _clamp01(item.get('detector_probability'), fake),
         'confidence': item.get('clarity', ''),
         'explanation': explanation,
         'agent_reasoning': '',
@@ -2430,6 +2424,7 @@ def image_report_api():
         'itemid': item.get('itemid'),
         'final_label': 'AI生成图像' if fake_pct >= 50 else '真实图像',
         'probability': _prob01_from_percent(fake_pct),
+        'detector_probability': _clamp01(item.get('detector_probability'), _prob01_from_percent(fake_pct)),
         'confidence': item.get('clarity', ''),
         'explanation': item.get('explantation') or _to_user_explanation(
             'AI生成图像' if fake_pct >= 50 else '真实图像',
