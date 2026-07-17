@@ -644,6 +644,139 @@ def test_image_detect_can_use_aliyun_primary_and_records_backend_model(client, m
     assert runs[0]["meta"]["service"] == "aigcDetector_pro"
 
 
+def test_fast_image_detect_exposes_parallel_visible_watermark(client, monkeypatch):
+    _login_session(client)
+    precheck = {
+        "status": "ok",
+        "elapsedMs": 24,
+        "engineVersion": "test-registry",
+        "genericVisibleWatermark": {
+            "available": True,
+            "detected": True,
+            "count": 1,
+            "model": "test-yolo",
+        },
+        "visibleHits": [{
+            "provider": "yolo11x_watermark",
+            "label": "可见水印（平台待确认）",
+            "confidence": 0.91,
+            "bbox": {"x": 0.72, "y": 0.81, "w": 0.18, "h": 0.09},
+        }],
+    }
+    monkeypatch.setattr(detection, "_primary_image_model", lambda: {"id": "fast-test"})
+    monkeypatch.setattr(
+        detection,
+        "_primary_image_endpoint",
+        lambda: ("http://detector.test/image", 30, ""),
+    )
+    monkeypatch.setattr(
+        detection,
+        "_backend_post",
+        lambda *args, **kwargs: _FakeResponse({
+            "code": 200,
+            "data": {
+                "data_itemid": 456,
+                "fake_percentage": 21.0,
+                "final_label": "真实图像",
+                "confidence": "中",
+                "filename": "demo.png",
+                "remote_evidence": {"visibleWatermarkPrecheck": precheck},
+            },
+        }),
+    )
+    monkeypatch.setattr(detection, "_ensure_local_primary_record", lambda *args, **kwargs: None)
+    monkeypatch.setattr(detection, "_metadata_for_item", lambda itemid: {})
+    monkeypatch.setattr(detection, "_record_model_run", lambda *args, **kwargs: None)
+
+    response = client.post(
+        "/image_upload/detect",
+        data={"image": (BytesIO(b"fake-image"), "demo.png")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    result = response.get_json()["result"]
+    assert result["visibleWatermark"]["detected"] is True
+    assert result["visibleWatermark"]["hits"][0]["confidence"] == pytest.approx(0.91)
+    assert result["visibleWatermark"]["elapsedMs"] == 24
+    assert "_remote_evidence" not in result
+
+
+def test_visible_watermark_is_persisted_in_model_run_meta(monkeypatch):
+    captured = {}
+    precheck = {
+        "status": "ok",
+        "elapsedMs": 18,
+        "genericVisibleWatermark": {"available": True, "detected": False, "count": 0},
+        "visibleHits": [],
+    }
+    data = {
+        "_route_model_id": "fast-test",
+        "_route_role": "primary",
+        "_route_provider": "internal",
+        "_route_latency_ms": 41,
+        "remote_evidence": {"visibleWatermarkPrecheck": precheck},
+    }
+    monkeypatch.setattr(detection.model_registry, "get_model", lambda model_id: {"id": model_id})
+
+    def capture_model_run(*args, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(detection.admin_state, "append_model_run", capture_model_run)
+    detection._record_model_run(987, data, {"Userid": 1})
+
+    visible = captured["meta"]["visibleWatermark"]
+    assert visible["supported"] is True
+    assert visible["detected"] is False
+    assert "remote_evidence" not in captured["meta"]
+
+    monkeypatch.setattr(
+        detection.admin_state,
+        "model_runs_by_itemids",
+        lambda itemids: {"987": {"meta": {"visibleWatermark": visible}}},
+    )
+    assert detection._stored_visible_watermark_for_item(987) == visible
+
+
+def test_image_result_restores_persisted_visible_watermark(client, monkeypatch):
+    visible = {
+        "enabled": True,
+        "supported": True,
+        "detected": False,
+        "provider": None,
+        "confidence": 0.0,
+        "evidenceLevel": "none",
+        "hits": [],
+        "temporal": {"sampledFrames": 1, "positiveFrames": 0, "moving": False},
+        "note": "可见水印扫描完成，本次未检出。",
+        "elapsedMs": 19,
+    }
+    monkeypatch.setattr(
+        detection,
+        "_load_detection_record",
+        lambda table, itemid: {
+            "itemid": 987,
+            "filename": "demo.png",
+            "fake": 21.0,
+            "clarity": "中",
+            "feedback": None,
+        },
+    )
+    monkeypatch.setattr(detection, "_metadata_for_item", lambda itemid: {})
+    monkeypatch.setattr(detection, "_backend_static_url", lambda kind, item: "/api/media/image/987")
+    monkeypatch.setattr(
+        detection.admin_state,
+        "model_runs_by_itemids",
+        lambda itemids: {"987": {"meta": {"visibleWatermark": visible}}},
+    )
+    _login_session(client)
+
+    response = client.get("/image_upload/result?itemid=987")
+
+    assert response.status_code == 200
+    assert response.get_json()["result"]["visibleWatermark"] == visible
+
+
 def test_public_agent_reasoning_hides_internal_model_fields():
     sanitized = detection._public_agent_reasoning(json.dumps({
         "fallback": "jianzhen-v2",

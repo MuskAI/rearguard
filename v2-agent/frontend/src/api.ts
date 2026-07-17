@@ -424,6 +424,7 @@ export interface ImageAgentResult {
   llm_used?: boolean;
   feedback?: 1 | -1 | null;
   swarm?: ImageAgentReview;
+  visibleWatermark?: VisibleWatermarkResult;
 }
 
 export interface ImageAgentJob {

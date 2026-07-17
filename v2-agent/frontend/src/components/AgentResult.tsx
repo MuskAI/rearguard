@@ -20,7 +20,7 @@ import {
   Video,
 } from "lucide-react";
 import type { AgentOutcome } from "../agentTypes";
-import type { ForensicReport, ProvenanceReport } from "../api";
+import type { ForensicReport, ProvenanceReport, VisibleWatermarkResult } from "../api";
 
 type ResultTab = "summary" | "evidence" | "file";
 type ForensicsPreviewState = "idle" | "running" | "complete" | "skipped";
@@ -187,6 +187,54 @@ function ProvenanceSection({ report }: { report?: ProvenanceReport }) {
   );
 }
 
+const WATERMARK_PROVIDER_LABELS: Record<string, string> = {
+  gemini: "Google Gemini",
+  doubao: "豆包",
+  jimeng: "即梦",
+  jimeng_pill: "即梦",
+  samsung: "Samsung",
+  yolo11x_watermark: "通用可见水印",
+};
+
+function WatermarkSection({ report }: { report?: VisibleWatermarkResult }) {
+  if (!report) return null;
+  const hits = report.hits || [];
+  const status = !report.supported
+    ? "暂不可用"
+    : report.detected
+      ? `检出 ${Math.max(hits.length, 1)} 处`
+      : "未检出";
+  const source = report.provider
+    ? WATERMARK_PROVIDER_LABELS[report.provider] || "可见水印"
+    : report.supported
+      ? "平台规则与通用定位"
+      : "无可用引擎";
+  const evidence = hits.slice(0, 4).map((hit) => {
+    const provider = WATERMARK_PROVIDER_LABELS[hit.provider] || "可见水印";
+    const confidence = Math.round(clamp01(Number(hit.confidence || 0)) * 100);
+    const x = Math.round(clamp01(Number(hit.bbox?.x || 0)) * 100);
+    const y = Math.round(clamp01(Number(hit.bbox?.y || 0)) * 100);
+    return `${provider}，置信度 ${confidence}%，位置约为横向 ${x}%、纵向 ${y}%`;
+  });
+
+  return (
+    <section className="result-band">
+      <div className="section-title">
+        <ScanLine size={18} />
+        <div><h3>可见水印检测</h3><p>与主模型并行完成，作为独立证据展示。</p></div>
+      </div>
+      <dl className="fact-grid compact">
+        <div><dt>检测状态</dt><dd>{status}</dd></div>
+        <div><dt>证据类型</dt><dd>{report.detected ? "来源或定位线索" : "扫描完成"}</dd></div>
+        <div><dt>识别来源</dt><dd>{source}</dd></div>
+        <div><dt>检测耗时</dt><dd>{report.elapsedMs ? `${Math.round(report.elapsedMs)} ms` : "已完成"}</dd></div>
+      </dl>
+      <p className="result-explanation">{report.note || "水印结果仅用于辅助复核，不会单独改写主鉴伪结论。"}</p>
+      {evidence.length > 0 && <EvidenceList items={evidence} />}
+    </section>
+  );
+}
+
 export default function AgentResult(props: Props) {
   const [tab, setTab] = useState<ResultTab>("summary");
   useEffect(() => setTab("summary"), [props.outcome.id]);
@@ -196,6 +244,9 @@ export default function AgentResult(props: Props) {
   const forensics = props.outcome.kind === "image" || props.outcome.kind === "evidence" ? props.outcome.forensics : undefined;
   const provenance = props.outcome.kind === "image" || props.outcome.kind === "evidence"
     ? props.outcome.provenance || (props.outcome.kind === "evidence" ? props.outcome.result.provenance || undefined : undefined)
+    : undefined;
+  const visibleWatermark = props.outcome.kind === "image" || props.outcome.kind === "evidence"
+    ? props.outcome.result.visibleWatermark
     : undefined;
   const forensicsActionLabel = props.forensicsBusy
     ? props.forensicsPreviewState === "skipped" ? "服务端判读中" : forensics?.source === "browser-preview" ? "模型判读中" : forensics?.source === "vlm" ? "正在归档" : "本地图谱生成中"
@@ -257,6 +308,7 @@ export default function AgentResult(props: Props) {
               <div className="consensus-track"><i style={{ width: `${Math.round(Number(props.outcome.result.swarm.consensusScore || 0) * 100)}%` }} /></div>
             </section>
           )}
+          <WatermarkSection report={visibleWatermark} />
           <div className="result-actions">
             <button type="button" className="primary-button" onClick={props.onDownload} disabled={props.downloadBusy}>
               {props.downloadBusy ? <LoaderCircle size={17} className="spin" /> : <Download size={17} />}
@@ -282,6 +334,7 @@ export default function AgentResult(props: Props) {
             <div className="section-title"><Layers3 size={18} /><div><h3>证据摘要</h3><p>证据条目用于解释模型判断，不应脱离原始文件单独使用。</p></div></div>
             <EvidenceList items={evidenceItems} />
           </section>
+          <WatermarkSection report={visibleWatermark} />
           {props.outcome.kind === "image" && props.outcome.result.swarm?.experts && (
             <section className="result-band">
               <div className="section-title"><ScanLine size={18} /><div><h3>复核队列</h3><p>仅展示匿名角色与公开状态。</p></div></div>

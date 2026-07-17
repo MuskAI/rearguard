@@ -491,6 +491,33 @@ def _public_agent_reasoning(value):
     return rendered if rendered not in ('{}', '[]', 'null') else ''
 
 
+def _visible_watermark_from_backend_data(data):
+    remote_evidence = (data or {}).get('remote_evidence')
+    if not isinstance(remote_evidence, dict):
+        return None
+    precheck = remote_evidence.get('visibleWatermarkPrecheck')
+    if not isinstance(precheck, dict):
+        return None
+    try:
+        return swarm_visible_watermark_expert._visible_result(precheck)
+    except Exception as exc:
+        print(f"[VISIBLE WATERMARK MAP ERROR] {type(exc).__name__}")
+        return None
+
+
+def _stored_visible_watermark_for_item(itemid):
+    target = str(itemid or '')
+    if not target:
+        return None
+    try:
+        run = admin_state.model_runs_by_itemids([target]).get(target) or {}
+    except Exception as exc:
+        print(f"[VISIBLE WATERMARK LOAD ERROR] {type(exc).__name__}")
+        return None
+    visible = (run.get('meta') or {}).get('visibleWatermark')
+    return copy.deepcopy(visible) if isinstance(visible, dict) else None
+
+
 def _record_model_run(itemid, data, user_info):
     if not itemid:
         return
@@ -499,18 +526,22 @@ def _record_model_run(itemid, data, user_info):
         return
     model = model_registry.get_model(model_id) or {'id': model_id}
     try:
+        meta = {
+            'provider': (data or {}).get('_route_provider') or '',
+            'service': (data or {}).get('_route_service') or '',
+            'latencyMs': (data or {}).get('_route_latency_ms'),
+            'fallback': (data or {}).get('_route_role') == 'fallback',
+        }
+        visible_watermark = _visible_watermark_from_backend_data(data)
+        if isinstance(visible_watermark, dict):
+            meta['visibleWatermark'] = visible_watermark
         admin_state.append_model_run(
             itemid,
             model,
             route=(data or {}).get('_route_role') or 'primary',
             status='success',
             actor=user_info,
-            meta={
-                'provider': (data or {}).get('_route_provider') or '',
-                'service': (data or {}).get('_route_service') or '',
-                'latencyMs': (data or {}).get('_route_latency_ms'),
-                'fallback': (data or {}).get('_route_role') == 'fallback',
-            },
+            meta=meta,
         )
     except Exception as exc:
         print(f"[MODEL RUN LOG ERROR] {exc}")
@@ -1151,6 +1182,7 @@ def _run_image_detection_payload(
         visual_issues = _normalize_visual_issues(visual_issues_source, final_label=final_label)
         agent_reasoning = data.get('agent_reasoning') or ''
         public_agent_reasoning = _public_agent_reasoning(agent_reasoning)
+        visible_watermark = _visible_watermark_from_backend_data(data)
         _record_model_run(data_itemid, data, user_info)
 
         if mark_guest:
@@ -1176,6 +1208,11 @@ def _run_image_detection_payload(
                 'resolution': data.get('resolution') or (data.get('meta') or {}).get('resolution', ''),
                 'all_metadata': metadata,
                 'feedback': None,
+                **(
+                    {'visibleWatermark': visible_watermark}
+                    if isinstance(visible_watermark, dict)
+                    else {}
+                ),
                 **(
                     {'_remote_evidence': data.get('remote_evidence')}
                     if include_internal_evidence and isinstance(data.get('remote_evidence'), dict)
@@ -2326,26 +2363,27 @@ def image_result_api():
         explanation = split_explanation
     visual_issues = _normalize_visual_issues(split_issues, final_label=final_label)
 
-    return jsonify({
-        'status': 'success',
-        'result': {
-            'itemid': item.get('itemid'),
-            'final_label': final_label,
-            'probability': fake,
-            'detector_probability': fake,
-            'confidence': item.get('clarity', ''),
-            'explanation': explanation,
-            'agent_reasoning': '',
-            'visual_issues': visual_issues,
-            'image_url': image_url,
-            'filename': filename,
-            'file_size': item.get('file_size', ''),
-            'img_format': item.get('img_format', ''),
-            'resolution': item.get('resolution', ''),
-            'all_metadata': all_metadata,
-            'feedback': feedback,
-        }
-    })
+    result = {
+        'itemid': item.get('itemid'),
+        'final_label': final_label,
+        'probability': fake,
+        'detector_probability': fake,
+        'confidence': item.get('clarity', ''),
+        'explanation': explanation,
+        'agent_reasoning': '',
+        'visual_issues': visual_issues,
+        'image_url': image_url,
+        'filename': filename,
+        'file_size': item.get('file_size', ''),
+        'img_format': item.get('img_format', ''),
+        'resolution': item.get('resolution', ''),
+        'all_metadata': all_metadata,
+        'feedback': feedback,
+    }
+    visible_watermark = _stored_visible_watermark_for_item(item.get('itemid'))
+    if isinstance(visible_watermark, dict):
+        result['visibleWatermark'] = visible_watermark
+    return jsonify({'status': 'success', 'result': result})
 
 
 @image_upload_blueprint.route('/image_upload/report')
