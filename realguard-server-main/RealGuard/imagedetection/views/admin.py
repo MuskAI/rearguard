@@ -22,7 +22,7 @@ import requests
 from flask import Blueprint, Response, g, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from imagedetection.views import admin_state, aliyun_green, model_registry
+from imagedetection.views import admin_state, aliyun_green, model_registry, traffic_geo
 from imagedetection.views.utils import (
     detection_owner_where,
     excute_detection_sql,
@@ -1829,10 +1829,11 @@ def _big_screen_payload():
         "feedback": _feedback_distribution(),
         "routes": _route_distribution(),
         "performance": _model_run_performance(1000),
+        "traffic": traffic_geo.traffic_summary(),
         "recent": _recent_detection_items(12),
         "assurance": assurance,
         "anomalies": _big_screen_anomalies(metrics, models, assurance_detail, host),
-        "privacy": {"piiIncluded": False, "internalEndpointsIncluded": False},
+        "privacy": {"piiIncluded": False, "internalEndpointsIncluded": False, "rawIpsIncluded": False},
     }
 
 

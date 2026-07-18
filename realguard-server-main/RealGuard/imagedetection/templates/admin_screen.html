@@ -76,6 +76,8 @@
     .series-toggle[aria-pressed="false"]{opacity:.48}
     .swatch{width:8px;height:8px;border-radius:2px;background:var(--green)}
     .swatch.cyan{background:var(--cyan)}
+    .view-controls{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+    .view-controls[hidden]{display:none}
     .canvas-wrap{height:calc(100% - 40px);min-height:0;position:relative}
     canvas{width:100%;height:100%;display:block;cursor:crosshair;touch-action:none;border-radius:4px}
     canvas:focus-visible{outline:2px solid var(--cyan);outline-offset:-2px}
@@ -83,6 +85,22 @@
     .chart-tooltip.visible{opacity:1;transform:none}
     .chart-tooltip strong{display:block;margin-bottom:3px}
     .chart-tooltip span{display:block;color:var(--muted)}
+    .traffic-view{height:calc(100% - 40px);min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 210px;gap:12px}
+    .traffic-view[hidden],.canvas-wrap[hidden]{display:none}
+    .traffic-map-stage{min-width:0;min-height:0;position:relative;border-right:1px solid var(--line-soft);padding-right:10px}
+    .traffic-map{width:100%;height:100%;min-height:190px;cursor:crosshair}
+    .traffic-map:focus-visible{outline:2px solid var(--cyan);outline-offset:-2px}
+    .traffic-rank{min-width:0;display:grid;grid-template-rows:auto minmax(0,1fr) auto;gap:8px}
+    .traffic-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 10px;padding-bottom:8px;border-bottom:1px solid var(--line-soft)}
+    .traffic-summary span{color:var(--muted);font-size:10px}
+    .traffic-summary strong{display:block;color:var(--ink);font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:17px;margin-top:2px}
+    .province-list{display:grid;align-content:start;gap:3px;overflow:auto}
+    .province-row{width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;padding:6px 7px;border-left:2px solid transparent;background:transparent;text-align:left;color:var(--muted)}
+    .province-row:hover,.province-row.active{color:var(--ink);background:rgba(112,213,138,.07);border-left-color:var(--green)}
+    .province-row span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
+    .province-row strong{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:11px;color:var(--green)}
+    .map-credit{color:#758179;font-size:9px;line-height:1.4}
+    .map-credit a{text-decoration:underline;text-underline-offset:2px}
     .side{display:grid;grid-template-rows:minmax(0,1.1fr) minmax(0,.9fr);gap:10px;min-height:0}
     .models{display:grid;gap:5px;overflow:auto;height:calc(100% - 36px)}
     .model,.recent-row,.anomaly{width:100%;border:1px solid var(--line);border-radius:var(--radius);background:rgba(255,255,255,.025);min-width:0;text-align:left;transition:background .18s,border-color .18s,transform .18s}
@@ -131,8 +149,8 @@
     @keyframes spin{to{transform:rotate(360deg)}}
     @keyframes metricFlash{0%{border-color:var(--green);background:rgba(112,213,138,.12)}100%{border-color:var(--line);background:var(--panel)}}
     @media(max-height:820px) and (min-width:1201px){.screen{padding:10px;gap:8px}.top{padding-bottom:8px}.mark{width:36px;height:36px}.top h1{font-size:23px}.sub{font-size:12px}.clock strong{font-size:20px}.icon-btn{width:36px;height:36px}.metric{min-height:66px;padding:8px 11px}.metric strong{font-size:25px}.runtime-item{padding:7px 10px}.panel{padding:10px}.panel-head{margin-bottom:7px}.grid{grid-template-rows:minmax(190px,1.15fr) minmax(140px,.85fr)}.recent-row,.model{padding:5px 8px}.anomaly{padding:7px}.foot{min-height:14px}}
-    @media(max-width:1200px){.screen{height:auto;min-height:100vh;overflow:visible}.metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.runtime{grid-template-columns:repeat(3,minmax(0,1fr))}.runtime-item{border-bottom:1px solid var(--line)}.grid{grid-template-columns:1fr;grid-template-rows:auto}.grid>*{grid-column:1}.side{grid-template-rows:auto}.models{height:auto}.canvas-wrap{height:320px}.model-side .panel:last-child .canvas-wrap{height:220px}.inspector{top:70px;bottom:14px}}
-    @media(max-width:720px){.screen{padding:10px}.top{display:grid}.top-right{justify-content:space-between}.clock{text-align:left}.clock-meta{justify-content:flex-start;flex-wrap:wrap}.metrics,.runtime{grid-template-columns:repeat(2,minmax(0,1fr))}.panel-head{align-items:flex-start;flex-direction:column}.panel-controls{justify-content:flex-start}.recent-row{grid-template-columns:1fr}.metric strong{font-size:25px}.canvas-wrap{height:260px}.inspector{top:10px;right:10px;bottom:10px;width:calc(100vw - 20px)}.detail-row{grid-template-columns:82px minmax(0,1fr)}}
+    @media(max-width:1200px){.screen{height:auto;min-height:100vh;overflow:visible}.metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.runtime{grid-template-columns:repeat(3,minmax(0,1fr))}.runtime-item{border-bottom:1px solid var(--line)}.grid{grid-template-columns:1fr;grid-template-rows:auto}.grid>*{grid-column:1}.side{grid-template-rows:auto}.models{height:auto}.canvas-wrap{height:320px}.traffic-view{height:360px}.model-side .panel:last-child .canvas-wrap{height:220px}.inspector{top:70px;bottom:14px}}
+    @media(max-width:720px){.screen{padding:10px}.top{display:grid}.top-right{justify-content:space-between}.clock{text-align:left}.clock-meta{justify-content:flex-start;flex-wrap:wrap}.metrics,.runtime{grid-template-columns:repeat(2,minmax(0,1fr))}.panel-head{align-items:flex-start;flex-direction:column}.panel-controls{justify-content:flex-start}.recent-row{grid-template-columns:1fr}.metric strong{font-size:25px}.canvas-wrap{height:260px}.traffic-view{height:auto;grid-template-columns:1fr}.traffic-map-stage{height:280px;border-right:0;border-bottom:1px solid var(--line-soft);padding:0 0 8px}.traffic-rank{max-height:250px}.inspector{top:10px;right:10px;bottom:10px;width:calc(100vw - 20px)}.detail-row{grid-template-columns:82px minmax(0,1fr)}}
     @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
   </style>
 </head>
@@ -164,19 +182,33 @@
     <section class="grid">
       <article class="panel trend-panel">
         <div class="panel-head">
-          <div class="panel-title"><h2>检测趋势</h2><span class="panel-sub" id="trendSubtitle">过去 24 小时</span></div>
+          <div class="panel-title"><h2 id="primaryTitle">访问来源</h2><span class="panel-sub" id="primarySubtitle">过去 24 小时 · 省级匿名聚合</span></div>
           <div class="panel-controls">
-            <div class="segmented" role="group" aria-label="趋势时间范围">
-              <button class="segment" type="button" data-range="6" aria-pressed="false">6h</button>
-              <button class="segment" type="button" data-range="12" aria-pressed="false">12h</button>
-              <button class="segment active" type="button" data-range="24" aria-pressed="true">24h</button>
+            <div class="segmented" role="group" aria-label="主视图">
+              <button class="segment active" type="button" data-primary-view="traffic" aria-pressed="true">访问地图</button>
+              <button class="segment" type="button" data-primary-view="trend" aria-pressed="false">检测趋势</button>
             </div>
-            <button class="series-toggle" type="button" data-series="images" aria-pressed="true"><span class="swatch"></span>图像</button>
-            <button class="series-toggle" type="button" data-series="videos" aria-pressed="true"><span class="swatch cyan"></span>视频</button>
+            <div class="view-controls" id="trendControls" hidden>
+              <div class="segmented" role="group" aria-label="趋势时间范围">
+                <button class="segment" type="button" data-range="6" aria-pressed="false">6h</button>
+                <button class="segment" type="button" data-range="12" aria-pressed="false">12h</button>
+                <button class="segment active" type="button" data-range="24" aria-pressed="true">24h</button>
+              </div>
+              <button class="series-toggle" type="button" data-series="images" aria-pressed="true"><span class="swatch"></span>图像</button>
+              <button class="series-toggle" type="button" data-series="videos" aria-pressed="true"><span class="swatch cyan"></span>视频</button>
+            </div>
             <span class="badge" id="pollBadge">30 秒</span>
           </div>
         </div>
-        <div class="canvas-wrap"><canvas id="trend" tabindex="0" role="img" aria-label="图像与视频检测趋势，使用左右方向键选择时间点"></canvas><div class="chart-tooltip" id="trendTooltip" role="status"></div><p class="sr-only" id="trendSummary"></p></div>
+        <div class="canvas-wrap" id="trendView" hidden><canvas id="trend" tabindex="0" role="img" aria-label="图像与视频检测趋势，使用左右方向键选择时间点"></canvas><div class="chart-tooltip" id="trendTooltip" role="status"></div><p class="sr-only" id="trendSummary"></p></div>
+        <div class="traffic-view" id="trafficView">
+          <div class="traffic-map-stage"><div class="traffic-map" id="trafficMap" tabindex="0" role="img" aria-label="最近 24 小时访客省级分布地图，可用方向键选择地区"></div></div>
+          <aside class="traffic-rank">
+            <div class="traffic-summary" id="trafficSummary"></div>
+            <div class="province-list" id="provinceList"></div>
+            <div class="map-credit">仅展示匿名省级汇总 · 地图数据源 <a href="https://datav.aliyun.com/portal/school/atlas/area_selector" target="_blank" rel="noreferrer">DataV GeoAtlas</a></div>
+          </aside>
+        </div>
       </article>
       <div class="side model-side">
         <article class="panel">
@@ -218,6 +250,7 @@
     <div class="inspector-body" id="inspectorBody"></div>
     <div class="inspector-actions" id="inspectorActions"></div>
   </aside>
+  <script src="/static/js/echarts-6.1.0.min.js"></script>
   <script>
     const SCREEN_TOKEN = {{ screen_token|default("", true)|tojson }};
     const esc = (v) => String(v ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
@@ -230,6 +263,7 @@
     const colors = {green:'#70d58a',cyan:'#42cfc1',amber:'#efbd5f',red:'#f47575',muted:'#a8b4aa',line:'#344038',track:'#27302b',ink:'#f2f6f1'};
     const ui = {
       trendRange:24,
+      primaryView:'traffic',
       visibleSeries:new Set(['images','videos']),
       distributionMode:'all',
       hover:{trend:null,routes:null,distribution:null},
@@ -244,6 +278,10 @@
       modelItems:[],
       recentItems:[],
       anomalyItems:[],
+      trafficItems:[],
+      trafficChart:null,
+      trafficMapReady:false,
+      trafficSelected:null,
     };
     function setConnection(kind, text){
       $('connection').className = `connection ${kind || ''}`;
@@ -289,6 +327,76 @@
       const count = Number(value) || 0;
       const sum = Number(total) || 0;
       return sum ? `${(count * 100 / sum).toFixed(1)}%` : '0%';
+    }
+    const provinceNames = {
+      '北京':'北京市','天津':'天津市','河北':'河北省','山西':'山西省','内蒙古':'内蒙古自治区','辽宁':'辽宁省','吉林':'吉林省','黑龙江':'黑龙江省',
+      '上海':'上海市','江苏':'江苏省','浙江':'浙江省','安徽':'安徽省','福建':'福建省','江西':'江西省','山东':'山东省','河南':'河南省','湖北':'湖北省',
+      '湖南':'湖南省','广东':'广东省','广西':'广西壮族自治区','海南':'海南省','重庆':'重庆市','四川':'四川省','贵州':'贵州省','云南':'云南省','西藏':'西藏自治区',
+      '陕西':'陕西省','甘肃':'甘肃省','青海':'青海省','宁夏':'宁夏回族自治区','新疆':'新疆维吾尔自治区','台湾':'台湾省','香港':'香港特别行政区','澳门':'澳门特别行政区'
+    };
+    const shortProvinceName = Object.fromEntries(Object.entries(provinceNames).map(([shortName,fullName])=>[fullName,shortName]));
+    async function ensureTrafficMap(){
+      if(ui.trafficMapReady || typeof echarts === 'undefined') return;
+      try{
+        const response=await fetch('/static/maps/china-provinces.json',{cache:'force-cache'});
+        if(!response.ok) throw new Error('地图数据加载失败');
+        echarts.registerMap('realguard-china',await response.json());
+        ui.trafficChart=echarts.init($('trafficMap'),null,{renderer:'canvas'});
+        ui.trafficChart.on('click',params=>{
+          const name=shortProvinceName[params.name] || params.name;
+          if(ui.trafficItems.some(item=>item.name===name)) selectTrafficProvince(name);
+        });
+        ui.trafficMapReady=true;
+        renderTraffic();
+      }catch(err){
+        $('trafficMap').innerHTML=`<div class="empty">${esc(err.message || '地图暂不可用')}</div>`;
+      }
+    }
+    function trafficDetail(item){
+      const traffic=state?.traffic || {};
+      const cities=(item.cities || []).map(city=>`${city.name} ${city.visitors}`).join('、') || '为保护隐私，少量城市不单列';
+      return {kicker:'访问来源',title:item.name,rows:[['独立访客',`${formatNumber(item.visitors)} 人`],['页面访问',`${formatNumber(item.requests)} 次`],['访客占比',`${Number(item.share || 0).toFixed(1)}%`],['主要城市',cities],['统计窗口',`最近 ${traffic.windowHours || 24} 小时`],['定位方式','ip2region 离线省级归属']],action:null};
+    }
+    function selectTrafficProvince(name,{open=true}={}){
+      const item=ui.trafficItems.find(entry=>entry.name===name);if(!item)return;
+      const previous=ui.trafficSelected;ui.trafficSelected=name;
+      document.querySelectorAll('[data-province-index]').forEach(button=>button.classList.toggle('active',ui.trafficItems[Number(button.dataset.provinceIndex)]?.name===name));
+      if(ui.trafficChart){
+        if(previous) ui.trafficChart.dispatchAction({type:'unselect',seriesIndex:0,name:provinceNames[previous] || previous});
+        ui.trafficChart.dispatchAction({type:'select',seriesIndex:0,name:provinceNames[name] || name});
+        ui.trafficChart.dispatchAction({type:'showTip',seriesIndex:0,name:provinceNames[name] || name});
+      }
+      if(open) openInspector(trafficDetail(item));
+    }
+    function renderTraffic(){
+      const traffic=state?.traffic || {};
+      ui.trafficItems=(traffic.provinces || []).slice();
+      $('trafficSummary').innerHTML=[['独立访客',traffic.uniqueVisitors],['页面访问',traffic.requests],['境内访客',traffic.domesticVisitors],['定位覆盖',`${traffic.coveragePercent ?? 0}%`]].map(([label,value])=>`<div><span>${esc(label)}</span><strong>${esc(formatNumber(value))}</strong></div>`).join('');
+      $('provinceList').innerHTML=ui.trafficItems.length?ui.trafficItems.slice(0,10).map((item,index)=>`<button class="province-row ${ui.trafficSelected===item.name?'active':''}" type="button" data-province-index="${index}" aria-label="查看${esc(item.name)}访问详情"><span>${index+1}. ${esc(item.name)}</span><strong>${esc(formatNumber(item.visitors))} 人</strong></button>`).join(''):'<div class="empty">暂无可展示的省级访问数据</div>';
+      if(!ui.trafficMapReady){ensureTrafficMap();return;}
+      const max=Math.max(1,...ui.trafficItems.map(item=>Number(item.visitors)||0));
+      const byName=new Map(ui.trafficItems.map(item=>[item.name,item]));
+      const data=Object.entries(provinceNames).map(([shortName,fullName])=>({name:fullName,value:Number(byName.get(shortName)?.visitors)||0,shortName}));
+      ui.trafficChart.setOption({
+        animationDurationUpdate:320,
+        tooltip:{trigger:'item',backgroundColor:'rgba(12,17,15,.96)',borderColor:'#506059',textStyle:{color:colors.ink,fontSize:12},formatter:params=>{const item=byName.get(shortProvinceName[params.name]);return item?`<strong>${esc(item.name)}</strong><br>独立访客 ${formatNumber(item.visitors)} 人<br>页面访问 ${formatNumber(item.requests)} 次`:`<strong>${esc(shortProvinceName[params.name] || params.name || '南海诸岛')}</strong><br>暂无访问`;}},
+        visualMap:{show:false,min:0,max,inRange:{color:['#26312b','#315c43','#4d9a63','#70d58a']}},
+        series:[{type:'map',map:'realguard-china',roam:true,scaleLimit:{min:1,max:5},selectedMode:'single',data,itemStyle:{areaColor:'#26312b',borderColor:'#627169',borderWidth:.7},emphasis:{label:{show:true,color:'#071008',fontWeight:800},itemStyle:{areaColor:'#efbd5f',borderColor:'#f2f6f1'}},select:{label:{show:true,color:'#071008',fontWeight:800},itemStyle:{areaColor:'#42cfc1',borderColor:'#f2f6f1',borderWidth:1.2}},label:{show:false}}]
+      },true);
+      if(ui.trafficSelected) selectTrafficProvince(ui.trafficSelected,{open:false});
+    }
+    function syncPrimaryView(){
+      const traffic=ui.primaryView==='traffic';
+      $('trafficView').hidden=!traffic;$('trendView').hidden=traffic;$('trendControls').hidden=traffic;
+      $('primaryTitle').textContent=traffic?'访问来源':'检测趋势';
+      if(traffic){
+        const value=state?.traffic;
+        $('primarySubtitle').textContent=value?.ready?`过去 ${value.windowHours || 24} 小时 · 省级匿名聚合`:(value?.source?.message || '访问地域数据准备中');
+        requestAnimationFrame(()=>ui.trafficChart?.resize());
+      }else{
+        drawTrend();
+      }
+      document.querySelectorAll('[data-primary-view]').forEach(button=>{const active=button.dataset.primaryView===ui.primaryView;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));});
     }
     function openInspector({kicker='数据详情',title='查看详情',rows=[],action=null}){
       $('inspectorKicker').textContent = kicker;
@@ -510,7 +618,7 @@
       const data=trendWindow();
       const active=ui.locked.trend ?? ui.hover.trend;
       drawCanvas('trend',(ctx,w,h)=>lineChart(ctx,w,h,data,active));
-      $('trendSubtitle').textContent=`过去 ${data.labels.length || ui.trendRange} 小时 · ${data.labels[0] || '--'} 至 ${data.labels[data.labels.length-1] || '--'}`;
+      if(ui.primaryView==='trend') $('primarySubtitle').textContent=`过去 ${data.labels.length || ui.trendRange} 小时 · ${data.labels[0] || '--'} 至 ${data.labels[data.labels.length-1] || '--'}`;
       $('trendSummary').textContent = `图像检测总计 ${data.images.reduce((sum,value)=>sum+Number(value || 0),0)}，视频检测总计 ${data.videos.reduce((sum,value)=>sum+Number(value || 0),0)}。`;
     }
     function drawDistribution(){
@@ -529,7 +637,7 @@
     }
     function renderCharts(){
       if(!state) return;
-      drawTrend();drawDistribution();drawRoutes();
+      syncPrimaryView();renderTraffic();drawTrend();drawDistribution();drawRoutes();
     }
     function drawChart(id){
       if(id==='trend') drawTrend();
@@ -722,6 +830,14 @@
       const index=Number(button.dataset.anomalyIndex);const item=index>=0?ui.anomalyItems[index]:null;
       openInspector(item?{kicker:item.level==='critical'?'严重异常':'风险提醒',title:item.title || '异常',rows:[['风险级别',item.level==='critical'?'严重':'警告'],['异常说明',item.message || '-'],['数据时间',state?.generatedAt || '-']],action:{href:'/admin#governance',label:'进入审计告警'}}:{kicker:'运行状态',title:'当前未发现异常',rows:[['模型链路','处于可观测范围'],['主机资源','处于可观测范围'],['数据时间',state?.generatedAt || '-']]});
     });
+    $('provinceList').addEventListener('click',event=>{const button=event.target.closest('[data-province-index]');if(!button)return;const item=ui.trafficItems[Number(button.dataset.provinceIndex)];if(item)selectTrafficProvince(item.name);});
+    $('trafficMap').addEventListener('keydown',event=>{
+      if(!ui.trafficItems.length)return;
+      const backward=event.key==='ArrowLeft'||event.key==='ArrowUp';const forward=event.key==='ArrowRight'||event.key==='ArrowDown';
+      if(backward||forward){event.preventDefault();const current=Math.max(0,ui.trafficItems.findIndex(item=>item.name===ui.trafficSelected));const next=Math.max(0,Math.min(ui.trafficItems.length-1,current+(backward?-1:1)));selectTrafficProvince(ui.trafficItems[next].name,{open:false});}
+      if((event.key==='Enter'||event.key===' ')&&ui.trafficSelected){event.preventDefault();selectTrafficProvince(ui.trafficSelected);}
+    });
+    document.querySelectorAll('[data-primary-view]').forEach(button=>button.addEventListener('click',()=>{ui.primaryView=button.dataset.primaryView;syncPrimaryView();renderCharts();}));
     document.querySelectorAll('[data-range]').forEach(button=>button.addEventListener('click',()=>{ui.trendRange=Number(button.dataset.range)||24;ui.hover.trend=null;ui.locked.trend=null;hideTooltip('trend');syncTrendControls();drawTrend();}));
     document.querySelectorAll('[data-series]').forEach(button=>button.addEventListener('click',()=>{const key=button.dataset.series;if(ui.visibleSeries.has(key)){if(ui.visibleSeries.size===1)return;ui.visibleSeries.delete(key);}else ui.visibleSeries.add(key);syncTrendControls();drawTrend();}));
     document.querySelectorAll('[data-distribution-mode]').forEach(button=>button.addEventListener('click',()=>{ui.distributionMode=button.dataset.distributionMode;ui.hover.distribution=null;ui.locked.distribution=null;hideTooltip('distribution');syncDistributionControls();drawDistribution();}));
@@ -734,8 +850,8 @@
     document.addEventListener('fullscreenchange',updateFullscreenButton);
     document.addEventListener('keydown',event=>{if(event.key==='Escape' && $('inspector').classList.contains('open')) closeInspector();});
     ['trend','routes','distribution'].forEach(setupCanvas);
-    window.addEventListener('resize',()=>{cancelAnimationFrame(resizeFrame);resizeFrame=requestAnimationFrame(renderCharts);});
-    syncTrendControls();syncDistributionControls();updateFullscreenButton();load();
+    window.addEventListener('resize',()=>{cancelAnimationFrame(resizeFrame);resizeFrame=requestAnimationFrame(()=>{renderCharts();ui.trafficChart?.resize();});});
+    syncTrendControls();syncDistributionControls();syncPrimaryView();updateFullscreenButton();load();
   </script>
 </body>
 </html>

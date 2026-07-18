@@ -175,6 +175,9 @@ def test_admin_screen_renders_interactive_operations_controls(client, monkeypatc
     assert 'id="autoRefresh"' in html
     assert 'data-range="6"' in html
     assert 'data-distribution-mode="feedback"' in html
+    assert 'data-primary-view="traffic"' in html
+    assert 'id="trafficMap"' in html
+    assert "/static/js/echarts-6.1.0.min.js" in html
     assert 'id="inspector"' in html
     assert "['trend','routes','distribution'].forEach(setupCanvas)" in html
 
@@ -430,11 +433,21 @@ def test_big_screen_payload_excludes_internal_topology_and_assurance_details(mon
     monkeypatch.setattr(admin, "_feedback_distribution", lambda: [])
     monkeypatch.setattr(admin, "_route_distribution", lambda: [])
     monkeypatch.setattr(admin, "_recent_detection_items", lambda limit=12: [])
+    monkeypatch.setattr(
+        admin.traffic_geo,
+        "traffic_summary",
+        lambda: {"ready": True, "uniqueVisitors": 3, "provinces": [], "privacy": {"rawIpsIncluded": False}},
+    )
 
     payload = admin._big_screen_payload()
     serialized = json.dumps(payload, ensure_ascii=False)
 
-    assert payload["privacy"] == {"piiIncluded": False, "internalEndpointsIncluded": False}
+    assert payload["privacy"] == {
+        "piiIncluded": False,
+        "internalEndpointsIncluded": False,
+        "rawIpsIncluded": False,
+    }
+    assert payload["traffic"]["privacy"]["rawIpsIncluded"] is False
     assert payload["routing"] == {
         "imagePrimary": "v1-onnx-mil",
         "imageFallback": "v2-private",

@@ -20,6 +20,7 @@ alibabacloud_green20220302
 c2pa-python>=0.6.0
 opencv-python-headless>=4.8.0
 PyWavelets>=1.4.0
+py-ip2region==3.0.4
 # invisible-watermark is installed separately with --no-deps in deploy_v1.sh
 # because its rivaGan code path eagerly imports torch (~700MB) even though we
 # only use the dwtDct/dwtDctSvd paths.
