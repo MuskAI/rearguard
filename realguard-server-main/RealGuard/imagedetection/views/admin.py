@@ -1776,9 +1776,10 @@ def _screen_algorithm_server_payload(models, routing):
     health = primary.get("health") if isinstance(primary.get("health"), dict) else {}
     telemetry = health.get("telemetry") if isinstance(health.get("telemetry"), dict) else {}
     service_ready = bool(health.get("serviceOk"))
-    model_ready = bool(health.get("ok"))
     remote_ready = telemetry.get("remoteReady")
     provider = str(telemetry.get("activeProvider") or "")
+    remote_model_ready = remote_ready is True and provider == "CUDAExecutionProvider"
+    model_ready = bool(health.get("ok")) or remote_model_ready
     accelerator_ready = remote_ready is not False and (
         not provider or provider == "CUDAExecutionProvider"
     )

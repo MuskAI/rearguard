@@ -387,7 +387,8 @@ def test_screen_algorithm_server_payload_uses_primary_model_gpu_telemetry():
             "name": "RealGuard 主模型",
             "enabled": True,
             "health": {
-                "ok": True,
+                # The Web proxy has no local model artifact, while the remote CUDA model is ready.
+                "ok": False,
                 "serviceOk": True,
                 "latencyMs": 31,
                 "telemetry": {
