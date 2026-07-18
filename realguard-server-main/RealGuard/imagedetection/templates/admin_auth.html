@@ -4,24 +4,24 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>慧鉴 AI 管理员认证</title>
+  <link rel="icon" href="data:,">
+  <link href="/static/css/font-awesome.min.css" rel="stylesheet">
   <style>
     :root{--ink:#101828;--muted:#667085;--line:#d9e1ec;--panel:#ffffff;--page:#eef3f8;--blue:#1d4ed8;--cyan:#0891b2;--red:#dc2626;--green:#15803d;--radius:8px}
     *{box-sizing:border-box}
-    body{margin:0;min-height:100vh;font-family:"IBM Plex Sans","Noto Sans SC",system-ui,sans-serif;color:var(--ink);background:
-      linear-gradient(120deg,rgba(8,145,178,.12),transparent 34rem),
-      linear-gradient(180deg,#f8fafc,var(--page));letter-spacing:0}
+    body{margin:0;min-height:100vh;font-family:"IBM Plex Sans","Noto Sans SC",system-ui,sans-serif;color:var(--ink);background:#f3f6f5;letter-spacing:0}
     a{color:inherit;text-decoration:none}
     .shell{min-height:100vh;display:grid;grid-template-columns:minmax(320px,.9fr) minmax(360px,520px);align-items:stretch}
     .hero{padding:clamp(32px,6vw,72px);display:flex;flex-direction:column;justify-content:space-between}
     .brand{display:flex;align-items:center;gap:12px;font-weight:900}
-    .mark{width:42px;height:42px;border-radius:8px;background:linear-gradient(135deg,var(--cyan),var(--blue));color:#fff;display:grid;place-items:center}
-    h1{font-size:clamp(38px,5vw,72px);line-height:1;margin:64px 0 14px;max-width:760px}
+    .mark{width:42px;height:42px;border-radius:8px;background:var(--cyan);color:#fff;display:grid;place-items:center}
+    h1{font-size:clamp(34px,4vw,48px);line-height:1.12;margin:64px 0 14px;max-width:680px}
     .lead{max-width:640px;color:#475467;font-size:17px;line-height:1.7}
     .rules{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:42px}
     .rule{border:1px solid rgba(16,24,40,.08);background:rgba(255,255,255,.7);border-radius:8px;padding:14px;min-height:92px}
     .rule strong{display:block;margin-bottom:6px}
     .rule span{color:var(--muted);font-size:13px;line-height:1.5}
-    .panel-wrap{display:grid;place-items:center;padding:28px;background:rgba(255,255,255,.52);backdrop-filter:blur(18px);border-left:1px solid rgba(16,24,40,.08)}
+    .panel-wrap{display:grid;place-items:center;padding:28px;background:#edf2f0;border-left:1px solid rgba(16,24,40,.08)}
     .panel{width:min(100%,420px);background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:0 24px 70px rgba(15,23,42,.12);padding:24px}
     .tabs{display:grid;grid-template-columns:1fr 1fr;gap:6px;background:#f2f5f9;border:1px solid var(--line);border-radius:8px;padding:4px;margin-bottom:22px}
     .tabs.one{grid-template-columns:1fr}
@@ -46,7 +46,7 @@
 <body>
   <main class="shell">
     <section class="hero">
-      <div class="brand"><span class="mark">慧</span><span>慧鉴 AI 管理台</span></div>
+      <div class="brand"><span class="mark"><i class="fa fa-eye"></i></span><span>慧鉴 AI 管理台</span></div>
       <div>
         <h1>后台管理入口独立认证</h1>
         <p class="lead">管理员账号与普通业务账号分离；创建账号必须由已有管理员或后台白名单账号授权，登录失败会临时锁定，降低后台暴露风险。</p>
@@ -56,14 +56,14 @@
           <div class="rule"><strong>兼容迁移</strong><span>现有环境白名单仍可作为过渡管理员权限。</span></div>
         </div>
       </div>
-      <p>Timezone: Asia/Shanghai · Account table: admin_accounts</p>
+      <p>管理员会话使用独立权限与审计策略。</p>
     </section>
     <section class="panel-wrap">
       <div class="panel">
-        <div class="tabs{% if not can_register %} one{% endif %}">
+        {% if can_register %}<div class="tabs">
           <a class="tab {% if mode != 'register' %}active{% endif %}" href="/admin/login">登录</a>
-          {% if can_register %}<a class="tab {% if mode == 'register' %}active{% endif %}" href="/admin/register">注册</a>{% endif %}
-        </div>
+          <a class="tab {% if mode == 'register' %}active{% endif %}" href="/admin/register">注册</a>
+        </div>{% endif %}
         {% if mode == 'register' %}
           <h2>注册管理员</h2>
           <p>只有已登录管理员或现有后台白名单账号可以创建新管理员。</p>
@@ -95,8 +95,8 @@
         {% if error %}<div class="error">{{ error }}</div>{% endif %}
         {% if message %}<div class="message">{{ message }}</div>{% endif %}
         <div class="meta">
-          已创建管理员账号：{{ admin_account_count }} 个<br>
-          当前白名单管理员会话：{% if legacy_admin_allowed %}可用{% else %}不可用{% endif %}
+          <i class="fa fa-lock"></i> 独立管理员认证已启用；登录活动会被审计并受到失败限流保护。
+          {% if can_register and admin_account_count is not none %}<br>当前管理员账号：{{ admin_account_count }} 个{% endif %}
         </div>
         <div class="links">
           <a href="/admin">返回后台</a>

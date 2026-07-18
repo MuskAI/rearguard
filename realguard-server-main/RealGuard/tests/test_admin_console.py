@@ -1,5 +1,7 @@
 from pathlib import Path
+import json
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -159,6 +161,7 @@ def test_admin_account_login_sets_admin_session(client, monkeypatch):
         } if identity == "ops" else None,
     )
     monkeypatch.setattr(admin, "_update_admin_login", lambda account: None)
+    monkeypatch.setattr(admin, "_audit", lambda *args, **kwargs: None)
 
     response = client.post(
         "/admin/login",
@@ -170,6 +173,46 @@ def test_admin_account_login_sets_admin_session(client, monkeypatch):
     with client.session_transaction() as sess:
         assert sess["admin_user"]["username"] == "ops"
         assert sess["admin_user"]["authType"] == "admin_account"
+        assert sess[admin.ADMIN_CSRF_SESSION_KEY] != "test-csrf-token"
+
+
+def test_admin_login_hides_account_inventory_and_sets_security_headers(client, monkeypatch):
+    monkeypatch.setattr(admin, "_admin_account_count", lambda: (_ for _ in ()).throw(AssertionError("must not query")))
+
+    response = client.get("/admin/login")
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert "已创建管理员账号" not in html
+    assert "当前白名单管理员会话" not in html
+    assert "no-store" in response.headers["Cache-Control"]
+    assert "private" in response.headers["Cache-Control"]
+    assert response.headers["X-Frame-Options"] == "DENY"
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+
+
+def test_admin_logout_requires_csrf_post_and_clears_session(client, monkeypatch):
+    audit = []
+    monkeypatch.setattr(admin, "_audit", lambda actor, action, target, **kwargs: audit.append((action, target)))
+    with client.session_transaction() as sess:
+        sess[admin.ADMIN_SESSION_KEY] = {
+            "Userid": "admin:1",
+            "adminId": 1,
+            "username": "ops",
+            "role": "admin",
+        }
+        sess[admin.ADMIN_SCREEN_SESSION_KEY] = "screen-claim"
+
+    denied = client.get("/admin/logout")
+    response = client.post("/admin/logout", headers=_csrf_headers(client))
+
+    assert denied.status_code == 405
+    assert response.status_code == 302
+    with client.session_transaction() as sess:
+        assert admin.ADMIN_SESSION_KEY not in sess
+        assert admin.ADMIN_CSRF_SESSION_KEY not in sess
+        assert admin.ADMIN_SCREEN_SESSION_KEY not in sess
+    assert audit == [("admin.logout", "1")]
 
 
 def test_admin_register_requires_existing_admin_session(client, monkeypatch):
@@ -273,6 +316,160 @@ def test_admin_system_returns_services(client, monkeypatch):
     payload = response.get_json()
     assert payload["services"][0]["id"] == "v1-onnx-mil"
     assert payload["services"][0]["health"]["ok"] is True
+
+
+def test_host_telemetry_reports_normalized_linux_resources(monkeypatch):
+    monkeypatch.setattr(admin.os, "cpu_count", lambda: 4)
+    monkeypatch.setattr(admin.os, "getloadavg", lambda: (1.0, 0.75, 0.5))
+    monkeypatch.setattr(
+        admin,
+        "_read_proc_text",
+        lambda path: "MemTotal: 1000 kB\nMemAvailable: 250 kB\n" if path == "/proc/meminfo" else "86461.0 0.0\n",
+    )
+    monkeypatch.setattr(admin.shutil, "disk_usage", lambda path: SimpleNamespace(total=1000, used=400, free=600))
+    monkeypatch.setattr(admin, "_PROCESS_STARTED_MONOTONIC", 100.0)
+    monkeypatch.setattr(admin.time, "monotonic", lambda: 160.0)
+
+    payload = admin._host_telemetry()
+
+    assert payload["status"] == "healthy"
+    assert payload["cpu"]["cores"] == 4
+    assert payload["cpu"]["loadPercent"] == 25.0
+    assert payload["memory"]["usedPercent"] == 75.0
+    assert payload["disk"]["usedPercent"] == 40.0
+    assert payload["uptimeSeconds"] == 86461
+    assert payload["processUptimeSeconds"] == 60
+
+
+def test_big_screen_payload_excludes_internal_topology_and_assurance_details(monkeypatch):
+    secret_endpoint = "http://10.1.20.66:15001/image"
+    raw_model = {
+        "id": "v1-onnx-mil",
+        "name": "V1",
+        "runtime": "flask",
+        "enabled": True,
+        "endpoint": secret_endpoint,
+        "healthUrl": "http://127.0.0.1:15001/health",
+        "artifactPath": "/srv/private/model.onnx",
+    }
+    monkeypatch.setattr(
+        admin.model_registry,
+        "load_registry",
+        lambda: {
+            "routing": {
+                "imagePrimary": "v1-onnx-mil",
+                "imageFallback": "v2-private",
+                "fallbackEnabled": False,
+                "notes": "private routing notes",
+            },
+            "models": [raw_model],
+        },
+    )
+    monkeypatch.setattr(admin.model_registry, "artifact_status", lambda model: {"path": "/srv/private/model.onnx"})
+    monkeypatch.setattr(
+        admin.model_registry,
+        "check_model_health",
+        lambda model: {
+            "ok": False,
+            "serviceOk": True,
+            "artifactReady": False,
+            "latencyMs": 18,
+            "message": "missing /srv/private/model.onnx",
+        },
+    )
+    monkeypatch.setattr(admin, "_dashboard_metrics", lambda: {"detections": {}, "users": {}})
+    monkeypatch.setattr(
+        admin,
+        "_v1_assurance",
+        lambda **kwargs: {
+            "online": False,
+            "blockers": [f"private endpoint {secret_endpoint}"],
+            "recommendations": ["private recommendation"],
+            "primary": raw_model,
+            "alerts": {"webhookUrl": "https://private.example/hook"},
+        },
+    )
+    monkeypatch.setattr(admin, "_host_telemetry", lambda: {"status": "healthy", "cpu": {}, "memory": {}, "disk": {}})
+    monkeypatch.setattr(admin, "_hourly_detection_series", lambda hours=24: {"labels": [], "images": [], "videos": []})
+    monkeypatch.setattr(admin, "_label_distribution", lambda: [])
+    monkeypatch.setattr(admin, "_feedback_distribution", lambda: [])
+    monkeypatch.setattr(admin, "_route_distribution", lambda: [])
+    monkeypatch.setattr(admin, "_recent_detection_items", lambda limit=12: [])
+
+    payload = admin._big_screen_payload()
+    serialized = json.dumps(payload, ensure_ascii=False)
+
+    assert payload["privacy"] == {"piiIncluded": False, "internalEndpointsIncluded": False}
+    assert payload["routing"] == {
+        "imagePrimary": "v1-onnx-mil",
+        "imageFallback": "v2-private",
+        "fallbackEnabled": False,
+    }
+    assert payload["models"][0]["health"]["message"] == "服务在线，模型能力未就绪"
+    assert payload["assurance"] == {"online": False, "blockerCount": 1, "recommendationCount": 1}
+    assert secret_endpoint not in serialized
+    assert "/srv/private" not in serialized
+    assert "private routing notes" not in serialized
+    assert "private.example" not in serialized
+
+
+def test_big_screen_recent_items_remove_user_and_file_identifiers(monkeypatch):
+    queries = []
+
+    def fake_detection_sql(sql, params=None):
+        queries.append(sql)
+        if sql.strip().upper().startswith("SHOW COLUMNS"):
+            return [
+                {"Field": "itemid"},
+                {"Field": "createtime"},
+                {"Field": "fake"},
+                {"Field": "aigc"},
+                {"Field": "clarity"},
+                {"Field": "feedback"},
+                {"Field": "filename"},
+                {"Field": "phone"},
+            ]
+        return [{
+            "itemid": 612,
+            "createtime": "2026-06-09 13:27:16",
+            "filename": "private-person.jpg",
+            "phone": "13329825566",
+            "aigc": "真实图像",
+            "fake": 12.3,
+            "clarity": "高",
+            "feedback": "满意",
+        }]
+
+    monkeypatch.setattr(admin, "excute_detection_sql", fake_detection_sql)
+    monkeypatch.setattr(
+        admin.admin_state,
+        "model_runs_by_itemids",
+        lambda itemids: {"612": {
+            "route": "primary",
+            "status": "success",
+            "model": {
+                "id": "v1-onnx-mil",
+                "name": "V1",
+                "runtime": "flask",
+                "version": "1.0",
+                "endpoint": "http://127.0.0.1:15001/image",
+            },
+            "actor": {"phone": "13329825566", "username": "private-user"},
+        }},
+    )
+
+    item = admin._recent_detection_items(1)[0]
+    serialized = json.dumps(item, ensure_ascii=False)
+
+    assert "filename" not in item
+    assert "phone" not in item
+    assert "filename" not in queries[-1].lower()
+    assert "phone" not in queries[-1].lower()
+    assert item["modelRoute"]["model"]["id"] == "v1-onnx-mil"
+    assert "private-person.jpg" not in serialized
+    assert "13329825566" not in serialized
+    assert "127.0.0.1" not in serialized
+    assert "private-user" not in serialized
 
 
 def test_admin_users_supports_search_and_limit(client, monkeypatch):
@@ -719,11 +916,47 @@ def test_big_screen_readonly_token_allows_unauthenticated_fetch(client, monkeypa
     )
 
     denied = client.get("/api/admin/big-screen")
+    denied_query = client.get("/api/admin/big-screen?token=screen-secret")
     allowed = client.get("/api/admin/big-screen", headers={"X-RealGuard-Screen-Token": "screen-secret"})
 
     assert denied.status_code == 401
+    assert denied_query.status_code == 401
     assert allowed.status_code == 200
     assert allowed.get_json()["metrics"]["detections"]["today"] == 11
+
+
+def test_big_screen_query_token_is_exchanged_for_signed_session(client, monkeypatch):
+    monkeypatch.setenv("REALGUARD_BIG_SCREEN_TOKEN", "screen-secret")
+    admin._clear_big_screen_cache()
+    monkeypatch.setattr(
+        admin,
+        "_big_screen_payload",
+        lambda: {
+            "generatedAt": "2026-06-09 18:00:00",
+            "metrics": {"detections": {"today": 11}},
+            "series": {"labels": [], "images": [], "videos": []},
+            "models": [],
+            "recent": [],
+            "anomalies": [],
+        },
+    )
+
+    exchanged = client.get("/admin/screen?token=screen-secret")
+
+    assert exchanged.status_code == 302
+    assert exchanged.headers["Location"].endswith("/admin/screen")
+    assert "screen-secret" not in exchanged.headers["Location"]
+    with client.session_transaction() as sess:
+        assert sess[admin.ADMIN_SCREEN_SESSION_KEY] == admin.hashlib.sha256(b"screen-secret").hexdigest()
+        assert sess[admin.ADMIN_SCREEN_SESSION_KEY] != "screen-secret"
+
+    page = client.get(exchanged.headers["Location"])
+    payload = client.get("/api/admin/big-screen")
+
+    assert page.status_code == 200
+    assert "screen-secret" not in page.get_data(as_text=True)
+    assert payload.status_code == 200
+    assert payload.get_json()["metrics"]["detections"]["today"] == 11
 
 
 def test_admin_routing_update_can_rollback(client, monkeypatch, tmp_path):

@@ -4,24 +4,24 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>慧鉴 AI 管理控制台</title>
-  <link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,600;6..72,800&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700;900&display=swap" rel="stylesheet">
+  <link rel="icon" href="data:,">
+  <link href="/static/css/font-awesome.min.css" rel="stylesheet">
   <style>
     :root{
-      --sidebar:#263445;
-      --sidebar-deep:#1f2d3d;
-      --sidebar-soft:#31445a;
-      --page:#f5f7fb;
+      --sidebar:#1d2926;
+      --sidebar-deep:#151e1c;
+      --sidebar-soft:#2b3c37;
+      --page:#f3f6f5;
       --panel:#ffffff;
       --ink:#182230;
       --muted:#667085;
       --line:#d8dee9;
       --line-soft:#edf0f5;
-      --blue:#2563eb;
-      --cyan:#00a6c8;
-      --green:#16a34a;
+      --blue:#176b87;
+      --cyan:#0891b2;
+      --green:#16875d;
       --amber:#d97706;
       --red:#dc2626;
-      --violet:#6d5dfc;
       --shadow:0 12px 34px rgba(15,23,42,.08);
       --radius:6px;
     }
@@ -36,20 +36,21 @@
     .app{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}
     .sidebar{background:linear-gradient(180deg,var(--sidebar-deep),var(--sidebar));color:#c9d4e2;min-height:100vh;position:sticky;top:0;padding:16px 12px}
     .brand{display:flex;align-items:center;gap:12px;height:56px;padding:0 10px;color:#fff}
-    .brand-mark{width:36px;height:36px;border-radius:var(--radius);background:linear-gradient(135deg,var(--cyan),var(--blue));display:grid;place-items:center;font-weight:900;box-shadow:0 10px 22px rgba(0,166,200,.24)}
+    .brand-mark{width:36px;height:36px;border-radius:var(--radius);background:var(--cyan);display:grid;place-items:center;font-weight:900}
     .brand-title{font-weight:800;font-size:17px}
     .brand-sub{font-family:"IBM Plex Mono",monospace;font-size:10px;color:#8fa3ba;text-transform:uppercase}
     .nav-group{margin-top:18px}
     .nav-label{font-family:"IBM Plex Mono",monospace;font-size:10px;text-transform:uppercase;color:#7f93aa;padding:12px 12px 6px}
     .nav-item{height:42px;display:flex;align-items:center;gap:11px;padding:0 12px;border-radius:var(--radius);color:#c9d4e2;margin:3px 0;transition:background .16s,color .16s}
     .nav-item:hover,.nav-item.active{background:var(--sidebar-soft);color:#fff}
-    .nav-icon{width:20px;text-align:center;font-size:15px}
+    .nav-icon{width:20px;text-align:center;font-size:14px;color:#8fb3a8}
+    .nav-item:hover .nav-icon,.nav-item.active .nav-icon{color:#77dfbc}
     .main{min-width:0}
     .topbar{height:58px;background:#fff;border-bottom:1px solid var(--line-soft);display:flex;align-items:center;justify-content:space-between;padding:0 22px;position:sticky;top:0;z-index:8}
     .crumbs{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:14px}
     .crumbs strong{color:var(--ink)}
     .top-actions{display:flex;align-items:center;gap:10px}
-    .avatar{width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,var(--blue),var(--violet));color:#fff;display:grid;place-items:center;font-weight:800}
+    .avatar{width:34px;height:34px;border-radius:50%;background:#275f55;color:#fff;display:grid;place-items:center;font-weight:800}
     .tags{height:38px;background:#fff;border-bottom:1px solid var(--line-soft);display:flex;align-items:center;gap:7px;padding:0 18px;overflow:auto}
     .tag-tab{height:26px;display:flex;align-items:center;padding:0 10px;border:1px solid var(--line);border-radius:3px;background:#fff;color:#475467;font-size:12px;white-space:nowrap}
     .tag-tab.active{background:#edf4ff;color:var(--blue);border-color:#bfdbfe}
@@ -57,24 +58,22 @@
     .view{display:none;animation:fadeIn .2s ease}
     .view.active{display:block}
     @keyframes fadeIn{from{opacity:.4;transform:translateY(4px)}to{opacity:1;transform:none}}
-    .hero{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(320px,.65fr);gap:16px;margin-bottom:16px}
-    .hero-card{border-radius:var(--radius);background:linear-gradient(135deg,#ffffff,#eef6ff);border:1px solid var(--line-soft);padding:26px;box-shadow:var(--shadow);position:relative;overflow:hidden}
-    .hero-card:after{content:"";position:absolute;right:-70px;top:-80px;width:230px;height:230px;border-radius:999px;background:radial-gradient(circle,rgba(37,99,235,.22),transparent 68%)}
-    .eyebrow{font-family:"IBM Plex Mono",monospace;font-size:11px;text-transform:uppercase;color:var(--blue);font-weight:700;letter-spacing:.14em}
-    h1{font-size:34px;line-height:1.1;margin:10px 0 8px}
+    .workspace-heading{display:grid;grid-template-columns:minmax(260px,.65fr) minmax(600px,1.35fr);gap:24px;align-items:center;padding:4px 0 18px;margin-bottom:16px;border-bottom:1px solid var(--line)}
+    .eyebrow{font-family:ui-monospace,monospace;font-size:11px;text-transform:uppercase;color:var(--blue);font-weight:700}
+    h1{font-size:24px;line-height:1.2;margin:6px 0}
     .subtitle{color:var(--muted);line-height:1.65;max-width:760px}
-    .quick{display:grid;gap:10px}
-    .quick-row{background:#fff;border:1px solid var(--line-soft);border-radius:var(--radius);padding:14px;display:flex;justify-content:space-between;gap:12px;box-shadow:0 8px 22px rgba(15,23,42,.04)}
+    .quick{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0;border:1px solid var(--line);border-radius:var(--radius);background:#fff;overflow:hidden}
+    .quick-row{padding:9px 12px;display:flex;justify-content:space-between;gap:12px;border-right:1px solid var(--line-soft)}
+    .quick-row:last-child{border-right:0}
     .quick-row small{display:block;color:var(--muted);font-size:12px}
     .quick-row strong{font-family:"IBM Plex Mono",monospace}
-    .metrics{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px;margin-bottom:16px}
+    .metrics{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:14px;margin-bottom:16px}
     .metric,.panel{background:var(--panel);border:1px solid var(--line-soft);border-radius:var(--radius);box-shadow:var(--shadow)}
     .metric{padding:17px;position:relative;overflow:hidden}
     .metric small{color:var(--muted);font-size:12px}
-    .metric strong{display:block;font-family:"Newsreader","Noto Sans SC",serif;font-size:36px;margin-top:6px}
+    .metric strong{display:block;font-family:ui-monospace,monospace;font-size:28px;margin-top:6px}
     .metric em{display:block;margin-top:8px;color:var(--muted);font-size:11px;font-style:normal;line-height:1.35}
     .metric.compact strong{font-size:19px;line-height:1.2}
-    .metric:after{content:"";position:absolute;right:14px;bottom:14px;width:38px;height:38px;border-radius:50%;background:rgba(37,99,235,.09)}
     .grid{display:grid;grid-template-columns:minmax(0,1.16fr) minmax(360px,.84fr);gap:16px}
     .panel{padding:18px;margin-bottom:16px}
     .panel-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;margin-bottom:14px}
@@ -89,6 +88,8 @@
     .btn.green{background:var(--green)}
     .btn.red{background:var(--red)}
     .btn:disabled{opacity:.55;cursor:not-allowed}
+    .btn .fa{width:14px;text-align:center}
+    .logout-form{margin:0;display:flex}
     .models{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
     .model-card{border:1px solid var(--line);border-radius:var(--radius);background:#fff;padding:15px}
     .model-card.primary{border-color:#bfdbfe;background:linear-gradient(135deg,#fff,#eff6ff)}
@@ -124,27 +125,27 @@
     .toggle.on:after{left:25px}
     .service-list{display:grid;gap:10px}
     .service{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;border:1px solid var(--line-soft);border-radius:var(--radius);padding:12px;background:#fff}
+    .host-strip{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin:0 0 14px;background:#f8faf9}
+    .host-stat{padding:12px;border-right:1px solid var(--line);min-width:0}
+    .host-stat:last-child{border-right:0}
+    .host-stat small{display:block;color:var(--muted);font-size:11px;margin-bottom:5px}
+    .host-stat strong{display:block;font-family:ui-monospace,monospace;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .mono{font-family:"IBM Plex Mono",monospace;font-size:12px}
     .toast{position:fixed;right:20px;bottom:20px;max-width:460px;background:#101828;color:#fff;border-radius:var(--radius);padding:13px 15px;box-shadow:0 18px 36px rgba(15,23,42,.22);display:none;z-index:20}
     @media(max-width:1100px){.app{grid-template-columns:76px minmax(0,1fr)}.brand-title,.brand-sub,.nav-text,.nav-label{display:none}.nav-item{justify-content:center}.hero,.grid{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.models{grid-template-columns:1fr}}
     @media(max-width:680px){.content{padding:14px}.topbar{padding:0 12px}.tags{display:none}.metrics{grid-template-columns:1fr}.hero-card{padding:18px}.input{min-width:100%;width:100%}.toolbar{align-items:stretch}.toolbar .btn,.toolbar .select{width:100%;justify-content:center}}
-    body{background:
-      radial-gradient(circle at 18% 0%,rgba(37,99,235,.09),transparent 28rem),
-      linear-gradient(180deg,#f6f8fc 0%,#eef3f8 100%);
-    }
+    body{background:var(--page)}
     .app{grid-template-columns:clamp(224px,16vw,272px) minmax(0,1fr);min-height:100dvh}
     .sidebar{height:100dvh;min-height:0;overflow:auto;z-index:18;box-shadow:inset -1px 0 0 rgba(255,255,255,.08)}
     .main{display:flex;flex-direction:column;min-height:100dvh;min-width:0}
     .topbar{backdrop-filter:blur(18px);background:rgba(255,255,255,.88);z-index:14}
     .tags{position:sticky;top:58px;z-index:12;background:rgba(255,255,255,.9);backdrop-filter:blur(16px)}
     .content{width:min(100%,1480px);max-width:none;margin:0 auto;padding:24px clamp(16px,2vw,30px) 48px}
-    .hero{grid-template-columns:minmax(0,1fr) minmax(300px,390px);align-items:stretch}
-    .hero-card{min-height:196px}
     .quick-row,.model-card,.panel,.metric{min-width:0}
     .quick-row{align-items:center}
     .quick-row span{min-width:0}
     .quick-row small,.model-id,.mono{overflow-wrap:anywhere;word-break:break-word}
-    .dashboard-grid{display:grid;grid-template-columns:minmax(0,1.08fr) minmax(360px,.92fr);gap:16px}
+    .dashboard-grid{display:grid;grid-template-columns:minmax(0,1.08fr) minmax(360px,.92fr);gap:16px;align-items:start}
     .model-summary-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
     .model-card.compact{padding:14px;background:linear-gradient(135deg,#fff,#f8fbff);display:grid;align-content:start;gap:10px}
     .model-card.compact.active-route{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.08),var(--shadow)}
@@ -155,12 +156,12 @@
     .model-workbench{display:grid;grid-template-columns:minmax(0,1fr) minmax(340px,420px);gap:16px;align-items:start}
     .model-workbench .models{grid-template-columns:1fr}
     .side-stack{display:grid;gap:16px;position:sticky;top:116px}
-    .route-strip{display:grid;grid-template-columns:1fr auto 1fr auto;gap:10px;align-items:center;margin-bottom:16px}
+    .route-strip{display:grid;grid-template-columns:1fr minmax(130px,auto) 1fr;gap:10px;align-items:center;margin-bottom:16px}
     .route-node{border:1px solid var(--line-soft);border-radius:var(--radius);background:#fff;padding:14px;box-shadow:0 8px 20px rgba(15,23,42,.04);min-width:0}
     .route-node small{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;font-family:"IBM Plex Mono",monospace;letter-spacing:.08em}
     .route-node strong{display:block;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .route-arrow{font-family:"IBM Plex Mono",monospace;color:var(--muted);font-weight:800}
-    .route-arrow.off{color:var(--red)}
+    .route-arrow{display:flex;align-items:center;justify-content:center;gap:7px;font-family:ui-monospace,monospace;color:var(--green);font-size:12px;font-weight:800;text-align:center}
+    .route-arrow.off{color:var(--muted)}
     .model-card.editor{padding:0;overflow:hidden}
     .model-card.editor .model-head{padding:15px;border-bottom:1px solid var(--line-soft);background:linear-gradient(135deg,#fff,#f8fafc)}
     .model-card.editor .kv{padding:15px;margin-top:0;grid-template-columns:108px minmax(0,1fr);align-items:center}
@@ -203,10 +204,10 @@
     .detail-drawer{border:1px solid var(--line-soft);border-radius:var(--radius);background:#fff;padding:14px;margin-top:14px}
     .btn.mini{height:27px;padding:0 8px;font-size:12px}
     .action-row{display:flex;flex-wrap:wrap;gap:6px}
-    @media(max-width:1280px){.dashboard-grid,.model-workbench{grid-template-columns:1fr}.side-stack{position:static}.route-strip{grid-template-columns:1fr}.route-arrow{display:none}.models{grid-template-columns:1fr}}
+    @media(max-width:1280px){.dashboard-grid,.model-workbench{grid-template-columns:1fr}.side-stack{position:static}.route-strip{grid-template-columns:1fr}.route-arrow{display:none}.models{grid-template-columns:1fr}.host-strip{grid-template-columns:repeat(3,minmax(0,1fr))}}
     @media(max-width:1280px){.assurance-grid{grid-template-columns:1fr}}
-    @media(max-width:960px){.app{grid-template-columns:84px minmax(0,1fr)}.brand-title,.brand-sub,.nav-text,.nav-label{display:none}.nav-item{justify-content:center}.hero{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.top-actions .btn.secondary[href="/index"]{display:none}}
-    @media(max-width:720px){.app{display:block}.sidebar{height:auto;position:relative;display:flex;gap:8px;padding:10px;overflow-x:auto}.brand{flex:0 0 auto}.nav-group{display:flex;margin-top:0;gap:6px}.nav-item{width:42px;flex:0 0 42px}.topbar{height:auto;min-height:58px;align-items:flex-start;padding:12px;gap:10px}.top-actions{flex-wrap:wrap;justify-content:flex-end}.tags{display:none}.content{padding:14px}.metrics{grid-template-columns:1fr}.model-summary-grid{grid-template-columns:1fr}.model-card.editor .kv,.kv{grid-template-columns:1fr}.panel-head{flex-direction:column}.toolbar{align-items:stretch}.toolbar .input,.toolbar .select,.toolbar .btn{width:100%;flex:1 1 auto;justify-content:center}.route-summary-row{display:grid}.data-table{min-width:720px}}
+    @media(max-width:960px){.app{grid-template-columns:84px minmax(0,1fr)}.brand-title,.brand-sub,.nav-text,.nav-label{display:none}.nav-item{justify-content:center}.workspace-heading{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.top-actions .btn.secondary[href="/index"]{display:none}}
+    @media(max-width:720px){.app{display:block}.sidebar{height:auto;position:relative;display:flex;gap:8px;padding:10px;overflow-x:auto}.brand{flex:0 0 auto}.nav-group{display:flex;margin-top:0;gap:6px}.nav-item{width:42px;flex:0 0 42px}.topbar{height:auto;min-height:58px;display:grid;grid-template-columns:1fr;align-items:start;padding:10px 12px;gap:8px}.crumbs{width:100%}.top-actions{width:100%;justify-content:flex-start;flex-wrap:nowrap;overflow-x:auto;padding-bottom:2px}.top-actions>*{flex:0 0 auto}.top-actions .role-badge{display:none}.tags{display:none}.content{padding:14px}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.quick{grid-template-columns:1fr}.quick-row{border-right:0;border-bottom:1px solid var(--line-soft)}.model-summary-grid{grid-template-columns:1fr}.model-card.editor .kv,.kv{grid-template-columns:1fr}.panel-head{flex-direction:column}.toolbar{align-items:stretch}.toolbar .input,.toolbar .select,.toolbar .btn{width:100%;flex:1 1 auto;justify-content:center}.route-summary-row{display:grid}.data-table{min-width:720px}.host-strip{grid-template-columns:1fr}.host-stat{border-right:0;border-bottom:1px solid var(--line)}}
   </style>
 </head>
 <body>
@@ -224,23 +225,23 @@
   <div class="app">
     <aside class="sidebar">
       <a class="brand" href="#dashboard" data-route="dashboard">
-        <span class="brand-mark">R</span>
+        <span class="brand-mark">慧</span>
         <span><span class="brand-title">慧鉴 AI</span><span class="brand-sub">管理控制台</span></span>
       </a>
       <nav class="nav-group">
         <div class="nav-label">Operations</div>
-        <a class="nav-item active" href="#dashboard" data-route="dashboard"><span class="nav-icon">▦</span><span class="nav-text">控制台</span></a>
-        <a class="nav-item" href="#assurance" data-route="assurance"><span class="nav-icon">◇</span><span class="nav-text">在线保障</span></a>
-        <a class="nav-item" href="#models" data-route="models"><span class="nav-icon">◈</span><span class="nav-text">模型管理</span></a>
-        <a class="nav-item" href="#swarm" data-route="swarm"><span class="nav-icon">✣</span><span class="nav-text">专家会诊模式</span></a>
-        <a class="nav-item" href="#system" data-route="system"><span class="nav-icon">●</span><span class="nav-text">服务健康</span></a>
-        <a class="nav-item" href="#governance" data-route="governance"><span class="nav-icon">⌬</span><span class="nav-text">审计告警</span></a>
-        {% if can_manage_admins %}<a class="nav-item" href="#admins" data-route="admins"><span class="nav-icon">◍</span><span class="nav-text">管理员</span></a>{% endif %}
-        <a class="nav-item" href="/admin/screen" target="_blank" rel="noopener"><span class="nav-icon">▰</span><span class="nav-text">运营大屏</span></a>
+        <a class="nav-item active" href="#dashboard" data-route="dashboard" title="控制台"><i class="nav-icon fa fa-dashboard"></i><span class="nav-text">控制台</span></a>
+        <a class="nav-item" href="#assurance" data-route="assurance" title="在线保障"><i class="nav-icon fa fa-shield"></i><span class="nav-text">在线保障</span></a>
+        <a class="nav-item" href="#models" data-route="models" title="模型管理"><i class="nav-icon fa fa-cubes"></i><span class="nav-text">模型管理</span></a>
+        <a class="nav-item" href="#swarm" data-route="swarm" title="专家会诊模式"><i class="nav-icon fa fa-sitemap"></i><span class="nav-text">专家会诊模式</span></a>
+        <a class="nav-item" href="#system" data-route="system" title="服务健康"><i class="nav-icon fa fa-heartbeat"></i><span class="nav-text">服务健康</span></a>
+        <a class="nav-item" href="#governance" data-route="governance" title="审计告警"><i class="nav-icon fa fa-bell"></i><span class="nav-text">审计告警</span></a>
+        {% if can_manage_admins %}<a class="nav-item" href="#admins" data-route="admins" title="管理员"><i class="nav-icon fa fa-users"></i><span class="nav-text">管理员</span></a>{% endif %}
+        <a class="nav-item" href="/admin/screen" target="_blank" rel="noopener" title="运营大屏"><i class="nav-icon fa fa-television"></i><span class="nav-text">运营大屏</span></a>
         <div class="nav-label">Data</div>
-        <a class="nav-item" href="#users" data-route="users"><span class="nav-icon">◎</span><span class="nav-text">用户管理</span></a>
-        <a class="nav-item" href="#detections" data-route="detections"><span class="nav-icon">▤</span><span class="nav-text">检测记录</span></a>
-        <a class="nav-item" href="#keys" data-route="keys"><span class="nav-icon">⌁</span><span class="nav-text">访问凭证</span></a>
+        <a class="nav-item" href="#users" data-route="users" title="用户管理"><i class="nav-icon fa fa-user"></i><span class="nav-text">用户管理</span></a>
+        <a class="nav-item" href="#detections" data-route="detections" title="检测记录"><i class="nav-icon fa fa-history"></i><span class="nav-text">检测记录</span></a>
+        <a class="nav-item" href="#keys" data-route="keys" title="访问凭证"><i class="nav-icon fa fa-key"></i><span class="nav-text">访问凭证</span></a>
       </nav>
     </aside>
 
@@ -248,11 +249,14 @@
       <header class="topbar">
         <div class="crumbs"><span>慧鉴 AI</span><span>/</span><strong id="crumb">控制台</strong></div>
         <div class="top-actions">
-          <button class="btn secondary" onclick="loadAll()">刷新</button>
-          <a class="btn secondary" href="/admin/screen" target="_blank" rel="noopener">大屏</a>
-          {% if can_manage_admins %}<button class="btn secondary" onclick="switchRoute('admins')">管理员</button>{% endif %}
-          <a class="btn secondary" href="/index">返回前台</a>
-          <a class="btn secondary" href="/admin/logout">退出后台</a>
+          <button class="btn secondary" onclick="loadAll()"><i class="fa fa-refresh"></i>刷新</button>
+          <a class="btn secondary" href="/admin/screen" target="_blank" rel="noopener"><i class="fa fa-television"></i>大屏</a>
+          {% if can_manage_admins %}<button class="btn secondary" onclick="switchRoute('admins')"><i class="fa fa-users"></i>管理员</button>{% endif %}
+          <a class="btn secondary" href="/index"><i class="fa fa-home"></i>返回前台</a>
+          <form class="logout-form" action="/admin/logout" method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="btn secondary" type="submit"><i class="fa fa-sign-out"></i>退出后台</button>
+          </form>
           <span class="role-badge">{{ admin_role_label }}</span>
           <div class="avatar">{{ (admin_user.username or admin_user.phone or "A")[:1] }}</div>
         </div>
@@ -261,11 +265,11 @@
 
       <section class="content">
         <section class="view active" id="view-dashboard" data-title="控制台">
-          <div class="hero">
-            <div class="hero-card">
-              <div class="eyebrow">慧鉴 AI · 运行与证据管理</div>
-              <h1>鉴伪系统管理工作台</h1>
-              <p class="subtitle">面向运维和业务管理员的单页控制台：模型健康、路由策略、用户、检测记录和 访问凭证 集中管理，保留权限白名单和真实服务状态。</p>
+          <div class="workspace-heading">
+            <div>
+              <div class="eyebrow">Operations / Overview</div>
+              <h1>系统总览</h1>
+              <p class="subtitle">集中查看检测流量、模型健康、线上路由与最近任务。</p>
             </div>
             <div class="quick" id="quickHealth"></div>
           </div>
@@ -377,8 +381,9 @@
           <section class="panel">
             <div class="panel-head">
               <div><h2>服务健康</h2><p>拆分服务在线状态和模型 artifact 完整性。</p></div>
-              <button class="btn secondary" onclick="loadSystem()">重新检查</button>
+              <button class="btn secondary" onclick="loadSystem()"><i class="fa fa-refresh"></i>重新检查</button>
             </div>
+            <div class="host-strip" id="hostTelemetry"></div>
             <div class="service-list" id="services"></div>
           </section>
         </section>
@@ -484,7 +489,7 @@
     const CAN_MANAGE_ADMINS = {{ can_manage_admins|tojson }};
     const ADMIN_ROLE_LABELS = {{ role_options|default({}, true)|tojson }};
     const titles = {dashboard:'控制台',assurance:'在线保障',models:'模型管理',swarm:'专家会诊模式',system:'服务健康',governance:'审计告警',admins:'管理员',users:'用户管理',detections:'检测记录',keys:'访问凭证'};
-    let state = {metrics:null, models:[], routing:{}, routingHistory:[], detections:[], users:[], admins:[], keys:[], services:[], assurance:null, swarm:null, alerts:null, audit:[], selectedUser:null, selectedDetection:null};
+    let state = {metrics:null, models:[], routing:{}, routingHistory:[], detections:[], users:[], admins:[], keys:[], services:[], host:null, serviceSummary:null, assurance:null, swarm:null, alerts:null, audit:[], selectedUser:null, selectedDetection:null};
     const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
     const can = (permission) => PERMISSIONS.has(permission);
     function toast(message){ const el=$('toast'); el.textContent=message; el.style.display='block'; clearTimeout(window.__toast); window.__toast=setTimeout(()=>el.style.display='none',3200); }
@@ -563,7 +568,7 @@
         {label:'用户总数', value: metrics?.users?.total ?? '--', hint:`今日新增用户 ${metrics?.users?.todayNew ?? metrics?.users?.today ?? '--'}`},
         {label:'累计图像检测', value: metrics?.detections?.images ?? '--', hint:`最新图像 ${lastImage}`},
         {label:'累计视频检测', value: metrics?.detections?.videos ?? '--', hint:`最新视频 ${lastVideo}`},
-        {label:'Active Keys', value: metrics?.users?.apiKeys ?? '--', hint:`刷新 ${win.generatedAt || '-'}`},
+        {label:'活跃 API 密钥', value: metrics?.users?.apiKeys ?? '--', hint:`刷新 ${win.generatedAt || '-'}`},
       ];
       $('metrics').innerHTML = items.map((item) => `<article class="metric ${String(item.value || '').length > 8 ? 'compact' : ''}"><small>${esc(item.label)}</small><strong>${esc(item.value)}</strong><em>${esc(item.hint || '')}</em></article>`).join('');
     }
@@ -687,10 +692,9 @@
       const fallback = currentModel(state.routing.imageFallback);
       const fallbackEnabled = !!state.routing.fallbackEnabled;
       const html = `
-        <div class="route-node"><small>Primary image model</small><strong>${esc(primary.name || state.routing.imagePrimary || '未配置')}</strong><div class="badge-row">${statusPill(primary.health)} ${rolePills(primary)}</div></div>
-        <div class="route-arrow ${fallbackEnabled ? '' : 'off'}">${fallbackEnabled ? 'AUTO' : 'NO AUTO'}</div>
-        <div class="route-node"><small>Fallback candidate</small><strong>${esc(fallback.name || state.routing.imageFallback || '未配置')}</strong><div class="badge-row">${statusPill(fallback.health)} ${rolePills(fallback)}</div></div>
-        <div class="route-arrow ${fallbackEnabled ? '' : 'off'}">${fallbackEnabled ? 'enabled' : 'disabled'}</div>`;
+        <div class="route-node"><small>主图像模型</small><strong>${esc(primary.name || state.routing.imagePrimary || '未配置')}</strong><div class="badge-row">${statusPill(primary.health)} ${rolePills(primary)}</div></div>
+        <div class="route-arrow ${fallbackEnabled ? '' : 'off'}"><i class="fa fa-${fallbackEnabled ? 'exchange' : 'lock'}"></i>${fallbackEnabled ? '自动兜底已开启' : '自动兜底已关闭'}</div>
+        <div class="route-node"><small>兜底候选模型</small><strong>${esc(fallback.name || state.routing.imageFallback || '未配置')}</strong><div class="badge-row">${statusPill(fallback.health)} ${rolePills(fallback)}</div></div>`;
       const strip = $('routeStrip');
       if(strip) strip.innerHTML = html;
     }
@@ -857,9 +861,40 @@
       $('apiKeys').innerHTML = table(['ID','名称','归属','Key','状态','配额','最后使用','操作'], state.keys.map(k => `
         <tr><td class="mono">${esc(k.id)}</td><td>${esc(k.name)}</td><td>${esc(k.owner)}<br><span class="mono">${esc(k.phone)}</span></td><td class="mono">${esc(k.masked)}</td><td>${k.status === 'active' ? '<span class="pill green">active</span>' : '<span class="pill red">revoked</span>'}</td><td>${esc(k.quota?.dailyLimit ?? '不限')}/day<br><span class="mono">${esc(k.quota?.rateLimitPerMinute ?? '不限')}/min</span></td><td>${esc(k.lastUsedAt || '-')}</td><td><button class="btn mini secondary" onclick="editQuota(${Number(k.id)})">配额</button></td></tr>`));
     }
+    function adminBytes(value){
+      const bytes = Number(value);
+      if(!Number.isFinite(bytes) || bytes <= 0) return '--';
+      const units = ['B','KB','MB','GB','TB'];
+      const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+      return `${(bytes / Math.pow(1024,index)).toFixed(index > 2 ? 1 : 0)} ${units[index]}`;
+    }
+    function adminDuration(value){
+      const seconds = Number(value);
+      if(!Number.isFinite(seconds) || seconds < 0) return '--';
+      const days = Math.floor(seconds / 86400);
+      const hours = Math.floor((seconds % 86400) / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      return days ? `${days}天 ${hours}小时` : hours ? `${hours}小时 ${minutes}分` : `${minutes}分钟`;
+    }
+    function renderHostTelemetry(){
+      const host = state.host || {};
+      const cpu = host.cpu || {};
+      const memory = host.memory || {};
+      const disk = host.disk || {};
+      const services = state.serviceSummary || {};
+      const rows = [
+        ['CPU 负载', `${cpu.loadPercent ?? '--'}%`, `${cpu.cores ?? '--'} 核 · 1m ${cpu.load1 ?? '--'}`],
+        ['内存', `${memory.usedPercent ?? '--'}%`, `${adminBytes(memory.usedBytes)} / ${adminBytes(memory.totalBytes)}`],
+        ['系统盘', `${disk.usedPercent ?? '--'}%`, `${adminBytes(disk.usedBytes)} / ${adminBytes(disk.totalBytes)}`],
+        ['模型服务', `${services.online ?? '--'}/${services.total ?? '--'} 在线`, `降级 ${services.degraded ?? 0} · 离线 ${services.offline ?? 0}`],
+        ['系统运行', adminDuration(host.uptimeSeconds), `Web 进程 ${adminDuration(host.processUptimeSeconds)}`],
+      ];
+      $('hostTelemetry').innerHTML = rows.map(([label,value,detail]) => `<div class="host-stat"><small>${esc(label)} · ${esc(detail)}</small><strong>${esc(value)}</strong></div>`).join('');
+    }
     function renderServices(){
+      renderHostTelemetry();
       $('services').innerHTML = state.services.map(s => `
-        <article class="service"><div><strong>${esc(s.name)}</strong><p class="mono">${esc(s.healthUrl || s.endpoint || '')}</p><p>${healthNotes(s.health)}</p></div>${statusPill(s.health)}</article>`).join('');
+        <article class="service"><div><strong>${esc(s.name)}</strong><p class="mono">${esc(s.healthUrl || s.endpoint || '')}</p><p>${healthNotes(s.health)}</p></div>${statusPill(s.health)}</article>`).join('') || '<div class="empty">暂无模型服务</div>';
     }
     async function loadOverview(){
       const data = await api('/api/admin/overview');
@@ -868,7 +903,7 @@
     }
     async function loadAssurance(){ const data = await api('/api/admin/assurance'); state.assurance = data.assurance; renderAssurance(); }
     async function loadExpertReview(){ const data = await api('/api/admin/swarm'); state.swarm = data.swarm; renderExpertReview(); }
-    async function loadSystem(){ const data = await api('/api/admin/system'); state.services = data.services; renderServices(); }
+    async function loadSystem(){ const data = await api('/api/admin/system'); state.services = data.services || []; state.host = data.host || null; state.serviceSummary = data.serviceSummary || null; renderServices(); }
     async function loadAlerts(){ const data = await api('/api/admin/alerts'); state.alerts = data.alerts; renderAlerts(); }
     async function loadAudit(){ const data = await api('/api/admin/audit?limit=120'); state.audit = data.audit; renderAudit(); }
     async function loadUsers(){

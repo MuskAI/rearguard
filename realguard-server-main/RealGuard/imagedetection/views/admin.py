@@ -6,6 +6,7 @@ import io
 import os
 import re
 import secrets
+import shutil
 import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -22,6 +23,7 @@ admin_blueprint = Blueprint("admin_blueprint", __name__)
 ADMIN_SESSION_KEY = "admin_user"
 ADMIN_LOGIN_ATTEMPTS_KEY = "admin_login_attempts"
 ADMIN_CSRF_SESSION_KEY = "admin_csrf_token"
+ADMIN_SCREEN_SESSION_KEY = "admin_screen_access_digest"
 ADMIN_USERNAME_RE = re.compile(r"^[a-zA-Z0-9_.-]{3,64}$")
 ADMIN_PASSWORD_MIN_LENGTH = int(os.environ.get("REALGUARD_ADMIN_PASSWORD_MIN_LENGTH", "10"))
 ADMIN_LOGIN_MAX_ATTEMPTS = int(os.environ.get("REALGUARD_ADMIN_LOGIN_MAX_ATTEMPTS", "5"))
@@ -130,6 +132,7 @@ ADMIN_ROLE_PERMISSIONS = {
 }
 BIG_SCREEN_CACHE_TTL_SECONDS = int(os.environ.get("REALGUARD_BIG_SCREEN_CACHE_SECONDS", "15"))
 _BIG_SCREEN_CACHE = {"expires": 0, "payload": None}
+_PROCESS_STARTED_MONOTONIC = time.monotonic()
 PROBE_PNG_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
 )
@@ -259,16 +262,24 @@ def _csrf_valid():
 
 
 def _screen_token_from_request():
-    return (
-        request.headers.get("X-RealGuard-Screen-Token")
-        or request.args.get("screenToken")
-        or request.args.get("token")
-        or ""
-    ).strip()
+    header_token = request.headers.get("X-RealGuard-Screen-Token") or ""
+    if header_token:
+        return header_token.strip()
+    if request.path == "/admin/screen":
+        return str(request.args.get("screenToken") or request.args.get("token") or "").strip()
+    return ""
 
 
-def _screen_token_valid():
-    token = _screen_token_from_request()
+def _configured_screen_token_digest():
+    plain = (os.environ.get("REALGUARD_BIG_SCREEN_TOKEN") or "").strip()
+    digest = (os.environ.get("REALGUARD_BIG_SCREEN_TOKEN_SHA256") or "").strip().lower()
+    if digest:
+        return digest
+    return hashlib.sha256(plain.encode("utf-8")).hexdigest() if plain else ""
+
+
+def _screen_token_matches(token):
+    token = str(token or "").strip()
     if not token:
         return False
     plain = (os.environ.get("REALGUARD_BIG_SCREEN_TOKEN") or "").strip()
@@ -276,9 +287,18 @@ def _screen_token_valid():
     if plain and hmac.compare_digest(token, plain):
         return True
     if digest:
-        token_digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
-        return hmac.compare_digest(token_digest, digest)
+        return hmac.compare_digest(hashlib.sha256(token.encode("utf-8")).hexdigest(), digest)
     return False
+
+
+def _screen_session_valid():
+    expected = _configured_screen_token_digest()
+    claim = str(session.get(ADMIN_SCREEN_SESSION_KEY) or "")
+    return bool(expected and claim and hmac.compare_digest(claim, expected))
+
+
+def _screen_token_valid():
+    return _screen_token_matches(_screen_token_from_request()) or _screen_session_valid()
 
 
 def _screen_token_user():
@@ -309,6 +329,16 @@ def _admin_csrf_protect():
     if not _csrf_valid():
         return _csrf_error_response()
     return None
+
+
+@admin_blueprint.after_request
+def _admin_security_headers(response):
+    response.headers["Cache-Control"] = "no-store, private"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "same-origin"
+    return response
 
 
 def _admin_timezone():
@@ -563,7 +593,7 @@ def _admin_auth_context(mode="login", error="", message=""):
         "csrf_token": _csrf_token(),
         "legacy_admin_allowed": bool(_is_legacy_admin(_current_user())),
         "can_register": can_register,
-        "admin_account_count": _admin_account_count(),
+        "admin_account_count": _admin_account_count() if can_register else None,
         "role_options": ADMIN_ROLE_LABELS,
     }
 
@@ -597,6 +627,19 @@ def _detection_data_select_clause():
         "fake",
         "detector_probability" if "detector_probability" in columns else "NULL AS detector_probability",
         "phone",
+        "aigc",
+        "clarity",
+        "feedback" if "feedback" in columns else "NULL AS feedback",
+    ]
+    return ", ".join(select_columns)
+
+
+def _screen_detection_select_clause():
+    columns = _detection_data_columns()
+    select_columns = [
+        "itemid",
+        "createtime",
+        "fake",
         "aigc",
         "clarity",
         "feedback" if "feedback" in columns else "NULL AS feedback",
@@ -703,10 +746,11 @@ def _probe_model(model):
         }
 
 
-def _v1_assurance():
-    registry = model_registry.load_registry()
+def _v1_assurance(registry=None, models=None):
+    registry = registry or model_registry.load_registry()
     routing = registry.get("routing", {})
-    models = [_model_payload(model, include_health=True) for model in registry.get("models", [])]
+    if models is None:
+        models = [_model_payload(model, include_health=True) for model in registry.get("models", [])]
     by_id = {model.get("id"): model for model in models}
     primary = by_id.get(routing.get("imagePrimary")) or {}
     v1_models = [model for model in models if str(model.get("id") or "").startswith("v1-")]
@@ -872,8 +916,24 @@ def _feedback_distribution():
     return [{"label": row.get("label"), "count": int(row.get("count") or 0)} for row in rows]
 
 
+def _screen_model_run(run):
+    if not isinstance(run, dict):
+        return None
+    model = run.get("model") if isinstance(run.get("model"), dict) else {}
+    return {
+        "route": run.get("route") or "",
+        "status": run.get("status") or "",
+        "model": {
+            "id": model.get("id") or "",
+            "name": model.get("name") or "",
+            "runtime": model.get("runtime") or "",
+            "version": model.get("version") or "",
+        },
+    }
+
+
 def _recent_detection_items(limit=12):
-    select_clause = _detection_data_select_clause()
+    select_clause = _screen_detection_select_clause()
     rows = excute_detection_sql(
         f"""
         SELECT {select_clause}
@@ -888,13 +948,11 @@ def _recent_detection_items(limit=12):
         {
             "id": row.get("itemid"),
             "createdAt": format_createtime(row.get("createtime")),
-            "filename": row.get("filename"),
-            "phone": row.get("phone"),
             "label": row.get("aigc"),
             "probability": row.get("fake"),
             "confidence": row.get("clarity"),
             "feedback": row.get("feedback"),
-            "modelRoute": route_runs.get(str(row.get("itemid"))) or None,
+            "modelRoute": _screen_model_run(route_runs.get(str(row.get("itemid")))),
         }
         for row in rows
     ]
@@ -911,10 +969,157 @@ def _route_distribution(limit=6):
     ]
 
 
-def _big_screen_anomalies(metrics, models, assurance):
+def _read_proc_text(path):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return handle.read()
+    except OSError:
+        return ""
+
+
+def _host_telemetry():
+    cpu_count = max(1, int(os.cpu_count() or 1))
+    try:
+        load_1, load_5, load_15 = os.getloadavg()
+    except (AttributeError, OSError):
+        load_1 = load_5 = load_15 = None
+
+    meminfo = {}
+    for line in _read_proc_text("/proc/meminfo").splitlines():
+        key, separator, value = line.partition(":")
+        if not separator:
+            continue
+        try:
+            meminfo[key] = int(value.strip().split()[0]) * 1024
+        except (IndexError, TypeError, ValueError):
+            continue
+    memory_total = int(meminfo.get("MemTotal") or 0)
+    memory_available = int(meminfo.get("MemAvailable") or meminfo.get("MemFree") or 0)
+    memory_used = max(0, memory_total - memory_available)
+    memory_percent = round(memory_used * 100 / memory_total, 1) if memory_total else None
+
+    try:
+        disk = shutil.disk_usage("/")
+        disk_total = int(disk.total)
+        disk_free = int(disk.free)
+        disk_used = int(disk.used)
+        disk_percent = round(disk_used * 100 / disk_total, 1) if disk_total else None
+    except OSError:
+        disk_total = disk_free = disk_used = 0
+        disk_percent = None
+
+    uptime_text = _read_proc_text("/proc/uptime").split()
+    try:
+        uptime_seconds = int(float(uptime_text[0])) if uptime_text else None
+    except (TypeError, ValueError):
+        uptime_seconds = None
+    load_percent = round(load_1 * 100 / cpu_count, 1) if load_1 is not None else None
+
+    status = "unknown"
+    if any(value is not None for value in (load_percent, memory_percent, disk_percent)):
+        if (
+            (load_percent is not None and load_percent >= 150)
+            or (memory_percent is not None and memory_percent >= 95)
+            or (disk_percent is not None and disk_percent >= 95)
+        ):
+            status = "critical"
+        elif (
+            (load_percent is not None and load_percent >= 100)
+            or (memory_percent is not None and memory_percent >= 85)
+            or (disk_percent is not None and disk_percent >= 85)
+        ):
+            status = "warning"
+        else:
+            status = "healthy"
+    return {
+        "status": status,
+        "cpu": {
+            "cores": cpu_count,
+            "load1": round(load_1, 2) if load_1 is not None else None,
+            "load5": round(load_5, 2) if load_5 is not None else None,
+            "load15": round(load_15, 2) if load_15 is not None else None,
+            "loadPercent": load_percent,
+        },
+        "memory": {
+            "totalBytes": memory_total,
+            "usedBytes": memory_used,
+            "availableBytes": memory_available,
+            "usedPercent": memory_percent,
+        },
+        "disk": {
+            "totalBytes": disk_total,
+            "usedBytes": disk_used,
+            "freeBytes": disk_free,
+            "usedPercent": disk_percent,
+        },
+        "uptimeSeconds": uptime_seconds,
+        "processUptimeSeconds": max(0, int(time.monotonic() - _PROCESS_STARTED_MONOTONIC)),
+    }
+
+
+def _screen_model_payload(model):
+    health = model.get("health") if isinstance(model.get("health"), dict) else {}
+    if health.get("ok"):
+        message = "运行正常"
+    elif health.get("serviceOk"):
+        message = "服务在线，模型能力未就绪"
+    else:
+        message = "服务不可达"
+    return {
+        "id": model.get("id") or "",
+        "name": model.get("name") or model.get("id") or "未命名模型",
+        "runtime": model.get("runtime") or "",
+        "enabled": model.get("enabled") is not False,
+        "health": {
+            "ok": bool(health.get("ok")),
+            "serviceOk": bool(health.get("serviceOk")),
+            "artifactReady": health.get("artifactReady"),
+            "latencyMs": health.get("latencyMs"),
+            "message": message,
+        },
+    }
+
+
+def _service_summary(models):
+    enabled = [model for model in models if model.get("enabled") is not False]
+    online = sum(1 for model in enabled if (model.get("health") or {}).get("ok"))
+    degraded = sum(
+        1
+        for model in enabled
+        if not (model.get("health") or {}).get("ok") and (model.get("health") or {}).get("serviceOk")
+    )
+    return {
+        "total": len(enabled),
+        "online": online,
+        "degraded": degraded,
+        "offline": max(0, len(enabled) - online - degraded),
+    }
+
+
+def _screen_routing_payload(routing):
+    return {
+        "imagePrimary": routing.get("imagePrimary") or "",
+        "imageFallback": routing.get("imageFallback") or "",
+        "fallbackEnabled": bool(routing.get("fallbackEnabled")),
+    }
+
+
+def _screen_assurance_payload(assurance):
+    return {
+        "online": bool(assurance.get("online")),
+        "blockerCount": len(assurance.get("blockers") or []),
+        "recommendationCount": len(assurance.get("recommendations") or []),
+    }
+
+
+def _big_screen_anomalies(metrics, models, assurance, host):
     anomalies = []
-    for blocker in assurance.get("blockers") or []:
-        anomalies.append({"level": "critical", "title": "V1 阻断", "message": blocker})
+    if not assurance.get("online"):
+        anomalies.append({
+            "level": "critical",
+            "title": "主检测链路未就绪",
+            "message": "主模型或依赖服务未达到可用状态，请登录管理后台查看阻断详情。",
+        })
     for model in models:
         health = model.get("health") or {}
         if not health.get("ok"):
@@ -940,26 +1145,43 @@ def _big_screen_anomalies(metrics, models, assurance):
             "title": "负反馈偏高",
             "message": f"当前负反馈 {negative} 条，建议抽检最近检测记录。",
         })
+    if host.get("status") in ("warning", "critical"):
+        cpu = (host.get("cpu") or {}).get("loadPercent")
+        memory = (host.get("memory") or {}).get("usedPercent")
+        disk = (host.get("disk") or {}).get("usedPercent")
+        anomalies.append({
+            "level": host.get("status"),
+            "title": "主机资源压力偏高",
+            "message": f"CPU 负载 {cpu if cpu is not None else '--'}%，内存 {memory if memory is not None else '--'}%，磁盘 {disk if disk is not None else '--'}%。",
+        })
     return anomalies[:10]
 
 
 def _big_screen_payload():
     registry = model_registry.load_registry()
-    models = [_model_payload(model, include_health=True) for model in registry.get("models", [])]
+    raw_models = [_model_payload(model, include_health=True) for model in registry.get("models", [])]
+    models = [_screen_model_payload(model) for model in raw_models]
     metrics = _dashboard_metrics()
-    assurance = _v1_assurance()
+    assurance_detail = _v1_assurance(registry=registry, models=raw_models)
+    assurance = _screen_assurance_payload(assurance_detail)
+    host = _host_telemetry()
+    now = datetime.now(_admin_timezone())
     return {
-        "generatedAt": datetime.now(_admin_timezone()).strftime("%Y-%m-%d %H:%M:%S"),
+        "generatedAt": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "generatedAtIso": now.isoformat(),
         "metrics": metrics,
-        "routing": registry.get("routing", {}),
+        "routing": _screen_routing_payload(registry.get("routing", {})),
         "models": models,
+        "services": _service_summary(models),
+        "host": host,
         "series": _hourly_detection_series(24),
         "labels": _label_distribution(),
         "feedback": _feedback_distribution(),
         "routes": _route_distribution(),
         "recent": _recent_detection_items(12),
         "assurance": assurance,
-        "anomalies": _big_screen_anomalies(metrics, models, assurance),
+        "anomalies": _big_screen_anomalies(metrics, models, assurance, host),
+        "privacy": {"piiIncluded": False, "internalEndpointsIncluded": False},
     }
 
 
@@ -990,6 +1212,7 @@ def _model_payload(model, include_health=False):
 def _service_health():
     registry = model_registry.load_registry()
     models = [_model_payload(model, include_health=True) for model in registry.get("models", [])]
+    screen_models = [_screen_model_payload(model) for model in models]
     return {
         "models": models,
         "services": [
@@ -1003,6 +1226,8 @@ def _service_health():
             }
             for model in models
         ],
+        "host": _host_telemetry(),
+        "serviceSummary": _service_summary(screen_models),
         "environment": {
             "detectorBackendUrl": os.environ.get("REALGUARD_DETECTION_BACKEND_URL", ""),
             "adminConfigured": bool(_admin_phone_set() or _admin_user_id_set()),
@@ -1051,8 +1276,11 @@ def admin_login():
             return render_template("admin_auth.html", **_admin_auth_context("login", error="管理员账号或密码错误")), 401
         _clear_admin_login_failures(identity)
         _update_admin_login(account)
+        admin_user = _admin_session_payload(account)
         session.permanent = True
-        session[ADMIN_SESSION_KEY] = _admin_session_payload(account)
+        session[ADMIN_SESSION_KEY] = admin_user
+        session[ADMIN_CSRF_SESSION_KEY] = secrets.token_urlsafe(32)
+        _audit(admin_user, "admin.login", str(account.get("id") or identity), meta={"ip": _client_ip()})
         return redirect(url_for("admin_blueprint.admin_console"))
     return render_template("admin_auth.html", **_admin_auth_context("login"))
 
@@ -1085,17 +1313,33 @@ def admin_register():
     return render_template("admin_auth.html", **_admin_auth_context("register"))
 
 
-@admin_blueprint.route("/admin/logout")
+@admin_blueprint.route("/admin/logout", methods=["POST"])
 def admin_logout():
+    admin_user = _current_admin_user()
+    legacy_user = _current_user()
+    actor = admin_user or _legacy_admin_payload(legacy_user)
+    if actor:
+        _audit(actor, "admin.logout", str(actor.get("adminId") or actor.get("Userid") or "session"), meta={"ip": _client_ip()})
     session.pop(ADMIN_SESSION_KEY, None)
     session.pop(ADMIN_LOGIN_ATTEMPTS_KEY, None)
+    session.pop(ADMIN_CSRF_SESSION_KEY, None)
+    session.pop(ADMIN_SCREEN_SESSION_KEY, None)
+    if not admin_user and _is_legacy_admin(legacy_user):
+        session.pop("user_info", None)
     return redirect(url_for("admin_blueprint.admin_login"))
 
 
 @admin_blueprint.route("/admin/screen")
 def admin_screen():
-    if _screen_token_valid():
-        return render_template("admin_screen.html", admin_user=_screen_token_user(), screen_token=_screen_token_from_request())
+    request_token = _screen_token_from_request()
+    if _screen_token_matches(request_token):
+        session[ADMIN_SCREEN_SESSION_KEY] = _configured_screen_token_digest()
+        session.modified = True
+        if request.args.get("screenToken") or request.args.get("token"):
+            return redirect(url_for("admin_blueprint.admin_screen"))
+        return render_template("admin_screen.html", admin_user=_screen_token_user(), screen_token="")
+    if _screen_session_valid():
+        return render_template("admin_screen.html", admin_user=_screen_token_user(), screen_token="")
     user, error = _admin_required("view")
     if error:
         return redirect(url_for("admin_blueprint.admin_login"))
