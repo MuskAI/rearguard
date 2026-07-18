@@ -49,6 +49,56 @@ def test_developer_ip_uses_nginx_real_ip_from_trusted_loopback():
         assert api._developer_request_ip() == "203.0.113.11"
 
 
+def test_browser_pageview_endpoint_records_same_origin_event(client, monkeypatch):
+    recorded = {}
+
+    def fake_record(**kwargs):
+        recorded.update(kwargs)
+        return True
+
+    monkeypatch.setattr(api.traffic_geo, "record_confirmed_pageview", fake_record)
+
+    response = client.post(
+        "/api/analytics/pageview",
+        json={
+            "visitorId": "visitor-00000001",
+            "eventId": "event-00000000001",
+            "page": "home",
+        },
+        headers={
+            "Sec-Fetch-Site": "same-origin",
+            "X-RealGuard-Browser-Event": "1",
+            "X-Real-IP": "203.0.113.12",
+            "User-Agent": "Mozilla/5.0 Chrome/126.0",
+        },
+        environ_base={"REMOTE_ADDR": "127.0.0.1"},
+    )
+
+    assert response.status_code == 204
+    assert recorded["ip"] == "203.0.113.12"
+    assert recorded["page"] == "home"
+    assert recorded["visitor_id"] == "visitor-00000001"
+
+
+def test_browser_pageview_endpoint_rejects_cross_site_and_unmarked_requests(client, monkeypatch):
+    monkeypatch.setattr(api.traffic_geo, "record_confirmed_pageview", lambda **_kwargs: True)
+    payload = {"visitorId": "visitor-00000001", "eventId": "event-00000000001", "page": "home"}
+
+    cross_site = client.post(
+        "/api/analytics/pageview",
+        json=payload,
+        headers={"Sec-Fetch-Site": "cross-site", "X-RealGuard-Browser-Event": "1"},
+    )
+    unmarked = client.post(
+        "/api/analytics/pageview",
+        json=payload,
+        headers={"Sec-Fetch-Site": "same-origin"},
+    )
+
+    assert cross_site.status_code == 403
+    assert unmarked.status_code == 400
+
+
 def test_authenticate_password_user_upgrades_legacy_secret(monkeypatch):
     recorded = []
     user = {

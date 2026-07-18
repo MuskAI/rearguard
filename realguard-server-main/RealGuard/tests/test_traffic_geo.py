@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
 
@@ -95,15 +95,15 @@ def test_aggregate_access_lines_returns_only_anonymous_province_counts():
     assert "8.8.8.8" not in str(payload)
 
 
-def test_traffic_summary_degrades_without_log_or_database(monkeypatch):
+def test_traffic_summary_uses_confirmed_browser_store_without_access_logs(tmp_path, monkeypatch):
     monkeypatch.setenv("REALGUARD_ACCESS_LOG_PATHS", "/missing/access.log")
-    monkeypatch.setattr(traffic_geo, "_load_searcher", lambda: None)
+    monkeypatch.setenv("REALGUARD_TRAFFIC_CUMULATIVE_DB", str(tmp_path / "traffic.sqlite3"))
 
     payload = traffic_geo.traffic_summary()
 
-    assert payload["ready"] is False
+    assert payload["ready"] is True
     assert payload["uniqueVisitors"] == 0
-    assert payload["source"]["databaseReady"] is False
+    assert payload["source"]["kind"] == "confirmed-browser-pageview"
 
 
 def test_single_visitor_city_is_hidden_and_ip_is_masked():
@@ -146,49 +146,52 @@ def test_online_visitors_are_deduplicated_within_activity_window():
     assert payload["site"] == {"pageViews": 3, "uniqueVisitors": 2}
 
 
-def test_cumulative_traffic_persists_and_deduplicates_log_reloads(tmp_path, monkeypatch):
-    access_log = tmp_path / "access.log"
-    state_db = tmp_path / "traffic.sqlite3"
-    access_log.write_text(
-        "\n".join([
-            log_line("8.8.8.8", "/"),
-            log_line("8.8.8.8", "/agent"),
-            log_line("1.1.1.1", "/"),
-        ]) + "\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("REALGUARD_ACCESS_LOG_GLOB", str(tmp_path / "access.log*"))
-    monkeypatch.setenv("REALGUARD_TRAFFIC_CUMULATIVE_DB", str(state_db))
+def test_confirmed_pageviews_persist_deduplicate_and_drive_all_windows(tmp_path, monkeypatch):
+    monkeypatch.setenv("REALGUARD_TRAFFIC_CUMULATIVE_DB", str(tmp_path / "traffic.sqlite3"))
     locations = {
         "8.8.8.8": {"country": "中国", "province": "浙江省", "city": "杭州市", "isoCode": "CN"},
         "1.1.1.1": {"country": "中国", "province": "四川省", "city": "成都市", "isoCode": "CN"},
     }
+    resolver = lambda ip: locations.get(ip, {})
+    common = {"agent": "Mozilla/5.0 Chrome/126.0", "resolver": resolver}
 
-    first = traffic_geo.cumulative_traffic_summary(resolver=lambda ip: locations.get(ip, {}))
-    duplicate_read = traffic_geo.cumulative_traffic_summary(resolver=lambda ip: locations.get(ip, {}))
-
-    assert first["homepage"] == {"pageViews": 2, "uniqueVisitors": 2}
-    assert first["site"] == {"pageViews": 3, "uniqueVisitors": 2}
-    assert duplicate_read["site"] == first["site"]
-    assert [item["name"] for item in first["provinces"]] == ["浙江", "四川"]
-
-    access_log.unlink()
-    persisted = traffic_geo.cumulative_traffic_summary(resolver=lambda ip: locations.get(ip, {}))
-
-    assert persisted["site"] == first["site"]
-    assert persisted["since"] == "2026-07-19"
-
-
-def test_cumulative_traffic_counts_identical_requests_at_different_log_offsets(tmp_path, monkeypatch):
-    access_log = tmp_path / "access.log"
-    repeated = log_line("8.8.8.8", "/")
-    access_log.write_text(f"{repeated}\n{repeated}\n", encoding="utf-8")
-    monkeypatch.setenv("REALGUARD_ACCESS_LOG_GLOB", str(access_log))
-    monkeypatch.setenv("REALGUARD_TRAFFIC_CUMULATIVE_DB", str(tmp_path / "traffic.sqlite3"))
-
-    payload = traffic_geo.cumulative_traffic_summary(
-        resolver=lambda _ip: {"country": "中国", "province": "浙江", "isoCode": "CN"},
+    assert traffic_geo.record_confirmed_pageview(
+        ip="8.8.8.8", visitor_id="visitor-00000001", event_id="event-00000000001",
+        page="home", occurred_at=NOW - timedelta(minutes=2), **common,
+    )
+    assert traffic_geo.record_confirmed_pageview(
+        ip="8.8.8.8", visitor_id="visitor-00000001", event_id="event-00000000001",
+        page="home", occurred_at=NOW - timedelta(minutes=2), **common,
+    )
+    assert traffic_geo.record_confirmed_pageview(
+        ip="8.8.8.8", visitor_id="visitor-00000001", event_id="event-00000000002",
+        page="image", occurred_at=NOW - timedelta(minutes=1), **common,
+    )
+    assert traffic_geo.record_confirmed_pageview(
+        ip="1.1.1.1", visitor_id="visitor-00000002", event_id="event-00000000003",
+        page="home", occurred_at=NOW - timedelta(minutes=10), **common,
     )
 
-    assert payload["site"] == {"pageViews": 2, "uniqueVisitors": 1}
-    assert payload["homepage"] == {"pageViews": 2, "uniqueVisitors": 1}
+    payload = traffic_geo.confirmed_traffic_summary(now=NOW)
+    cumulative = payload["cumulative"]
+
+    assert payload["site"] == {"pageViews": 3, "uniqueVisitors": 2}
+    assert payload["homepage"] == {"pageViews": 2, "uniqueVisitors": 2}
+    assert payload["onlineVisitors"] == 1
+    assert cumulative["site"] == payload["site"]
+    assert [item["name"] for item in cumulative["provinces"]] == ["浙江", "四川"]
+    assert "8.8.8.8" not in str(payload)
+
+
+def test_confirmed_pageview_rejects_automation_and_invalid_payload(tmp_path, monkeypatch):
+    monkeypatch.setenv("REALGUARD_TRAFFIC_CUMULATIVE_DB", str(tmp_path / "traffic.sqlite3"))
+    common = {
+        "ip": "8.8.8.8",
+        "visitor_id": "visitor-00000001",
+        "event_id": "event-00000000001",
+        "page": "home",
+        "resolver": lambda _ip: {},
+    }
+
+    assert not traffic_geo.record_confirmed_pageview(agent="HeadlessChrome/126.0", **common)
+    assert not traffic_geo.record_confirmed_pageview(agent="Mozilla/5.0", **{**common, "page": "admin"})

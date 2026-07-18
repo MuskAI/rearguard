@@ -14,6 +14,7 @@ from PIL import Image
 from flask import Blueprint, Response, jsonify, request, send_file, session, stream_with_context
 
 from imagedetection.views.historical_record import DETECTION_BACKEND_BASE_URL
+from imagedetection.views import traffic_geo
 from imagedetection.views.login import (
     _authenticate_password_user,
     _find_user_by_phone,
@@ -236,6 +237,28 @@ def _developer_ip_allowed(raw_allowlist):
     except ValueError:
         return False
     return any(client_ip in ipaddress.ip_network(value, strict=False) for value in allowlist)
+
+
+@api_blueprint.route("/analytics/pageview", methods=["POST"])
+def record_analytics_pageview():
+    if request.content_length and request.content_length > 2048:
+        return jsonify({"status": "error", "message": "请求体过大"}), 413
+    fetch_site = str(request.headers.get("Sec-Fetch-Site") or "").strip().lower()
+    if fetch_site and fetch_site != "same-origin":
+        return jsonify({"status": "error", "message": "仅允许同源上报"}), 403
+    if request.headers.get("X-RealGuard-Browser-Event") != "1":
+        return jsonify({"status": "error", "message": "无效的页面访问事件"}), 400
+    payload = request.get_json(silent=True) or {}
+    accepted = traffic_geo.record_confirmed_pageview(
+        ip=_developer_request_ip(),
+        agent=request.headers.get("User-Agent", ""),
+        visitor_id=payload.get("visitorId", ""),
+        event_id=payload.get("eventId", ""),
+        page=payload.get("page", ""),
+    )
+    if not accepted:
+        return jsonify({"status": "error", "message": "页面访问事件未通过校验"}), 400
+    return "", 204
 
 
 def _normalize_developer_expiry(raw):
