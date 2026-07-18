@@ -5,74 +5,135 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>慧鉴 AI 运营大屏</title>
   <link rel="icon" href="data:,">
+  <link href="/static/css/font-awesome.min.css" rel="stylesheet">
   <style>
-    :root{--bg:#10130f;--panel:#181d17;--panel-2:#20261d;--ink:#f4f7ef;--muted:#a8b3a2;--line:#323b2f;--green:#66d37e;--cyan:#3fd5c0;--amber:#f1bf5a;--red:#f76f6f;--radius:8px}
+    :root{--bg:#0d1211;--panel:#181d1a;--panel-2:#202720;--ink:#f2f6f1;--muted:#a8b4aa;--line:#344038;--line-soft:#28312c;--green:#70d58a;--cyan:#42cfc1;--amber:#efbd5f;--red:#f47575;--radius:8px;--shadow:0 18px 48px rgba(0,0,0,.28)}
     *{box-sizing:border-box}
-    body{margin:0;min-height:100vh;background:#0d1211;color:var(--ink);font-family:"IBM Plex Sans","Noto Sans SC",system-ui,sans-serif;letter-spacing:0}
+    html{color-scheme:dark}
+    body{margin:0;min-height:100vh;background:var(--bg);color:var(--ink);font-family:"IBM Plex Sans","Noto Sans SC",system-ui,sans-serif;letter-spacing:0}
+    button,a{font:inherit}
+    button{border:0;color:inherit;cursor:pointer}
+    a{color:inherit;text-decoration:none}
+    :focus-visible{outline:2px solid var(--cyan);outline-offset:3px}
     .screen{height:100dvh;min-height:0;overflow:hidden;padding:14px;display:grid;grid-template-rows:auto auto auto minmax(0,1fr) auto;gap:10px}
-    .top{display:flex;align-items:center;justify-content:space-between;gap:18px;border-bottom:1px solid var(--line);padding-bottom:14px}
-    .brand{display:flex;align-items:center;gap:14px}
-    .mark{width:44px;height:44px;border-radius:8px;background:var(--green);color:#071008;display:grid;place-items:center;font-weight:1000}
-    h1{font-size:30px;margin:0 0 4px}
+    .top{display:flex;align-items:center;justify-content:space-between;gap:18px;border-bottom:1px solid var(--line);padding-bottom:12px}
+    .brand{display:flex;align-items:center;gap:14px;min-width:0}
+    .mark{width:44px;height:44px;border-radius:var(--radius);background:var(--green);color:#071008;display:grid;place-items:center;font-weight:900;flex:0 0 auto}
+    h1{font-size:28px;margin:0 0 4px;line-height:1.2}
     .sub{color:var(--muted);font-size:13px}
+    .top-right{display:flex;align-items:center;gap:14px}
     .clock{font-family:"IBM Plex Mono",ui-monospace,monospace;text-align:right}
-    .clock strong{display:block;font-size:24px;color:var(--green)}
+    .clock strong{display:block;font-size:23px;color:var(--green);font-variant-numeric:tabular-nums}
     .clock-meta{display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:4px;color:var(--muted);font-size:12px}
     .connection{display:inline-flex;align-items:center;gap:6px;color:var(--amber)}
     .connection:before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
     .connection.ok{color:var(--green)}
     .connection.error{color:var(--red)}
-    .metrics{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}
+    .screen-actions{display:flex;align-items:center;gap:7px}
+    .icon-btn{width:40px;height:40px;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);display:grid;place-items:center;color:var(--muted);transition:background .18s,color .18s,border-color .18s,transform .18s}
+    .icon-btn:hover{background:var(--panel-2);color:var(--ink);border-color:#526158}
+    .icon-btn:active{transform:scale(.96)}
+    .icon-btn[aria-pressed="true"]{color:var(--amber);border-color:rgba(239,189,95,.55);background:rgba(239,189,95,.08)}
+    .icon-btn[aria-busy="true"] .fa-refresh{animation:spin .8s linear infinite}
+    .metrics{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}
     .metric,.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius)}
-    .metric{padding:12px 14px;min-height:78px;display:flex;flex-direction:column;justify-content:space-between}
+    .metric{width:100%;min-height:78px;padding:11px 13px;display:flex;flex-direction:column;justify-content:space-between;text-align:left;transition:background .18s,border-color .18s,transform .18s}
+    .metric:hover{background:var(--panel-2);border-color:#526158;transform:translateY(-1px)}
     .metric span{color:var(--muted);font-size:12px}
-    .metric strong{font-size:32px;line-height:1;font-family:"IBM Plex Mono",ui-monospace,monospace}
-    .metric small{color:var(--green)}
-    .runtime{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border:1px solid var(--line);border-radius:var(--radius);background:#121716;overflow:hidden}
-    .runtime-item{padding:11px 14px;border-right:1px solid var(--line);min-width:0}
+    .metric strong{font-size:30px;line-height:1;font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+    .metric small{color:var(--green);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .metric.changed{animation:metricFlash .5s ease-out}
+    .runtime{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border:1px solid var(--line);border-radius:var(--radius);background:#121715;overflow:hidden}
+    .runtime-item{width:100%;padding:10px 13px;border-right:1px solid var(--line);background:transparent;min-width:0;text-align:left;transition:background .18s}
     .runtime-item:last-child{border-right:0}
-    .runtime-item span{display:block;color:var(--muted);font-size:11px;margin-bottom:5px}
-    .runtime-item strong{display:block;font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .meter{height:3px;margin-top:8px;background:#29312d;overflow:hidden}
-    .meter i{display:block;height:100%;background:var(--green)}
+    .runtime-item:hover{background:rgba(255,255,255,.035)}
+    .runtime-item span{display:block;color:var(--muted);font-size:11px;margin-bottom:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .runtime-item strong{display:block;font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-variant-numeric:tabular-nums}
+    .meter{height:3px;margin-top:7px;background:#29312d;overflow:hidden}
+    .meter i{display:block;height:100%;background:var(--green);transition:transform .3s ease-out;transform-origin:left}
     .meter i.warn{background:var(--amber)}
     .meter i.critical{background:var(--red)}
     .meter.neutral{opacity:.35}
-    .grid{min-height:0;display:grid;grid-template-columns:repeat(6,minmax(0,1fr));grid-template-rows:minmax(200px,1.15fr) minmax(150px,.85fr);gap:10px}
+    .grid{min-height:0;display:grid;grid-template-columns:repeat(6,minmax(0,1fr));grid-template-rows:minmax(210px,1.15fr) minmax(160px,.85fr);gap:10px}
     .trend-panel{grid-column:span 4}
     .model-side{grid-column:span 2}
     .anomaly-panel,.distribution-panel,.recent-panel{grid-column:span 2}
-    .panel{padding:14px;min-width:0;min-height:0;overflow:hidden}
-    .panel-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}
-    .panel h2{font-size:16px;margin:0}
-    .badge{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:5px 9px;color:var(--muted);font-size:12px}
-    .badge:before{content:"";width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 14px var(--green)}
-    .canvas-wrap{height:calc(100% - 36px);min-height:0}
-    canvas{width:100%;height:100%;display:block}
-    .side{display:grid;grid-template-rows:minmax(0,1.3fr) minmax(0,.7fr);gap:12px;min-height:0}
+    .panel{padding:13px;min-width:0;min-height:0;overflow:hidden}
+    .panel-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px;min-height:30px}
+    .panel-title{min-width:0}
+    .panel h2{font-size:16px;margin:0;line-height:1.25}
+    .panel-sub{display:block;color:var(--muted);font-size:11px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .panel-controls{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap}
+    .badge{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:5px 9px;color:var(--muted);font-size:11px;white-space:nowrap}
+    .badge:before{content:"";width:7px;height:7px;border-radius:50%;background:var(--green)}
+    .segmented{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:#111613}
+    .segment{min-width:38px;min-height:30px;padding:0 9px;background:transparent;color:var(--muted);font-size:11px;border-right:1px solid var(--line)}
+    .segment:last-child{border-right:0}
+    .segment:hover{color:var(--ink);background:rgba(255,255,255,.04)}
+    .segment.active,.segment[aria-pressed="true"]{color:#071008;background:var(--green);font-weight:800}
+    .series-toggle{min-height:30px;padding:0 9px;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--muted);display:inline-flex;align-items:center;gap:6px;font-size:11px}
+    .series-toggle[aria-pressed="true"]{color:var(--ink);background:rgba(255,255,255,.04)}
+    .series-toggle[aria-pressed="false"]{opacity:.48}
+    .swatch{width:8px;height:8px;border-radius:2px;background:var(--green)}
+    .swatch.cyan{background:var(--cyan)}
+    .canvas-wrap{height:calc(100% - 40px);min-height:0;position:relative}
+    canvas{width:100%;height:100%;display:block;cursor:crosshair;touch-action:none;border-radius:4px}
+    canvas:focus-visible{outline:2px solid var(--cyan);outline-offset:-2px}
+    .chart-tooltip{position:absolute;z-index:8;min-width:150px;max-width:220px;padding:9px 10px;border:1px solid #506059;border-radius:6px;background:rgba(12,17,15,.96);box-shadow:var(--shadow);pointer-events:none;opacity:0;transform:translateY(4px);transition:opacity .12s,transform .12s;color:var(--ink);font-size:12px;line-height:1.45}
+    .chart-tooltip.visible{opacity:1;transform:none}
+    .chart-tooltip strong{display:block;margin-bottom:3px}
+    .chart-tooltip span{display:block;color:var(--muted)}
+    .side{display:grid;grid-template-rows:minmax(0,1.1fr) minmax(0,.9fr);gap:10px;min-height:0}
     .models{display:grid;gap:5px;overflow:auto;height:calc(100% - 36px)}
-    .model,.recent-row{border:1px solid var(--line);border-radius:8px;background:rgba(255,255,255,.03);min-width:0}
-    .model{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;padding:2px 8px}
+    .model,.recent-row,.anomaly{width:100%;border:1px solid var(--line);border-radius:var(--radius);background:rgba(255,255,255,.025);min-width:0;text-align:left;transition:background .18s,border-color .18s,transform .18s}
+    .model:hover,.recent-row:hover,.anomaly:hover{background:rgba(255,255,255,.055);border-color:#536159}
+    .model:active,.recent-row:active,.anomaly:active{transform:scale(.995)}
+    .model.active{border-color:rgba(112,213,138,.7);box-shadow:inset 3px 0 0 var(--green)}
+    .model{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;padding:7px 9px}
     .model strong{font-size:14px;line-height:1.2}
     .model strong,.recent-row strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .model span,.recent-row span{color:var(--muted);font-size:12px;overflow-wrap:anywhere}
-    .state{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:11px;color:var(--red)}
+    .state{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:11px;color:var(--red);display:flex;align-items:center;gap:6px}
+    .state:before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
     .state.ok{color:var(--green)}
     .state.warn{color:var(--amber)}
-    .recent{display:grid;gap:8px;overflow:auto;max-height:100%}
-    .recent-row{display:grid;grid-template-columns:78px 1fr auto;gap:10px;align-items:center;padding:8px 10px}
-    .label{font-size:12px;border-radius:999px;padding:5px 8px;background:rgba(102,211,126,.12);color:var(--green);white-space:nowrap}
-    .anomalies{display:grid;gap:8px;overflow:auto;max-height:100%}
-    .anomaly{border:1px solid var(--line);border-radius:8px;background:rgba(255,255,255,.03);padding:10px}
+    .recent{display:grid;gap:6px;overflow:auto;max-height:100%}
+    .recent-row{display:grid;grid-template-columns:72px 1fr auto;gap:9px;align-items:center;padding:7px 9px}
+    .label{font-size:11px;border-radius:999px;padding:4px 7px;background:rgba(112,213,138,.12);color:var(--green);white-space:nowrap}
+    .label.fake{background:rgba(244,117,117,.12);color:var(--red)}
+    .anomalies{display:grid;gap:6px;overflow:auto;max-height:100%}
+    .anomaly{padding:9px}
     .anomaly strong{display:block;margin-bottom:4px}
     .anomaly span{color:var(--muted);font-size:12px;line-height:1.45}
-    .anomaly.critical{border-color:rgba(247,111,111,.5);background:rgba(247,111,111,.08)}
-    .anomaly.warning{border-color:rgba(241,191,90,.5);background:rgba(241,191,90,.08)}
-    .foot{display:flex;justify-content:space-between;gap:12px;color:var(--muted);font-size:12px;margin-top:8px}
+    .anomaly.critical{border-color:rgba(244,117,117,.5);background:rgba(244,117,117,.07)}
+    .anomaly.warning{border-color:rgba(239,189,95,.5);background:rgba(239,189,95,.07)}
+    .filter-btn{min-height:30px;padding:0 9px;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--muted);font-size:11px;display:none;align-items:center;gap:6px}
+    .filter-btn.visible{display:inline-flex}
+    .foot{display:flex;justify-content:space-between;align-items:center;gap:12px;color:var(--muted);font-size:12px;min-height:18px}
+    .foot strong{color:var(--ink);font-weight:700}
+    .active-filter{display:inline-flex;align-items:center;gap:7px;padding:0;background:transparent;color:var(--muted);font-size:12px;text-align:left}
+    .active-filter:not(:disabled):hover strong{color:var(--green)}
+    .active-filter:disabled{cursor:default}
+    .inspector{position:fixed;z-index:40;right:14px;top:78px;bottom:40px;width:min(360px,calc(100vw - 28px));padding:16px;border:1px solid #536159;border-radius:var(--radius);background:#151b18;box-shadow:var(--shadow);transform:translateX(calc(100% + 30px));opacity:0;visibility:hidden;transition:transform .24s ease-out,opacity .18s,visibility .18s;display:grid;grid-template-rows:auto minmax(0,1fr) auto;gap:14px}
+    .inspector.open{transform:none;opacity:1;visibility:visible}
+    .inspector-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--line)}
+    .inspector-kicker{display:block;color:var(--green);font-size:11px;font-weight:800;margin-bottom:5px}
+    .inspector h2{font-size:19px;margin:0;line-height:1.3}
+    .inspector-body{overflow:auto;display:grid;align-content:start}
+    .detail-row{display:grid;grid-template-columns:96px minmax(0,1fr);gap:12px;padding:11px 0;border-bottom:1px solid var(--line-soft)}
+    .detail-row span{color:var(--muted);font-size:12px}
+    .detail-row strong{font-size:13px;overflow-wrap:anywhere}
+    .inspector-actions{display:flex;gap:8px;padding-top:2px}
+    .action-link{min-height:38px;padding:0 12px;border:1px solid var(--line);border-radius:6px;display:inline-flex;align-items:center;justify-content:center;gap:7px;color:var(--ink);background:var(--panel-2);font-weight:700;font-size:13px}
+    .action-link:hover{border-color:#607168}
+    .empty{padding:20px;color:var(--muted);text-align:center;font-size:12px}
     .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-    @media(max-height:800px) and (min-width:1201px){.screen{padding:10px;gap:8px}.top{padding-bottom:8px}.mark{width:36px;height:36px}.top h1{font-size:24px}.sub{font-size:12px}.clock strong{font-size:20px}.metric{min-height:68px;padding:9px 12px}.metric strong{font-size:26px}.runtime-item{padding:8px 11px}.panel{padding:10px}.panel-head{margin-bottom:8px}.grid{grid-template-rows:minmax(190px,1.15fr) minmax(140px,.85fr)}.recent-row{padding:6px 8px}.anomaly{padding:7px}.foot{margin-top:0}}
-    @media(max-width:1200px){.screen{height:auto;min-height:100vh;overflow:visible}.metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.runtime{grid-template-columns:repeat(3,minmax(0,1fr))}.runtime-item{border-bottom:1px solid var(--line)}.grid{grid-template-columns:1fr;grid-template-rows:auto}.grid>*{grid-column:1}.side{grid-template-rows:auto}.models{height:auto}.canvas-wrap{height:320px}.model-side .panel:last-child .canvas-wrap{height:180px}}
-    @media(max-width:720px){.screen{padding:12px}.top{display:grid}.clock{text-align:left}.clock-meta{justify-content:flex-start;flex-wrap:wrap}.metrics,.runtime{grid-template-columns:repeat(2,minmax(0,1fr))}.recent-row{grid-template-columns:1fr}.metric strong{font-size:26px}.canvas-wrap{height:260px}}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    @keyframes metricFlash{0%{border-color:var(--green);background:rgba(112,213,138,.12)}100%{border-color:var(--line);background:var(--panel)}}
+    @media(max-height:820px) and (min-width:1201px){.screen{padding:10px;gap:8px}.top{padding-bottom:8px}.mark{width:36px;height:36px}.top h1{font-size:23px}.sub{font-size:12px}.clock strong{font-size:20px}.icon-btn{width:36px;height:36px}.metric{min-height:66px;padding:8px 11px}.metric strong{font-size:25px}.runtime-item{padding:7px 10px}.panel{padding:10px}.panel-head{margin-bottom:7px}.grid{grid-template-rows:minmax(190px,1.15fr) minmax(140px,.85fr)}.recent-row,.model{padding:5px 8px}.anomaly{padding:7px}.foot{min-height:14px}}
+    @media(max-width:1200px){.screen{height:auto;min-height:100vh;overflow:visible}.metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.runtime{grid-template-columns:repeat(3,minmax(0,1fr))}.runtime-item{border-bottom:1px solid var(--line)}.grid{grid-template-columns:1fr;grid-template-rows:auto}.grid>*{grid-column:1}.side{grid-template-rows:auto}.models{height:auto}.canvas-wrap{height:320px}.model-side .panel:last-child .canvas-wrap{height:220px}.inspector{top:70px;bottom:14px}}
+    @media(max-width:720px){.screen{padding:10px}.top{display:grid}.top-right{justify-content:space-between}.clock{text-align:left}.clock-meta{justify-content:flex-start;flex-wrap:wrap}.metrics,.runtime{grid-template-columns:repeat(2,minmax(0,1fr))}.panel-head{align-items:flex-start;flex-direction:column}.panel-controls{justify-content:flex-start}.recent-row{grid-template-columns:1fr}.metric strong{font-size:25px}.canvas-wrap{height:260px}.inspector{top:10px;right:10px;bottom:10px;width:calc(100vw - 20px)}.detail-row{grid-template-columns:82px minmax(0,1fr)}}
+    @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
   </style>
 </head>
 <body>
@@ -85,49 +146,105 @@
           <div class="sub">检测增长、模型路由、反馈分布和服务保障集中展示</div>
         </div>
       </div>
-      <div class="clock">
-        <strong id="clock">--:--:--</strong>
-        <div class="clock-meta"><span class="connection" id="connection">正在连接</span><span id="generated">等待数据</span></div>
+      <div class="top-right">
+        <div class="clock">
+          <strong id="clock">--:--:--</strong>
+          <div class="clock-meta"><span class="connection" id="connection">正在连接</span><span id="generated">等待数据</span></div>
+        </div>
+        <div class="screen-actions">
+          <button class="icon-btn" id="autoRefresh" type="button" aria-label="暂停自动刷新" aria-pressed="false" title="暂停自动刷新"><i class="fa fa-pause" aria-hidden="true"></i></button>
+          <button class="icon-btn" id="refreshNow" type="button" aria-label="立即刷新" title="立即刷新"><i class="fa fa-refresh" aria-hidden="true"></i></button>
+          <button class="icon-btn" id="fullscreenToggle" type="button" aria-label="进入全屏" title="进入全屏"><i class="fa fa-expand" aria-hidden="true"></i></button>
+          <a class="icon-btn" href="/admin" aria-label="返回管理后台" title="返回管理后台"><i class="fa fa-arrow-left" aria-hidden="true"></i></a>
+        </div>
       </div>
     </header>
     <section class="metrics" id="metrics"></section>
     <section class="runtime" id="runtime"></section>
     <section class="grid">
       <article class="panel trend-panel">
-        <div class="panel-head"><h2>24 小时检测趋势</h2><span class="badge">30 秒轮询</span></div>
-        <div class="canvas-wrap"><canvas id="trend" role="img" aria-label="24 小时图像与视频检测趋势"></canvas><p class="sr-only" id="trendSummary"></p></div>
+        <div class="panel-head">
+          <div class="panel-title"><h2>检测趋势</h2><span class="panel-sub" id="trendSubtitle">过去 24 小时</span></div>
+          <div class="panel-controls">
+            <div class="segmented" role="group" aria-label="趋势时间范围">
+              <button class="segment" type="button" data-range="6" aria-pressed="false">6h</button>
+              <button class="segment" type="button" data-range="12" aria-pressed="false">12h</button>
+              <button class="segment active" type="button" data-range="24" aria-pressed="true">24h</button>
+            </div>
+            <button class="series-toggle" type="button" data-series="images" aria-pressed="true"><span class="swatch"></span>图像</button>
+            <button class="series-toggle" type="button" data-series="videos" aria-pressed="true"><span class="swatch cyan"></span>视频</button>
+            <span class="badge" id="pollBadge">30 秒</span>
+          </div>
+        </div>
+        <div class="canvas-wrap"><canvas id="trend" tabindex="0" role="img" aria-label="图像与视频检测趋势，使用左右方向键选择时间点"></canvas><div class="chart-tooltip" id="trendTooltip" role="status"></div><p class="sr-only" id="trendSummary"></p></div>
       </article>
       <div class="side model-side">
         <article class="panel">
-          <div class="panel-head"><h2>模型服务状态</h2><span class="badge">routing</span></div>
+          <div class="panel-head"><div class="panel-title"><h2>模型服务状态</h2><span class="panel-sub">主路由与服务健康</span></div><span class="badge" id="modelStatusBadge">模型</span></div>
           <div class="models" id="models"></div>
         </article>
         <article class="panel">
-          <div class="panel-head"><h2>路由占比</h2><span class="badge">model runs</span></div>
-          <div class="canvas-wrap"><canvas id="routes" role="img" aria-label="模型路由调用占比"></canvas><p class="sr-only" id="routeSummary"></p></div>
+          <div class="panel-head"><div class="panel-title"><h2>路由占比</h2><span class="panel-sub">最近模型调用</span></div><span class="badge">调用量</span></div>
+          <div class="canvas-wrap"><canvas id="routes" tabindex="0" role="img" aria-label="模型路由调用占比，使用上下方向键选择模型"></canvas><div class="chart-tooltip" id="routesTooltip" role="status"></div><p class="sr-only" id="routeSummary"></p></div>
         </article>
       </div>
       <article class="panel anomaly-panel">
-        <div class="panel-head"><h2>异常与风险</h2><span class="badge">anomaly</span></div>
+        <div class="panel-head"><div class="panel-title"><h2>异常与风险</h2><span class="panel-sub">按严重程度优先展示</span></div><span class="badge" id="anomalyCount">0 项</span></div>
         <div class="anomalies" id="anomalies"></div>
       </article>
       <article class="panel distribution-panel">
-        <div class="panel-head"><h2>标签与反馈分布</h2><span class="badge">quality</span></div>
-        <div class="canvas-wrap"><canvas id="distribution" role="img" aria-label="检测标签与用户反馈分布"></canvas><p class="sr-only" id="distributionSummary"></p></div>
+        <div class="panel-head">
+          <div class="panel-title"><h2>标签与反馈分布</h2><span class="panel-sub">检测结论与用户反馈</span></div>
+          <div class="segmented" role="group" aria-label="分布数据类型">
+            <button class="segment active" type="button" data-distribution-mode="all" aria-pressed="true">全部</button>
+            <button class="segment" type="button" data-distribution-mode="labels" aria-pressed="false">标签</button>
+            <button class="segment" type="button" data-distribution-mode="feedback" aria-pressed="false">反馈</button>
+          </div>
+        </div>
+        <div class="canvas-wrap"><canvas id="distribution" tabindex="0" role="img" aria-label="检测标签与用户反馈分布，使用上下方向键选择类别"></canvas><div class="chart-tooltip" id="distributionTooltip" role="status"></div><p class="sr-only" id="distributionSummary"></p></div>
       </article>
       <article class="panel recent-panel">
-        <div class="panel-head"><h2>最新检测流水</h2><span class="badge">recent</span></div>
+        <div class="panel-head"><div class="panel-title"><h2>最新检测流水</h2><span class="panel-sub" id="recentSubtitle">最近 12 条</span></div><button class="filter-btn" id="clearFilter" type="button"><i class="fa fa-times" aria-hidden="true"></i>清除筛选</button></div>
         <div class="recent" id="recent"></div>
       </article>
     </section>
-    <div class="foot"><span>管理员：{{ admin_user.username or admin_user.phone or "admin" }}</span><span><a href="/admin" style="color:inherit">返回后台</a></span></div>
+    <div class="foot"><button class="active-filter" id="activeFilter" type="button" disabled><strong>全部检测</strong></button><span>管理员：{{ admin_user.username or admin_user.phone or "admin" }} · 数据不含用户身份信息</span></div>
   </main>
+  <aside class="inspector" id="inspector" aria-hidden="true" aria-labelledby="inspectorTitle">
+    <div class="inspector-head">
+      <div><span class="inspector-kicker" id="inspectorKicker">数据详情</span><h2 id="inspectorTitle">查看详情</h2></div>
+      <button class="icon-btn" id="closeInspector" type="button" aria-label="关闭详情" title="关闭详情"><i class="fa fa-times" aria-hidden="true"></i></button>
+    </div>
+    <div class="inspector-body" id="inspectorBody"></div>
+    <div class="inspector-actions" id="inspectorActions"></div>
+  </aside>
   <script>
     const SCREEN_TOKEN = {{ screen_token|default("", true)|tojson }};
     const esc = (v) => String(v ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
     const $ = (id) => document.getElementById(id);
     let state = null;
     let lastSuccessAt = 0;
+    let loading = false;
+    let resizeFrame = 0;
+    const previousMetricValues = new Map();
+    const colors = {green:'#70d58a',cyan:'#42cfc1',amber:'#efbd5f',red:'#f47575',muted:'#a8b4aa',line:'#344038',track:'#27302b',ink:'#f2f6f1'};
+    const ui = {
+      trendRange:24,
+      visibleSeries:new Set(['images','videos']),
+      distributionMode:'all',
+      hover:{trend:null,routes:null,distribution:null},
+      locked:{trend:null,routes:null,distribution:null},
+      chartGeometry:{},
+      filter:null,
+      autoRefresh:true,
+      refreshTimer:null,
+      nextRefreshAt:0,
+      metrics:[],
+      runtimeItems:[],
+      modelItems:[],
+      recentItems:[],
+      anomalyItems:[],
+    };
     function setConnection(kind, text){
       $('connection').className = `connection ${kind || ''}`;
       $('connection').textContent = text;
@@ -135,7 +252,12 @@
     function tick(){
       const now = new Date();
       $('clock').textContent = now.toLocaleTimeString('zh-CN', {hour12:false});
-      if(lastSuccessAt && Date.now() - lastSuccessAt > 70000) setConnection('error', '数据已过期');
+      if(lastSuccessAt && Date.now() - lastSuccessAt > 70000 && ui.autoRefresh && !loading) setConnection('error', '数据已过期');
+      if(ui.autoRefresh && ui.nextRefreshAt){
+        $('pollBadge').textContent = `${Math.max(0, Math.ceil((ui.nextRefreshAt - Date.now()) / 1000))} 秒`;
+      }else{
+        $('pollBadge').textContent = '已暂停';
+      }
     }
     setInterval(tick, 1000); tick();
     async function api(){
@@ -154,65 +276,140 @@
         clearTimeout(timeout);
       }
     }
+    function formatNumber(value){
+      const number = Number(value);
+      return Number.isFinite(number) ? new Intl.NumberFormat('zh-CN').format(number) : String(value ?? '--');
+    }
+    function formatProbability(value){
+      const number = Number(value);
+      if(!Number.isFinite(number)) return String(value ?? '-');
+      return `${(number <= 1 ? number * 100 : number).toFixed(1)}%`;
+    }
+    function formatShare(value,total){
+      const count = Number(value) || 0;
+      const sum = Number(total) || 0;
+      return sum ? `${(count * 100 / sum).toFixed(1)}%` : '0%';
+    }
+    function openInspector({kicker='数据详情',title='查看详情',rows=[],action=null}){
+      $('inspectorKicker').textContent = kicker;
+      $('inspectorTitle').textContent = title;
+      $('inspectorBody').innerHTML = rows.map(([label,value]) => `<div class="detail-row"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join('') || '<div class="empty">暂无更多数据</div>';
+      $('inspectorActions').innerHTML = action ? `<a class="action-link" href="${esc(action.href)}"><i class="fa fa-arrow-right" aria-hidden="true"></i>${esc(action.label)}</a>` : '';
+      $('inspector').classList.add('open');
+      $('inspector').setAttribute('aria-hidden','false');
+    }
+    function closeInspector(){
+      $('inspector').classList.remove('open');
+      $('inspector').setAttribute('aria-hidden','true');
+    }
     function drawCanvas(id, draw){
       const canvas = $(id);
       const rect = canvas.getBoundingClientRect();
+      if(rect.width <= 0 || rect.height <= 0) return null;
       const ratio = window.devicePixelRatio || 1;
       canvas.width = Math.max(1, Math.floor(rect.width * ratio));
       canvas.height = Math.max(1, Math.floor(rect.height * ratio));
       const ctx = canvas.getContext('2d');
       ctx.scale(ratio, ratio);
-      draw(ctx, rect.width, rect.height);
+      const geometry = draw(ctx, rect.width, rect.height) || {};
+      ui.chartGeometry[id] = geometry;
+      return geometry;
     }
-    function lineChart(ctx, w, h, series){
-      const pad = {l:42,r:18,t:18,b:34};
+    function trendWindow(){
+      const source = state?.series || {};
+      const labels = source.labels || [];
+      const count = Math.min(ui.trendRange, labels.length || ui.trendRange);
+      const start = Math.max(0, labels.length - count);
+      return {
+        labels:labels.slice(start),
+        images:(source.images || []).slice(start),
+        videos:(source.videos || []).slice(start),
+      };
+    }
+    function lineChart(ctx, w, h, series, activeIndex){
+      const pad = {l:44,r:16,t:20,b:30};
       const labels = series.labels || [];
       const images = series.images || [];
       const videos = series.videos || [];
-      const max = Math.max(1, ...images, ...videos);
+      const visibleValues = [];
+      if(ui.visibleSeries.has('images')) visibleValues.push(...images);
+      if(ui.visibleSeries.has('videos')) visibleValues.push(...videos);
+      const max = Math.max(1, ...visibleValues.map(value => Number(value) || 0));
       ctx.clearRect(0,0,w,h);
-      ctx.strokeStyle = '#323b2f'; ctx.lineWidth = 1;
-      for(let i=0;i<5;i++){const y=pad.t+(h-pad.t-pad.b)*i/4;ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(w-pad.r,y);ctx.stroke();}
+      ctx.font='11px ui-monospace';
+      ctx.textBaseline='middle';
+      for(let i=0;i<4;i++){
+        const value = max * (3 - i) / 3;
+        const y=pad.t+(h-pad.t-pad.b)*i/3;
+        ctx.strokeStyle=colors.line;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(w-pad.r,y);ctx.stroke();
+        ctx.fillStyle=colors.muted;ctx.fillText(String(Math.round(value)),4,y);
+      }
+      const xPositions = labels.map((_,i)=>pad.l + (w-pad.l-pad.r) * (labels.length <= 1 ? .5 : i/(labels.length-1)));
       function path(values,color){
         ctx.beginPath();
         values.forEach((value,i)=>{
-          const x = pad.l + (w-pad.l-pad.r) * (labels.length <= 1 ? 0 : i/(labels.length-1));
-          const y = h-pad.b - (h-pad.t-pad.b) * value/max;
+          const x = xPositions[i] ?? pad.l;
+          const y = h-pad.b - (h-pad.t-pad.b) * (Number(value)||0)/max;
           if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
         });
         ctx.strokeStyle=color;ctx.lineWidth=3;ctx.stroke();
       }
-      path(images,'#66d37e'); path(videos,'#3fd5c0');
-      ctx.fillStyle='#a8b3a2';ctx.font='12px ui-monospace';
-      labels.forEach((label,i)=>{if(i%4===0||i===labels.length-1){const x=pad.l+(w-pad.l-pad.r)*(labels.length<=1?0:i/(labels.length-1));ctx.fillText(label,x-16,h-12);}});
-      ctx.fillStyle='#66d37e';ctx.fillText('图像',pad.l,16);
-      ctx.fillStyle='#3fd5c0';ctx.fillText('视频',pad.l+48,16);
+      if(ui.visibleSeries.has('images')) path(images,colors.green);
+      if(ui.visibleSeries.has('videos')) path(videos,colors.cyan);
+      ctx.fillStyle=colors.muted;ctx.textBaseline='alphabetic';
+      const step = Math.max(1,Math.ceil(labels.length/6));
+      labels.forEach((label,i)=>{if(i%step===0||i===labels.length-1){ctx.fillText(label,(xPositions[i]||pad.l)-14,h-9);}});
+      if(Number.isInteger(activeIndex) && activeIndex >= 0 && activeIndex < labels.length){
+        const x = xPositions[activeIndex];
+        ctx.save();ctx.setLineDash([4,4]);ctx.strokeStyle='#718079';ctx.beginPath();ctx.moveTo(x,pad.t);ctx.lineTo(x,h-pad.b);ctx.stroke();ctx.restore();
+        [['images',images,colors.green],['videos',videos,colors.cyan]].forEach(([key,values,color])=>{
+          if(!ui.visibleSeries.has(key)) return;
+          const y=h-pad.b-(h-pad.t-pad.b)*(Number(values[activeIndex])||0)/max;
+          ctx.beginPath();ctx.arc(x,y,5,0,Math.PI*2);ctx.fillStyle='#111613';ctx.fill();ctx.lineWidth=3;ctx.strokeStyle=color;ctx.stroke();
+        });
+      }
+      return {type:'trend',plot:{left:pad.l,right:w-pad.r,top:pad.t,bottom:h-pad.b},xPositions,items:labels.map((label,index)=>({label,index,images:Number(images[index])||0,videos:Number(videos[index])||0}))};
     }
-    function barChart(ctx,w,h,items,colors){
-      const pad = {l:92,r:18,t:12,b:18};
+    function barChart(ctx,w,h,items,palette,activeIndex){
+      const visibleItems = items.slice(0,8);
+      const pad = {l:Math.min(104,Math.max(78,w*.32)),r:16,t:8,b:8};
       const max = Math.max(1, ...items.map(i=>Number(i.count)||0));
+      const total = items.reduce((sum,item)=>sum+(Number(item.count)||0),0);
       ctx.clearRect(0,0,w,h);
-      ctx.font='12px ui-monospace';
-      items.slice(0,8).forEach((item,i)=>{
-        const y = pad.t + i * Math.max(24,(h-pad.t-pad.b)/Math.max(8,items.length));
+      ctx.font='11px ui-monospace';ctx.textBaseline='middle';
+      const rowHeight = (h-pad.t-pad.b)/Math.max(1,visibleItems.length);
+      const bars=[];
+      visibleItems.forEach((item,i)=>{
+        const y = pad.t + i * rowHeight + Math.max(2,(rowHeight-14)/2);
         const barW = (w-pad.l-pad.r) * (Number(item.count)||0) / max;
-        ctx.fillStyle='#a8b3a2';ctx.fillText(String(item.label || item.model || '-').slice(0,10),8,y+14);
-        ctx.fillStyle=colors[i%colors.length];ctx.fillRect(pad.l,y,Math.max(2,barW),14);
-        const count = String(item.count||0);
-        const countX = Math.min(pad.l+barW+8, w-pad.r-ctx.measureText(count).width);
-        ctx.fillStyle='#f4f7ef';ctx.fillText(count,countX,y+13);
+        const color=palette[i%palette.length];
+        ctx.fillStyle=colors.muted;ctx.fillText(String(item.label || item.model || '-').slice(0,12),6,y+7);
+        ctx.fillStyle=colors.track;ctx.fillRect(pad.l,y,w-pad.l-pad.r,14);
+        ctx.globalAlpha = activeIndex === null || activeIndex === undefined || activeIndex === i ? 1 : .45;
+        ctx.fillStyle=color;ctx.fillRect(pad.l,y,Math.max(2,barW),14);ctx.globalAlpha=1;
+        const value = `${formatNumber(item.count||0)} · ${formatShare(item.count,total)}`;
+        const countX = Math.min(pad.l+barW+7, w-pad.r-ctx.measureText(value).width);
+        ctx.fillStyle=colors.ink;ctx.fillText(value,countX,y+7);
+        bars.push({x:pad.l,y,width:w-pad.l-pad.r,height:14,index:i,item,total});
       });
+      return {type:'bars',items:visibleItems,bars,total};
     }
     function renderMetrics(metrics){
       const rows = [
-        ['今日新增检测', metrics?.detections?.today, `图像 ${metrics?.detections?.todayImages ?? 0} / 视频 ${metrics?.detections?.todayVideos ?? 0}`],
-        ['累计图像检测', metrics?.detections?.images, 'image records'],
-        ['累计视频检测', metrics?.detections?.videos, 'video records'],
-        ['用户总数', metrics?.users?.total, `今日新增 ${metrics?.users?.todayNew ?? 0}`],
-        ['活跃 API 密钥', metrics?.users?.apiKeys, '开发者接入'],
-        ['负反馈', metrics?.detections?.feedbackNegative, `正反馈 ${metrics?.detections?.feedbackPositive ?? 0}`],
+        {key:'today',label:'今日检测',value:metrics?.detections?.today,sub:`图像 ${metrics?.detections?.todayImages ?? 0} / 视频 ${metrics?.detections?.todayVideos ?? 0}`,rows:[['今日图像',`${metrics?.detections?.todayImages ?? 0} 次`],['今日视频',`${metrics?.detections?.todayVideos ?? 0} 次`],['昨日检测',`${metrics?.detections?.yesterday ?? 0} 次`]],action:{href:'/admin#detections',label:'查看检测记录'}},
+        {key:'images',label:'累计图像',value:metrics?.detections?.images,sub:'图像鉴伪记录',rows:[['累计图像',`${formatNumber(metrics?.detections?.images)} 次`],['最后检测',metrics?.detections?.lastImageAt || '-']],action:{href:'/admin#detections',label:'查看检测记录'}},
+        {key:'videos',label:'累计视频',value:metrics?.detections?.videos,sub:'视频鉴伪记录',rows:[['累计视频',`${formatNumber(metrics?.detections?.videos)} 次`],['最后检测',metrics?.detections?.lastVideoAt || '-']],action:{href:'/admin#detections',label:'查看检测记录'}},
+        {key:'users',label:'用户总数',value:metrics?.users?.total,sub:`今日新增 ${metrics?.users?.todayNew ?? 0}`,rows:[['用户总数',formatNumber(metrics?.users?.total)],['今日新增',formatNumber(metrics?.users?.todayNew)]],action:{href:'/admin#users',label:'查看用户'}},
+        {key:'keys',label:'活跃 API 密钥',value:metrics?.users?.apiKeys,sub:'开发者接入',rows:[['活跃密钥',formatNumber(metrics?.users?.apiKeys)],['统计口径','当前可用开发者凭证']],action:{href:'/admin#keys',label:'查看访问凭证'}},
+        {key:'feedback',label:'负反馈',value:metrics?.detections?.feedbackNegative,sub:`正反馈 ${metrics?.detections?.feedbackPositive ?? 0}`,rows:[['负反馈',formatNumber(metrics?.detections?.feedbackNegative)],['正反馈',formatNumber(metrics?.detections?.feedbackPositive)],['负反馈占比',formatShare(metrics?.detections?.feedbackNegative,(Number(metrics?.detections?.feedbackNegative)||0)+(Number(metrics?.detections?.feedbackPositive)||0))]],action:{href:'/admin#detections',label:'抽检检测记录'}},
       ];
-      $('metrics').innerHTML = rows.map(([label,value,sub])=>`<article class="metric"><span>${esc(label)}</span><strong>${esc(value ?? '--')}</strong><small>${esc(sub)}</small></article>`).join('');
+      ui.metrics=rows;
+      $('metrics').innerHTML = rows.map((item,index)=>{
+        const previous=previousMetricValues.get(item.key);
+        const changed=previous !== undefined && String(previous)!==String(item.value);
+        previousMetricValues.set(item.key,item.value);
+        return `<button class="metric ${changed?'changed':''}" type="button" data-metric-index="${index}" aria-label="查看${esc(item.label)}详情"><span>${esc(item.label)}</span><strong>${esc(formatNumber(item.value))}</strong><small>${esc(item.sub)}</small></button>`;
+      }).join('');
     }
     function formatBytes(value){
       const bytes = Number(value);
@@ -233,11 +430,11 @@
       if(inverse) return Number(percent) < 50 ? 'critical' : Number(percent) < 100 ? 'warn' : '';
       return Number(percent) >= 95 ? 'critical' : Number(percent) >= 85 ? 'warn' : '';
     }
-    function runtimeItem(label, value, detail, percent=null, inverse=false){
-      const hasPercent = percent !== null && Number.isFinite(Number(percent));
-      const width = hasPercent ? Math.max(0, Math.min(100, Number(percent))) : 0;
-      const meter = hasPercent ? `<div class="meter"><i class="${meterClass(percent,inverse)}" style="width:${width}%"></i></div>` : '<div class="meter neutral"></div>';
-      return `<div class="runtime-item"><span>${esc(label)} · ${esc(detail)}</span><strong>${esc(value)}</strong>${meter}</div>`;
+    function runtimeItem(item,index){
+      const hasPercent = item.percent !== null && item.percent !== undefined && Number.isFinite(Number(item.percent));
+      const width = hasPercent ? Math.max(0, Math.min(100, Number(item.percent))) : 0;
+      const meter = hasPercent ? `<div class="meter"><i class="${meterClass(item.percent,item.inverse)}" style="width:${width}%"></i></div>` : '<div class="meter neutral"></div>';
+      return `<button class="runtime-item" type="button" data-runtime-index="${index}" aria-label="查看${esc(item.label)}详情"><span>${esc(item.label)} · ${esc(item.detail)}</span><strong>${esc(item.value)}</strong>${meter}</button>`;
     }
     function renderRuntime(host, services){
       const cpu = host?.cpu || {};
@@ -246,13 +443,14 @@
       const total = Number(services?.total) || 0;
       const online = Number(services?.online) || 0;
       const servicePercent = total ? online * 100 / total : 0;
-      $('runtime').innerHTML = [
-        runtimeItem('CPU 负载', `${cpu.loadPercent ?? '--'}%`, `${cpu.cores ?? '--'} 核 · 1m ${cpu.load1 ?? '--'}`, cpu.loadPercent),
-        runtimeItem('内存', `${memory.usedPercent ?? '--'}%`, `${formatBytes(memory.usedBytes)} / ${formatBytes(memory.totalBytes)}`, memory.usedPercent),
-        runtimeItem('系统盘', `${disk.usedPercent ?? '--'}%`, `${formatBytes(disk.usedBytes)} / ${formatBytes(disk.totalBytes)}`, disk.usedPercent),
-        runtimeItem('模型服务', `${online}/${total || '--'} 在线`, `降级 ${services?.degraded ?? 0} · 离线 ${services?.offline ?? 0}`, servicePercent, true),
-        runtimeItem('运行时长', formatDuration(host?.uptimeSeconds), `Web 进程 ${formatDuration(host?.processUptimeSeconds)}`),
-      ].join('');
+      ui.runtimeItems = [
+        {label:'CPU 负载',value:`${cpu.loadPercent ?? '--'}%`,detail:`${cpu.cores ?? '--'} 核 · 1m ${cpu.load1 ?? '--'}`,percent:cpu.loadPercent,rows:[['当前负载',`${cpu.loadPercent ?? '--'}%`],['CPU 核心',`${cpu.cores ?? '--'} 核`],['1 分钟负载',cpu.load1 ?? '--']]},
+        {label:'内存',value:`${memory.usedPercent ?? '--'}%`,detail:`${formatBytes(memory.usedBytes)} / ${formatBytes(memory.totalBytes)}`,percent:memory.usedPercent,rows:[['使用率',`${memory.usedPercent ?? '--'}%`],['已使用',formatBytes(memory.usedBytes)],['总容量',formatBytes(memory.totalBytes)]]},
+        {label:'系统盘',value:`${disk.usedPercent ?? '--'}%`,detail:`${formatBytes(disk.usedBytes)} / ${formatBytes(disk.totalBytes)}`,percent:disk.usedPercent,rows:[['使用率',`${disk.usedPercent ?? '--'}%`],['已使用',formatBytes(disk.usedBytes)],['总容量',formatBytes(disk.totalBytes)]]},
+        {label:'模型服务',value:`${online}/${total || '--'} 在线`,detail:`降级 ${services?.degraded ?? 0} · 离线 ${services?.offline ?? 0}`,percent:servicePercent,inverse:true,rows:[['服务总数',total],['在线',online],['降级',services?.degraded ?? 0],['离线',services?.offline ?? 0]]},
+        {label:'运行时长',value:formatDuration(host?.uptimeSeconds),detail:`Web 进程 ${formatDuration(host?.processUptimeSeconds)}`,rows:[['系统运行',formatDuration(host?.uptimeSeconds)],['Web 进程',formatDuration(host?.processUptimeSeconds)]]},
+      ];
+      $('runtime').innerHTML = ui.runtimeItems.map(runtimeItem).join('');
     }
     function healthState(model){
       const h = model.health || {};
@@ -261,33 +459,197 @@
       return ['','故障'];
     }
     function renderModels(models,routing){
-      $('models').innerHTML = (models || []).map(m => {
+      ui.modelItems=models || [];
+      const online=ui.modelItems.filter(model=>model.health?.ok).length;
+      $('modelStatusBadge').textContent=`${online}/${ui.modelItems.length || 0} 在线`;
+      $('models').innerHTML = ui.modelItems.map((m,index) => {
         const [cls,text] = healthState(m);
         const role = routing?.imagePrimary === m.id ? '主路由' : (routing?.imageFallback === m.id ? '兜底' : '');
-        return `<div class="model"><div><strong>${esc(m.name || m.id)}</strong><span>${esc(m.id)} ${role ? '· '+role : ''}</span></div><div class="state ${cls}">${text}</div></div>`;
-      }).join('') || '<div class="model"><strong>暂无模型</strong><span>等待配置</span></div>';
+        const active=ui.filter?.kind==='model' && ui.filter.value===m.id;
+        return `<button class="model ${active?'active':''}" type="button" data-model-index="${index}"><span><strong>${esc(m.name || m.id)}</strong><span>${esc(m.id)} ${role ? '· '+role : ''}</span></span><span class="state ${cls}">${text}</span></button>`;
+      }).join('') || '<div class="empty">暂无模型服务</div>';
+    }
+    function filteredRecent(){
+      const source=state?.recent || [];
+      if(!ui.filter) return source;
+      if(ui.filter.kind==='model') return source.filter(item=>(item.modelRoute?.model?.id || '未记录模型')===ui.filter.value);
+      if(ui.filter.kind==='label') return source.filter(item=>String(item.label || '')===ui.filter.value);
+      return source;
     }
     function renderRecent(items){
-      $('recent').innerHTML = (items || []).map(item => {
+      const source=items || filteredRecent();
+      ui.recentItems=source;
+      $('recentSubtitle').textContent=ui.filter ? `${source.length} 条匹配结果` : `最近 ${source.length} 条`;
+      $('clearFilter').classList.toggle('visible',!!ui.filter);
+      const activeFilter=$('activeFilter');
+      activeFilter.disabled=!ui.filter;
+      activeFilter.setAttribute('aria-label',ui.filter ? `清除筛选：${ui.filter.label}` : '当前显示全部检测');
+      activeFilter.innerHTML=ui.filter ? `<strong>${esc(ui.filter.label)}</strong><i class="fa fa-times" aria-hidden="true"></i>` : '<strong>全部检测</strong>';
+      $('recent').innerHTML = source.map((item,index) => {
         const model = item.modelRoute?.model?.id || '未记录模型';
-        const evidence = `概率 ${item.probability ?? '-'} · 置信度 ${item.confidence ?? '-'}`;
-        return `<div class="recent-row"><strong>#${esc(item.id)}</strong><span>${esc(item.createdAt)} · ${esc(model)}<br>${esc(evidence)}</span><b class="label">${esc(item.label || '-')}</b></div>`;
-      }).join('') || '<div class="recent-row"><span>暂无检测记录</span></div>';
+        const evidence = `概率 ${formatProbability(item.probability)} · 置信度 ${item.confidence ?? '-'}`;
+        const fake=/AI|生成|fake|伪/i.test(String(item.label || ''));
+        return `<button class="recent-row" type="button" data-recent-index="${index}"><strong>#${esc(item.id)}</strong><span>${esc(item.createdAt)} · ${esc(model)}<br>${esc(evidence)}</span><b class="label ${fake?'fake':''}">${esc(item.label || '-')}</b></button>`;
+      }).join('') || '<div class="empty">当前筛选下暂无检测记录</div>';
     }
     function renderAnomalies(items){
-      $('anomalies').innerHTML = (items || []).map(item => `<div class="anomaly ${esc(item.level || '')}"><strong>${esc(item.title || '异常')}</strong><span>${esc(item.message || '')}</span></div>`).join('') || '<div class="anomaly"><strong>当前未发现异常</strong><span>模型、路由和反馈处于可观测范围。</span></div>';
+      const rank={critical:0,warning:1};
+      ui.anomalyItems=[...(items || [])].sort((a,b)=>(rank[a.level]??2)-(rank[b.level]??2));
+      $('anomalyCount').textContent=`${ui.anomalyItems.length} 项`;
+      $('anomalies').innerHTML = ui.anomalyItems.map((item,index) => `<button class="anomaly ${esc(item.level || '')}" type="button" data-anomaly-index="${index}"><strong>${esc(item.title || '异常')}</strong><span>${esc(item.message || '')}</span></button>`).join('') || '<button class="anomaly" type="button" data-anomaly-index="-1"><strong>当前未发现异常</strong><span>模型、路由和主机资源处于可观测范围。</span></button>';
+    }
+    function distributionItems(){
+      const labels=(state?.labels || []).map(item=>({...item,kind:'label',displayLabel:item.label}));
+      const feedback=(state?.feedback || []).map(item=>({...item,kind:'feedback',displayLabel:`反馈 · ${item.label}`,label:`反馈 · ${item.label}`}));
+      if(ui.distributionMode==='labels') return labels;
+      if(ui.distributionMode==='feedback') return feedback;
+      return [...labels,...feedback];
+    }
+    function drawTrend(){
+      if(!state) return;
+      const data=trendWindow();
+      const active=ui.locked.trend ?? ui.hover.trend;
+      drawCanvas('trend',(ctx,w,h)=>lineChart(ctx,w,h,data,active));
+      $('trendSubtitle').textContent=`过去 ${data.labels.length || ui.trendRange} 小时 · ${data.labels[0] || '--'} 至 ${data.labels[data.labels.length-1] || '--'}`;
+      $('trendSummary').textContent = `图像检测总计 ${data.images.reduce((sum,value)=>sum+Number(value || 0),0)}，视频检测总计 ${data.videos.reduce((sum,value)=>sum+Number(value || 0),0)}。`;
+    }
+    function drawDistribution(){
+      if(!state) return;
+      const items=distributionItems();
+      const active=ui.locked.distribution ?? ui.hover.distribution;
+      drawCanvas('distribution',(ctx,w,h)=>barChart(ctx,w,h,items,[colors.green,colors.cyan,colors.amber,colors.red],active));
+      $('distributionSummary').textContent = items.map(item=>`${item.label} ${item.count}`).join('；');
+    }
+    function drawRoutes(){
+      if(!state) return;
+      const items=(state.routes || []).map(item=>({...item,label:item.model,kind:'model'}));
+      const active=ui.locked.routes ?? ui.hover.routes;
+      drawCanvas('routes',(ctx,w,h)=>barChart(ctx,w,h,items,[colors.cyan,colors.green,colors.amber],active));
+      $('routeSummary').textContent = items.map(item=>`${item.model} ${item.count}`).join('；');
     }
     function renderCharts(){
       if(!state) return;
-      drawCanvas('trend',(ctx,w,h)=>lineChart(ctx,w,h,state.series || {}));
-      const distribution = [...(state.labels || []), ...(state.feedback || []).map(item=>({label:`反馈 ${item.label}`,count:item.count}))];
-      drawCanvas('distribution',(ctx,w,h)=>barChart(ctx,w,h,distribution,['#66d37e','#3fd5c0','#f1bf5a','#f76f6f']));
-      drawCanvas('routes',(ctx,w,h)=>barChart(ctx,w,h,state.routes || [],['#3fd5c0','#66d37e','#f1bf5a']));
-      $('trendSummary').textContent = `图像检测总计 ${(state.series?.images || []).reduce((sum,value)=>sum+Number(value || 0),0)}，视频检测总计 ${(state.series?.videos || []).reduce((sum,value)=>sum+Number(value || 0),0)}。`;
-      $('distributionSummary').textContent = distribution.map(item=>`${item.label} ${item.count}`).join('；');
-      $('routeSummary').textContent = (state.routes || []).map(item=>`${item.model} ${item.count}`).join('；');
+      drawTrend();drawDistribution();drawRoutes();
+    }
+    function drawChart(id){
+      if(id==='trend') drawTrend();
+      if(id==='distribution') drawDistribution();
+      if(id==='routes') drawRoutes();
+    }
+    function tooltipData(id,index){
+      const geometry=ui.chartGeometry[id] || {};
+      const item=geometry.items?.[index];
+      if(!item) return null;
+      if(id==='trend') return {title:item.label,lines:[`图像 ${formatNumber(item.images)} 次`,`视频 ${formatNumber(item.videos)} 次`,`合计 ${formatNumber(item.images+item.videos)} 次`]};
+      const label=item.displayLabel || item.label || item.model || '-';
+      return {title:label,lines:[`数量 ${formatNumber(item.count)}`,`占比 ${formatShare(item.count,geometry.total)}`]};
+    }
+    function showTooltip(id,index,x,y){
+      const data=tooltipData(id,index);
+      const tooltip=$(`${id}Tooltip`);
+      const wrap=tooltip.parentElement;
+      if(!data){tooltip.classList.remove('visible');return;}
+      tooltip.innerHTML=`<strong>${esc(data.title)}</strong>${data.lines.map(line=>`<span>${esc(line)}</span>`).join('')}`;
+      tooltip.style.left=`${Math.max(4,Math.min(wrap.clientWidth-190,x+12))}px`;
+      tooltip.style.top=`${Math.max(4,Math.min(wrap.clientHeight-78,y-18))}px`;
+      tooltip.classList.add('visible');
+    }
+    function showTooltipAtItem(id,index){
+      const geometry=ui.chartGeometry[id] || {};
+      if(id==='trend'){
+        const x=geometry.xPositions?.[index] ?? 0;
+        showTooltip(id,index,x,geometry.plot?.top || 8);
+      }else{
+        const bar=geometry.bars?.[index];
+        if(bar) showTooltip(id,index,bar.x+Math.min(bar.width*.65,150),bar.y);
+      }
+    }
+    function hideTooltip(id){$(`${id}Tooltip`)?.classList.remove('visible');}
+    function chartIndexAt(id,event){
+      const canvas=$(id);const rect=canvas.getBoundingClientRect();
+      const x=event.clientX-rect.left;const y=event.clientY-rect.top;
+      const geometry=ui.chartGeometry[id] || {};
+      if(id==='trend'){
+        if(!geometry.xPositions?.length || y<(geometry.plot?.top||0) || y>(geometry.plot?.bottom||rect.height)) return {index:null,x,y};
+        let nearest=0;let distance=Infinity;
+        geometry.xPositions.forEach((point,index)=>{const next=Math.abs(point-x);if(next<distance){distance=next;nearest=index;}});
+        return {index:nearest,x,y};
+      }
+      const bar=geometry.bars?.find(item=>y>=item.y-5 && y<=item.y+item.height+5);
+      return {index:bar?.index ?? null,x,y};
+    }
+    function chartInspector(id,index){
+      const geometry=ui.chartGeometry[id] || {};
+      const item=geometry.items?.[index];
+      if(!item) return null;
+      if(id==='trend'){
+        const total=item.images+item.videos;
+        return {kicker:'趋势时间点',title:item.label,rows:[['图像检测',`${formatNumber(item.images)} 次`],['视频检测',`${formatNumber(item.videos)} 次`],['检测合计',`${formatNumber(total)} 次`],['图像占比',formatShare(item.images,total)]],action:{href:'/admin#detections',label:'查看检测记录'}};
+      }
+      if(id==='routes'){
+        const performance=(state?.performance?.models || []).find(model=>model.modelId===item.model) || {};
+        return {kicker:'模型路由',title:item.model || '未知模型',rows:[['调用次数',formatNumber(item.count)],['调用占比',formatShare(item.count,geometry.total)],['成功率',performance.successRate!=null?`${performance.successRate}%`:'-'],['P50 延迟',performance.p50LatencyMs!=null?`${performance.p50LatencyMs} ms`:'-'],['P95 延迟',performance.p95LatencyMs!=null?`${performance.p95LatencyMs} ms`:'-']],action:{href:'/admin#models',label:'查看模型配置'}};
+      }
+      return {kicker:item.kind==='feedback'?'用户反馈':'检测标签',title:item.displayLabel || item.label || '-',rows:[['数量',formatNumber(item.count)],['占比',formatShare(item.count,geometry.total)],['数据类型',item.kind==='feedback'?'用户反馈':'检测结论']],action:{href:'/admin#detections',label:'查看检测记录'}};
+    }
+    function selectChartItem(id,index){
+      if(index===null || index===undefined) return;
+      ui.locked[id]=index;ui.hover[id]=index;drawChart(id);showTooltipAtItem(id,index);
+      const detail=chartInspector(id,index);if(detail) openInspector(detail);
+      const item=ui.chartGeometry[id]?.items?.[index];
+      if(id==='routes' && item) applyFilter({kind:'model',value:item.model,label:`模型 · ${item.model}`});
+      if(id==='distribution' && item?.kind==='label') applyFilter({kind:'label',value:String(item.displayLabel || item.label || ''),label:`标签 · ${item.displayLabel || item.label}`});
+    }
+    function applyFilter(filter){
+      ui.filter=filter;
+      if(state){renderRecent();renderModels(state.models,state.routing);drawRoutes();drawDistribution();}
+    }
+    function clearFilter(){
+      ui.filter=null;ui.locked.routes=null;ui.locked.distribution=null;
+      if(state){renderRecent();renderModels(state.models,state.routing);drawRoutes();drawDistribution();}
+    }
+    function setupCanvas(id){
+      const canvas=$(id);
+      canvas.addEventListener('pointermove',event=>{
+        const hit=chartIndexAt(id,event);ui.hover[id]=hit.index;drawChart(id);
+        if(hit.index===null) hideTooltip(id);else showTooltip(id,hit.index,hit.x,hit.y);
+      });
+      canvas.addEventListener('pointerleave',()=>{
+        ui.hover[id]=null;
+        if(ui.locked[id]===null){hideTooltip(id);drawChart(id);}else{drawChart(id);showTooltipAtItem(id,ui.locked[id]);}
+      });
+      canvas.addEventListener('click',event=>{const hit=chartIndexAt(id,event);selectChartItem(id,hit.index);});
+      canvas.addEventListener('keydown',event=>{
+        const length=ui.chartGeometry[id]?.items?.length || 0;if(!length) return;
+        const backward=event.key==='ArrowLeft'||event.key==='ArrowUp';
+        const forward=event.key==='ArrowRight'||event.key==='ArrowDown';
+        if(backward||forward){
+          event.preventDefault();
+          const current=ui.locked[id] ?? ui.hover[id] ?? 0;
+          const next=Math.max(0,Math.min(length-1,current+(backward?-1:1)));
+          ui.hover[id]=next;ui.locked[id]=next;drawChart(id);showTooltipAtItem(id,next);
+        }
+        if(event.key==='Enter'||event.key===' '){event.preventDefault();selectChartItem(id,ui.locked[id] ?? ui.hover[id] ?? 0);}
+        if(event.key==='Escape'){ui.hover[id]=null;ui.locked[id]=null;hideTooltip(id);drawChart(id);}
+      });
+    }
+    function modelDetail(model){
+      const [cls,status]=healthState(model);void cls;
+      const role=state?.routing?.imagePrimary===model.id?'主路由':state?.routing?.imageFallback===model.id?'兜底候选':'未参与路由';
+      const telemetry=model.health?.telemetry || {};
+      return {kicker:'模型服务',title:model.name || model.id,rows:[['模型 ID',model.id || '-'],['路由角色',role],['运行状态',status],['Runtime',model.runtime || '-'],['健康说明',model.health?.message || '-'],['延迟',model.health?.latencyMs!=null?`${model.health.latencyMs} ms`:'-'],['推理设备',telemetry.activeProvider || '-'],['GPU',telemetry.cudaDeviceId!=null?`设备 ${telemetry.cudaDeviceId}`:'-']],action:{href:'/admin#models',label:'查看模型配置'}};
+    }
+    function scheduleRefresh(){
+      clearTimeout(ui.refreshTimer);ui.refreshTimer=null;
+      if(!ui.autoRefresh){ui.nextRefreshAt=0;tick();return;}
+      ui.nextRefreshAt=Date.now()+30000;
+      ui.refreshTimer=setTimeout(load,30000);
+      tick();
     }
     async function load(){
+      if(loading) return;
+      loading=true;clearTimeout(ui.refreshTimer);ui.refreshTimer=null;
+      $('refreshNow').disabled=true;$('refreshNow').setAttribute('aria-busy','true');
       setConnection('', state ? '正在刷新' : '正在连接');
       try{
         state = await api();
@@ -297,16 +659,83 @@
         renderMetrics(state.metrics);
         renderRuntime(state.host, state.services);
         renderModels(state.models, state.routing);
-        renderRecent(state.recent);
+        renderRecent();
         renderAnomalies(state.anomalies);
         renderCharts();
       }catch(err){
         setConnection('error', state ? '刷新失败' : '连接失败');
         $('generated').textContent = state ? `保留上次数据 · ${err.message}` : err.message;
+      }finally{
+        loading=false;$('refreshNow').disabled=false;$('refreshNow').removeAttribute('aria-busy');scheduleRefresh();
       }
     }
-    window.addEventListener('resize', renderCharts);
-    load(); setInterval(load, 30000);
+    function syncTrendControls(){
+      document.querySelectorAll('[data-range]').forEach(button=>{const active=Number(button.dataset.range)===ui.trendRange;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));});
+      document.querySelectorAll('[data-series]').forEach(button=>button.setAttribute('aria-pressed',String(ui.visibleSeries.has(button.dataset.series))));
+    }
+    function syncDistributionControls(){
+      document.querySelectorAll('[data-distribution-mode]').forEach(button=>{const active=button.dataset.distributionMode===ui.distributionMode;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));});
+    }
+    function toggleAutoRefresh(){
+      ui.autoRefresh=!ui.autoRefresh;
+      const button=$('autoRefresh');
+      button.setAttribute('aria-pressed',String(!ui.autoRefresh));
+      button.setAttribute('aria-label',ui.autoRefresh?'暂停自动刷新':'恢复自动刷新');
+      button.title=ui.autoRefresh?'暂停自动刷新':'恢复自动刷新';
+      button.innerHTML=`<i class="fa fa-${ui.autoRefresh?'pause':'play'}" aria-hidden="true"></i>`;
+      setConnection(ui.autoRefresh?'ok':'','自动刷新'+(ui.autoRefresh?'已恢复':'已暂停'));
+      scheduleRefresh();
+    }
+    async function toggleFullscreen(){
+      try{
+        if(document.fullscreenElement) await document.exitFullscreen();
+        else await document.documentElement.requestFullscreen();
+      }catch(_err){setConnection('error','浏览器未允许全屏');}
+    }
+    function updateFullscreenButton(){
+      const active=!!document.fullscreenElement;const button=$('fullscreenToggle');
+      button.setAttribute('aria-label',active?'退出全屏':'进入全屏');button.title=active?'退出全屏':'进入全屏';
+      button.innerHTML=`<i class="fa fa-${active?'compress':'expand'}" aria-hidden="true"></i>`;
+    }
+    $('metrics').addEventListener('click',event=>{
+      const button=event.target.closest('[data-metric-index]');if(!button) return;
+      const item=ui.metrics[Number(button.dataset.metricIndex)];if(!item) return;
+      if(item.key==='feedback'){ui.distributionMode='feedback';ui.locked.distribution=null;syncDistributionControls();drawDistribution();}
+      openInspector({kicker:'核心指标',title:item.label,rows:item.rows,action:item.action});
+    });
+    $('runtime').addEventListener('click',event=>{
+      const button=event.target.closest('[data-runtime-index]');if(!button) return;
+      const item=ui.runtimeItems[Number(button.dataset.runtimeIndex)];if(item) openInspector({kicker:'主机与服务',title:item.label,rows:item.rows,action:{href:'/admin#system',label:'查看服务健康'}});
+    });
+    $('models').addEventListener('click',event=>{
+      const button=event.target.closest('[data-model-index]');if(!button) return;
+      const model=ui.modelItems[Number(button.dataset.modelIndex)];if(!model) return;
+      applyFilter({kind:'model',value:model.id,label:`模型 · ${model.name || model.id}`});openInspector(modelDetail(model));
+    });
+    $('recent').addEventListener('click',event=>{
+      const button=event.target.closest('[data-recent-index]');if(!button) return;
+      const item=ui.recentItems[Number(button.dataset.recentIndex)];if(!item) return;
+      openInspector({kicker:'检测流水',title:`记录 #${item.id}`,rows:[['检测时间',item.createdAt || '-'],['检测结论',item.label || '-'],['生成概率',formatProbability(item.probability)],['置信度',item.confidence || '-'],['执行模型',item.modelRoute?.model?.id || '未记录'],['路由状态',item.modelRoute?.status || '-'],['用户反馈',item.feedback ?? '暂无']],action:{href:'/admin#detections',label:'进入检测记录'}});
+    });
+    $('anomalies').addEventListener('click',event=>{
+      const button=event.target.closest('[data-anomaly-index]');if(!button) return;
+      const index=Number(button.dataset.anomalyIndex);const item=index>=0?ui.anomalyItems[index]:null;
+      openInspector(item?{kicker:item.level==='critical'?'严重异常':'风险提醒',title:item.title || '异常',rows:[['风险级别',item.level==='critical'?'严重':'警告'],['异常说明',item.message || '-'],['数据时间',state?.generatedAt || '-']],action:{href:'/admin#governance',label:'进入审计告警'}}:{kicker:'运行状态',title:'当前未发现异常',rows:[['模型链路','处于可观测范围'],['主机资源','处于可观测范围'],['数据时间',state?.generatedAt || '-']]});
+    });
+    document.querySelectorAll('[data-range]').forEach(button=>button.addEventListener('click',()=>{ui.trendRange=Number(button.dataset.range)||24;ui.hover.trend=null;ui.locked.trend=null;hideTooltip('trend');syncTrendControls();drawTrend();}));
+    document.querySelectorAll('[data-series]').forEach(button=>button.addEventListener('click',()=>{const key=button.dataset.series;if(ui.visibleSeries.has(key)){if(ui.visibleSeries.size===1)return;ui.visibleSeries.delete(key);}else ui.visibleSeries.add(key);syncTrendControls();drawTrend();}));
+    document.querySelectorAll('[data-distribution-mode]').forEach(button=>button.addEventListener('click',()=>{ui.distributionMode=button.dataset.distributionMode;ui.hover.distribution=null;ui.locked.distribution=null;hideTooltip('distribution');syncDistributionControls();drawDistribution();}));
+    $('clearFilter').addEventListener('click',clearFilter);
+    $('activeFilter').addEventListener('click',clearFilter);
+    $('closeInspector').addEventListener('click',closeInspector);
+    $('autoRefresh').addEventListener('click',toggleAutoRefresh);
+    $('refreshNow').addEventListener('click',load);
+    $('fullscreenToggle').addEventListener('click',toggleFullscreen);
+    document.addEventListener('fullscreenchange',updateFullscreenButton);
+    document.addEventListener('keydown',event=>{if(event.key==='Escape' && $('inspector').classList.contains('open')) closeInspector();});
+    ['trend','routes','distribution'].forEach(setupCanvas);
+    window.addEventListener('resize',()=>{cancelAnimationFrame(resizeFrame);resizeFrame=requestAnimationFrame(renderCharts);});
+    syncTrendControls();syncDistributionControls();updateFullscreenButton();load();
   </script>
 </body>
 </html>

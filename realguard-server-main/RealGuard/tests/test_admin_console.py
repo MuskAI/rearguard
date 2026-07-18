@@ -162,6 +162,23 @@ def test_admin_page_renders_workspace_for_allowed_user(client, monkeypatch):
     assert "运营大屏" in html
 
 
+def test_admin_screen_renders_interactive_operations_controls(client, monkeypatch):
+    monkeypatch.setenv("REALGUARD_ADMIN_USER_IDS", "1")
+    monkeypatch.setattr(admin, "_admin_account_count", lambda: 0)
+    _login_session(client)
+
+    response = client.get("/admin/screen")
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert "慧鉴 AI 运营态势大屏" in html
+    assert 'id="autoRefresh"' in html
+    assert 'data-range="6"' in html
+    assert 'data-distribution-mode="feedback"' in html
+    assert 'id="inspector"' in html
+    assert "['trend','routes','distribution'].forEach(setupCanvas)" in html
+
+
 def test_admin_account_login_sets_admin_session(client, monkeypatch):
     password_hash = admin.generate_password_hash("StrongPass123")
     monkeypatch.setattr(admin, "_admin_account_count", lambda: 1)
