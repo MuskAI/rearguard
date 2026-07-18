@@ -15,7 +15,7 @@ from imagedetection import creat_app  # noqa: E402
 from imagedetection.views import api, detection, reporting  # noqa: E402
 import detector_backend  # noqa: E402
 
-OWNER_WHERE = "(Userid = %s) OR (Userid IS NULL AND phone = %s) OR (Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s)"
+OWNER_WHERE = "(phone = %s) OR ((phone IS NULL OR phone = '') AND openid = %s)"
 GUEST_OWNER_WHERE = "Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s"
 IMAGE_HISTORY_QUERY = f"SELECT * FROM data WHERE {OWNER_WHERE} ORDER BY {api.HISTORY_ORDER_BY}"
 VIDEO_HISTORY_QUERY = f"SELECT * FROM video_data WHERE {OWNER_WHERE} ORDER BY {api.HISTORY_ORDER_BY}"
@@ -360,13 +360,13 @@ def test_remote_primary_result_is_imported_into_local_user_history(monkeypatch):
 
     assert itemid == 648
     assert "INSERT INTO data" in inserted["sql"]
-    assert inserted["params"][-1] == 1
+    assert inserted["params"][-1] is None
     assert api_json["data"]["data_itemid"] == 648
     assert api_json["data"]["filename"] == "local-result.png"
     assert api_json["data"]["image_url"] == "/api/media/image/648"
 
 
-def test_existing_local_primary_record_is_bound_to_current_user(monkeypatch):
+def test_existing_primary_record_keeps_detection_database_owner(monkeypatch):
     updates = []
     api_json = {
         "code": 200,
@@ -407,8 +407,7 @@ def test_existing_local_primary_record_is_bound_to_current_user(monkeypatch):
     )
 
     assert itemid == 22
-    assert updates[0][1] == (1, 22)
-    assert updates[0][2] is False
+    assert updates == []
 
 
 def test_swarm_final_result_updates_the_same_history_record(monkeypatch):
@@ -1363,7 +1362,7 @@ def test_video_report_downloads_attachment_for_logged_user(client, monkeypatch):
 
     def fake_detection_sql(sql, params=None, fetch=True):
         if sql == f"SELECT * FROM video_data WHERE itemid = %s AND ({OWNER_WHERE}) LIMIT 1":
-            assert params == ("41", 1, "13800000000", "openid-1")
+            assert params == ("41", "13800000000", "openid-1")
             return [{
                 "itemid": 41,
                 "filename": "clip.mp4",
@@ -1398,7 +1397,7 @@ def test_history_detection_records_include_report_urls(client, monkeypatch):
 
     def fake_detection_sql(sql, params=None, fetch=True):
         if sql == IMAGE_HISTORY_QUERY:
-            assert params == (1, "13800000000", "openid-1")
+            assert params == ("13800000000", "openid-1")
             return [{
                 "itemid": 51,
                 "filename": "img.png",
@@ -1410,7 +1409,7 @@ def test_history_detection_records_include_report_urls(client, monkeypatch):
                 "explantation": "视觉可疑点\n- 背景纹理重复",
             }]
         if sql == VIDEO_HISTORY_QUERY:
-            assert params == (1, "13800000000", "openid-1")
+            assert params == ("13800000000", "openid-1")
             return [{
                 "itemid": 61,
                 "filename": "vid.mp4",
@@ -1438,20 +1437,20 @@ def test_history_detection_records_include_report_urls(client, monkeypatch):
     assert video_response.get_json()["records"][0]["report_url"] == "/video_upload/report?itemid=61"
 
 
-def test_history_uses_userid_for_legacy_bound_records(client, monkeypatch):
+def test_history_uses_verified_phone_when_detection_userid_differs(client, monkeypatch):
     _login_session(client)
 
     def fake_detection_sql(sql, params=None, fetch=True):
         if sql == IMAGE_HISTORY_QUERY:
-            assert params == (1, "13800000000", "openid-1")
+            assert params == ("13800000000", "openid-1")
             return [{
                 "itemid": 71,
-                "Userid": 1,
-                "filename": "legacy-openid-only.png",
+                "Userid": 999,
+                "filename": "detection-db-owner.png",
                 "fake": 63.0,
                 "clarity": "中",
-                "openid": "legacy-wechat-openid",
-                "phone": "",
+                "openid": "openid-1",
+                "phone": "13800000000",
                 "createtime": "2026-05-28 10:00:00",
                 "explantation": "",
             }]

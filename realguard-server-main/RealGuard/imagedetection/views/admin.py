@@ -15,7 +15,7 @@ from flask import Blueprint, Response, jsonify, redirect, render_template, reque
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from imagedetection.views import admin_state, aliyun_green, model_registry
-from imagedetection.views.utils import excute_detection_sql, excute_sql, format_createtime
+from imagedetection.views.utils import detection_owner_where, excute_detection_sql, excute_sql, format_createtime
 
 
 admin_blueprint = Blueprint("admin_blueprint", __name__)
@@ -1455,16 +1455,7 @@ def admin_user_detail(user_id):
     row = rows[0]
     phone = row.get("phone") or ""
     openid = row.get("openid") or ""
-    history_clauses = ["Userid = %s"]
-    history_params = [user_id]
-    if phone:
-        history_clauses.append("phone = %s")
-        history_params.append(phone)
-    if openid:
-        history_clauses.append("openid = %s")
-        history_params.append(openid)
-    history_where = " OR ".join(history_clauses)
-    history_params = tuple(history_params)
+    history_where, history_params = detection_owner_where(phone, openid)
     select_clause = _detection_data_select_clause()
     detection_rows = excute_detection_sql(
         f"""

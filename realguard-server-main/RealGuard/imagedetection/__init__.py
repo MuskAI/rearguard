@@ -11,6 +11,7 @@ from .views import profile
 from .views import api
 from .views import admin
 from .views import developer_platform
+from .views import utils
 
 
 def creat_app():
@@ -65,6 +66,16 @@ def creat_app():
             if not upgrade():
                 raise click.ClickException(f"developer schema upgrade failed: {label}")
             click.echo(f"developer schema ready: {label}")
+
+    @app.cli.command("repair-detection-owners")
+    def repair_detection_owners():
+        """Repair cross-database history owner IDs using verified identities."""
+        try:
+            changes = utils.repair_detection_history_owners()
+        except Exception as exc:
+            raise click.ClickException(f"detection owner repair failed: {exc}") from exc
+        for table, count in changes.items():
+            click.echo(f"{table}: repaired {count} owner rows")
 
     @app.cli.command("create-admin")
     @click.option("--username", prompt=True, help="Admin username.")

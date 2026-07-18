@@ -22,7 +22,13 @@ from imagedetection.views.login import (
     _sync_detection_user,
     _verify_sms_code,
 )
-from imagedetection.views.utils import excute_detection_sql, excute_sql, excute_sql_lastid, format_createtime
+from imagedetection.views.utils import (
+    detection_owner_where,
+    excute_detection_sql,
+    excute_sql,
+    excute_sql_lastid,
+    format_createtime,
+)
 
 
 api_blueprint = Blueprint("api_blueprint", __name__, url_prefix="/api")
@@ -686,23 +692,9 @@ def _history_identity(allow_empty=False):
 
 
 def _history_actor_where(actor):
-    clauses = []
-    params = []
-    user_id = (actor or {}).get("user_id")
-    if user_id not in (None, ""):
-        clauses.append("(Userid = %s)")
-        params.append(user_id)
     phone = str((actor or {}).get("phone") or "").strip()
-    if phone:
-        clauses.append("(Userid IS NULL AND phone = %s)")
-        params.append(phone)
     openid = str((actor or {}).get("openid") or "").strip()
-    if openid:
-        clauses.append("(Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s)")
-        params.append(openid)
-    if not clauses:
-        return "1 = 0", ()
-    return " OR ".join(clauses), tuple(params)
+    return detection_owner_where(phone, openid)
 
 
 def _is_guest_detection_record(item):

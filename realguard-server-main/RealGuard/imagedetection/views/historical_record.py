@@ -1,7 +1,7 @@
 import os
 from flask import Blueprint, render_template, session
 
-from imagedetection.views.utils import excute_detection_sql, format_createtime
+from imagedetection.views.utils import detection_owner_where, excute_detection_sql, format_createtime
 
 historical_record_blueprint = Blueprint('historical_record_blueprint', __name__)
 
@@ -17,23 +17,9 @@ STATIC_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'sta
 
 
 def _session_history_where(user_info):
-    clauses = []
-    params = []
-    user_id = (user_info or {}).get('Userid') or (user_info or {}).get('userId') or (user_info or {}).get('id')
     phone = str((user_info or {}).get('phone') or '').strip()
     openid = str((user_info or {}).get('openid') or '').strip()
-    if user_id not in (None, ''):
-        clauses.append('(Userid = %s)')
-        params.append(user_id)
-    if phone:
-        clauses.append("(Userid IS NULL AND phone = %s)")
-        params.append(phone)
-    if openid:
-        clauses.append("(Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s)")
-        params.append(openid)
-    if not clauses:
-        return '1 = 0', ()
-    return ' OR '.join(clauses), tuple(params)
+    return detection_owner_where(phone, openid)
 
 
 def _detection_static_url(kind, item):

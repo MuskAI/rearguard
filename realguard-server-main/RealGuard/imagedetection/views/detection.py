@@ -28,6 +28,7 @@ from imagedetection.views import (
 )
 from imagedetection.views.utils import (
     create_folder,
+    detection_owner_where,
     excute_detection_sql,
     excute_detection_sql_lastid,
     get_file_size_str,
@@ -292,20 +293,8 @@ def _detection_owner():
 
 
 def _detection_owner_where(user_id, phone, openid):
-    clauses = []
-    params = []
-    if user_id not in (None, ''):
-        clauses.append("(Userid = %s)")
-        params.append(user_id)
-    if phone:
-        clauses.append("(Userid IS NULL AND phone = %s)")
-        params.append(phone)
-    if openid:
-        clauses.append("(Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s)")
-        params.append(openid)
-    if not clauses:
-        return "1 = 0", ()
-    return " OR ".join(clauses), tuple(params)
+    del user_id
+    return detection_owner_where(phone, openid)
 
 
 def _runtime_owner_matches(owner, user_id, phone, openid, is_guest):
@@ -626,19 +615,6 @@ def _record_matches_detection_actor(record, source_filename, backend_openid, pho
     return actor_matches and filename_matches
 
 
-def _bind_detection_record_to_user(itemid, record, user_info):
-    user_id = (user_info or {}).get('Userid')
-    if user_id in (None, '') or (record or {}).get('Userid') not in (None, ''):
-        return
-    updated = excute_detection_sql(
-        "UPDATE data SET Userid = %s WHERE itemid = %s AND Userid IS NULL",
-        (user_id, itemid),
-        fetch=False,
-    )
-    if updated is None:
-        raise RuntimeError('检测结果用户归属写入失败')
-
-
 def _insert_local_detection_record(data, image_bytes, filename, backend_openid, phone, user_info):
     stored_name, file_path = _save_local_upload(
         image_bytes,
@@ -681,7 +657,7 @@ def _insert_local_detection_record(data, image_bytes, filename, backend_openid, 
             resolution,
             confidence,
             safe_truncate(explanation, 500),
-            (user_info or {}).get('Userid'),
+            None,
         ),
     )
     if not itemid:
@@ -704,7 +680,6 @@ def _ensure_local_primary_record(api_json, image_bytes, filename, backend_openid
     remote_filename = str(data.get('filename') or '').strip()
     local_record = _local_detection_record(remote_itemid)
     if _record_matches_detection_actor(local_record, remote_filename, backend_openid, phone):
-        _bind_detection_record_to_user(remote_itemid, local_record, user_info)
         if (data.get('watermark_verdict_override') or {}).get('applied'):
             updated = excute_detection_sql(
                 """
@@ -803,7 +778,7 @@ def _insert_v2_fallback_record(payload, image_bytes, filename, backend_openid, p
             resolution,
             confidence_level,
             safe_truncate(explanation, 500),
-            (user_info or {}).get('Userid'),
+            None,
         ),
     )
     if not itemid:
@@ -938,7 +913,7 @@ def _insert_aliyun_record(model, aliyun_payload, image_bytes, filename, backend_
             resolution,
             confidence_level,
             safe_truncate(explanation, 500),
-            (user_info or {}).get('Userid'),
+            None,
         ),
     )
     if not itemid:
@@ -2075,7 +2050,7 @@ def _persist_swarm_history_result(final_result, image_bytes, filename, backend_o
             """
             UPDATE data
             SET fake = %s, detector_probability = %s, aigc = %s,
-                clarity = %s, explantation = %s, Userid = COALESCE(Userid, %s)
+                clarity = %s, explantation = %s
             WHERE itemid = %s
             """,
             (
@@ -2084,7 +2059,6 @@ def _persist_swarm_history_result(final_result, image_bytes, filename, backend_o
                 final_result.get('final_label') or ('AI生成图像' if fake_pct >= 50 else '真实图像'),
                 final_result.get('confidence') or _conf_level_from_score(fake_pct / 100.0),
                 explanation,
-                (user_info or {}).get('Userid'),
                 itemid,
             ),
             fetch=False,
@@ -2425,7 +2399,11 @@ def image_detection_feedback():
         db_text = '满意'
     elif db_feedback == -1:
         db_text = '不满意'
-    owner_where, owner_params = _detection_owner_where(user_id, phone, openid)
+    if is_guest:
+        owner_where = "Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s"
+        owner_params = (openid,)
+    else:
+        owner_where, owner_params = _detection_owner_where(user_id, phone, openid)
     sql = f"UPDATE data SET feedback = %s WHERE itemid = %s AND ({owner_where})"
     n = excute_detection_sql(sql, (db_text, itemid, *owner_params), fetch=False)
     if n is None:

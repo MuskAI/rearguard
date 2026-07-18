@@ -1,7 +1,7 @@
 from flask import Blueprint, render_template, request, session, jsonify
 
 from imagedetection.views.login import _hash_password, _password_matches, _password_policy_error
-from imagedetection.views.utils import excute_detection_sql, excute_sql
+from imagedetection.views.utils import detection_owner_where, excute_detection_sql, excute_sql
 
 profile_blueprint = Blueprint('profile_blueprint', __name__)
 
@@ -13,21 +13,8 @@ def profile_page():
 
     user_info = session['user_info']
     phone = user_info.get('phone', '')
-    user_id = user_info.get('Userid') or user_info.get('userId') or user_info.get('id')
     openid = user_info.get('openid', '')
-    clauses = []
-    params = []
-    if user_id not in (None, ''):
-        clauses.append('(Userid = %s)')
-        params.append(user_id)
-    if phone:
-        clauses.append('(Userid IS NULL AND phone = %s)')
-        params.append(phone)
-    if openid:
-        clauses.append("(Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s)")
-        params.append(openid)
-    history_where = ' OR '.join(clauses) if clauses else '1 = 0'
-    history_params = tuple(params)
+    history_where, history_params = detection_owner_where(phone, openid)
 
     user = {
         'username': user_info.get('username', ''),

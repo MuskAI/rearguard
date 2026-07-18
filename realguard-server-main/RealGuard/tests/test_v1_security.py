@@ -9,7 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from imagedetection import creat_app  # noqa: E402
-from imagedetection.views import api, detection, login, profile  # noqa: E402
+from imagedetection.views import api, detection, login, profile, utils  # noqa: E402
 
 
 @pytest.fixture
@@ -84,8 +84,8 @@ def test_image_result_api_queries_with_user_phone(client, monkeypatch):
 
     def fake_detection_sql(sql, params=None, fetch=True):
         calls.append((sql, params))
-        if sql == "SELECT * FROM data WHERE itemid = %s AND ((Userid = %s) OR (Userid IS NULL AND phone = %s) OR (Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s)) LIMIT 1":
-            assert params == ("7", 1, "13800000000", "openid-1")
+        if sql == "SELECT * FROM data WHERE itemid = %s AND ((phone = %s) OR ((phone IS NULL OR phone = '') AND openid = %s)) LIMIT 1":
+            assert params == ("7", "13800000000", "openid-1")
             return [{
                 "itemid": 7,
                 "filename": "sample.png",
@@ -110,7 +110,7 @@ def test_image_result_api_queries_with_user_phone(client, monkeypatch):
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["result"]["itemid"] == 7
-    assert any(params == ("7", 1, "13800000000", "openid-1") for _, params in calls)
+    assert any(params == ("7", "13800000000", "openid-1") for _, params in calls)
 
 
 def test_image_result_recovers_generic_watermark_from_runtime_precheck(client, monkeypatch):
@@ -263,8 +263,9 @@ def test_public_swarm_job_recovers_generic_watermark_from_primary_precheck():
 def test_owner_query_never_uses_loose_identity_or_conditions():
     where, params = detection._detection_owner_where(7, "13800000007", "openid-7")
 
-    assert where == "(Userid = %s) OR (Userid IS NULL AND phone = %s) OR (Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s)"
-    assert params == (7, "13800000007", "openid-7")
+    assert "Userid" not in where
+    assert where == "(phone = %s) OR ((phone IS NULL OR phone = '') AND openid = %s)"
+    assert params == ("13800000007", "openid-7")
 
 
 def test_profile_counts_use_stable_identity_fallbacks(client, monkeypatch):
@@ -282,10 +283,10 @@ def test_profile_counts_use_stable_identity_fallbacks(client, monkeypatch):
     assert response.status_code == 200
     assert len(calls) == 2
     for sql, params in calls:
-        assert "(Userid = %s)" in sql
-        assert "Userid IS NULL AND phone = %s" in sql
-        assert "Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s" in sql
-        assert params == (1, "13800000000", "openid-1")
+        assert "Userid" not in sql
+        assert "(phone = %s)" in sql
+        assert "(phone IS NULL OR phone = '') AND openid = %s" in sql
+        assert params == ("13800000000", "openid-1")
 
 
 def test_legacy_login_clears_previous_account_state(client, monkeypatch):
@@ -355,8 +356,56 @@ def test_image_result_hides_foreign_record(client, monkeypatch):
     response = client.get("/image_upload/result?itemid=88")
 
     assert response.status_code == 404
-    assert "Userid IS NULL AND phone" in calls[0][0]
-    assert calls[0][1] == ("88", 1, "13800000000", "openid-1")
+    assert "Userid" not in calls[0][0]
+    assert "phone = %s" in calls[0][0]
+    assert calls[0][1] == ("88", "13800000000", "openid-1")
+
+
+def test_detection_owner_repair_uses_detection_database_identities(monkeypatch):
+    class FakeCursor:
+        def __init__(self):
+            self.rowcount = 0
+            self.queries = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql):
+            self.queries.append(" ".join(sql.split()))
+            self.rowcount = (2, 3, 1, 0)[len(self.queries) - 1]
+
+    class FakeConnection:
+        def __init__(self):
+            self.cursor_instance = FakeCursor()
+            self.committed = False
+            self.closed = False
+
+        def cursor(self):
+            return self.cursor_instance
+
+        def commit(self):
+            self.committed = True
+
+        def rollback(self):
+            raise AssertionError("repair should not roll back")
+
+        def close(self):
+            self.closed = True
+
+    connection = FakeConnection()
+    monkeypatch.setattr(utils, "get_detection_db_connection", lambda: connection)
+
+    changed = utils.repair_detection_history_owners()
+
+    assert changed == {"data": 5, "video_data": 1}
+    assert connection.committed is True
+    assert connection.closed is True
+    assert len(connection.cursor_instance.queries) == 4
+    assert all("JOIN `user` owners" in sql for sql in connection.cursor_instance.queries)
+    assert all("ON BINARY records." in sql for sql in connection.cursor_instance.queries)
 
 
 def test_full_media_endpoint_checks_owner_before_backend_fetch(client, monkeypatch):

@@ -43,6 +43,27 @@ def get_detection_db_connection():
     return pymysql.connect(**DETECTION_DB_CONFIG)
 
 
+def detection_owner_where(phone='', openid=''):
+    """Build a tenant filter from identities verified by the account database.
+
+    The account database and detection database have independent auto-increment
+    user IDs. Their ``Userid`` values must never be compared across databases.
+    """
+    clauses = []
+    params = []
+    phone = str(phone or '').strip()
+    openid = str(openid or '').strip()
+    if phone:
+        clauses.append('(phone = %s)')
+        params.append(phone)
+    if openid:
+        clauses.append("((phone IS NULL OR phone = '') AND openid = %s)")
+        params.append(openid)
+    if not clauses:
+        return '1 = 0', ()
+    return ' OR '.join(clauses), tuple(params)
+
+
 def excute_sql(sql, params=None, fetch=True):
     """
     执行 SQL 语句
@@ -137,6 +158,45 @@ def excute_detection_sql_lastid(sql, params=None):
     finally:
         if conn:
             conn.close()
+
+
+def repair_detection_history_owners():
+    """Align stored ``Userid`` values with the detection database user table."""
+    conn = get_detection_db_connection()
+    changes = {}
+    try:
+        with conn.cursor() as cursor:
+            for table in ('data', 'video_data'):
+                cursor.execute(
+                    f"""
+                    UPDATE `{table}` records
+                    JOIN `user` owners ON BINARY records.phone = BINARY owners.phone
+                    SET records.Userid = owners.Userid
+                    WHERE records.phone IS NOT NULL AND records.phone <> ''
+                      AND owners.phone IS NOT NULL AND owners.phone <> ''
+                      AND (records.Userid IS NULL OR records.Userid <> owners.Userid)
+                    """
+                )
+                phone_changes = cursor.rowcount
+                cursor.execute(
+                    f"""
+                    UPDATE `{table}` records
+                    JOIN `user` owners ON BINARY records.openid = BINARY owners.openid
+                    SET records.Userid = owners.Userid
+                    WHERE (records.phone IS NULL OR records.phone = '')
+                      AND records.openid IS NOT NULL AND records.openid <> ''
+                      AND owners.openid IS NOT NULL AND owners.openid <> ''
+                      AND (records.Userid IS NULL OR records.Userid <> owners.Userid)
+                    """
+                )
+                changes[table] = phone_changes + cursor.rowcount
+        conn.commit()
+        return changes
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def create_folder(path):

@@ -38,8 +38,9 @@ def test_logged_in_feedback_is_scoped_to_current_owner(client, monkeypatch):
 
     assert response.status_code == 200
     assert response.get_json()["feedback"] == 1
-    assert "Userid = %s" in captured["sql"]
-    assert captured["params"] == ("满意", 31, 7, "13800000000", "owner-openid")
+    assert "Userid" not in captured["sql"]
+    assert "phone = %s" in captured["sql"]
+    assert captured["params"] == ("满意", 31, "13800000000", "owner-openid")
     assert captured["fetch"] is False
 
 
