@@ -21,7 +21,7 @@ def creat_app():
         PERMANENT_SESSION_LIFETIME=timedelta(days=30),
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE='Lax',
-        SESSION_COOKIE_SECURE=str(os.environ.get('REALGUARD_SESSION_COOKIE_SECURE', '0')).lower() in ('1', 'true', 'yes'),
+        SESSION_COOKIE_SECURE=str(os.environ.get('REALGUARD_SESSION_COOKIE_SECURE', '1')).lower() in ('1', 'true', 'yes'),
         SESSION_REFRESH_EACH_REQUEST=True,
     )
 
@@ -34,6 +34,18 @@ def creat_app():
     app.register_blueprint(developer_platform.developer_platform_blueprint)
     app.register_blueprint(developer_platform.openapi_blueprint)
     app.register_blueprint(developer_platform.developer_admin_blueprint)
+
+    @app.before_request
+    def protect_all_admin_api_writes():
+        """Cover admin APIs registered on blueprints other than admin_blueprint."""
+        admin.ensure_alert_worker(app)
+        if not request.path.startswith('/api/admin/'):
+            return None
+        if request.method in ('GET', 'HEAD', 'OPTIONS', 'TRACE'):
+            return None
+        if not admin._csrf_valid():
+            return admin._csrf_error_response()
+        return None
 
     @app.after_request
     def prevent_sensitive_response_caching(response):

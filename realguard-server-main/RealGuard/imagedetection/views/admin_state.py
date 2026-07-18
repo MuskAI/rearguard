@@ -15,7 +15,10 @@ except ImportError:  # pragma: no cover - Windows fallback for local development
 
 CURRENT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = CURRENT_DIR.parents[1]
-DEFAULT_STATE_PATH = PROJECT_ROOT / "admin_state.json"
+LEGACY_STATE_PATH = PROJECT_ROOT / "admin_state.json"
+DEFAULT_STATE_PATH = Path(
+    os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state"))
+) / "realguard" / "admin_state.json"
 STATE_PATH = Path(os.environ.get("REALGUARD_ADMIN_STATE_PATH", str(DEFAULT_STATE_PATH)))
 _STATE_THREAD_LOCK = threading.RLock()
 
@@ -27,13 +30,16 @@ def _default_state():
             "enabled": False,
             "webhookUrl": "",
             "smsPhones": "",
+            "cooldownSeconds": 900,
             "rules": {
                 "v1Offline": True,
                 "artifactMissing": True,
                 "fallbackEnabled": True,
                 "probeFailed": True,
             },
-            "notes": "告警配置仅保存后台策略；接入企业微信/短信网关后即可投递。",
+            "notes": "告警通过 HTTPS Webhook 投递，事件会去重并在恢复时发送通知。",
+            "runtime": {"events": {}},
+            "deliveryHistory": [],
         },
         "audit": [],
         "modelRuns": [],
@@ -51,6 +57,10 @@ def _merge_defaults(saved):
         state["alerts"].update(saved["alerts"])
         if isinstance(saved["alerts"].get("rules"), dict):
             state["alerts"]["rules"].update(saved["alerts"]["rules"])
+        if not isinstance(state["alerts"].get("runtime"), dict):
+            state["alerts"]["runtime"] = {"events": {}}
+        if not isinstance(state["alerts"].get("deliveryHistory"), list):
+            state["alerts"]["deliveryHistory"] = []
     if not isinstance(state.get("audit"), list):
         state["audit"] = []
     if not isinstance(state.get("modelRuns"), list):
@@ -64,8 +74,16 @@ def _merge_defaults(saved):
 
 def _load_state_unlocked():
     try:
-        if STATE_PATH.exists():
-            return _merge_defaults(json.loads(STATE_PATH.read_text(encoding="utf-8")))
+        source_path = STATE_PATH
+        if (
+            not source_path.exists()
+            and STATE_PATH == DEFAULT_STATE_PATH
+            and LEGACY_STATE_PATH.exists()
+        ):
+            source_path = LEGACY_STATE_PATH
+        if source_path.exists():
+            os.chmod(source_path, 0o600)
+            return _merge_defaults(json.loads(source_path.read_text(encoding="utf-8")))
     except Exception as exc:
         print(f"[ADMIN STATE ERROR] load failed: {exc}")
     return _default_state()
@@ -84,7 +102,9 @@ def _save_state_unlocked(state):
     )
     try:
         tmp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.chmod(tmp_path, 0o600)
         tmp_path.replace(STATE_PATH)
+        os.chmod(STATE_PATH, 0o600)
     finally:
         tmp_path.unlink(missing_ok=True)
     return data
@@ -96,6 +116,7 @@ def _state_write_lock():
         STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
         lock_path = STATE_PATH.with_name(f".{STATE_PATH.name}.lock")
         with lock_path.open("a+", encoding="utf-8") as lock_file:
+            os.chmod(lock_path, 0o600)
             if fcntl is not None:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             try:
@@ -125,7 +146,7 @@ def alerts():
 def update_alerts(updates):
     def mutate(state):
         current = state.setdefault("alerts", _default_state()["alerts"])
-        for key in ("enabled", "webhookUrl", "smsPhones", "notes"):
+        for key in ("enabled", "webhookUrl", "smsPhones", "notes", "cooldownSeconds"):
             if key in updates:
                 current[key] = updates.get(key)
         if isinstance(updates.get("rules"), dict):
@@ -133,9 +154,117 @@ def update_alerts(updates):
             for key in ("v1Offline", "artifactMissing", "fallbackEnabled", "probeFailed"):
                 if key in updates["rules"]:
                     rules[key] = bool(updates["rules"][key])
+                    if not rules[key]:
+                        event = current.setdefault("runtime", {"events": {}}).setdefault("events", {}).setdefault(key, {})
+                        event["active"] = False
+                        event["suppressedAtEpoch"] = int(time.time())
         return deepcopy(current)
 
     return _update_state(mutate)
+
+
+def claim_alert_event(event_id, active, title, message, level="warning", force=False):
+    now = int(time.time())
+
+    def mutate(state):
+        config = state.setdefault("alerts", _default_state()["alerts"])
+        runtime = config.setdefault("runtime", {"events": {}})
+        events = runtime.setdefault("events", {})
+        event = events.setdefault(str(event_id), {})
+        was_active = bool(event.get("active"))
+        last_attempt = int(event.get("lastAttemptAtEpoch") or 0)
+        last_recovery_attempt = int(event.get("lastRecoveryAttemptAtEpoch") or 0)
+        try:
+            cooldown = max(60, min(int(config.get("cooldownSeconds") or 900), 86400))
+        except (TypeError, ValueError):
+            cooldown = 900
+        should_send = bool(force)
+        kind = "test" if force else "alert"
+        if not force and active:
+            should_send = not was_active or now - last_attempt >= cooldown
+        elif not force and not active and was_active:
+            kind = "recovery"
+            should_send = now - last_recovery_attempt >= max(60, min(cooldown, 300))
+        event.update({
+            "active": bool(active),
+            "title": str(title or ""),
+            "message": str(message or ""),
+            "level": str(level or "warning"),
+            "updatedAtEpoch": now,
+        })
+        if was_active != bool(active):
+            event["changedAtEpoch"] = now
+        if should_send:
+            event["lastAttemptAtEpoch"] = now
+            if kind == "recovery":
+                event["lastRecoveryAttemptAtEpoch"] = now
+        events[str(event_id)] = event
+        runtime["events"] = events
+        config["runtime"] = runtime
+        state["alerts"] = config
+        if not should_send:
+            return None
+        return {
+            "id": f"alert_{uuid.uuid4().hex[:20]}",
+            "eventId": str(event_id),
+            "kind": kind,
+            "active": bool(active),
+            "level": "success" if kind == "recovery" else str(level or "warning"),
+            "title": f"{title}已恢复" if kind == "recovery" else str(title or "系统告警"),
+            "message": "对应异常状态已恢复。" if kind == "recovery" else str(message or ""),
+            "createdAt": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+    return _update_state(mutate)
+
+
+def suppress_alert_event(event_id):
+    def mutate(state):
+        config = state.setdefault("alerts", _default_state()["alerts"])
+        event = config.setdefault("runtime", {"events": {}}).setdefault("events", {}).setdefault(str(event_id), {})
+        event["active"] = False
+        event["suppressedAtEpoch"] = int(time.time())
+        state["alerts"] = config
+
+    _update_state(mutate)
+
+
+def record_alert_delivery(claim, ok, status_code=None, error="", attempts=1):
+    entry = {
+        **(claim or {}),
+        "ok": bool(ok),
+        "statusCode": status_code,
+        "error": str(error or "")[:500],
+        "attempts": int(attempts or 1),
+        "deliveredAt": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+    def mutate(state):
+        config = state.setdefault("alerts", _default_state()["alerts"])
+        history = config.setdefault("deliveryHistory", [])
+        history.insert(0, entry)
+        config["deliveryHistory"] = history[:200]
+        event = config.setdefault("runtime", {"events": {}}).setdefault("events", {}).setdefault(
+            str(entry.get("eventId") or "unknown"), {}
+        )
+        if ok:
+            event["lastSentAtEpoch"] = int(time.time())
+        elif entry.get("kind") == "recovery":
+            event["active"] = True
+        event["lastDeliveryOk"] = bool(ok)
+        event["lastError"] = entry["error"]
+        state["alerts"] = config
+        return deepcopy(entry)
+
+    return _update_state(mutate)
+
+
+def alert_delivery_history(limit=50):
+    try:
+        limit = max(1, min(int(limit), 200))
+    except (TypeError, ValueError):
+        limit = 50
+    return alerts().get("deliveryHistory", [])[:limit]
 
 
 def _db_state_enabled():
@@ -203,10 +332,26 @@ def list_audit(limit=100):
         """,
         (limit,),
     )
-    if rows is not None:
-        return [_audit_entry_from_row(row) for row in rows]
-    audit = load_state().get("audit", [])
-    return audit[:limit]
+    fallback = load_state().get("audit", [])
+    if rows is None:
+        return fallback[:limit]
+    combined = [_audit_entry_from_row(row) for row in rows]
+    seen = {
+        (entry.get("createdAt"), entry.get("action"), entry.get("target"), (entry.get("actor") or {}).get("id"))
+        for entry in combined
+    }
+    for entry in fallback:
+        fingerprint = (
+            entry.get("createdAt"),
+            entry.get("action"),
+            entry.get("target"),
+            (entry.get("actor") or {}).get("id"),
+        )
+        if fingerprint not in seen:
+            combined.append(entry)
+            seen.add(fingerprint)
+    combined.sort(key=lambda entry: str(entry.get("createdAt") or ""), reverse=True)
+    return combined[:limit]
 
 
 def append_audit(actor, action, target, before=None, after=None, meta=None):

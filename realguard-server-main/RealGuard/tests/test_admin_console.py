@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 import sys
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -12,16 +13,21 @@ if str(ROOT) not in sys.path:
 
 from imagedetection import creat_app  # noqa: E402
 from imagedetection.views import admin  # noqa: E402
+from imagedetection.views import developer_platform  # noqa: E402
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    monkeypatch.setattr(admin, "_refresh_admin_session", lambda user: user)
+    admin.model_registry.clear_health_cache()
+    admin._clear_dashboard_metrics_cache()
+    admin._clear_big_screen_cache()
     app = creat_app()
     app.config.update(TESTING=True)
     return app.test_client()
 
 
-def _login_session(client, phone="13800000000"):
+def _login_session(client, phone="13800000000", admin_role=None):
     with client.session_transaction() as sess:
         sess["user_info"] = {
             "Userid": 1,
@@ -29,6 +35,17 @@ def _login_session(client, phone="13800000000"):
             "phone": phone,
             "openid": "openid-1",
         }
+        if admin_role:
+            sess[admin.ADMIN_SESSION_KEY] = {
+                "Userid": "admin:1",
+                "adminId": 1,
+                "username": "root",
+                "phone": phone,
+                "role": admin_role,
+                "authType": "admin_account",
+                "sessionVersion": 1,
+                "issuedAt": int(time.time()),
+            }
 
 
 def _csrf_headers(client):
@@ -247,7 +264,7 @@ def test_admin_register_requires_existing_admin_session(client, monkeypatch):
         "password_confirm": "StrongPass123",
     })
     with client.session_transaction() as sess:
-        sess["admin_user"] = {"Userid": "admin:1", "adminId": 1, "username": "root", "role": "admin"}
+        sess["admin_user"] = {"Userid": "admin:1", "adminId": 1, "username": "root", "role": "super_admin"}
     allowed = client.post("/admin/register", data={
         "username": "ops",
         "phone": "13329825566",
@@ -260,7 +277,7 @@ def test_admin_register_requires_existing_admin_session(client, monkeypatch):
     assert allowed.status_code == 302
     assert created["username"] == "ops"
     with client.session_transaction() as sess:
-        assert sess["admin_user"]["adminId"] == 4
+        assert sess["admin_user"]["adminId"] == 1
 
 
 def test_admin_big_screen_endpoint_uses_admin_session(client, monkeypatch):
@@ -288,7 +305,7 @@ def test_admin_big_screen_endpoint_uses_admin_session(client, monkeypatch):
 
 def test_admin_system_returns_services(client, monkeypatch):
     monkeypatch.setenv("REALGUARD_ADMIN_PHONES", "13800000000")
-    _login_session(client)
+    _login_session(client, admin_role="admin")
     monkeypatch.setattr(
         admin.model_registry,
         "load_registry",
@@ -386,6 +403,7 @@ def test_big_screen_payload_excludes_internal_topology_and_assurance_details(mon
             "blockers": [f"private endpoint {secret_endpoint}"],
             "recommendations": ["private recommendation"],
             "primary": raw_model,
+            "routing": {"fallbackEnabled": True},
             "alerts": {"webhookUrl": "https://private.example/hook"},
         },
     )
@@ -407,6 +425,7 @@ def test_big_screen_payload_excludes_internal_topology_and_assurance_details(mon
     }
     assert payload["models"][0]["health"]["message"] == "服务在线，模型能力未就绪"
     assert payload["assurance"] == {"online": False, "blockerCount": 1, "recommendationCount": 1}
+    assert any(item["title"] == "自动兜底已开启" for item in payload["anomalies"])
     assert secret_endpoint not in serialized
     assert "/srv/private" not in serialized
     assert "private routing notes" not in serialized
@@ -474,7 +493,7 @@ def test_big_screen_recent_items_remove_user_and_file_identifiers(monkeypatch):
 
 def test_admin_users_supports_search_and_limit(client, monkeypatch):
     monkeypatch.setenv("REALGUARD_ADMIN_PHONES", "13800000000")
-    _login_session(client)
+    _login_session(client, admin_role="admin")
     recorded = {}
 
     def fake_sql(sql, params=None, fetch=True):
@@ -496,13 +515,13 @@ def test_admin_users_supports_search_and_limit(client, monkeypatch):
 
     assert response.status_code == 200
     assert "phone LIKE" in recorded["sql"]
-    assert recorded["params"][-1] == 20
+    assert recorded["params"][-1] == 21
     assert response.get_json()["users"][0]["username"] == "muskai"
 
 
 def test_admin_api_keys_returns_masked_keys(client, monkeypatch):
     monkeypatch.setenv("REALGUARD_ADMIN_PHONES", "13800000000")
-    _login_session(client)
+    _login_session(client, admin_role="admin")
 
     def fake_sql(sql, params=None, fetch=True):
         assert "developer_api_keys" in sql
@@ -532,9 +551,54 @@ def test_admin_api_keys_returns_masked_keys(client, monkeypatch):
     assert key["owner"] == "muskai"
 
 
+def test_api_key_owner_and_phone_search_are_redacted_without_pii_permission(client, monkeypatch):
+    _login_session(client, admin_role="operator")
+    recorded = {}
+
+    def fake_sql(sql, params=None, fetch=True):
+        recorded["sql"] = sql
+        recorded["params"] = params
+        return [{
+            "id": 4,
+            "user_id": 2,
+            "name": "prod",
+            "key_prefix": "rg_sk_",
+            "key_last4": "9abc",
+            "scopes": "detect",
+            "status": "active",
+            "phone": "13329825566",
+            "username": "13329825566",
+        }]
+
+    monkeypatch.setattr(admin, "excute_sql", fake_sql)
+
+    response = client.get("/api/admin/api-keys?q=13329825566")
+
+    assert response.status_code == 200
+    assert "u.phone LIKE" not in recorded["sql"]
+    assert "u.username LIKE" not in recorded["sql"]
+    key = response.get_json()["keys"][0]
+    assert key["owner"] == "133****5566"
+    assert key["phone"] == "133****5566"
+
+
+def test_reviewer_cannot_export_users_without_user_view(client, monkeypatch):
+    _login_session(client, admin_role="reviewer")
+    monkeypatch.setattr(
+        admin,
+        "excute_sql",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not query users")),
+    )
+
+    response = client.get("/api/admin/users/export")
+
+    assert response.status_code == 403
+    assert "user.view" in response.get_json()["message"]
+
+
 def test_admin_detections_tolerates_missing_optional_columns(client, monkeypatch):
     monkeypatch.setenv("REALGUARD_ADMIN_PHONES", "13800000000")
-    _login_session(client)
+    _login_session(client, admin_role="admin")
     recorded = {}
 
     def fake_detection_sql(sql, params=None, fetch=True):
@@ -581,6 +645,58 @@ def test_admin_detections_tolerates_missing_optional_columns(client, monkeypatch
     assert payload["detections"][0]["modelRoute"]["model"]["id"] == "aliyun-aigc-pro"
 
 
+def test_reviewer_detection_route_redacts_topology_actor_and_untrusted_meta(client, monkeypatch):
+    _login_session(client, admin_role="reviewer")
+
+    def fake_detection_sql(sql, params=None, fetch=True):
+        if sql.strip().upper().startswith("SHOW COLUMNS"):
+            return [
+                {"Field": field}
+                for field in ("itemid", "createtime", "filename", "fake", "phone", "aigc", "clarity", "feedback")
+            ]
+        return [{
+            "itemid": 612,
+            "createtime": "2026-06-09 13:27:16",
+            "filename": "sample.jpg",
+            "fake": 82.8,
+            "phone": "13329825566",
+            "aigc": "AI生成图像",
+            "clarity": "中",
+            "feedback": None,
+        }]
+
+    monkeypatch.setattr(admin, "excute_detection_sql", fake_detection_sql)
+    monkeypatch.setattr(
+        admin.admin_state,
+        "model_runs_by_itemids",
+        lambda itemids: {"612": {
+            "id": "run-1",
+            "route": "primary",
+            "status": "success",
+            "model": {
+                "id": "v1-onnx-mil",
+                "name": "V1",
+                "runtime": "private-runtime",
+                "endpoint": "https://10.1.20.66/private",
+            },
+            "actor": {"id": 7, "username": "private-user", "phone": "13329825566"},
+            "meta": {"latencyMs": 15, "secretToken": "do-not-return"},
+        }},
+    )
+
+    response = client.get("/api/admin/detections?limit=10")
+
+    assert response.status_code == 200
+    route = response.get_json()["detections"][0]["modelRoute"]
+    assert route["model"] == {"id": "v1-onnx-mil", "name": "V1", "version": ""}
+    assert route["actor"] == {"id": 7}
+    assert route["meta"] == {"latencyMs": 15}
+    serialized = json.dumps(route)
+    assert "10.1.20.66" not in serialized
+    assert "private-user" not in serialized
+    assert "do-not-return" not in serialized
+
+
 def test_v1_health_marks_capability_unready_when_external_data_missing(monkeypatch, tmp_path):
     onnx_path = tmp_path / "model_deploy.onnx"
     external_path = tmp_path / "model_deploy.onnx.data"
@@ -623,7 +739,7 @@ def test_admin_can_create_probe_and_delete_candidate_model(client, monkeypatch, 
     monkeypatch.setattr(admin.model_registry, "REGISTRY_PATH", tmp_path / "registry.json")
     monkeypatch.setattr(admin.admin_state, "STATE_PATH", tmp_path / "admin_state.json")
     monkeypatch.setattr(admin, "_probe_model", lambda model: {"ok": True, "message": "probe ok"})
-    _login_session(client)
+    _login_session(client, admin_role="admin")
 
     headers = _csrf_headers(client)
     created = client.post("/api/admin/models", json={
@@ -648,7 +764,7 @@ def test_admin_can_create_probe_and_delete_candidate_model(client, monkeypatch, 
 def test_admin_rejects_deleting_routed_model(client, monkeypatch, tmp_path):
     monkeypatch.setenv("REALGUARD_ADMIN_PHONES", "13800000000")
     monkeypatch.setattr(admin.model_registry, "REGISTRY_PATH", tmp_path / "registry.json")
-    _login_session(client)
+    _login_session(client, admin_role="admin")
 
     response = client.delete("/api/admin/models/v1-onnx-mil", headers=_csrf_headers(client))
 
@@ -658,7 +774,7 @@ def test_admin_rejects_deleting_routed_model(client, monkeypatch, tmp_path):
 
 def test_admin_assurance_reports_v1_blockers(client, monkeypatch):
     monkeypatch.setenv("REALGUARD_ADMIN_PHONES", "13800000000")
-    _login_session(client)
+    _login_session(client, admin_role="admin")
     monkeypatch.setattr(
         admin.model_registry,
         "load_registry",
@@ -691,7 +807,12 @@ def test_admin_assurance_reports_v1_blockers(client, monkeypatch):
 def test_admin_alerts_and_api_key_quota_are_persisted(client, monkeypatch, tmp_path):
     monkeypatch.setenv("REALGUARD_ADMIN_PHONES", "13800000000")
     monkeypatch.setattr(admin.admin_state, "STATE_PATH", tmp_path / "admin_state.json")
-    _login_session(client)
+    monkeypatch.setattr(
+        admin,
+        "excute_sql",
+        lambda sql, params=None, fetch=True: [{"id": 4}] if "SELECT id FROM developer_api_keys" in sql else 1,
+    )
+    _login_session(client, admin_role="admin")
 
     headers = _csrf_headers(client)
     alerts = client.post("/api/admin/alerts", json={
@@ -713,7 +834,7 @@ def test_admin_alerts_and_api_key_quota_are_persisted(client, monkeypatch, tmp_p
 def test_admin_detection_review_writes_feedback_and_audit(client, monkeypatch, tmp_path):
     monkeypatch.setenv("REALGUARD_ADMIN_PHONES", "13800000000")
     monkeypatch.setattr(admin.admin_state, "STATE_PATH", tmp_path / "admin_state.json")
-    _login_session(client)
+    _login_session(client, admin_role="admin")
     calls = []
 
     def fake_detection_sql(sql, params=None, fetch=True):
@@ -729,8 +850,8 @@ def test_admin_detection_review_writes_feedback_and_audit(client, monkeypatch, t
     response = client.post("/api/admin/detections/9/review", json={"feedback": -1}, headers=_csrf_headers(client))
 
     assert response.status_code == 200
-    assert response.get_json()["review"]["feedback"] == "不满意"
-    assert any(call[1] == ("不满意", 9) for call in calls)
+    assert response.get_json()["review"]["feedback"] == -1
+    assert any(call[1] == (-1, 9) for call in calls)
     assert client.get("/api/admin/audit").get_json()["audit"][0]["action"] == "detection.review"
 
 
@@ -754,7 +875,7 @@ def test_aliyun_green_health_requires_credentials(monkeypatch):
 def test_admin_probe_uses_aliyun_adapter(client, monkeypatch, tmp_path):
     monkeypatch.setenv("REALGUARD_ADMIN_PHONES", "13800000000")
     monkeypatch.setattr(admin.admin_state, "STATE_PATH", tmp_path / "admin_state.json")
-    _login_session(client)
+    _login_session(client, admin_role="admin")
     monkeypatch.setattr(
         admin.model_registry,
         "get_model",
@@ -778,7 +899,7 @@ def test_admin_probe_uses_aliyun_adapter(client, monkeypatch, tmp_path):
 
 def test_admin_write_requires_csrf_token(client, monkeypatch):
     monkeypatch.setenv("REALGUARD_ADMIN_PHONES", "13800000000")
-    _login_session(client)
+    _login_session(client, admin_role="admin")
 
     response = client.post("/api/admin/models", json={"id": "v3-no-csrf"})
 
@@ -812,30 +933,13 @@ def test_admin_accounts_can_be_listed_and_updated(client, monkeypatch):
             "Userid": "admin:1",
             "adminId": 1,
             "username": "root",
-            "role": "admin",
+            "role": "super_admin",
             "authType": "admin_account",
         }
     monkeypatch.setattr(admin, "_ensure_admin_account_table", lambda: True)
     monkeypatch.setattr(admin, "_audit", lambda *args, **kwargs: None)
-    calls = []
-
     def fake_sql(sql, params=None, fetch=True):
-        calls.append((sql, params, fetch))
         normalized = sql.strip().upper()
-        if normalized.startswith("UPDATE ADMIN_ACCOUNTS"):
-            return 1
-        if "FROM ADMIN_ACCOUNTS" in normalized and "WHERE ID" in normalized:
-            role = "operator" if any(call[0].strip().upper().startswith("UPDATE ADMIN_ACCOUNTS") for call in calls) else "readonly"
-            return [{
-                "id": 2,
-                "username": "ops",
-                "phone": "13300000000",
-                "role": role,
-                "status": "active",
-                "created_at": "2026-06-10 10:00:00",
-                "last_login_at": None,
-                "last_login_ip": "",
-            }]
         if "FROM ADMIN_ACCOUNTS" in normalized:
             return [{
                 "id": 2,
@@ -850,6 +954,28 @@ def test_admin_accounts_can_be_listed_and_updated(client, monkeypatch):
         return []
 
     monkeypatch.setattr(admin, "excute_sql", fake_sql)
+    monkeypatch.setattr(
+        admin,
+        "_update_admin_account_atomic",
+        lambda admin_id, role, status, actor_admin_id=None: (
+            {
+                "id": admin_id,
+                "username": "ops",
+                "phone": "13300000000",
+                "role": "readonly",
+                "status": "active",
+            },
+            {
+                "id": admin_id,
+                "username": "ops",
+                "phone": "13300000000",
+                "role": role,
+                "status": status,
+                "session_version": 2,
+            },
+            "",
+        ),
+    )
 
     listed = client.get("/api/admin/admins?limit=20")
     updated = client.post(
@@ -870,23 +996,18 @@ def test_admin_cannot_disable_self(client, monkeypatch):
             "Userid": "admin:2",
             "adminId": 2,
             "username": "root",
-            "role": "admin",
+            "role": "super_admin",
             "authType": "admin_account",
         }
     monkeypatch.setattr(admin, "_ensure_admin_account_table", lambda: True)
     monkeypatch.setattr(
         admin,
-        "excute_sql",
-        lambda sql, params=None, fetch=True: [{
-            "id": 2,
-            "username": "root",
-            "phone": "",
-            "role": "admin",
-            "status": "active",
-            "created_at": "2026-06-10 10:00:00",
-            "last_login_at": None,
-            "last_login_ip": "",
-        }],
+        "_update_admin_account_atomic",
+        lambda *args, **kwargs: (
+            {"id": 2, "username": "root", "role": "super_admin", "status": "active"},
+            None,
+            "self_downgrade",
+        ),
     )
 
     response = client.post(
@@ -962,7 +1083,7 @@ def test_big_screen_query_token_is_exchanged_for_signed_session(client, monkeypa
 def test_admin_routing_update_can_rollback(client, monkeypatch, tmp_path):
     monkeypatch.setenv("REALGUARD_ADMIN_PHONES", "13800000000")
     monkeypatch.setattr(admin.model_registry, "REGISTRY_PATH", tmp_path / "registry.json")
-    _login_session(client)
+    _login_session(client, admin_role="admin")
     headers = _csrf_headers(client)
 
     updated = client.post(
@@ -981,7 +1102,7 @@ def test_admin_routing_update_can_rollback(client, monkeypatch, tmp_path):
 def test_admin_swarm_config_can_be_updated(client, monkeypatch, tmp_path):
     monkeypatch.setenv("REALGUARD_ADMIN_PHONES", "13800000000")
     monkeypatch.setattr(admin.model_registry, "REGISTRY_PATH", tmp_path / "registry.json")
-    _login_session(client)
+    _login_session(client, admin_role="admin")
     headers = _csrf_headers(client)
 
     loaded = client.get("/api/admin/swarm")
@@ -1010,7 +1131,7 @@ def test_admin_swarm_config_can_be_updated(client, monkeypatch, tmp_path):
 
 def test_admin_detection_detail_returns_model_chain(client, monkeypatch):
     monkeypatch.setenv("REALGUARD_ADMIN_PHONES", "13800000000")
-    _login_session(client)
+    _login_session(client, admin_role="admin")
 
     def fake_detection_sql(sql, params=None, fetch=True):
         normalized = sql.strip().upper()
@@ -1088,3 +1209,232 @@ def test_create_admin_cli_uses_explicit_initializer(monkeypatch):
     assert result.exit_code == 0
     assert created["username"] == "root"
     assert created["role"] == "super_admin"
+
+
+def test_admin_session_cookie_is_secure_by_default(client):
+    response = client.get("/admin/login")
+
+    cookie = response.headers.get("Set-Cookie", "")
+    assert "Secure" in cookie
+    assert "HttpOnly" in cookie
+    assert "SameSite=Lax" in cookie
+
+
+def test_developer_admin_write_requires_global_csrf(client):
+    with client.session_transaction() as sess:
+        sess[admin.ADMIN_SESSION_KEY] = {
+            "Userid": "admin:1",
+            "adminId": 1,
+            "username": "root",
+            "role": "super_admin",
+            "authType": "admin_account",
+        }
+
+    response = client.post("/api/admin/developer/pricing", json={"mode": "fast", "unitPriceFen": 5})
+
+    assert response.status_code == 403
+    assert "CSRF" in response.get_json()["message"]
+
+
+def test_legacy_whitelist_is_readonly_for_sensitive_data(client, monkeypatch):
+    monkeypatch.setenv("REALGUARD_ADMIN_PHONES", "13800000000")
+    _login_session(client)
+
+    response = client.get("/api/admin/users")
+
+    assert response.status_code == 403
+    assert "user.view" in response.get_json()["message"]
+
+
+def test_admin_session_version_revokes_existing_cookie(monkeypatch):
+    issued_at = int(time.time())
+    cookie_user = {
+        "Userid": "admin:7",
+        "adminId": 7,
+        "username": "ops",
+        "role": "operator",
+        "authType": "admin_account",
+        "sessionVersion": 3,
+        "issuedAt": issued_at,
+    }
+    monkeypatch.setattr(
+        admin,
+        "_find_admin_account_by_id",
+        lambda admin_id: {
+            "id": admin_id,
+            "username": "ops",
+            "phone": "",
+            "role": "operator",
+            "status": "active",
+            "session_version": 4,
+        },
+    )
+
+    assert admin._refresh_admin_session(cookie_user) is None
+
+
+def test_health_rejects_authentication_error_as_service_ok(monkeypatch):
+    class Response:
+        status_code = 401
+        text = "unauthorized"
+
+        def json(self):
+            return {"status": "error"}
+
+    class Session:
+        trust_env = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def get(self, *_args, **_kwargs):
+            return Response()
+
+    monkeypatch.setattr(admin.model_registry.requests, "Session", Session)
+
+    health = admin.model_registry.check_model_health({"id": "candidate", "healthUrl": "https://model.test/health"})
+
+    assert health["httpStatus"] == 401
+    assert health["serviceOk"] is False
+    assert health["ok"] is False
+
+
+def test_webhook_delivery_pins_validated_public_address_and_rejects_redirect(monkeypatch):
+    calls = []
+    monkeypatch.setattr(admin, "_resolve_public_webhook_addresses", lambda host, port: (["8.8.8.8"], ""))
+    monkeypatch.setattr(
+        admin,
+        "_post_webhook_payload",
+        lambda url, payload, address, timeout=5: calls.append((url, address)) or (302, "redirect"),
+    )
+    monkeypatch.setattr(admin.time, "sleep", lambda *_args: None)
+    monkeypatch.setattr(
+        admin.admin_state,
+        "record_alert_delivery",
+        lambda claim, ok, **kwargs: {"ok": ok, **kwargs},
+    )
+
+    result = admin._deliver_alert_claim(
+        {"eventId": "probeFailed", "kind": "alert", "title": "test"},
+        "https://hooks.example.test/notify",
+    )
+
+    assert result["ok"] is False
+    assert result["status_code"] == 302
+    assert result["attempts"] == 3
+    assert calls == [
+        ("https://hooks.example.test/notify", "8.8.8.8"),
+        ("https://hooks.example.test/notify", "8.8.8.8"),
+        ("https://hooks.example.test/notify", "8.8.8.8"),
+    ]
+
+
+def test_webhook_validation_rejects_domain_resolving_to_loopback(monkeypatch):
+    monkeypatch.setattr(
+        admin.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [(admin.socket.AF_INET, admin.socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))],
+    )
+
+    url, error = admin._validate_webhook_url("https://hooks.example.test/notify", resolve=True)
+
+    assert url == ""
+    assert "内网" in error or "本机" in error
+
+
+def test_last_super_admin_update_uses_serializing_row_locks(monkeypatch):
+    queries = []
+
+    class Cursor:
+        current = ""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params=None):
+            normalized = " ".join(sql.split())
+            queries.append((normalized, params))
+            if "WHERE role = 'super_admin'" in normalized:
+                self.current = "super_admins"
+            elif "FOR UPDATE" in normalized:
+                self.current = "target"
+            elif normalized.startswith("UPDATE admin_accounts"):
+                self.current = "update"
+            else:
+                self.current = "after"
+
+        def fetchall(self):
+            return [{"id": 1}] if self.current == "super_admins" else []
+
+        def fetchone(self):
+            if self.current == "target":
+                return {
+                    "id": 1,
+                    "username": "root",
+                    "role": "super_admin",
+                    "status": "active",
+                    "session_version": 1,
+                }
+            return None
+
+    class Connection:
+        rolled_back = False
+        committed = False
+
+        def begin(self):
+            return None
+
+        def cursor(self):
+            return Cursor()
+
+        def rollback(self):
+            self.rolled_back = True
+
+        def commit(self):
+            self.committed = True
+
+        def close(self):
+            return None
+
+    connection = Connection()
+    monkeypatch.setattr(admin, "get_db_connection", lambda: connection)
+
+    before, after, error = admin._update_admin_account_atomic(1, "readonly", "active", actor_admin_id=2)
+
+    assert before["role"] == "super_admin"
+    assert after is None
+    assert error == "last_super_admin"
+    assert connection.rolled_back is True
+    assert connection.committed is False
+    assert "ORDER BY id FOR UPDATE" in queries[0][0]
+    assert not any(query.startswith("UPDATE admin_accounts") for query, _ in queries)
+
+
+def test_admin_security_sql_upgrades_existing_tables_idempotently():
+    sql = (ROOT / "sql" / "patch_admin_security.sql").read_text(encoding="utf-8")
+
+    assert "information_schema.COLUMNS" in sql
+    assert "ALTER TABLE admin_accounts ADD COLUMN session_version" in sql
+    assert "CREATE TABLE IF NOT EXISTS admin_login_attempts" in sql
+    assert "idx_admin_accounts_role_status" in sql
+
+
+def test_routing_rejects_unknown_primary(monkeypatch, tmp_path):
+    monkeypatch.setattr(admin.model_registry, "REGISTRY_PATH", tmp_path / "registry.json")
+
+    with pytest.raises(ValueError, match="主模型不存在"):
+        admin.model_registry.update_routing({"imagePrimary": "missing-model"})
+
+
+def test_csv_neutralizes_spreadsheet_formulas():
+    app = creat_app()
+    with app.test_request_context("/"):
+        response = admin._csv_response("audit.csv", ["value"], [["=HYPERLINK(\"https://evil.test\")"]])
+
+    assert "'=HYPERLINK" in response.get_data(as_text=True)

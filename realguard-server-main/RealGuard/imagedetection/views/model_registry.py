@@ -1,7 +1,12 @@
+import fcntl
 import json
 import os
 import re
+import tempfile
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
 
@@ -26,6 +31,10 @@ DEFAULT_SWARM_EXPERTS = [
     {"id": "aliyun_recap", "name": "翻拍风险专家", "role": "翻拍检测", "provider": "aliyun", "enabled": True, "weight": 0.02, "modelId": "aliyun-recap-detector"},
     {"id": "visible_watermark", "name": "AI 平台水印识别专家", "role": "平台水印复核", "provider": "hybrid", "enabled": True, "weight": 0.0},
 ]
+HEALTH_CACHE_TTL_SECONDS = int(os.environ.get("REALGUARD_MODEL_HEALTH_CACHE_SECONDS", "20"))
+_HEALTH_CACHE = {}
+_HEALTH_CACHE_LOCK = threading.Lock()
+_HEALTH_INFLIGHT = {}
 
 
 def _truthy(value):
@@ -234,7 +243,24 @@ def _merge_defaults(saved):
     return merged
 
 
-def load_registry():
+def _registry_lock_path():
+    return REGISTRY_PATH.with_suffix(REGISTRY_PATH.suffix + ".lock")
+
+
+@contextmanager
+def _registry_lock(exclusive=False):
+    REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = _registry_lock_path()
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        os.chmod(lock_path, 0o600)
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _load_registry_unlocked():
     try:
         if REGISTRY_PATH.exists():
             return _merge_defaults(json.loads(REGISTRY_PATH.read_text(encoding="utf-8")))
@@ -243,14 +269,34 @@ def load_registry():
     return _default_registry()
 
 
-def save_registry(registry):
+def load_registry():
+    with _registry_lock():
+        return _load_registry_unlocked()
+
+
+def _save_registry_unlocked(registry):
     REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
     data = deepcopy(registry)
     data["updatedAt"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    tmp_path = REGISTRY_PATH.with_suffix(REGISTRY_PATH.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp_path.replace(REGISTRY_PATH)
+    descriptor, tmp_name = tempfile.mkstemp(prefix=f".{REGISTRY_PATH.name}.", suffix=".tmp", dir=REGISTRY_PATH.parent)
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp_path, 0o600)
+        tmp_path.replace(REGISTRY_PATH)
+        os.chmod(REGISTRY_PATH, 0o600)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
     return data
+
+
+def save_registry(registry):
+    with _registry_lock(exclusive=True):
+        return _save_registry_unlocked(registry)
 
 
 def list_models():
@@ -325,10 +371,11 @@ def _coerce_swarm_config(current, updates):
 
 
 def update_swarm_config(updates):
-    registry = load_registry()
-    before = deepcopy(registry.get("swarm") or _default_registry()["swarm"])
-    registry["swarm"] = _coerce_swarm_config(before, updates or {})
-    return save_registry(registry)["swarm"]
+    with _registry_lock(exclusive=True):
+        registry = _load_registry_unlocked()
+        before = deepcopy(registry.get("swarm") or _default_registry()["swarm"])
+        registry["swarm"] = _coerce_swarm_config(before, updates or {})
+        return _save_registry_unlocked(registry)["swarm"]
 
 
 def routing_history(limit=10):
@@ -367,18 +414,18 @@ def _coerce_model_payload(payload):
 
 
 def create_model(payload):
-    registry = load_registry()
     model, error = _coerce_model_payload(payload or {})
     if error:
         return None, None, error
-    if any(item.get("id") == model["id"] for item in registry.get("models", [])):
-        return None, None, "模型 ID 已存在"
-    registry.setdefault("models", []).append(model)
-    return save_registry(registry), model, ""
+    with _registry_lock(exclusive=True):
+        registry = _load_registry_unlocked()
+        if any(item.get("id") == model["id"] for item in registry.get("models", [])):
+            return None, None, "模型 ID 已存在"
+        registry.setdefault("models", []).append(model)
+        return _save_registry_unlocked(registry), model, ""
 
 
 def update_model(model_id, updates):
-    registry = load_registry()
     allowed = {
         "name",
         "family",
@@ -394,74 +441,115 @@ def update_model(model_id, updates):
         "externalDataPath",
         "description",
     }
-    for model in registry.get("models", []):
-        if model.get("id") == model_id:
-            for key, value in updates.items():
-                if key in allowed:
-                    model[key] = value
-            return save_registry(registry), model
+    with _registry_lock(exclusive=True):
+        registry = _load_registry_unlocked()
+        for model in registry.get("models", []):
+            if model.get("id") == model_id:
+                candidate = dict(model)
+                candidate.update({key: value for key, value in updates.items() if key in allowed})
+                candidate["id"] = model_id
+                normalized, error = _coerce_model_payload(candidate)
+                if error:
+                    return None, None
+                model.clear()
+                model.update(normalized)
+                return _save_registry_unlocked(registry), model
     return None, None
 
 
 def delete_model(model_id):
-    registry = load_registry()
-    routing = registry.get("routing", {})
-    if model_id in (routing.get("imagePrimary"), routing.get("imageFallback")):
-        return None, "模型正在路由策略中使用，不能删除"
-    models = registry.get("models", [])
-    remaining = [model for model in models if model.get("id") != model_id]
-    if len(remaining) == len(models):
-        return None, "模型不存在"
-    registry["models"] = remaining
-    return save_registry(registry), ""
+    with _registry_lock(exclusive=True):
+        registry = _load_registry_unlocked()
+        routing = registry.get("routing", {})
+        if model_id in (routing.get("imagePrimary"), routing.get("imageFallback")):
+            return None, "模型正在路由策略中使用，不能删除"
+        models = registry.get("models", [])
+        remaining = [model for model in models if model.get("id") != model_id]
+        if len(remaining) == len(models):
+            return None, "模型不存在"
+        registry["models"] = remaining
+        return _save_registry_unlocked(registry), ""
+
+
+def _validated_routing(registry, updates):
+    routing = deepcopy(registry.get("routing") or {})
+    allowed = {"imagePrimary", "imageFallback", "fallbackEnabled", "fallbackMode", "notes"}
+    for key, value in (updates or {}).items():
+        if key in allowed:
+            routing[key] = value
+    routing["imagePrimary"] = str(routing.get("imagePrimary") or "").strip()
+    routing["imageFallback"] = str(routing.get("imageFallback") or "").strip()
+    routing["fallbackEnabled"] = _truthy(routing.get("fallbackEnabled"))
+    routing["fallbackMode"] = str(routing.get("fallbackMode") or "automatic").strip()
+    routing["notes"] = str(routing.get("notes") or "").strip()[:1000]
+    if routing["fallbackMode"] not in ("automatic", "manual"):
+        raise ValueError("fallbackMode 仅支持 automatic 或 manual")
+    models = {str(model.get("id")): model for model in registry.get("models", [])}
+    primary = models.get(routing["imagePrimary"])
+    if not primary:
+        raise ValueError("主模型不存在")
+    if primary.get("enabled") is False or "image" not in str(primary.get("modality") or "").lower():
+        raise ValueError("主模型必须是已启用的图像模型")
+    fallback = models.get(routing["imageFallback"]) if routing["imageFallback"] else None
+    if routing["fallbackEnabled"]:
+        if not fallback:
+            raise ValueError("启用兜底时必须选择存在的兜底模型")
+        if fallback.get("enabled") is False or "image" not in str(fallback.get("modality") or "").lower():
+            raise ValueError("兜底模型必须是已启用的图像模型")
+        if routing["imageFallback"] == routing["imagePrimary"]:
+            raise ValueError("主模型和兜底模型不能相同")
+    return routing
 
 
 def update_routing(updates):
-    registry = load_registry()
-    allowed = {"imagePrimary", "imageFallback", "fallbackEnabled", "fallbackMode", "notes"}
-    routing = registry.setdefault("routing", {})
-    before = deepcopy(routing)
-    for key, value in updates.items():
-        if key in allowed:
-            routing[key] = value
-    if before != routing:
-        history = registry.setdefault("routingHistory", [])
-        history.insert(0, {
-            "id": f"route_{int(time.time() * 1000)}",
-            "createdAt": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "routing": before,
-            "after": deepcopy(routing),
-        })
-        registry["routingHistory"] = history[:30]
-    return save_registry(registry)["routing"]
+    with _registry_lock(exclusive=True):
+        registry = _load_registry_unlocked()
+        before = deepcopy(registry.get("routing") or {})
+        routing = _validated_routing(registry, updates)
+        registry["routing"] = routing
+        if before != routing:
+            history = registry.setdefault("routingHistory", [])
+            history.insert(0, {
+                "id": f"route_{int(time.time() * 1000)}",
+                "createdAt": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "routing": before,
+                "after": deepcopy(routing),
+            })
+            registry["routingHistory"] = history[:30]
+        return _save_registry_unlocked(registry)["routing"]
 
 
 def rollback_routing(snapshot_id=None):
-    registry = load_registry()
-    history = registry.get("routingHistory", [])
-    if not history:
-        return None, None, "没有可回滚的路由快照"
-    snapshot = None
-    if snapshot_id:
-        snapshot = next((item for item in history if item.get("id") == snapshot_id), None)
-        if not snapshot:
-            return None, None, "指定路由快照不存在"
-    else:
-        snapshot = history[0]
-    target = deepcopy(snapshot.get("routing") or {})
-    if not target:
-        return None, snapshot, "路由快照内容为空"
-    current = deepcopy(registry.get("routing") or {})
-    registry["routing"] = target
-    history.insert(0, {
-        "id": f"route_{int(time.time() * 1000)}",
-        "createdAt": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "routing": current,
-        "after": target,
-        "rollbackOf": snapshot.get("id"),
-    })
-    registry["routingHistory"] = history[:30]
-    return save_registry(registry)["routing"], snapshot, ""
+    with _registry_lock(exclusive=True):
+        registry = _load_registry_unlocked()
+        history = registry.get("routingHistory", [])
+        if not history:
+            return None, None, "没有可回滚的路由快照"
+        snapshot = None
+        if snapshot_id:
+            snapshot = next((item for item in history if item.get("id") == snapshot_id), None)
+            if not snapshot:
+                return None, None, "指定路由快照不存在"
+        else:
+            snapshot = history[0]
+        target = deepcopy(snapshot.get("routing") or {})
+        if not target:
+            return None, snapshot, "路由快照内容为空"
+        try:
+            target = _validated_routing(registry, target)
+        except ValueError as exc:
+            return None, snapshot, f"路由快照已失效：{exc}"
+        current = deepcopy(registry.get("routing") or {})
+        registry["routing"] = target
+        history.insert(0, {
+            "id": f"route_{int(time.time() * 1000)}",
+            "createdAt": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "routing": current,
+            "after": target,
+            "rollbackOf": snapshot.get("id"),
+        })
+        registry["routingHistory"] = history[:30]
+        return _save_registry_unlocked(registry)["routing"], snapshot, ""
 
 
 def artifact_status(model):
@@ -535,12 +623,28 @@ def check_model_health(model):
                 sess.trust_env = False
                 resp = sess.get(health_url, timeout=min(int(model.get("timeoutSeconds") or 10), 10))
             status["httpStatus"] = resp.status_code
-            status["serviceOk"] = resp.status_code < 500
+            status["serviceOk"] = 200 <= resp.status_code < 300
             status["message"] = "service reachable" if status["serviceOk"] else resp.text[:120]
             try:
                 payload = resp.json()
-                status["artifactReady"] = bool(payload.get("artifactReady", status["artifactReady"]))
-                status["dependencyReady"] = bool(payload.get("dependencyReady", status["dependencyReady"]))
+                if "serviceOk" in payload:
+                    status["serviceOk"] = status["serviceOk"] and _truthy(payload.get("serviceOk"))
+                if str(payload.get("status") or "").strip().lower() in ("error", "failed", "offline", "unhealthy"):
+                    status["serviceOk"] = False
+                if "artifactReady" in payload:
+                    status["artifactReady"] = _truthy(payload.get("artifactReady"))
+                if "dependencyReady" in payload:
+                    status["dependencyReady"] = _truthy(payload.get("dependencyReady"))
+                remote = payload.get("remoteInference") if isinstance(payload.get("remoteInference"), dict) else {}
+                status["telemetry"] = {
+                    "inferenceMode": str(payload.get("inferenceMode") or ""),
+                    "activeProvider": str(remote.get("activeProvider") or payload.get("activeProvider") or ""),
+                    "cudaDeviceId": remote.get("cudaDeviceId", payload.get("cudaDeviceId")),
+                    "remoteReady": remote.get("ready"),
+                    "remoteLatencyMs": remote.get("latencyMs"),
+                    "queueDepth": payload.get("queueDepth"),
+                    "gpu": payload.get("gpu") if isinstance(payload.get("gpu"), dict) else None,
+                }
                 for warning in payload.get("warnings") or []:
                     if warning not in status["warnings"]:
                         status["warnings"].append(str(warning))
@@ -563,3 +667,84 @@ def check_model_health(model):
     elif status["ok"]:
         status["message"] = "ok"
     return status
+
+
+def _health_cache_key(model):
+    relevant = {
+        key: model.get(key)
+        for key in (
+            "id",
+            "enabled",
+            "runtime",
+            "healthUrl",
+            "timeoutSeconds",
+            "artifactPath",
+            "externalDataPath",
+        )
+    }
+    return json.dumps(relevant, sort_keys=True, ensure_ascii=True, default=str)
+
+
+def check_models_health(models, force=False):
+    """Probe model health concurrently and reuse recent results across admin panels."""
+    now = time.time()
+    results = {}
+    pending = []
+    waiting = []
+    with _HEALTH_CACHE_LOCK:
+        for model in models:
+            model_id = str(model.get("id") or "")
+            key = _health_cache_key(model)
+            cached = _HEALTH_CACHE.get(key)
+            if not force and cached and now < cached[0]:
+                results[model_id] = deepcopy(cached[1])
+            elif not force and key in _HEALTH_INFLIGHT:
+                waiting.append((model_id, key, model, _HEALTH_INFLIGHT[key]))
+            else:
+                event = None
+                if not force:
+                    event = threading.Event()
+                    _HEALTH_INFLIGHT[key] = event
+                pending.append((model_id, key, model, event))
+    if pending:
+        workers = min(max(1, len(pending)), int(os.environ.get("REALGUARD_MODEL_HEALTH_WORKERS", "6")))
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="model-health") as executor:
+            futures = {
+                executor.submit(check_model_health, model): (model_id, key, event)
+                for model_id, key, model, event in pending
+            }
+            for future in as_completed(futures):
+                model_id, key, owner_event = futures[future]
+                try:
+                    health = future.result()
+                except Exception as exc:
+                    health = {
+                        "ok": False,
+                        "serviceOk": False,
+                        "message": str(exc),
+                        "checkedAt": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                results[model_id] = health
+                with _HEALTH_CACHE_LOCK:
+                    _HEALTH_CACHE[key] = (time.time() + max(1, HEALTH_CACHE_TTL_SECONDS), deepcopy(health))
+                    if owner_event is not None:
+                        _HEALTH_INFLIGHT.pop(key, None)
+                        owner_event.set()
+    for model_id, key, model, event in waiting:
+        timeout = max(5, min(int(model.get("timeoutSeconds") or 10) + 2, 190))
+        event.wait(timeout=timeout)
+        with _HEALTH_CACHE_LOCK:
+            cached = _HEALTH_CACHE.get(key)
+        if cached:
+            results[model_id] = deepcopy(cached[1])
+            continue
+        health = check_model_health(model)
+        results[model_id] = health
+        with _HEALTH_CACHE_LOCK:
+            _HEALTH_CACHE[key] = (time.time() + max(1, HEALTH_CACHE_TTL_SECONDS), deepcopy(health))
+    return results
+
+
+def clear_health_cache():
+    with _HEALTH_CACHE_LOCK:
+        _HEALTH_CACHE.clear()

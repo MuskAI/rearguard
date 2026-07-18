@@ -30,6 +30,7 @@
     a{color:inherit;text-decoration:none}
     button,input,select,textarea{font:inherit}
     button{border:0;cursor:pointer}
+    :focus-visible{outline:3px solid rgba(23,107,135,.3);outline-offset:2px}
     .login-wrap{min-height:100vh;display:grid;place-items:center;padding:28px;background:linear-gradient(135deg,#eef4ff,#f8fafc)}
     .notice{max-width:720px;border:1px solid var(--line);border-radius:var(--radius);background:#fff;padding:28px;box-shadow:var(--shadow)}
     .notice h1{font-family:"Newsreader","Noto Sans SC",serif;font-size:42px;margin:8px 0}
@@ -62,11 +63,11 @@
     .eyebrow{font-family:ui-monospace,monospace;font-size:11px;text-transform:uppercase;color:var(--blue);font-weight:700}
     h1{font-size:24px;line-height:1.2;margin:6px 0}
     .subtitle{color:var(--muted);line-height:1.65;max-width:760px}
-    .quick{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0;border:1px solid var(--line);border-radius:var(--radius);background:#fff;overflow:hidden}
-    .quick-row{padding:9px 12px;display:flex;justify-content:space-between;gap:12px;border-right:1px solid var(--line-soft)}
+    .quick{display:flex;gap:0;border:1px solid var(--line);border-radius:var(--radius);background:#fff;overflow:hidden}
+    .quick-row{padding:9px 12px;display:flex;flex:1 1 220px;justify-content:space-between;gap:12px;border-right:1px solid var(--line-soft)}
     .quick-row:last-child{border-right:0}
     .quick-row small{display:block;color:var(--muted);font-size:12px}
-    .quick-row strong{font-family:"IBM Plex Mono",monospace}
+    .quick-row strong{font-family:"IBM Plex Mono",monospace;font-size:14px;line-height:1.35;overflow-wrap:anywhere}
     .metrics{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:14px;margin-bottom:16px}
     .metric,.panel{background:var(--panel);border:1px solid var(--line-soft);border-radius:var(--radius);box-shadow:var(--shadow)}
     .metric{padding:17px;position:relative;overflow:hidden}
@@ -88,6 +89,7 @@
     .btn.green{background:var(--green)}
     .btn.red{background:var(--red)}
     .btn:disabled{opacity:.55;cursor:not-allowed}
+    .btn[aria-busy="true"]{cursor:wait}
     .btn .fa{width:14px;text-align:center}
     .logout-form{margin:0;display:flex}
     .models{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
@@ -119,19 +121,38 @@
     .routing{display:grid;gap:12px}
     .switch-row{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;border:1px solid var(--line-soft);padding:13px;border-radius:var(--radius)}
     .switch-row p{margin:3px 0 0;color:var(--muted);font-size:13px}
+    .switch-control{display:inline-flex;align-items:center;min-width:48px;min-height:44px;cursor:pointer}
+    .switch-control input{position:absolute;opacity:0;pointer-events:none}
     .toggle{width:48px;height:26px;border-radius:999px;background:#cbd5e1;position:relative;cursor:pointer;transition:background .18s}
     .toggle:after{content:"";position:absolute;width:20px;height:20px;left:3px;top:3px;border-radius:50%;background:#fff;box-shadow:0 2px 6px rgba(15,23,42,.2);transition:left .18s}
     .toggle.on{background:var(--green)}
     .toggle.on:after{left:25px}
     .service-list{display:grid;gap:10px}
     .service{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;border:1px solid var(--line-soft);border-radius:var(--radius);padding:12px;background:#fff}
-    .host-strip{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin:0 0 14px;background:#f8faf9}
+    .host-strip{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin:0 0 14px;background:#f8faf9}
     .host-stat{padding:12px;border-right:1px solid var(--line);min-width:0}
     .host-stat:last-child{border-right:0}
     .host-stat small{display:block;color:var(--muted);font-size:11px;margin-bottom:5px}
     .host-stat strong{display:block;font-family:ui-monospace,monospace;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .mono{font-family:"IBM Plex Mono",monospace;font-size:12px}
     .toast{position:fixed;right:20px;bottom:20px;max-width:460px;background:#101828;color:#fff;border-radius:var(--radius);padding:13px 15px;box-shadow:0 18px 36px rgba(15,23,42,.22);display:none;z-index:20}
+    .inline-state{border:1px solid var(--line-soft);background:#f8fafc;border-radius:var(--radius);padding:18px;color:var(--muted);display:grid;gap:10px;justify-items:start}
+    .inline-state.error{border-color:#fecaca;background:#fff7f7;color:#991b1b}
+    .skeleton{min-height:84px;border-radius:var(--radius);background:linear-gradient(100deg,#eef2f1 20%,#f8faf9 38%,#eef2f1 56%);background-size:220% 100%;animation:skeleton 1.1s ease-in-out infinite}
+    @keyframes skeleton{to{background-position-x:-220%}}
+    .sync-status{font-size:12px;color:var(--muted);white-space:nowrap}
+    .load-more{display:flex;justify-content:center;padding:14px 0 2px}
+    .audit-item button{margin-top:8px}
+    dialog{border:0;padding:0;border-radius:8px;width:min(520px,calc(100vw - 28px));box-shadow:0 28px 80px rgba(15,23,42,.24);color:var(--ink)}
+    dialog::backdrop{background:rgba(15,23,42,.48);backdrop-filter:blur(3px)}
+    .dialog-head{padding:20px 22px 12px;border-bottom:1px solid var(--line-soft)}
+    .dialog-head h2{margin:0;font-size:20px}
+    .dialog-body{padding:18px 22px;display:grid;gap:14px;max-height:min(62vh,560px);overflow:auto}
+    .dialog-body p{margin:0;color:var(--muted);line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere}
+    .dialog-field{display:grid;gap:6px;font-size:13px;font-weight:700}
+    .dialog-field .input{width:100%;min-width:0;font-weight:400}
+    .dialog-error{display:none;color:var(--red);font-size:13px}
+    .dialog-actions{padding:14px 22px 20px;display:flex;justify-content:flex-end;gap:10px}
     @media(max-width:1100px){.app{grid-template-columns:76px minmax(0,1fr)}.brand-title,.brand-sub,.nav-text,.nav-label{display:none}.nav-item{justify-content:center}.hero,.grid{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.models{grid-template-columns:1fr}}
     @media(max-width:680px){.content{padding:14px}.topbar{padding:0 12px}.tags{display:none}.metrics{grid-template-columns:1fr}.hero-card{padding:18px}.input{min-width:100%;width:100%}.toolbar{align-items:stretch}.toolbar .btn,.toolbar .select{width:100%;justify-content:center}}
     body{background:var(--page)}
@@ -207,7 +228,8 @@
     @media(max-width:1280px){.dashboard-grid,.model-workbench{grid-template-columns:1fr}.side-stack{position:static}.route-strip{grid-template-columns:1fr}.route-arrow{display:none}.models{grid-template-columns:1fr}.host-strip{grid-template-columns:repeat(3,minmax(0,1fr))}}
     @media(max-width:1280px){.assurance-grid{grid-template-columns:1fr}}
     @media(max-width:960px){.app{grid-template-columns:84px minmax(0,1fr)}.brand-title,.brand-sub,.nav-text,.nav-label{display:none}.nav-item{justify-content:center}.workspace-heading{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.top-actions .btn.secondary[href="/index"]{display:none}}
-    @media(max-width:720px){.app{display:block}.sidebar{height:auto;position:relative;display:flex;gap:8px;padding:10px;overflow-x:auto}.brand{flex:0 0 auto}.nav-group{display:flex;margin-top:0;gap:6px}.nav-item{width:42px;flex:0 0 42px}.topbar{height:auto;min-height:58px;display:grid;grid-template-columns:1fr;align-items:start;padding:10px 12px;gap:8px}.crumbs{width:100%}.top-actions{width:100%;justify-content:flex-start;flex-wrap:nowrap;overflow-x:auto;padding-bottom:2px}.top-actions>*{flex:0 0 auto}.top-actions .role-badge{display:none}.tags{display:none}.content{padding:14px}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.quick{grid-template-columns:1fr}.quick-row{border-right:0;border-bottom:1px solid var(--line-soft)}.model-summary-grid{grid-template-columns:1fr}.model-card.editor .kv,.kv{grid-template-columns:1fr}.panel-head{flex-direction:column}.toolbar{align-items:stretch}.toolbar .input,.toolbar .select,.toolbar .btn{width:100%;flex:1 1 auto;justify-content:center}.route-summary-row{display:grid}.data-table{min-width:720px}.host-strip{grid-template-columns:1fr}.host-stat{border-right:0;border-bottom:1px solid var(--line)}}
+    @media(max-width:720px){.app{display:block}.sidebar{height:auto;position:relative;display:flex;gap:8px;padding:10px;overflow-x:auto}.brand{flex:0 0 auto}.nav-group{display:flex;margin-top:0;gap:6px}.nav-item{width:auto;min-width:max-content;flex:0 0 auto;padding:0 12px}.nav-text{display:inline!important}.topbar{height:auto;min-height:58px;display:grid;grid-template-columns:1fr;align-items:start;padding:10px 12px;gap:8px}.crumbs{width:100%}.top-actions{width:100%;justify-content:flex-start;flex-wrap:nowrap;overflow-x:auto;padding-bottom:2px}.top-actions>*{flex:0 0 auto}.top-actions .role-badge{display:none}.tags{display:none}.content{padding:14px}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.quick{display:grid;grid-template-columns:1fr}.quick-row{border-right:0;border-bottom:1px solid var(--line-soft)}.model-summary-grid{grid-template-columns:1fr}.model-card.editor .kv,.kv{grid-template-columns:1fr}.panel-head{flex-direction:column}.toolbar{align-items:stretch}.toolbar .input,.toolbar .select,.toolbar .btn{width:100%;flex:1 1 auto;justify-content:center}.route-summary-row{display:grid}.data-table{min-width:640px}.host-strip{grid-template-columns:1fr}.host-stat{border-right:0;border-bottom:1px solid var(--line)}.toast{left:14px;right:14px;bottom:14px}.dialog-actions{display:grid;grid-template-columns:1fr 1fr}.dialog-actions .btn{justify-content:center;min-height:44px}}
+    @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
   </style>
 </head>
 <body>
@@ -231,17 +253,27 @@
       <nav class="nav-group">
         <div class="nav-label">Operations</div>
         <a class="nav-item active" href="#dashboard" data-route="dashboard" title="控制台"><i class="nav-icon fa fa-dashboard"></i><span class="nav-text">控制台</span></a>
+        {% if "topology.view" in admin_permissions %}
         <a class="nav-item" href="#assurance" data-route="assurance" title="在线保障"><i class="nav-icon fa fa-shield"></i><span class="nav-text">在线保障</span></a>
         <a class="nav-item" href="#models" data-route="models" title="模型管理"><i class="nav-icon fa fa-cubes"></i><span class="nav-text">模型管理</span></a>
         <a class="nav-item" href="#swarm" data-route="swarm" title="专家会诊模式"><i class="nav-icon fa fa-sitemap"></i><span class="nav-text">专家会诊模式</span></a>
         <a class="nav-item" href="#system" data-route="system" title="服务健康"><i class="nav-icon fa fa-heartbeat"></i><span class="nav-text">服务健康</span></a>
+        {% endif %}
+        {% if "alerts.manage" in admin_permissions or "audit.view" in admin_permissions %}
         <a class="nav-item" href="#governance" data-route="governance" title="审计告警"><i class="nav-icon fa fa-bell"></i><span class="nav-text">审计告警</span></a>
+        {% endif %}
         {% if can_manage_admins %}<a class="nav-item" href="#admins" data-route="admins" title="管理员"><i class="nav-icon fa fa-users"></i><span class="nav-text">管理员</span></a>{% endif %}
         <a class="nav-item" href="/admin/screen" target="_blank" rel="noopener" title="运营大屏"><i class="nav-icon fa fa-television"></i><span class="nav-text">运营大屏</span></a>
         <div class="nav-label">Data</div>
+        {% if "user.view" in admin_permissions %}
         <a class="nav-item" href="#users" data-route="users" title="用户管理"><i class="nav-icon fa fa-user"></i><span class="nav-text">用户管理</span></a>
+        {% endif %}
+        {% if "detection.view" in admin_permissions %}
         <a class="nav-item" href="#detections" data-route="detections" title="检测记录"><i class="nav-icon fa fa-history"></i><span class="nav-text">检测记录</span></a>
+        {% endif %}
+        {% if "api_key.view" in admin_permissions %}
         <a class="nav-item" href="#keys" data-route="keys" title="访问凭证"><i class="nav-icon fa fa-key"></i><span class="nav-text">访问凭证</span></a>
+        {% endif %}
       </nav>
     </aside>
 
@@ -249,6 +281,7 @@
       <header class="topbar">
         <div class="crumbs"><span>慧鉴 AI</span><span>/</span><strong id="crumb">控制台</strong></div>
         <div class="top-actions">
+          <span class="sync-status" id="syncStatus" aria-live="polite">尚未同步</span>
           <button class="btn secondary" onclick="loadAll()"><i class="fa fa-refresh"></i>刷新</button>
           <a class="btn secondary" href="/admin/screen" target="_blank" rel="noopener"><i class="fa fa-television"></i>大屏</a>
           {% if can_manage_admins %}<button class="btn secondary" onclick="switchRoute('admins')"><i class="fa fa-users"></i>管理员</button>{% endif %}
@@ -398,7 +431,7 @@
               <div class="compact-form" id="alertsForm">
                 <label>启用告警<select class="select" id="alertEnabled"><option value="false">关闭</option><option value="true">开启</option></select></label>
                 <label>Webhook URL<input class="input" id="alertWebhook" placeholder="https://..."></label>
-                <label>短信手机号<input class="input" id="alertPhones" placeholder="133..., 188..."></label>
+                <label>重复通知冷却（秒）<input class="input" id="alertCooldown" type="number" min="60" max="86400" step="60"></label>
                 <label>规则
                   <div class="stack">
                     <label><input type="checkbox" id="ruleV1Offline"> V1 主能力离线</label>
@@ -408,7 +441,11 @@
                   </div>
                 </label>
                 <label>备注<textarea id="alertNotes"></textarea></label>
-                <button class="btn" {% if "alerts.manage" not in admin_permissions %}disabled{% endif %} onclick="saveAlerts()">保存告警策略</button>
+                <div class="action-row">
+                  <button class="btn" {% if "alerts.manage" not in admin_permissions %}disabled{% endif %} onclick="saveAlerts()">保存告警策略</button>
+                  <button class="btn secondary" {% if "alerts.manage" not in admin_permissions %}disabled{% endif %} onclick="testAlert()">发送测试通知</button>
+                </div>
+                <div id="alertDeliveries" class="audit-list"></div>
               </div>
             </section>
             <section class="panel">
@@ -481,7 +518,17 @@
       </section>
     </main>
   </div>
-  <div class="toast" id="toast"></div>
+  <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+  <dialog id="actionDialog" aria-labelledby="dialogTitle">
+    <form method="dialog" id="actionDialogForm">
+      <div class="dialog-head"><h2 id="dialogTitle"></h2></div>
+      <div class="dialog-body" id="dialogBody"></div>
+      <div class="dialog-actions">
+        <button class="btn secondary" value="cancel" type="button" id="dialogCancel">取消</button>
+        <button class="btn" value="confirm" type="submit" id="dialogConfirm">确认</button>
+      </div>
+    </form>
+  </dialog>
   <script>
     const $ = (id) => document.getElementById(id);
     const CSRF_TOKEN = {{ csrf_token|tojson }};
@@ -489,16 +536,81 @@
     const CAN_MANAGE_ADMINS = {{ can_manage_admins|tojson }};
     const ADMIN_ROLE_LABELS = {{ role_options|default({}, true)|tojson }};
     const titles = {dashboard:'控制台',assurance:'在线保障',models:'模型管理',swarm:'专家会诊模式',system:'服务健康',governance:'审计告警',admins:'管理员',users:'用户管理',detections:'检测记录',keys:'访问凭证'};
-    let state = {metrics:null, models:[], routing:{}, routingHistory:[], detections:[], users:[], admins:[], keys:[], services:[], host:null, serviceSummary:null, assurance:null, swarm:null, alerts:null, audit:[], selectedUser:null, selectedDetection:null};
+    const routePermissions = {assurance:'topology.view',models:'topology.view',swarm:'topology.view',system:'topology.view',governance:['alerts.manage','audit.view'],admins:'admin.manage',users:'user.view',detections:'detection.view',keys:'api_key.view'};
+    const routeAllowed = (route) => {
+      const required = routePermissions[route];
+      if(!required) return true;
+      return Array.isArray(required) ? required.some(can) : can(required);
+    };
+    const mutationRequests = new Map();
+    let state = {metrics:null, models:[], routing:{}, routingHistory:[], detections:[], users:[], admins:[], keys:[], services:[], host:null, serviceSummary:null, performance:null, assurance:null, swarm:null, alerts:null, alertDeliveries:[], audit:[], pages:{}, selectedUser:null, selectedDetection:null};
     const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
     const can = (permission) => PERMISSIONS.has(permission);
-    function toast(message){ const el=$('toast'); el.textContent=message; el.style.display='block'; clearTimeout(window.__toast); window.__toast=setTimeout(()=>el.style.display='none',3200); }
+    function toast(message){ const el=$('toast'); el.textContent=message; el.style.display='block'; clearTimeout(window.__toast); window.__toast=setTimeout(()=>el.style.display='none',4200); }
+    function updateSync(text){ if($('syncStatus')) $('syncStatus').textContent = text; }
+    async function panelLoad(targetIds, retryName, work){
+      const targets = targetIds.map($).filter(Boolean);
+      targets.forEach((target) => { target.setAttribute('aria-busy','true'); if(!target.innerHTML.trim()) target.innerHTML='<div class="skeleton" aria-label="加载中"></div>'; });
+      try{
+        const value = await work();
+        updateSync(`已同步 ${new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}`);
+        return value;
+      }catch(err){
+        const message = err?.message || '加载失败';
+        targets.forEach((target, index) => {
+          target.innerHTML = index === 0 ? `<div class="inline-state error"><strong>此区域加载失败</strong><span>${esc(message)}</span><button class="btn mini secondary" onclick="${retryName}()">重试</button></div>` : '';
+        });
+        updateSync('部分数据同步失败');
+        return null;
+      }finally{
+        targets.forEach((target) => target.removeAttribute('aria-busy'));
+      }
+    }
+    function requestAction({title,message='',warning='',confirmText='确认',danger=false,fields=[],info=false}){
+      const dialog = $('actionDialog');
+      const form = $('actionDialogForm');
+      $('dialogTitle').textContent = title;
+      $('dialogBody').innerHTML = `${message ? `<p>${esc(message)}</p>` : ''}${warning ? `<div class="warning-band">${esc(warning)}</div>` : ''}${fields.map((field) => `<label class="dialog-field">${esc(field.label)}<input class="input" name="${esc(field.name)}" type="${esc(field.type || 'text')}" value="${esc(field.value ?? '')}" ${field.required ? 'required' : ''} ${field.min !== undefined ? `min="${esc(field.min)}"` : ''} ${field.max !== undefined ? `max="${esc(field.max)}"` : ''} ${field.step !== undefined ? `step="${esc(field.step)}"` : ''} autocomplete="${esc(field.autocomplete || 'off')}"></label>`).join('')}<div class="dialog-error" id="dialogError"></div>`;
+      const confirmButton = $('dialogConfirm');
+      confirmButton.textContent = info ? '关闭' : confirmText;
+      confirmButton.className = `btn ${danger ? 'red' : ''}`;
+      $('dialogCancel').style.display = info ? 'none' : '';
+      return new Promise((resolve) => {
+        let settled = false;
+        const finish = (value) => { if(settled) return; settled=true; if(dialog.open) dialog.close(); resolve(value); };
+        $('dialogCancel').onclick = () => finish(null);
+        form.onsubmit = (event) => {
+          event.preventDefault();
+          if(info){ finish({}); return; }
+          if(!form.reportValidity()) return;
+          const values = Object.fromEntries(new FormData(form).entries());
+          const confirmField = fields.find((field) => field.matches);
+          if(confirmField && values[confirmField.name] !== values[confirmField.matches]){
+            const error = $('dialogError'); error.textContent = confirmField.mismatchMessage || '两次输入不一致'; error.style.display='block'; return;
+          }
+          finish(values);
+        };
+        dialog.oncancel = (event) => { event.preventDefault(); finish(null); };
+        dialog.onclose = () => finish(null);
+        dialog.showModal();
+        dialog.querySelector('input')?.focus();
+      });
+    }
     async function api(url, options={}){
-      const headers = {'Content-Type':'application/json', 'X-CSRF-Token': CSRF_TOKEN, ...(options.headers || {})};
-      const res = await fetch(url, {...options, headers});
-      const data = await res.json().catch(()=>({status:'error', message:'非 JSON 响应'}));
-      if(!res.ok || data.status === 'error') throw new Error(data.message || `HTTP ${res.status}`);
-      return data;
+      const method = String(options.method || 'GET').toUpperCase();
+      const mutationKey = ['GET','HEAD','OPTIONS'].includes(method) ? '' : `${method}:${url}`;
+      if(mutationKey && mutationRequests.has(mutationKey)) throw new Error('该操作正在处理中，请稍候');
+      const requestPromise = (async() => {
+        const headers = {'Content-Type':'application/json', 'X-CSRF-Token': CSRF_TOKEN, ...(options.headers || {})};
+        const res = await fetch(url, {...options, headers});
+        const data = await res.json().catch(()=>({status:'error', message:'非 JSON 响应'}));
+        if(res.status === 401){ location.href='/admin/login'; throw new Error('后台会话已过期，请重新登录'); }
+        if(!res.ok || data.status === 'error') throw new Error(data.message || `HTTP ${res.status}`);
+        return data;
+      })();
+      if(mutationKey) mutationRequests.set(mutationKey, requestPromise);
+      try{ return await requestPromise; }
+      finally{ if(mutationKey) mutationRequests.delete(mutationKey); }
     }
     function statusPill(health){
       if(!health) return '<span class="status warn">unchecked</span>';
@@ -536,22 +648,23 @@
     }
     function routeTitle(route){ return titles[route] || route; }
     function switchRoute(route){
+      if(!routeAllowed(route)){ toast('当前角色无权访问该模块'); route='dashboard'; }
       document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === `view-${route}`));
       document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.route === route));
       $('crumb').textContent = routeTitle(route);
       history.replaceState(null, '', `#${route}`);
       renderTags(route);
-      if(route === 'assurance') loadAssurance();
-      if(route === 'swarm') loadExpertReview();
-      if(route === 'system') loadSystem();
-      if(route === 'governance') { loadAlerts(); loadAudit(); }
+      if(route === 'assurance' && can('topology.view')) loadAssurance();
+      if(route === 'swarm' && can('topology.view')) loadExpertReview();
+      if(route === 'system' && can('topology.view')) loadSystem();
+      if(route === 'governance') { if(can('alerts.manage')) loadAlerts(); if(can('audit.view')) loadAudit(); }
       if(route === 'admins' && CAN_MANAGE_ADMINS) loadAdmins();
       if(route === 'users') loadUsers();
       if(route === 'detections') loadDetections();
       if(route === 'keys') loadApiKeys();
     }
     function renderTags(active){
-      const base = ['dashboard','assurance','models','swarm','system','governance',...(CAN_MANAGE_ADMINS ? ['admins'] : []),'users','detections','keys'];
+      const base = ['dashboard','assurance','models','swarm','system','governance',...(CAN_MANAGE_ADMINS ? ['admins'] : []),'users','detections','keys'].filter(routeAllowed);
       $('tags').innerHTML = base.map(route => `<a href="#${route}" data-route="${route}" class="tag-tab ${route===active?'active':''}">${routeTitle(route)}</a>`).join('');
       document.querySelectorAll('.tag-tab').forEach(el => el.onclick = (e) => { e.preventDefault(); switchRoute(el.dataset.route); });
     }
@@ -630,19 +743,36 @@
       const rules = alerts.rules || {};
       $('alertEnabled').value = alerts.enabled ? 'true' : 'false';
       $('alertWebhook').value = alerts.webhookUrl || '';
-      $('alertPhones').value = alerts.smsPhones || '';
+      $('alertCooldown').value = alerts.cooldownSeconds || 900;
       $('ruleV1Offline').checked = !!rules.v1Offline;
       $('ruleArtifactMissing').checked = !!rules.artifactMissing;
       $('ruleFallbackEnabled').checked = !!rules.fallbackEnabled;
       $('ruleProbeFailed').checked = !!rules.probeFailed;
       $('alertNotes').value = alerts.notes || '';
+      $('alertDeliveries').innerHTML = (state.alertDeliveries || []).slice(0, 8).map((item) => `
+        <article class="audit-item">
+          <strong>${esc(item.title || item.eventId || '告警')}</strong>
+          <span class="pill ${item.ok ? 'green' : 'red'}">${item.ok ? '投递成功' : '投递失败'}</span>
+          <p>${esc(item.deliveredAt || item.createdAt || '')} · 尝试 ${esc(item.attempts || 1)} 次${item.statusCode ? ` · HTTP ${esc(item.statusCode)}` : ''}</p>
+          ${item.error ? `<p>${esc(item.error)}</p>` : ''}
+        </article>`).join('') || '<div class="empty">暂无告警投递记录</div>';
     }
     function renderAudit(){
-      $('audit').innerHTML = (state.audit || []).map(item => `
+      $('audit').innerHTML = (state.audit || []).map((item,index) => `
         <article class="audit-item">
           <strong>${esc(item.action)}</strong> <span class="pill">${esc(item.target)}</span>
           <p>${esc(item.createdAt)} · ${esc(item.actor?.username || item.actor?.phone || item.actor?.id || 'unknown')}</p>
+          ${(item.before || item.after || (item.meta && Object.keys(item.meta).length)) ? `<button class="btn mini secondary" onclick="openAudit(${index})">查看变更</button>` : ''}
         </article>`).join('') || '<div class="empty">暂无审计记录</div>';
+    }
+    function openAudit(index){
+      const item = state.audit?.[index];
+      if(!item) return;
+      requestAction({
+        title:`审计详情 · ${item.action || '-'}`,
+        message:JSON.stringify({before:item.before ?? null,after:item.after ?? null,meta:item.meta || {}},null,2),
+        info:true,
+      });
     }
     function renderUserDetail(){
       const data = state.selectedUser;
@@ -790,7 +920,7 @@
       $('routing').innerHTML = `
         <label>主图像模型<select class="select" id="imagePrimary">${modelOptions}</select></label>
         <label>兜底模型<select class="select" id="imageFallback">${modelOptions}</select></label>
-        <div class="switch-row"><div><strong>允许自动兜底</strong><p>关闭后，V1 主模型失败会直接报错；开启后会自动调用兜底模型。</p></div><div class="toggle ${state.routing.fallbackEnabled ? 'on' : ''}" onclick="this.classList.toggle('on')"></div></div>
+        <div class="switch-row"><div><strong>允许自动兜底</strong><p>关闭后，V1 主模型失败会直接报错；开启后会自动调用兜底模型。</p></div><label class="switch-control" aria-label="允许自动兜底"><input id="fallbackEnabled" type="checkbox" ${state.routing.fallbackEnabled ? 'checked' : ''} onchange="this.nextElementSibling.classList.toggle('on',this.checked)"><span class="toggle ${state.routing.fallbackEnabled ? 'on' : ''}" aria-hidden="true"></span></label></div>
         <div class="warning-band">切换主模型会立即影响线上检测路径。当前建议保持 V1 legacy tunnel 在线，同时继续修复本机 ONNX 权重。</div>
         <label>备注<textarea id="routingNotes">${esc(state.routing.notes || '')}</textarea></label>
         <button class="btn" ${can('routing.manage') ? '' : 'disabled'} onclick="saveRouting()">保存路由策略</button>
@@ -827,12 +957,13 @@
     }
     function renderDetections(target='detections', items=state.detections){
       const actionHeader = target === 'detections' ? '操作' : '反馈';
-      $(target).innerHTML = table(['ID','时间','用户','文件','结果','概率','后台模型',actionHeader], items.map(d => `
+      const content = table(['ID','时间','用户','文件','结果','概率','后台模型',actionHeader], items.map(d => `
         <tr><td class="mono">${esc(d.id)}</td><td>${esc(d.createdAt)}</td><td>${esc(d.phone)}</td><td>${esc(d.filename || '')}</td><td>${esc(d.label)}</td><td>${esc(d.probability ?? '')}</td><td class="mono">${esc(routeModelLabel(d.modelRoute))}</td><td>${target === 'detections' ? `<div class="action-row"><button class="btn mini secondary" onclick="openDetection(${Number(d.id)})">详情</button><button class="btn mini green" ${can('detection.review') ? '' : 'disabled'} onclick="reviewDetection(${Number(d.id)},1)">正确</button><button class="btn mini red" ${can('detection.review') ? '' : 'disabled'} onclick="reviewDetection(${Number(d.id)},-1)">误判</button><button class="btn mini secondary" ${can('detection.review') ? '' : 'disabled'} onclick="reviewDetection(${Number(d.id)},0)">清除</button></div>` : esc(d.feedback ?? '')}</td></tr>`));
+      $(target).innerHTML = content + (target === 'detections' && state.pages.detections?.hasMore ? '<div class="load-more"><button class="btn secondary" onclick="loadDetections(true)">加载更多</button></div>' : '');
     }
     function renderUsers(){
       $('users').innerHTML = table(['ID','用户','手机号','OpenID','注册时间','操作'], state.users.map(u => `
-        <tr><td class="mono">${esc(u.id)}</td><td>${esc(u.username)}</td><td>${esc(u.phone)}</td><td class="mono">${esc(u.openid || '')}</td><td>${esc(u.createdAt)}</td><td><button class="btn mini secondary" onclick="openUser(${Number(u.id)})">详情</button></td></tr>`));
+        <tr><td class="mono">${esc(u.id)}</td><td>${esc(u.username)}</td><td>${esc(u.phone)}</td><td class="mono">${esc(u.openid || '')}</td><td>${esc(u.createdAt)}</td><td><button class="btn mini secondary" onclick="openUser(${Number(u.id)})">详情</button></td></tr>`)) + (state.pages.users?.hasMore ? '<div class="load-more"><button class="btn secondary" onclick="loadUsers(true)">加载更多</button></div>' : '');
     }
     function roleOptions(selected){
       return Object.entries(ADMIN_ROLE_LABELS || {}).map(([role, label]) => `<option value="${esc(role)}" ${role === selected ? 'selected' : ''}>${esc(label)}</option>`).join('');
@@ -855,11 +986,11 @@
           <td>${esc(a.createdAt || '-')}</td>
           <td>${esc(a.lastLoginAt || '-')}<br><span class="mono">${esc(a.lastLoginIp || '')}</span></td>
           <td><div class="action-row"><button class="btn mini" onclick="saveAdminAccount(${Number(a.id)})">保存</button><button class="btn mini secondary" onclick="resetAdminPassword(${Number(a.id)})">重置密码</button></div></td>
-        </tr>`), '暂无管理员账号');
+        </tr>`), '暂无管理员账号') + (state.pages.admins?.hasMore ? '<div class="load-more"><button class="btn secondary" onclick="loadAdmins(true)">加载更多</button></div>' : '');
     }
     function renderApiKeys(){
       $('apiKeys').innerHTML = table(['ID','名称','归属','Key','状态','配额','最后使用','操作'], state.keys.map(k => `
-        <tr><td class="mono">${esc(k.id)}</td><td>${esc(k.name)}</td><td>${esc(k.owner)}<br><span class="mono">${esc(k.phone)}</span></td><td class="mono">${esc(k.masked)}</td><td>${k.status === 'active' ? '<span class="pill green">active</span>' : '<span class="pill red">revoked</span>'}</td><td>${esc(k.quota?.dailyLimit ?? '不限')}/day<br><span class="mono">${esc(k.quota?.rateLimitPerMinute ?? '不限')}/min</span></td><td>${esc(k.lastUsedAt || '-')}</td><td><button class="btn mini secondary" onclick="editQuota(${Number(k.id)})">配额</button></td></tr>`));
+        <tr><td class="mono">${esc(k.id)}</td><td>${esc(k.name)}</td><td>${esc(k.owner)}<br><span class="mono">${esc(k.phone)}</span></td><td class="mono">${esc(k.masked)}</td><td>${k.status === 'active' ? '<span class="pill green">启用</span>' : '<span class="pill red">已撤销</span>'}</td><td>${esc(k.quota?.dailyLimit ?? '不限')}/日<br><span class="mono">${esc(k.quota?.rateLimitPerMinute ?? '不限')}/分钟</span></td><td>${esc(k.lastUsedAt || '-')}</td><td><button class="btn mini secondary" onclick="editQuota(${Number(k.id)})">配额</button></td></tr>`)) + (state.pages.keys?.hasMore ? '<div class="load-more"><button class="btn secondary" onclick="loadApiKeys(true)">加载更多</button></div>' : '');
     }
     function adminBytes(value){
       const bytes = Number(value);
@@ -882,11 +1013,13 @@
       const memory = host.memory || {};
       const disk = host.disk || {};
       const services = state.serviceSummary || {};
+      const performance = state.performance || {};
       const rows = [
         ['CPU 负载', `${cpu.loadPercent ?? '--'}%`, `${cpu.cores ?? '--'} 核 · 1m ${cpu.load1 ?? '--'}`],
         ['内存', `${memory.usedPercent ?? '--'}%`, `${adminBytes(memory.usedBytes)} / ${adminBytes(memory.totalBytes)}`],
         ['系统盘', `${disk.usedPercent ?? '--'}%`, `${adminBytes(disk.usedBytes)} / ${adminBytes(disk.totalBytes)}`],
         ['模型服务', `${services.online ?? '--'}/${services.total ?? '--'} 在线`, `降级 ${services.degraded ?? 0} · 离线 ${services.offline ?? 0}`],
+        ['推理延迟', performance.p95LatencyMs != null ? `${performance.p95LatencyMs} ms` : '--', `P50 ${performance.p50LatencyMs ?? '--'} ms · 样本 ${performance.sampleSize ?? 0}`],
         ['系统运行', adminDuration(host.uptimeSeconds), `Web 进程 ${adminDuration(host.processUptimeSeconds)}`],
       ];
       $('hostTelemetry').innerHTML = rows.map(([label,value,detail]) => `<div class="host-stat"><small>${esc(label)} · ${esc(detail)}</small><strong>${esc(value)}</strong></div>`).join('');
@@ -894,36 +1027,48 @@
     function renderServices(){
       renderHostTelemetry();
       $('services').innerHTML = state.services.map(s => `
-        <article class="service"><div><strong>${esc(s.name)}</strong><p class="mono">${esc(s.healthUrl || s.endpoint || '')}</p><p>${healthNotes(s.health)}</p></div>${statusPill(s.health)}</article>`).join('') || '<div class="empty">暂无模型服务</div>';
+        <article class="service"><div><strong>${esc(s.name)}</strong><p class="mono">${esc(s.healthUrl || s.endpoint || '')}</p><p>${healthNotes(s.health)}</p>${s.health?.telemetry?.activeProvider ? `<p class="mono">${esc(s.health.telemetry.activeProvider)} · GPU ${esc(s.health.telemetry.cudaDeviceId ?? '-')} · 远端 ${esc(s.health.telemetry.remoteLatencyMs ?? '-')} ms</p>` : ''}</div>${statusPill(s.health)}</article>`).join('') || '<div class="empty">暂无模型服务</div>';
     }
     async function loadOverview(){
-      const data = await api('/api/admin/overview');
-      state.metrics = data.metrics; state.models = data.models; state.routing = data.routing; state.routingHistory = data.routingHistory || [];
-      renderMetrics(data.metrics); renderQuick(); renderRouteStrip(); renderModelCards('dashboardModels', state.models, 'summary'); renderModelCards('models', state.models, 'editor'); renderRouting();
+      return panelLoad(['metrics','quickHealth','dashboardModels'], 'loadOverview', async () => {
+        const data = await api('/api/admin/overview');
+        state.metrics = data.metrics; state.models = data.models || []; state.routing = data.routing || {}; state.routingHistory = data.routingHistory || [];
+        renderMetrics(data.metrics); renderQuick(); renderRouteStrip(); renderModelCards('dashboardModels', state.models, 'summary'); renderModelCards('models', state.models, 'editor'); renderRouting();
+      });
     }
-    async function loadAssurance(){ const data = await api('/api/admin/assurance'); state.assurance = data.assurance; renderAssurance(); }
-    async function loadExpertReview(){ const data = await api('/api/admin/swarm'); state.swarm = data.swarm; renderExpertReview(); }
-    async function loadSystem(){ const data = await api('/api/admin/system'); state.services = data.services || []; state.host = data.host || null; state.serviceSummary = data.serviceSummary || null; renderServices(); }
-    async function loadAlerts(){ const data = await api('/api/admin/alerts'); state.alerts = data.alerts; renderAlerts(); }
-    async function loadAudit(){ const data = await api('/api/admin/audit?limit=120'); state.audit = data.audit; renderAudit(); }
-    async function loadUsers(){
-      const params = new URLSearchParams({limit: $('userLimit')?.value || '40', q: $('userQuery')?.value || ''});
-      const data = await api(`/api/admin/users?${params}`); state.users = data.users; renderUsers();
+    async function loadAssurance(){ return panelLoad(['assurance','assuranceModels'],'loadAssurance',async()=>{ const data=await api('/api/admin/assurance'); state.assurance=data.assurance; renderAssurance(); }); }
+    async function loadExpertReview(){ return panelLoad(['swarmExpertsConfig'],'loadExpertReview',async()=>{ const data=await api('/api/admin/swarm'); state.swarm=data.swarm; renderExpertReview(); }); }
+    async function loadSystem(){ return panelLoad(['hostTelemetry','services'],'loadSystem',async()=>{ const data=await api('/api/admin/system'); state.services=data.services||[]; state.host=data.host||null; state.serviceSummary=data.serviceSummary||null; state.performance=data.performance||null; renderServices(); }); }
+    async function loadAlerts(){ return panelLoad(['alertDeliveries'],'loadAlerts',async()=>{ const data=await api('/api/admin/alerts'); state.alerts=data.alerts; state.alertDeliveries=data.deliveryHistory||[]; renderAlerts(); }); }
+    async function loadAudit(){ return panelLoad(['audit'],'loadAudit',async()=>{ const data=await api('/api/admin/audit?limit=120'); state.audit=data.audit||[]; renderAudit(); }); }
+    async function loadUsers(append=false){
+      return panelLoad(['users'],'loadUsers',async()=>{
+        const params=new URLSearchParams({limit:$('userLimit')?.value||'40',q:$('userQuery')?.value||''});
+        if(append&&state.pages.users?.nextCursor) params.set('cursor',state.pages.users.nextCursor);
+        const data=await api(`/api/admin/users?${params}`); state.users=append?[...state.users,...(data.users||[])]:data.users||[]; state.pages.users=data.page||{}; renderUsers();
+      });
     }
-    async function loadAdmins(){
+    async function loadAdmins(append=false){
       if(!CAN_MANAGE_ADMINS) return;
-      const params = new URLSearchParams({limit: $('adminLimit')?.value || '40', q: $('adminQuery')?.value || ''});
-      const data = await api(`/api/admin/admins?${params}`);
-      state.admins = data.admins || [];
-      renderAdmins();
+      return panelLoad(['admins'],'loadAdmins',async()=>{
+        const params=new URLSearchParams({limit:$('adminLimit')?.value||'40',q:$('adminQuery')?.value||''});
+        if(append&&state.pages.admins?.nextCursor) params.set('cursor',state.pages.admins.nextCursor);
+        const data=await api(`/api/admin/admins?${params}`); state.admins=append?[...state.admins,...(data.admins||[])]:data.admins||[]; state.pages.admins=data.page||{}; renderAdmins();
+      });
     }
-    async function loadDetections(){
-      const params = new URLSearchParams({limit: $('detectionLimit')?.value || '60', q: $('detectionQuery')?.value || '', label: $('detectionLabel')?.value || ''});
-      const data = await api(`/api/admin/detections?${params}`); state.detections = data.detections; renderDetections(); renderDetections('dashboardDetections', state.detections.slice(0, 8));
+    async function loadDetections(append=false){
+      return panelLoad(['detections'],'loadDetections',async()=>{
+        const params=new URLSearchParams({limit:$('detectionLimit')?.value||'60',q:$('detectionQuery')?.value||'',label:$('detectionLabel')?.value||''});
+        if(append&&state.pages.detections?.nextCursor) params.set('cursor',state.pages.detections.nextCursor);
+        const data=await api(`/api/admin/detections?${params}`); state.detections=append?[...state.detections,...(data.detections||[])]:data.detections||[]; state.pages.detections=data.page||{}; renderDetections(); renderDetections('dashboardDetections',state.detections.slice(0,8));
+      });
     }
-    async function loadApiKeys(){
-      const params = new URLSearchParams({limit: $('keyLimit')?.value || '60', q: $('keyQuery')?.value || ''});
-      const data = await api(`/api/admin/api-keys?${params}`); state.keys = data.keys; renderApiKeys();
+    async function loadApiKeys(append=false){
+      return panelLoad(['apiKeys'],'loadApiKeys',async()=>{
+        const params=new URLSearchParams({limit:$('keyLimit')?.value||'60',q:$('keyQuery')?.value||''});
+        if(append&&state.pages.keys?.nextCursor) params.set('cursor',state.pages.keys.nextCursor);
+        const data=await api(`/api/admin/api-keys?${params}`); state.keys=append?[...state.keys,...(data.keys||[])]:data.keys||[]; state.pages.keys=data.page||{}; renderApiKeys();
+      });
     }
     async function createModel(){
       if(!can('model.manage')){ toast('当前角色无模型管理权限'); return; }
@@ -941,9 +1086,14 @@
       if(!model.id){ toast(`未找到模型: ${id}`); return; }
       if(!isImageModel(model)){ toast('只能把图像能力模型设为主模型'); return; }
       const ready = model.health?.ok || model.health?.capabilityReady;
-      const risk = ready ? '' : '\n\n注意：该模型当前不是 OK 状态，切换后可能影响线上检测。';
-      if(!confirm(`确认把线上图像鉴伪主模型切换为：${model.name || id}？${risk}`)) return;
-      if(!confirm('再次确认：该操作会立即影响线上检测路径，是否继续？')) return;
+      const approval = await requestAction({
+        title:'切换线上主模型',
+        message:`主模型将从「${currentModel(state.routing.imagePrimary).name || state.routing.imagePrimary || '-'}」切换为「${model.name || id}」。`,
+        warning:ready ? '保存后会立即影响新的图像检测任务。' : '目标模型当前未就绪，切换后可能导致线上检测失败。',
+        confirmText:'确认切换',
+        danger:!ready,
+      });
+      if(!approval) return;
       const payload = {
         imagePrimary: id,
         imageFallback: state.routing.imageFallback,
@@ -959,10 +1109,12 @@
     }
     async function saveRouting(){
       if(!can('routing.manage')){ toast('当前角色无路由管理权限'); return; }
-      const payload = {imagePrimary:$('imagePrimary').value,imageFallback:$('imageFallback').value,fallbackEnabled:document.querySelector('#routing .toggle').classList.contains('on'),notes:$('routingNotes').value};
-      if(payload.imagePrimary !== state.routing.imagePrimary && !confirm(`确认把主图像模型切换为 ${payload.imagePrimary}？这会立即影响线上检测。`)) return;
-      if(payload.imagePrimary !== state.routing.imagePrimary && !confirm('再次确认主模型切换，是否继续？')) return;
-      if(payload.fallbackEnabled && !state.routing.fallbackEnabled && !confirm('确认开启自动兜底？V1 失败时系统将自动调用兜底模型。')) return;
+      const payload = {imagePrimary:$('imagePrimary').value,imageFallback:$('imageFallback').value,fallbackEnabled:!!$('fallbackEnabled')?.checked,notes:$('routingNotes').value};
+      const changed = payload.imagePrimary !== state.routing.imagePrimary || payload.imageFallback !== state.routing.imageFallback || payload.fallbackEnabled !== !!state.routing.fallbackEnabled;
+      if(changed){
+        const approval=await requestAction({title:'保存路由策略',message:`主模型：${payload.imagePrimary}\n兜底模型：${payload.imageFallback}\n自动兜底：${payload.fallbackEnabled?'开启':'关闭'}`,warning:'路由变更会立即作用于新任务，请确认模型与业务口径。',confirmText:'保存并生效'});
+        if(!approval) return;
+      }
       const data = await api('/api/admin/routing', {method:'POST', body:JSON.stringify(payload)});
       state.routing = data.routing; toast('路由策略已保存'); await loadOverview(); await loadAssurance(); await loadAudit();
     }
@@ -994,8 +1146,8 @@
       if(!can('routing.manage')){ toast('当前角色无路由管理权限'); return; }
       const snapshot = (state.routingHistory || []).find(item => item.id === snapshotId) || {};
       const target = snapshot.routing || {};
-      if(!confirm(`确认回滚到 ${snapshot.createdAt || '历史快照'}：${target.imagePrimary || '-'}？`)) return;
-      if(!confirm('再次确认路由回滚，是否继续？')) return;
+      const approval=await requestAction({title:'回滚路由',message:`将回滚到 ${snapshot.createdAt || '历史快照'}，主模型为 ${target.imagePrimary || '-'}。`,warning:'回滚会立即作用于新任务。',confirmText:'确认回滚',danger:true});
+      if(!approval) return;
       const data = await api('/api/admin/routing/rollback', {method:'POST', body:JSON.stringify({snapshotId})});
       state.routing = data.routing;
       toast('路由已回滚');
@@ -1013,7 +1165,8 @@
     }
     async function deleteModel(id){
       if(!can('model.manage')){ toast('当前角色无模型管理权限'); return; }
-      if(!confirm(`确认删除模型 ${id}？正在路由中使用的模型会被后台拒绝。`)) return;
+      const approval=await requestAction({title:'删除模型',message:`确认删除模型「${id}」？`,warning:'此操作不可撤销；正在路由中使用的模型会被后台拒绝删除。',confirmText:'删除模型',danger:true});
+      if(!approval) return;
       await api(`/api/admin/models/${encodeURIComponent(id)}`, {method:'DELETE'});
       toast('模型已删除'); await loadOverview(); await loadAudit();
     }
@@ -1028,7 +1181,7 @@
       const payload = {
         enabled: $('alertEnabled').value === 'true',
         webhookUrl: $('alertWebhook').value,
-        smsPhones: $('alertPhones').value,
+        cooldownSeconds: $('alertCooldown').value,
         notes: $('alertNotes').value,
         rules: {
           v1Offline: $('ruleV1Offline').checked,
@@ -1040,24 +1193,33 @@
       const data = await api('/api/admin/alerts', {method:'POST', body:JSON.stringify(payload)});
       state.alerts = data.alerts; renderAlerts(); toast('告警策略已保存'); await loadAudit();
     }
+    async function testAlert(){
+      if(!can('alerts.manage')){ toast('当前角色无告警管理权限'); return; }
+      const approval=await requestAction({title:'发送测试通知',message:'系统将向当前保存的 HTTPS Webhook 发送一条不含用户数据的测试消息。',confirmText:'发送测试'});
+      if(!approval) return;
+      const data=await api('/api/admin/alerts/test',{method:'POST',body:'{}'});
+      toast(data.delivery?.ok?'测试通知已送达':'测试通知发送失败');
+      await loadAlerts(); await loadAudit();
+    }
     async function openUser(id){ const data = await api(`/api/admin/users/${encodeURIComponent(id)}`); state.selectedUser = data; renderUserDetail(); }
     async function saveAdminAccount(id){
       if(!can('admin.manage')){ toast('当前角色无管理员管理权限'); return; }
       const role = $(`adminRole-${id}`)?.value || 'readonly';
       const status = $(`adminStatus-${id}`)?.value || 'active';
-      if(!confirm(`确认更新管理员 #${id}：${role} / ${status}？`)) return;
+      const approval=await requestAction({title:'更新管理员权限',message:`管理员 #${id}\n角色：${ADMIN_ROLE_LABELS[role] || role}\n状态：${status === 'active' ? '启用' : '停用'}`,warning:'降权或停用后，该账号的现有后台会话会立即失效。',confirmText:'确认更新',danger:status==='disabled'});
+      if(!approval) return;
       await api(`/api/admin/admins/${encodeURIComponent(id)}`, {method:'POST', body:JSON.stringify({role, status})});
       toast('管理员账号已更新');
       await loadAdmins(); await loadAudit();
     }
     async function resetAdminPassword(id){
       if(!can('admin.manage')){ toast('当前角色无管理员管理权限'); return; }
-      const password = prompt('输入新的管理员密码，至少 10 位且包含字母和数字');
-      if(password === null) return;
-      const confirmPassword = prompt('再次输入新密码');
-      if(confirmPassword === null) return;
-      if(password !== confirmPassword){ toast('两次密码不一致'); return; }
-      await api(`/api/admin/admins/${encodeURIComponent(id)}/password`, {method:'POST', body:JSON.stringify({password})});
+      const values=await requestAction({title:'重置管理员密码',message:`为管理员 #${id} 设置新密码。`,warning:'密码修改后，该账号所有现有后台会话会立即失效。',confirmText:'重置密码',danger:true,fields:[
+        {name:'password',label:'新密码',type:'password',required:true,autocomplete:'new-password'},
+        {name:'passwordConfirm',label:'再次输入',type:'password',required:true,autocomplete:'new-password',matches:'password',mismatchMessage:'两次密码不一致'},
+      ]});
+      if(!values) return;
+      await api(`/api/admin/admins/${encodeURIComponent(id)}/password`, {method:'POST', body:JSON.stringify({password:values.password})});
       toast('管理员密码已重置');
       await loadAudit();
     }
@@ -1065,30 +1227,36 @@
     async function reviewDetection(id, feedback){
       if(!can('detection.review')){ toast('当前角色无检测复核权限'); return; }
       const data = await api(`/api/admin/detections/${encodeURIComponent(id)}/review`, {method:'POST', body:JSON.stringify({feedback})});
-      toast(`记录 ${id}: ${data.review.feedback || '已清除'}`); await loadDetections(); await loadAudit();
+      const feedbackLabel=data.review.feedback===1?'标记为正确':data.review.feedback===-1?'标记为误判':'已清除反馈';
+      toast(`记录 ${id}: ${feedbackLabel}`); await loadDetections(); await loadAudit();
     }
     async function editQuota(id){
       if(!can('api_key.manage')){ toast('当前角色无 访问凭证 管理权限'); return; }
       const key = state.keys.find(k => Number(k.id) === Number(id)) || {};
-      const daily = prompt('每日调用上限，留空表示不限', key.quota?.dailyLimit ?? '');
-      if(daily === null) return;
-      const perMin = prompt('每分钟限流，留空表示不限', key.quota?.rateLimitPerMinute ?? '');
-      if(perMin === null) return;
-      await api(`/api/admin/api-keys/${encodeURIComponent(id)}/quota`, {method:'POST', body:JSON.stringify({dailyLimit: daily, rateLimitPerMinute: perMin})});
+      const values=await requestAction({title:'调整 API 配额',message:`${key.name || `Key #${id}`} · ${key.masked || ''}`,confirmText:'保存配额',fields:[
+        {name:'dailyLimit',label:'每日调用上限（留空表示不限）',type:'number',min:0,step:1,value:key.quota?.dailyLimit ?? ''},
+        {name:'rateLimitPerMinute',label:'每分钟限流（留空表示不限）',type:'number',min:0,step:1,value:key.quota?.rateLimitPerMinute ?? ''},
+      ]});
+      if(!values) return;
+      await api(`/api/admin/api-keys/${encodeURIComponent(id)}/quota`, {method:'POST', body:JSON.stringify(values)});
       toast('配额已保存'); await loadApiKeys(); await loadAudit();
     }
     async function loadAll(){
-      try{
-        await loadOverview();
-        const tasks = [loadAssurance(), loadExpertReview(), loadUsers(), loadDetections(), loadApiKeys(), loadSystem(), loadAlerts(), loadAudit()];
-        if(CAN_MANAGE_ADMINS) tasks.push(loadAdmins());
-        await Promise.all(tasks);
-      }
-      catch(err){ toast(err.message); }
+      updateSync('正在同步…');
+      await loadOverview();
+      const tasks=[];
+      if(can('topology.view')) tasks.push(loadAssurance(),loadExpertReview(),loadSystem());
+      if(can('user.view')) tasks.push(loadUsers());
+      if(can('detection.view')) tasks.push(loadDetections());
+      if(can('api_key.view')) tasks.push(loadApiKeys());
+      if(can('alerts.manage')) tasks.push(loadAlerts());
+      if(can('audit.view')) tasks.push(loadAudit());
+      if(CAN_MANAGE_ADMINS) tasks.push(loadAdmins());
+      await Promise.allSettled(tasks);
     }
     document.querySelectorAll('[data-route]').forEach(el => el.addEventListener('click', e => { e.preventDefault(); switchRoute(el.dataset.route); }));
     const initial = (location.hash || '#dashboard').slice(1);
-    const initialRoute = (titles[initial] && (initial !== 'admins' || CAN_MANAGE_ADMINS)) ? initial : 'dashboard';
+    const initialRoute = (titles[initial] && routeAllowed(initial)) ? initial : 'dashboard';
     renderTags(initialRoute); switchRoute(initialRoute); loadAll();
   </script>
 {% endif %}

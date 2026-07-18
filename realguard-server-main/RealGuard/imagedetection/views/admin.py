@@ -3,20 +3,33 @@ import csv
 import hashlib
 import hmac
 import io
+import ipaddress
+import json
 import os
 import re
 import secrets
 import shutil
+import socket
+import ssl
+import threading
 import time
 from datetime import datetime, timedelta
+from http.client import HTTPResponse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from urllib.parse import urlparse
 
 import requests
-from flask import Blueprint, Response, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, Response, g, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from imagedetection.views import admin_state, aliyun_green, model_registry
-from imagedetection.views.utils import detection_owner_where, excute_detection_sql, excute_sql, format_createtime
+from imagedetection.views.utils import (
+    detection_owner_where,
+    excute_detection_sql,
+    excute_sql,
+    format_createtime,
+    get_db_connection,
+)
 
 
 admin_blueprint = Blueprint("admin_blueprint", __name__)
@@ -24,10 +37,12 @@ ADMIN_SESSION_KEY = "admin_user"
 ADMIN_LOGIN_ATTEMPTS_KEY = "admin_login_attempts"
 ADMIN_CSRF_SESSION_KEY = "admin_csrf_token"
 ADMIN_SCREEN_SESSION_KEY = "admin_screen_access_digest"
+ADMIN_SCREEN_SESSION_ISSUED_KEY = "admin_screen_access_issued_at"
 ADMIN_USERNAME_RE = re.compile(r"^[a-zA-Z0-9_.-]{3,64}$")
 ADMIN_PASSWORD_MIN_LENGTH = int(os.environ.get("REALGUARD_ADMIN_PASSWORD_MIN_LENGTH", "10"))
 ADMIN_LOGIN_MAX_ATTEMPTS = int(os.environ.get("REALGUARD_ADMIN_LOGIN_MAX_ATTEMPTS", "5"))
 ADMIN_LOGIN_LOCK_SECONDS = int(os.environ.get("REALGUARD_ADMIN_LOGIN_LOCK_SECONDS", "600"))
+ADMIN_SESSION_MAX_AGE_SECONDS = int(os.environ.get("REALGUARD_ADMIN_SESSION_MAX_AGE_SECONDS", "28800"))
 ADMIN_SCHEMA_SQL = (
     """
     CREATE TABLE IF NOT EXISTS admin_accounts (
@@ -37,10 +52,12 @@ ADMIN_SCHEMA_SQL = (
         password_hash VARCHAR(255) NOT NULL,
         role VARCHAR(32) NOT NULL DEFAULT 'admin',
         status VARCHAR(16) NOT NULL DEFAULT 'active',
+        session_version INT NOT NULL DEFAULT 1,
         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         last_login_at DATETIME NULL,
         last_login_ip VARCHAR(64) NULL,
         KEY idx_admin_accounts_status (status),
+        KEY idx_admin_accounts_role_status (role, status),
         KEY idx_admin_accounts_phone (phone)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """,
@@ -107,7 +124,14 @@ ADMIN_ROLE_LABELS = {
 }
 ALL_ADMIN_PERMISSIONS = {
     "view",
+    "audit.view",
     "admin.manage",
+    "user.view",
+    "user.read_pii",
+    "detection.view",
+    "detection.read_pii",
+    "api_key.view",
+    "topology.view",
     "model.manage",
     "model.probe",
     "routing.manage",
@@ -118,21 +142,29 @@ ALL_ADMIN_PERMISSIONS = {
 }
 ADMIN_ROLE_PERMISSIONS = {
     "super_admin": {"*"},
-    "admin": {"*"},
+    "admin": ALL_ADMIN_PERMISSIONS - {"admin.manage"},
     "operator": {
         "view",
+        "detection.view",
+        "detection.read_pii",
+        "api_key.view",
+        "topology.view",
         "model.probe",
         "alerts.manage",
         "routing.manage",
         "detection.review",
         "data.export",
     },
-    "reviewer": {"view", "detection.review", "data.export"},
+    "reviewer": {"view", "detection.view", "detection.review", "data.export"},
     "readonly": {"view"},
 }
 BIG_SCREEN_CACHE_TTL_SECONDS = int(os.environ.get("REALGUARD_BIG_SCREEN_CACHE_SECONDS", "15"))
 _BIG_SCREEN_CACHE = {"expires": 0, "payload": None}
+DASHBOARD_METRICS_CACHE_TTL_SECONDS = int(os.environ.get("REALGUARD_DASHBOARD_METRICS_CACHE_SECONDS", "15"))
+_DASHBOARD_METRICS_CACHE = {"expires": 0, "payload": None}
 _PROCESS_STARTED_MONOTONIC = time.monotonic()
+_ALERT_WORKER_LOCK = threading.Lock()
+_ALERT_WORKER_THREAD = None
 PROBE_PNG_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
 )
@@ -145,7 +177,22 @@ def _current_user():
 
 def _current_admin_user():
     user = session.get(ADMIN_SESSION_KEY)
-    return user if isinstance(user, dict) else None
+    if not isinstance(user, dict):
+        return None
+    if hasattr(g, "_realguard_admin_user"):
+        return g._realguard_admin_user
+    refreshed = _refresh_admin_session(user)
+    if not refreshed:
+        session.pop(ADMIN_SESSION_KEY, None)
+        session.pop(ADMIN_CSRF_SESSION_KEY, None)
+        session.modified = True
+        g._realguard_admin_user = None
+        return None
+    if refreshed != user:
+        session[ADMIN_SESSION_KEY] = refreshed
+        session.modified = True
+    g._realguard_admin_user = refreshed
+    return refreshed
 
 
 def _admin_phone_set():
@@ -190,9 +237,9 @@ def _admin_permissions(role):
 def _has_admin_permission(user, permission="view"):
     if not user:
         return False
-    role = _normalize_admin_role(user.get("role") or ("super_admin" if user.get("authType") == "legacy_whitelist" else "admin"))
+    role = _normalize_admin_role(user.get("role") or "readonly")
     permissions = ADMIN_ROLE_PERMISSIONS.get(role, set())
-    return "*" in permissions or permission in permissions or permission == "view"
+    return "*" in permissions or permission in permissions
 
 
 def _legacy_admin_payload(user):
@@ -203,7 +250,7 @@ def _legacy_admin_payload(user):
         "adminId": None,
         "username": user.get("username") or "",
         "phone": user.get("phone") or "",
-        "role": "super_admin",
+        "role": "readonly",
         "authType": "legacy_whitelist",
     }
 
@@ -294,7 +341,13 @@ def _screen_token_matches(token):
 def _screen_session_valid():
     expected = _configured_screen_token_digest()
     claim = str(session.get(ADMIN_SCREEN_SESSION_KEY) or "")
-    return bool(expected and claim and hmac.compare_digest(claim, expected))
+    try:
+        issued_at = int(session.get(ADMIN_SCREEN_SESSION_ISSUED_KEY) or 0)
+    except (TypeError, ValueError):
+        issued_at = 0
+    max_age = max(300, int(os.environ.get("REALGUARD_BIG_SCREEN_SESSION_SECONDS", "14400")))
+    valid_age = issued_at > 0 and 0 <= int(time.time()) - issued_at <= max_age
+    return bool(expected and claim and valid_age and hmac.compare_digest(claim, expected))
 
 
 def _screen_token_valid():
@@ -313,8 +366,20 @@ def _screen_token_user():
 
 
 def _client_ip():
-    forwarded = str(request.headers.get("X-Forwarded-For") or "").split(",", 1)[0].strip()
-    return (forwarded or request.remote_addr or "")[:128]
+    remote = str(request.remote_addr or "").strip()
+    trusted = {
+        item.strip()
+        for item in os.environ.get("REALGUARD_TRUSTED_PROXIES", "127.0.0.1,::1").split(",")
+        if item.strip()
+    }
+    candidate = remote
+    if remote in trusted:
+        forwarded = str(request.headers.get("X-Forwarded-For") or "").split(",")[-1].strip()
+        candidate = forwarded or str(request.headers.get("X-Real-IP") or "").strip() or remote
+    try:
+        return str(ipaddress.ip_address(candidate))[:128]
+    except ValueError:
+        return remote[:128]
 
 
 def _security_hash(value):
@@ -394,6 +459,56 @@ def apply_admin_schema():
             messages.append(f"{table}: failed")
         else:
             messages.append(f"{table}: ready")
+    columns = excute_sql("SHOW COLUMNS FROM admin_accounts") or []
+    if columns and "session_version" not in {row.get("Field") for row in columns}:
+        result = excute_sql(
+            "ALTER TABLE admin_accounts ADD COLUMN session_version INT NOT NULL DEFAULT 1 AFTER status",
+            fetch=False,
+        )
+        if result is None:
+            ok = False
+            messages.append("admin_accounts.session_version: failed")
+        else:
+            messages.append("admin_accounts.session_version: ready")
+    admin_indexes = excute_sql("SHOW INDEX FROM admin_accounts") or []
+    if admin_indexes and "idx_admin_accounts_role_status" not in {
+        row.get("Key_name") for row in admin_indexes
+    }:
+        result = excute_sql(
+            "CREATE INDEX idx_admin_accounts_role_status ON admin_accounts (role, status)",
+            fetch=False,
+        )
+        if result is None:
+            ok = False
+            messages.append("admin_accounts.idx_admin_accounts_role_status: failed")
+        else:
+            messages.append("admin_accounts.idx_admin_accounts_role_status: ready")
+    index_specs = {
+        "data": {
+            "idx_data_createtime": "createtime",
+            "idx_data_phone": "phone",
+            "idx_data_aigc": "aigc",
+            "idx_data_feedback": "feedback",
+        },
+        "video_data": {
+            "idx_video_data_createtime": "createtime",
+            "idx_video_data_phone": "phone",
+        },
+    }
+    for table, indexes in index_specs.items():
+        existing_rows = excute_detection_sql(f"SHOW INDEX FROM `{table}`")
+        if existing_rows is None:
+            messages.append(f"{table} indexes: skipped")
+            continue
+        existing = {row.get("Key_name") for row in existing_rows}
+        for name, column in indexes.items():
+            if name in existing:
+                continue
+            result = excute_detection_sql(
+                f"CREATE INDEX `{name}` ON `{table}` (`{column}`)",
+                fetch=False,
+            )
+            messages.append(f"{table}.{name}: {'ready' if result is not None else 'failed'}")
     return ok, messages
 
 
@@ -426,12 +541,29 @@ def _find_admin_account(identity):
         return None
     rows = excute_sql(
         """
-        SELECT id, username, phone, password_hash, role, status, created_at, last_login_at, last_login_ip
+        SELECT id, username, phone, password_hash, role, status, session_version,
+               created_at, last_login_at, last_login_ip
         FROM admin_accounts
         WHERE username = %s OR phone = %s
         LIMIT 1
         """,
         (identity, identity),
+    ) or []
+    return rows[0] if rows else None
+
+
+def _find_admin_account_by_id(admin_id):
+    if not admin_id or not _ensure_admin_account_table():
+        return None
+    rows = excute_sql(
+        """
+        SELECT id, username, phone, password_hash, role, status, session_version,
+               created_at, last_login_at, last_login_ip
+        FROM admin_accounts
+        WHERE id = %s
+        LIMIT 1
+        """,
+        (admin_id,),
     ) or []
     return rows[0] if rows else None
 
@@ -449,7 +581,8 @@ def _admin_password_error(password):
 
 def _admin_registration_allowed():
     admin_user = _current_admin_user()
-    return bool((admin_user and _has_admin_permission(admin_user, "admin.manage")) or _is_legacy_admin(_current_user()))
+    legacy_bootstrap = _is_legacy_admin(_current_user()) and _admin_account_count() == 0
+    return bool((admin_user and _has_admin_permission(admin_user, "admin.manage")) or legacy_bootstrap)
 
 
 def _create_admin_account(username, phone, password, role="admin"):
@@ -481,7 +614,7 @@ def _create_admin_account(username, phone, password, role="admin"):
     return True, ""
 
 
-def _admin_session_payload(account):
+def _admin_session_payload(account, issued_at=None):
     return {
         "Userid": f"admin:{account.get('id')}",
         "adminId": account.get("id"),
@@ -489,13 +622,36 @@ def _admin_session_payload(account):
         "phone": account.get("phone") or "",
         "role": account.get("role") or "admin",
         "authType": "admin_account",
+        "sessionVersion": int(account.get("session_version") or 1),
+        "issuedAt": int(issued_at or time.time()),
     }
+
+
+def _refresh_admin_session(user):
+    """Refresh the signed cookie snapshot from the authoritative account row."""
+    if not isinstance(user, dict) or user.get("authType") != "admin_account":
+        return None
+    try:
+        issued_at = int(user.get("issuedAt") or 0)
+        session_version = int(user.get("sessionVersion") or 0)
+        admin_id = int(user.get("adminId") or 0)
+    except (TypeError, ValueError):
+        return None
+    now = int(time.time())
+    if issued_at <= 0 or now - issued_at > max(300, ADMIN_SESSION_MAX_AGE_SECONDS) or issued_at > now + 60:
+        return None
+    account = _find_admin_account_by_id(admin_id)
+    if not account or account.get("status") != "active":
+        return None
+    if int(account.get("session_version") or 1) != session_version:
+        return None
+    return _admin_session_payload(account, issued_at=issued_at)
 
 
 def _update_admin_login(account):
     excute_sql(
         "UPDATE admin_accounts SET last_login_at = NOW(), last_login_ip = %s WHERE id = %s",
-        (request.headers.get("X-Forwarded-For", request.remote_addr or "")[:64], account.get("id")),
+        (_client_ip()[:64], account.get("id")),
         fetch=False,
     )
 
@@ -540,36 +696,49 @@ def _record_admin_login_failure(identity=None):
     if identity and _login_attempt_table_ready():
         identity_hash, ip_hash = _login_attempt_keys(identity)
         now = int(time.time())
-        rows = excute_sql(
-            """
-            SELECT failure_count, locked_until_epoch
-            FROM admin_login_attempts
-            WHERE identity_hash = %s AND ip_hash = %s
-            LIMIT 1
-            """,
-            (identity_hash, ip_hash),
-        ) or []
-        if rows:
-            row = rows[0]
-            previous_lock = int(row.get("locked_until_epoch") or 0)
-            previous_count = int(row.get("failure_count") or 0)
-            count = 1 if previous_lock and previous_lock <= now else previous_count + 1
-        else:
-            count = 1
-        locked_until = now + ADMIN_LOGIN_LOCK_SECONDS if count >= ADMIN_LOGIN_MAX_ATTEMPTS else 0
-        excute_sql(
-            """
-            INSERT INTO admin_login_attempts (identity_hash, ip_hash, failure_count, locked_until_epoch, last_failed_at)
-            VALUES (%s, %s, %s, %s, NOW())
-            ON DUPLICATE KEY UPDATE
-                failure_count = VALUES(failure_count),
-                locked_until_epoch = VALUES(locked_until_epoch),
-                last_failed_at = NOW()
-            """,
-            (identity_hash, ip_hash, count, locked_until),
-            fetch=False,
-        )
-        return
+        conn = None
+        try:
+            conn = get_db_connection()
+            conn.begin()
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT failure_count, locked_until_epoch
+                    FROM admin_login_attempts
+                    WHERE identity_hash = %s AND ip_hash = %s
+                    LIMIT 1 FOR UPDATE
+                    """,
+                    (identity_hash, ip_hash),
+                )
+                row = cursor.fetchone()
+                if row:
+                    previous_lock = int(row.get("locked_until_epoch") or 0)
+                    previous_count = int(row.get("failure_count") or 0)
+                    count = 1 if previous_lock and previous_lock <= now else previous_count + 1
+                else:
+                    count = 1
+                locked_until = now + ADMIN_LOGIN_LOCK_SECONDS if count >= ADMIN_LOGIN_MAX_ATTEMPTS else 0
+                cursor.execute(
+                    """
+                    INSERT INTO admin_login_attempts
+                        (identity_hash, ip_hash, failure_count, locked_until_epoch, last_failed_at)
+                    VALUES (%s, %s, %s, %s, NOW())
+                    ON DUPLICATE KEY UPDATE
+                        failure_count = VALUES(failure_count),
+                        locked_until_epoch = VALUES(locked_until_epoch),
+                        last_failed_at = NOW()
+                    """,
+                    (identity_hash, ip_hash, count, locked_until),
+                )
+            conn.commit()
+            return
+        except Exception as exc:
+            print(f"[ADMIN LOGIN RATE LIMIT ERROR] {exc}")
+            if conn:
+                conn.rollback()
+        finally:
+            if conn:
+                conn.close()
     _record_session_login_failure()
 
 
@@ -613,6 +782,87 @@ def _admin_account_payload(row):
     }
 
 
+def _update_admin_account_atomic(admin_id, role, status, actor_admin_id=None):
+    conn = None
+    try:
+        conn = get_db_connection()
+        conn.begin()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id
+                FROM admin_accounts
+                WHERE role = 'super_admin' AND status = 'active'
+                ORDER BY id
+                FOR UPDATE
+                """
+            )
+            active_super_ids = {int(row.get("id")) for row in (cursor.fetchall() or [])}
+            cursor.execute(
+                """
+                SELECT id, username, phone, role, status, session_version,
+                       created_at, last_login_at, last_login_ip
+                FROM admin_accounts
+                WHERE id = %s
+                LIMIT 1
+                FOR UPDATE
+                """,
+                (admin_id,),
+            )
+            before = cursor.fetchone()
+            if not before:
+                conn.rollback()
+                return None, None, "not_found"
+            effective_role = _normalize_admin_role(role if role is not None else before.get("role"))
+            effective_status = str(status if status is not None else before.get("status") or "active").strip()
+            if int(actor_admin_id or 0) == int(admin_id) and (
+                effective_status != "active" or effective_role not in ("admin", "super_admin")
+            ):
+                conn.rollback()
+                return before, None, "self_downgrade"
+            removes_active_super = (
+                int(admin_id) in active_super_ids
+                and (effective_role != "super_admin" or effective_status != "active")
+            )
+            if removes_active_super and len(active_super_ids) <= 1:
+                conn.rollback()
+                return before, None, "last_super_admin"
+            cursor.execute(
+                """
+                UPDATE admin_accounts
+                SET role = %s, status = %s, session_version = session_version + 1
+                WHERE id = %s
+                """,
+                (effective_role, effective_status, admin_id),
+            )
+            cursor.execute(
+                """
+                SELECT id, username, phone, role, status, session_version,
+                       created_at, last_login_at, last_login_ip
+                FROM admin_accounts
+                WHERE id = %s
+                LIMIT 1
+                """,
+                (admin_id,),
+            )
+            after = cursor.fetchone() or {
+                **before,
+                "role": effective_role,
+                "status": effective_status,
+                "session_version": int(before.get("session_version") or 1) + 1,
+            }
+        conn.commit()
+        return before, after, ""
+    except Exception as exc:
+        print(f"[ADMIN ACCOUNT UPDATE ERROR] {exc}")
+        if conn:
+            conn.rollback()
+        return None, None, "database_error"
+    finally:
+        if conn:
+            conn.close()
+
+
 def _detection_data_columns():
     rows = excute_detection_sql("SHOW COLUMNS FROM data") or []
     return {row.get("Field") for row in rows if isinstance(row, dict) and row.get("Field")}
@@ -654,6 +904,23 @@ def _limit_arg(default=50, maximum=200):
         return default
 
 
+def _cursor_arg():
+    raw = str(request.args.get("cursor") or "").strip()
+    if not raw:
+        return None
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return None
+
+
+def _page_payload(items, limit, id_field="id"):
+    has_more = len(items) > limit
+    visible = items[:limit]
+    next_cursor = visible[-1].get(id_field) if has_more and visible else None
+    return visible, {"hasMore": has_more, "nextCursor": str(next_cursor) if next_cursor is not None else None}
+
+
 def _search_term():
     return str(request.args.get("q") or "").strip()
 
@@ -667,16 +934,325 @@ def _audit(actor, action, target, before=None, after=None, meta=None):
 
 
 def _csv_response(filename, headers, rows):
+    def safe_cell(value):
+        if isinstance(value, str) and value[:1] in ("=", "+", "-", "@", "\t", "\r"):
+            return f"'{value}"
+        return value
+
     buffer = io.StringIO()
     buffer.write("\ufeff")
     writer = csv.writer(buffer)
-    writer.writerow(headers)
-    writer.writerows(rows)
+    writer.writerow([safe_cell(value) for value in headers])
+    writer.writerows([[safe_cell(value) for value in row] for row in rows])
     return Response(
         buffer.getvalue(),
         mimetype="text/csv; charset=utf-8",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+def _mask_phone(value):
+    text = str(value or "")
+    if len(text) < 7:
+        return "***" if text else ""
+    return f"{text[:3]}****{text[-4:]}"
+
+
+def _mask_identifier(value):
+    text = str(value or "")
+    if len(text) <= 8:
+        return "***" if text else ""
+    return f"{text[:4]}...{text[-4:]}"
+
+
+def _api_key_owner_label(username, phone, include_pii=False):
+    username = str(username or "").strip()
+    phone = str(phone or "").strip()
+    if include_pii:
+        return username or phone
+    if username:
+        compact = re.sub(r"[\s()+.-]", "", username)
+        if username == phone or (compact.isdigit() and 7 <= len(compact) <= 15):
+            return _mask_phone(username)
+        return _mask_identifier(username)
+    return _mask_phone(phone)
+
+
+def _redact_metadata(value):
+    sensitive_tokens = ("gps", "latitude", "longitude", "serial", "owner", "artist", "copyright", "location")
+    if isinstance(value, dict):
+        return {
+            key: _redact_metadata(item)
+            for key, item in value.items()
+            if not any(token in str(key).lower() for token in sensitive_tokens)
+        }
+    if isinstance(value, list):
+        return [_redact_metadata(item) for item in value]
+    return value
+
+
+def _safe_model_payload(model):
+    payload = dict(model)
+    for field in ("endpoint", "healthUrl", "artifactPath", "externalDataPath", "notes", "headers", "env"):
+        payload.pop(field, None)
+    artifacts = payload.get("artifacts")
+    if isinstance(artifacts, dict):
+        payload["artifacts"] = {
+            key: {"exists": bool(item.get("exists"))} if isinstance(item, dict) else item
+            for key, item in artifacts.items()
+        }
+    return payload
+
+
+def _safe_model_run_payload(run, include_topology=False, include_pii=False):
+    if not isinstance(run, dict):
+        return None
+    model = run.get("model") if isinstance(run.get("model"), dict) else {}
+    actor = run.get("actor") if isinstance(run.get("actor"), dict) else {}
+    meta = run.get("meta") if isinstance(run.get("meta"), dict) else {}
+    safe_model = {
+        "id": model.get("id") or "",
+        "name": model.get("name") or model.get("id") or "",
+        "version": model.get("version") or "",
+    }
+    if include_topology:
+        safe_model.update({
+            "runtime": model.get("runtime") or "",
+            "endpoint": model.get("endpoint") or "",
+        })
+    safe_actor = {"id": actor.get("id")}
+    if include_pii:
+        safe_actor.update({
+            "username": actor.get("username") or "",
+            "phone": actor.get("phone") or "",
+        })
+    safe_meta = {
+        key: meta.get(key)
+        for key in ("provider", "service", "latencyMs", "fallback")
+        if key in meta
+    }
+    if include_topology and include_pii:
+        safe_meta = dict(meta)
+    return {
+        "id": run.get("id") or "",
+        "createdAt": run.get("createdAt") or "",
+        "itemid": run.get("itemid"),
+        "route": run.get("route") or "",
+        "status": run.get("status") or "",
+        "model": safe_model,
+        "actor": safe_actor,
+        "meta": safe_meta,
+    }
+
+
+def _model_run_for_admin(run, actor, pii_permission="detection.read_pii"):
+    return _safe_model_run_payload(
+        run,
+        include_topology=_has_admin_permission(actor, "topology.view"),
+        include_pii=_has_admin_permission(actor, pii_permission),
+    )
+
+
+def _resolve_public_webhook_addresses(host, port):
+    try:
+        resolved = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        return [], f"Webhook 域名解析失败：{exc}"
+    addresses = []
+    for item in resolved:
+        address = str(item[4][0] or "").split("%", 1)[0]
+        try:
+            parsed = ipaddress.ip_address(address)
+        except ValueError:
+            continue
+        if not parsed.is_global:
+            return [], "Webhook 域名解析到了内网、本机或保留地址"
+        normalized = str(parsed)
+        if normalized not in addresses:
+            addresses.append(normalized)
+    if not addresses:
+        return [], "Webhook 域名没有可用的公网地址"
+    return addresses, ""
+
+
+def _validate_webhook_url(value, resolve=False):
+    url = str(value or "").strip()
+    if not url:
+        return "", ""
+    if any(ord(char) <= 32 or ord(char) == 127 for char in url):
+        return "", "Webhook 地址包含非法控制字符"
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        return "", "Webhook 必须使用不含账号信息的 HTTPS 地址"
+    host = parsed.hostname
+    try:
+        port = parsed.port or 443
+    except ValueError:
+        return "", "Webhook 端口无效"
+    try:
+        literal = ipaddress.ip_address(host)
+        if not literal.is_global:
+            return "", "Webhook 不能指向内网、本机或保留地址"
+    except ValueError:
+        if resolve:
+            _, error = _resolve_public_webhook_addresses(host, port)
+            if error:
+                return "", error
+    return url, ""
+
+
+def _post_webhook_payload(url, payload, address, timeout=5):
+    parsed = urlparse(url)
+    host = parsed.hostname.encode("idna").decode("ascii")
+    port = parsed.port or 443
+    target = parsed.path or "/"
+    if parsed.query:
+        target = f"{target}?{parsed.query}"
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    host_header = f"[{host}]" if ":" in host else host
+    if port != 443:
+        host_header = f"{host_header}:{port}"
+    headers = (
+        f"POST {target} HTTP/1.1\r\n"
+        f"Host: {host_header}\r\n"
+        "User-Agent: RealGuard-Alerting/1.0\r\n"
+        "Content-Type: application/json; charset=utf-8\r\n"
+        f"Content-Length: {len(body)}\r\n"
+        "Connection: close\r\n\r\n"
+    ).encode("ascii")
+    tls_context = ssl.create_default_context()
+    with socket.create_connection((address, port), timeout=timeout) as raw_socket:
+        with tls_context.wrap_socket(raw_socket, server_hostname=host) as tls_socket:
+            tls_socket.settimeout(timeout)
+            tls_socket.sendall(headers + body)
+            response = HTTPResponse(tls_socket)
+            response.begin()
+            response_text = response.read(161).decode("utf-8", errors="replace")
+            return response.status, response_text
+
+
+def _deliver_alert_claim(claim, webhook_url):
+    url, error = _validate_webhook_url(webhook_url)
+    if error:
+        return admin_state.record_alert_delivery(claim, False, error=error, attempts=1)
+    parsed = urlparse(url)
+    addresses, error = _resolve_public_webhook_addresses(parsed.hostname, parsed.port or 443)
+    if error:
+        return admin_state.record_alert_delivery(claim, False, error=error, attempts=1)
+    payload = {
+        "source": "慧鉴AI",
+        "eventId": claim.get("eventId"),
+        "kind": claim.get("kind"),
+        "level": claim.get("level"),
+        "title": claim.get("title"),
+        "message": claim.get("message"),
+        "occurredAt": claim.get("createdAt"),
+    }
+    last_error = ""
+    status_code = None
+    for attempt in range(1, 4):
+        try:
+            address = addresses[(attempt - 1) % len(addresses)]
+            status_code, response_text = _post_webhook_payload(url, payload, address, timeout=5)
+            if 200 <= status_code < 300:
+                return admin_state.record_alert_delivery(claim, True, status_code=status_code, attempts=attempt)
+            last_error = f"HTTP {status_code}: {response_text[:160]}"
+        except Exception as exc:
+            last_error = str(exc)
+        if attempt < 3:
+            time.sleep(0.5 * attempt)
+    return admin_state.record_alert_delivery(
+        claim,
+        False,
+        status_code=status_code,
+        error=last_error,
+        attempts=3,
+    )
+
+
+def _alert_conditions(registry, models, assurance):
+    routing = registry.get("routing") or {}
+    enabled_models = [model for model in models if model.get("enabled") is not False]
+    artifact_missing = any(
+        model.get("id") == "v1-onnx-mil" and (model.get("health") or {}).get("artifactReady") is False
+        for model in models
+    )
+    probe_failed = any(not (model.get("health") or {}).get("serviceOk") for model in enabled_models)
+    return {
+        "v1Offline": {
+            "active": not bool(assurance.get("online")),
+            "level": "critical",
+            "title": "主鉴伪链路离线",
+            "message": "主图像模型未达到可用状态，请登录管理后台查看模型健康详情。",
+        },
+        "artifactMissing": {
+            "active": artifact_missing,
+            "level": "critical",
+            "title": "模型文件缺失",
+            "message": "V1 ONNX 模型文件不完整，模型能力无法正常加载。",
+        },
+        "fallbackEnabled": {
+            "active": bool(routing.get("fallbackEnabled")),
+            "level": "warning",
+            "title": "自动兜底已启用",
+            "message": "主模型失败后会切换模型，请确认当前业务口径允许自动替换。",
+        },
+        "probeFailed": {
+            "active": probe_failed,
+            "level": "warning",
+            "title": "模型健康探测失败",
+            "message": "至少一个已启用模型的健康接口不可达或返回失败状态。",
+        },
+    }
+
+
+def run_alert_cycle():
+    config = admin_state.alerts()
+    if not config.get("enabled") or not str(config.get("webhookUrl") or "").strip():
+        return []
+    registry = model_registry.load_registry()
+    models = _models_payload_with_health(registry.get("models", []))
+    assurance = _v1_assurance(registry=registry, models=models)
+    conditions = _alert_conditions(registry, models, assurance)
+    deliveries = []
+    rules = config.get("rules") or {}
+    for event_id, condition in conditions.items():
+        if not rules.get(event_id, True):
+            admin_state.suppress_alert_event(event_id)
+            continue
+        active = bool(condition.get("active"))
+        claim = admin_state.claim_alert_event(
+            event_id,
+            active,
+            condition.get("title"),
+            condition.get("message"),
+            condition.get("level"),
+        )
+        if claim:
+            deliveries.append(_deliver_alert_claim(claim, config.get("webhookUrl")))
+    return deliveries
+
+
+def ensure_alert_worker(app):
+    global _ALERT_WORKER_THREAD
+    if app.config.get("TESTING") or os.environ.get("REALGUARD_ALERT_WORKER_ENABLED", "1").lower() in ("0", "false", "off"):
+        return
+    with _ALERT_WORKER_LOCK:
+        if _ALERT_WORKER_THREAD and _ALERT_WORKER_THREAD.is_alive():
+            return
+
+        def loop():
+            interval = max(15, int(os.environ.get("REALGUARD_ALERT_INTERVAL_SECONDS", "30")))
+            while True:
+                try:
+                    with app.app_context():
+                        run_alert_cycle()
+                except Exception as exc:
+                    print(f"[ADMIN ALERT WORKER ERROR] {exc}")
+                time.sleep(interval)
+
+        _ALERT_WORKER_THREAD = threading.Thread(target=loop, name="realguard-alert-worker", daemon=True)
+        _ALERT_WORKER_THREAD.start()
 
 
 def _probe_model(model):
@@ -750,7 +1326,7 @@ def _v1_assurance(registry=None, models=None):
     registry = registry or model_registry.load_registry()
     routing = registry.get("routing", {})
     if models is None:
-        models = [_model_payload(model, include_health=True) for model in registry.get("models", [])]
+        models = _models_payload_with_health(registry.get("models", []))
     by_id = {model.get("id"): model for model in models}
     primary = by_id.get(routing.get("imagePrimary")) or {}
     v1_models = [model for model in models if str(model.get("id") or "").startswith("v1-")]
@@ -856,6 +1432,22 @@ def _dashboard_metrics():
     }
 
 
+def _cached_dashboard_metrics():
+    now = time.time()
+    payload = _DASHBOARD_METRICS_CACHE.get("payload")
+    if payload and now < float(_DASHBOARD_METRICS_CACHE.get("expires") or 0):
+        return payload
+    payload = _dashboard_metrics()
+    _DASHBOARD_METRICS_CACHE["payload"] = payload
+    _DASHBOARD_METRICS_CACHE["expires"] = now + max(1, DASHBOARD_METRICS_CACHE_TTL_SECONDS)
+    return payload
+
+
+def _clear_dashboard_metrics_cache():
+    _DASHBOARD_METRICS_CACHE["expires"] = 0
+    _DASHBOARD_METRICS_CACHE["payload"] = None
+
+
 def _hourly_detection_series(hours=24):
     start, buckets = _hours_window(hours)
     image_rows = excute_detection_sql(
@@ -907,7 +1499,12 @@ def _feedback_distribution():
         return [{"label": "未反馈", "count": _scalar("SELECT COUNT(*) AS count FROM data", detection=True)}]
     rows = excute_detection_sql(
         """
-        SELECT COALESCE(NULLIF(feedback, ''), '未反馈') AS label, COUNT(*) AS count
+        SELECT CASE
+                 WHEN feedback = 1 THEN '满意'
+                 WHEN feedback = -1 THEN '不满意'
+                 ELSE '未反馈'
+               END AS label,
+               COUNT(*) AS count
         FROM data
         GROUP BY label
         ORDER BY count DESC
@@ -1076,7 +1673,60 @@ def _screen_model_payload(model):
             "artifactReady": health.get("artifactReady"),
             "latencyMs": health.get("latencyMs"),
             "message": message,
+            "telemetry": health.get("telemetry") if isinstance(health.get("telemetry"), dict) else {},
         },
+    }
+
+
+def _model_run_performance(limit=1000):
+    runs = admin_state.list_model_runs(limit)
+    groups = {}
+    all_latencies = []
+    success = 0
+    for run in runs:
+        model = run.get("model") if isinstance(run.get("model"), dict) else {}
+        model_id = str(model.get("id") or "unknown")
+        group = groups.setdefault(model_id, {"modelId": model_id, "count": 0, "success": 0, "latencies": []})
+        group["count"] += 1
+        if str(run.get("status") or "").lower() in ("success", "ok", "completed"):
+            group["success"] += 1
+            success += 1
+        meta = run.get("meta") if isinstance(run.get("meta"), dict) else {}
+        try:
+            latency = float(meta.get("latencyMs"))
+        except (TypeError, ValueError):
+            latency = None
+        if latency is not None and latency >= 0:
+            group["latencies"].append(latency)
+            all_latencies.append(latency)
+
+    def percentile(values, fraction):
+        if not values:
+            return None
+        ordered = sorted(values)
+        index = min(len(ordered) - 1, max(0, int(round((len(ordered) - 1) * fraction))))
+        return round(ordered[index], 1)
+
+    models = []
+    for group in groups.values():
+        count = group.pop("count")
+        successful = group.pop("success")
+        latencies = group.pop("latencies")
+        models.append({
+            **group,
+            "count": count,
+            "successRate": round(successful * 100 / count, 1) if count else None,
+            "p50LatencyMs": percentile(latencies, 0.5),
+            "p95LatencyMs": percentile(latencies, 0.95),
+        })
+    models.sort(key=lambda item: item.get("count") or 0, reverse=True)
+    total = len(runs)
+    return {
+        "sampleSize": total,
+        "successRate": round(success * 100 / total, 1) if total else None,
+        "p50LatencyMs": percentile(all_latencies, 0.5),
+        "p95LatencyMs": percentile(all_latencies, 0.95),
+        "models": models[:12],
     }
 
 
@@ -1159,9 +1809,9 @@ def _big_screen_anomalies(metrics, models, assurance, host):
 
 def _big_screen_payload():
     registry = model_registry.load_registry()
-    raw_models = [_model_payload(model, include_health=True) for model in registry.get("models", [])]
+    raw_models = _models_payload_with_health(registry.get("models", []))
     models = [_screen_model_payload(model) for model in raw_models]
-    metrics = _dashboard_metrics()
+    metrics = _cached_dashboard_metrics()
     assurance_detail = _v1_assurance(registry=registry, models=raw_models)
     assurance = _screen_assurance_payload(assurance_detail)
     host = _host_telemetry()
@@ -1178,9 +1828,10 @@ def _big_screen_payload():
         "labels": _label_distribution(),
         "feedback": _feedback_distribution(),
         "routes": _route_distribution(),
+        "performance": _model_run_performance(1000),
         "recent": _recent_detection_items(12),
         "assurance": assurance,
-        "anomalies": _big_screen_anomalies(metrics, models, assurance, host),
+        "anomalies": _big_screen_anomalies(metrics, models, assurance_detail, host),
         "privacy": {"piiIncluded": False, "internalEndpointsIncluded": False},
     }
 
@@ -1209,9 +1860,24 @@ def _model_payload(model, include_health=False):
     return payload
 
 
+def _models_payload_with_health(models, force=False):
+    models = list(models or [])
+    health_by_id = model_registry.check_models_health(models, force=force)
+    payloads = []
+    for model in models:
+        payload = _model_payload(model)
+        payload["health"] = health_by_id.get(str(model.get("id") or ""), {
+            "ok": False,
+            "serviceOk": False,
+            "message": "health result unavailable",
+        })
+        payloads.append(payload)
+    return payloads
+
+
 def _service_health():
     registry = model_registry.load_registry()
-    models = [_model_payload(model, include_health=True) for model in registry.get("models", [])]
+    models = _models_payload_with_health(registry.get("models", []))
     screen_models = [_screen_model_payload(model) for model in models]
     return {
         "models": models,
@@ -1228,6 +1894,7 @@ def _service_health():
         ],
         "host": _host_telemetry(),
         "serviceSummary": _service_summary(screen_models),
+        "performance": _model_run_performance(1000),
         "environment": {
             "detectorBackendUrl": os.environ.get("REALGUARD_DETECTION_BACKEND_URL", ""),
             "adminConfigured": bool(_admin_phone_set() or _admin_user_id_set()),
@@ -1288,6 +1955,9 @@ def admin_login():
 @admin_blueprint.route("/admin/register", methods=["GET", "POST"])
 def admin_register():
     user, permission_error = _admin_required("admin.manage")
+    if permission_error and _is_legacy_admin(_current_user()) and _admin_account_count() == 0:
+        user = _legacy_admin_payload(_current_user())
+        permission_error = None
     if permission_error:
         return render_template(
             "admin_auth.html",
@@ -1306,8 +1976,6 @@ def admin_register():
             return render_template("admin_auth.html", **_admin_auth_context("register", error=message)), 400
         account = _find_admin_account(username)
         if account:
-            session.permanent = True
-            session[ADMIN_SESSION_KEY] = _admin_session_payload(account)
             _audit(user, "admin_account.create", username, after={"username": username, "phone": phone, "role": role})
         return redirect(url_for("admin_blueprint.admin_console"))
     return render_template("admin_auth.html", **_admin_auth_context("register"))
@@ -1324,6 +1992,7 @@ def admin_logout():
     session.pop(ADMIN_LOGIN_ATTEMPTS_KEY, None)
     session.pop(ADMIN_CSRF_SESSION_KEY, None)
     session.pop(ADMIN_SCREEN_SESSION_KEY, None)
+    session.pop(ADMIN_SCREEN_SESSION_ISSUED_KEY, None)
     if not admin_user and _is_legacy_admin(legacy_user):
         session.pop("user_info", None)
     return redirect(url_for("admin_blueprint.admin_login"))
@@ -1334,6 +2003,7 @@ def admin_screen():
     request_token = _screen_token_from_request()
     if _screen_token_matches(request_token):
         session[ADMIN_SCREEN_SESSION_KEY] = _configured_screen_token_digest()
+        session[ADMIN_SCREEN_SESSION_ISSUED_KEY] = int(time.time())
         session.modified = True
         if request.args.get("screenToken") or request.args.get("token"):
             return redirect(url_for("admin_blueprint.admin_screen"))
@@ -1348,17 +2018,19 @@ def admin_screen():
 
 @admin_blueprint.route("/api/admin/overview")
 def admin_overview():
-    _, error = _admin_required("view")
+    user, error = _admin_required("view")
     if error:
         return error
     registry = model_registry.load_registry()
-    models = [_model_payload(model, include_health=True) for model in registry.get("models", [])]
+    models = _models_payload_with_health(registry.get("models", []))
+    if not _has_admin_permission(user, "topology.view"):
+        models = [_safe_model_payload(model) for model in models]
     return jsonify({
         "status": "success",
         "routing": registry.get("routing", {}),
         "routingHistory": model_registry.routing_history(10),
         "models": models,
-        "metrics": _dashboard_metrics(),
+        "metrics": _cached_dashboard_metrics(),
     })
 
 
@@ -1374,7 +2046,7 @@ def admin_big_screen():
 
 @admin_blueprint.route("/api/admin/system")
 def admin_system():
-    _, error = _admin_required("view")
+    _, error = _admin_required("topology.view")
     if error:
         return error
     return jsonify({"status": "success", **_service_health()})
@@ -1382,7 +2054,7 @@ def admin_system():
 
 @admin_blueprint.route("/api/admin/models", methods=["GET", "POST"])
 def admin_models():
-    permission = "model.manage" if request.method == "POST" else "view"
+    permission = "model.manage" if request.method == "POST" else "topology.view"
     user, error = _admin_required(permission)
     if error:
         return error
@@ -1391,6 +2063,7 @@ def admin_models():
         _, model, message = model_registry.create_model(payload)
         if not model:
             return jsonify({"status": "error", "message": message or "模型创建失败"}), 400
+        model_registry.clear_health_cache()
         _audit(user, "model.create", model.get("id"), before=None, after=model)
         return jsonify({"status": "success", "model": _model_payload(model, include_health=True)}), 201
     return jsonify({
@@ -1411,6 +2084,7 @@ def admin_update_model(model_id):
     _, model = model_registry.update_model(model_id, payload)
     if not model:
         return jsonify({"status": "error", "message": "模型不存在"}), 404
+    model_registry.clear_health_cache()
     _audit(user, "model.update", model_id, before=before, after=model)
     return jsonify({"status": "success", "model": _model_payload(model, include_health=True)})
 
@@ -1424,6 +2098,7 @@ def admin_delete_model(model_id):
     registry, message = model_registry.delete_model(model_id)
     if not registry:
         return jsonify({"status": "error", "message": message or "模型删除失败"}), 400
+    model_registry.clear_health_cache()
     _audit(user, "model.delete", model_id, before=before, after=None)
     return jsonify({"status": "success", "models": [_model_payload(model) for model in registry.get("models", [])]})
 
@@ -1436,6 +2111,7 @@ def admin_model_health(model_id):
     model = model_registry.get_model(model_id)
     if not model:
         return jsonify({"status": "error", "message": "模型不存在"}), 404
+    model_registry.clear_health_cache()
     return jsonify({"status": "success", "health": model_registry.check_model_health(model)})
 
 
@@ -1458,7 +2134,10 @@ def admin_update_routing():
     if error:
         return error
     before = model_registry.get_routing()
-    routing = model_registry.update_routing(request.get_json(silent=True) or {})
+    try:
+        routing = model_registry.update_routing(request.get_json(silent=True) or {})
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
     _clear_big_screen_cache()
     _audit(user, "routing.update", "image", before=before, after=routing)
     return jsonify({"status": "success", "routing": routing})
@@ -1481,7 +2160,7 @@ def admin_rollback_routing():
 
 @admin_blueprint.route("/api/admin/swarm", methods=["GET", "PATCH", "POST"])
 def admin_swarm_config():
-    permission = "view" if request.method == "GET" else "routing.manage"
+    permission = "topology.view" if request.method == "GET" else "routing.manage"
     user, error = _admin_required(permission)
     if error:
         return error
@@ -1496,7 +2175,7 @@ def admin_swarm_config():
 
 @admin_blueprint.route("/api/admin/assurance")
 def admin_assurance():
-    _, error = _admin_required("view")
+    _, error = _admin_required("topology.view")
     if error:
         return error
     return jsonify({"status": "success", "assurance": _v1_assurance()})
@@ -1504,21 +2183,66 @@ def admin_assurance():
 
 @admin_blueprint.route("/api/admin/alerts", methods=["GET", "PATCH", "POST"])
 def admin_alerts():
-    permission = "view" if request.method == "GET" else "alerts.manage"
+    permission = "alerts.manage"
     user, error = _admin_required(permission)
     if error:
         return error
     if request.method == "GET":
-        return jsonify({"status": "success", "alerts": admin_state.alerts()})
+        alerts = admin_state.alerts()
+        return jsonify({
+            "status": "success",
+            "alerts": alerts,
+            "deliveryHistory": admin_state.alert_delivery_history(50),
+        })
     before = admin_state.alerts()
-    alerts = admin_state.update_alerts(request.get_json(silent=True) or {})
+    payload = request.get_json(silent=True) or {}
+    normalized = dict(payload)
+    if "enabled" in normalized:
+        normalized["enabled"] = str(normalized.get("enabled") or "").strip().lower() in ("1", "true", "yes", "on") if not isinstance(normalized.get("enabled"), bool) else normalized.get("enabled")
+    if "webhookUrl" in normalized:
+        webhook_url, validation_error = _validate_webhook_url(normalized.get("webhookUrl"))
+        if validation_error:
+            return jsonify({"status": "error", "message": validation_error}), 400
+        normalized["webhookUrl"] = webhook_url
+    effective_url = normalized.get("webhookUrl", before.get("webhookUrl"))
+    if normalized.get("enabled", before.get("enabled")) and not effective_url:
+        return jsonify({"status": "error", "message": "启用告警前请配置 HTTPS Webhook"}), 400
+    if "cooldownSeconds" in normalized:
+        try:
+            normalized["cooldownSeconds"] = max(60, min(int(normalized.get("cooldownSeconds")), 86400))
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "message": "告警冷却时间必须为 60-86400 秒"}), 400
+    alerts = admin_state.update_alerts(normalized)
     _audit(user, "alerts.update", "alerts", before=before, after=alerts)
     return jsonify({"status": "success", "alerts": alerts})
 
 
+@admin_blueprint.route("/api/admin/alerts/test", methods=["POST"])
+def admin_test_alert():
+    user, error = _admin_required("alerts.manage")
+    if error:
+        return error
+    config = admin_state.alerts()
+    webhook_url = str(config.get("webhookUrl") or "").strip()
+    if not webhook_url:
+        return jsonify({"status": "error", "message": "请先保存 HTTPS Webhook"}), 400
+    claim = admin_state.claim_alert_event(
+        "manualTest",
+        False,
+        "慧鉴AI告警测试",
+        "这是一条由管理员触发的测试通知。",
+        "info",
+        force=True,
+    )
+    delivery = _deliver_alert_claim(claim, webhook_url)
+    _audit(user, "alerts.test", "webhook", meta={"ok": delivery.get("ok"), "statusCode": delivery.get("statusCode")})
+    status_code = 200 if delivery.get("ok") else 502
+    return jsonify({"status": "success" if delivery.get("ok") else "error", "delivery": delivery}), status_code
+
+
 @admin_blueprint.route("/api/admin/audit")
 def admin_audit():
-    _, error = _admin_required("view")
+    _, error = _admin_required("audit.view")
     if error:
         return error
     return jsonify({"status": "success", "audit": admin_state.list_audit(_limit_arg(80, 500))})
@@ -1532,6 +2256,7 @@ def admin_accounts():
     if not _ensure_admin_account_table():
         return jsonify({"status": "success", "admins": [], "message": "管理员账号表尚未初始化"})
     limit = _limit_arg(80, 200)
+    cursor = _cursor_arg()
     query = _search_term()
     filters = []
     params = []
@@ -1539,21 +2264,27 @@ def admin_accounts():
         like = f"%{query}%"
         filters.append("(username LIKE %s OR phone LIKE %s OR role LIKE %s OR status LIKE %s)")
         params.extend([like, like, like, like])
+    if cursor:
+        filters.append("id < %s")
+        params.append(cursor)
     where = f"WHERE {' AND '.join(filters)}" if filters else ""
-    params.append(limit)
+    params.append(limit + 1)
     rows = excute_sql(
         f"""
-        SELECT id, username, phone, role, status, created_at, last_login_at, last_login_ip
+        SELECT id, username, phone, role, status, session_version,
+               created_at, last_login_at, last_login_ip
         FROM admin_accounts
         {where}
-        ORDER BY status = 'active' DESC, id DESC
+        ORDER BY id DESC
         LIMIT %s
         """,
         tuple(params),
     ) or []
+    items, page = _page_payload([_admin_account_payload(row) for row in rows], limit)
     return jsonify({
         "status": "success",
-        "admins": [_admin_account_payload(row) for row in rows],
+        "admins": items,
+        "page": page,
         "roles": ADMIN_ROLE_LABELS,
         "currentAdminId": (_current_admin_user() or {}).get("adminId"),
     })
@@ -1566,44 +2297,27 @@ def admin_update_account(admin_id):
         return error
     if not _ensure_admin_account_table():
         return jsonify({"status": "error", "message": "管理员账号表尚未初始化"}), 400
-    before_rows = excute_sql(
-        """
-        SELECT id, username, phone, role, status, created_at, last_login_at, last_login_ip
-        FROM admin_accounts
-        WHERE id = %s
-        LIMIT 1
-        """,
-        (admin_id,),
-    ) or []
-    if not before_rows:
-        return jsonify({"status": "error", "message": "管理员账号不存在"}), 404
-    before = before_rows[0]
     payload = request.get_json(silent=True) or {}
-    role = payload.get("role", before.get("role"))
-    status = payload.get("status", before.get("status"))
-    role = _normalize_admin_role(role)
-    status = str(status or "active").strip()
-    if status not in ("active", "disabled"):
+    role = payload.get("role")
+    status = payload.get("status")
+    if role is not None and str(role).strip() not in ADMIN_ROLE_LABELS:
+        return jsonify({"status": "error", "message": "管理员角色无效"}), 400
+    if status is not None and str(status).strip() not in ("active", "disabled"):
         return jsonify({"status": "error", "message": "管理员状态只能为 active 或 disabled"}), 400
-    if actor.get("adminId") == admin_id and (status != "active" or role not in ("admin", "super_admin")):
-        return jsonify({"status": "error", "message": "不能停用或降级当前登录管理员"}), 400
-    updated = excute_sql(
-        "UPDATE admin_accounts SET role = %s, status = %s WHERE id = %s",
-        (role, status, admin_id),
-        fetch=False,
+    before, after, update_error = _update_admin_account_atomic(
+        admin_id,
+        str(role).strip() if role is not None else None,
+        str(status).strip() if status is not None else None,
+        actor_admin_id=actor.get("adminId"),
     )
-    if updated is None:
+    if update_error == "not_found":
+        return jsonify({"status": "error", "message": "管理员账号不存在"}), 404
+    if update_error == "self_downgrade":
+        return jsonify({"status": "error", "message": "不能停用或降级当前登录管理员"}), 400
+    if update_error == "last_super_admin":
+        return jsonify({"status": "error", "message": "必须至少保留一个启用的超级管理员"}), 400
+    if update_error:
         return jsonify({"status": "error", "message": "管理员账号更新失败"}), 500
-    after_rows = excute_sql(
-        """
-        SELECT id, username, phone, role, status, created_at, last_login_at, last_login_ip
-        FROM admin_accounts
-        WHERE id = %s
-        LIMIT 1
-        """,
-        (admin_id,),
-    ) or []
-    after = after_rows[0] if after_rows else before
     _audit(actor, "admin_account.update", str(admin_id), before=_admin_account_payload(before), after=_admin_account_payload(after))
     return jsonify({"status": "success", "admin": _admin_account_payload(after)})
 
@@ -1622,7 +2336,8 @@ def admin_reset_account_password(admin_id):
         return jsonify({"status": "error", "message": password_error}), 400
     rows = excute_sql(
         """
-        SELECT id, username, phone, role, status, created_at, last_login_at, last_login_ip
+        SELECT id, username, phone, role, status, session_version,
+               created_at, last_login_at, last_login_ip
         FROM admin_accounts
         WHERE id = %s
         LIMIT 1
@@ -1632,7 +2347,7 @@ def admin_reset_account_password(admin_id):
     if not rows:
         return jsonify({"status": "error", "message": "管理员账号不存在"}), 404
     updated = excute_sql(
-        "UPDATE admin_accounts SET password_hash = %s WHERE id = %s",
+        "UPDATE admin_accounts SET password_hash = %s, session_version = session_version + 1 WHERE id = %s",
         (generate_password_hash(password), admin_id),
         fetch=False,
     )
@@ -1644,18 +2359,23 @@ def admin_reset_account_password(admin_id):
 
 @admin_blueprint.route("/api/admin/users")
 def admin_users():
-    _, error = _admin_required("view")
+    actor, error = _admin_required("user.view")
     if error:
         return error
     limit = _limit_arg(50, 200)
+    cursor = _cursor_arg()
     query = _search_term()
-    where = ""
+    filters = []
     params = []
     if query:
         like = f"%{query}%"
-        where = "WHERE phone LIKE %s OR username LIKE %s OR openid LIKE %s"
+        filters.append("(phone LIKE %s OR username LIKE %s OR openid LIKE %s)")
         params.extend([like, like, like])
-    params.append(limit)
+    if cursor:
+        filters.append("Userid < %s")
+        params.append(cursor)
+    where = f"WHERE {' AND '.join(filters)}" if filters else ""
+    params.append(limit + 1)
     rows = excute_sql(
         f"""
         SELECT Userid, phone, username, openid, created_at, terms_version, terms_accepted_at
@@ -1666,23 +2386,25 @@ def admin_users():
         """,
         tuple(params),
     ) or []
+    include_pii = _has_admin_permission(actor, "user.read_pii")
     users = []
     for row in rows:
         users.append({
             "id": row.get("Userid"),
-            "phone": row.get("phone"),
+            "phone": row.get("phone") if include_pii else _mask_phone(row.get("phone")),
             "username": row.get("username"),
-            "openid": row.get("openid"),
+            "openid": row.get("openid") if include_pii else _mask_identifier(row.get("openid")),
             "createdAt": format_createtime(row.get("created_at")),
             "termsVersion": row.get("terms_version"),
             "termsAcceptedAt": format_createtime(row.get("terms_accepted_at")),
         })
-    return jsonify({"status": "success", "users": users})
+    users, page = _page_payload(users, limit)
+    return jsonify({"status": "success", "users": users, "page": page})
 
 
 @admin_blueprint.route("/api/admin/users/<int:user_id>")
 def admin_user_detail(user_id):
-    _, error = _admin_required("view")
+    actor, error = _admin_required("user.view")
     if error:
         return error
     rows = excute_sql(
@@ -1724,11 +2446,12 @@ def admin_user_detail(user_id):
     image_count = _scalar(f"SELECT COUNT(*) AS count FROM data WHERE {history_where}", history_params, detection=True)
     video_count = _scalar(f"SELECT COUNT(*) AS count FROM video_data WHERE {history_where}", history_params, detection=True)
     route_runs = admin_state.model_runs_by_itemids([item.get("itemid") for item in detection_rows])
+    include_pii = _has_admin_permission(actor, "user.read_pii")
     user = {
         "id": row.get("Userid"),
-        "phone": phone,
+        "phone": phone if include_pii else _mask_phone(phone),
         "username": row.get("username"),
-        "openid": openid,
+        "openid": openid if include_pii else _mask_identifier(openid),
         "createdAt": format_createtime(row.get("created_at")),
         "termsVersion": row.get("terms_version"),
         "termsAcceptedAt": format_createtime(row.get("terms_accepted_at")),
@@ -1742,13 +2465,15 @@ def admin_user_detail(user_id):
                 "id": item.get("itemid"),
                 "createdAt": format_createtime(item.get("createtime")),
                 "filename": item.get("filename"),
-                "phone": item.get("phone"),
+                "phone": item.get("phone") if include_pii else _mask_phone(item.get("phone")),
                 "label": item.get("aigc"),
                 "probability": item.get("fake"),
                 "detectorProbability": item.get("detector_probability"),
                 "confidence": item.get("clarity"),
                 "feedback": item.get("feedback"),
-                "modelRoute": route_runs.get(str(item.get("itemid"))) or None,
+                "modelRoute": _model_run_for_admin(
+                    route_runs.get(str(item.get("itemid"))), actor, "user.read_pii"
+                ),
             }
             for item in detection_rows
         ],
@@ -1761,7 +2486,7 @@ def admin_user_detail(user_id):
                 "status": key.get("status") or "",
                 "createdAt": format_createtime(key.get("created_at")),
                 "lastUsedAt": format_createtime(key.get("last_used_at")),
-                "lastUsedIp": key.get("last_used_ip") or "",
+                "lastUsedIp": (key.get("last_used_ip") or "") if include_pii else _mask_identifier(key.get("last_used_ip")),
             }
             for key in key_rows
         ],
@@ -1770,9 +2495,11 @@ def admin_user_detail(user_id):
 
 @admin_blueprint.route("/api/admin/users/export")
 def admin_users_export():
-    _, error = _admin_required("data.export")
+    actor, error = _admin_required("data.export")
     if error:
         return error
+    if not _has_admin_permission(actor, "user.view"):
+        return _permission_error("user.view")
     rows = excute_sql(
         """
         SELECT Userid, phone, username, openid, created_at, terms_version, terms_accepted_at
@@ -1781,15 +2508,17 @@ def admin_users_export():
         LIMIT 5000
         """
     ) or []
+    include_pii = _has_admin_permission(actor, "user.read_pii")
+    _audit(actor, "users.export", "users", meta={"count": len(rows), "piiIncluded": include_pii})
     return _csv_response(
         "realguard-users.csv",
         ["ID", "Phone", "Username", "OpenID", "Created At", "Terms Version", "Terms Accepted At"],
         [
             [
                 row.get("Userid"),
-                row.get("phone"),
+                row.get("phone") if include_pii else _mask_phone(row.get("phone")),
                 row.get("username"),
-                row.get("openid"),
+                row.get("openid") if include_pii else _mask_identifier(row.get("openid")),
                 format_createtime(row.get("created_at")),
                 row.get("terms_version"),
                 format_createtime(row.get("terms_accepted_at")),
@@ -1801,10 +2530,11 @@ def admin_users_export():
 
 @admin_blueprint.route("/api/admin/detections")
 def admin_detections():
-    _, error = _admin_required("view")
+    actor, error = _admin_required("detection.view")
     if error:
         return error
     limit = _limit_arg(80, 200)
+    cursor = _cursor_arg()
     query = _search_term()
     label = str(request.args.get("label") or "").strip()
     filters = []
@@ -1816,8 +2546,11 @@ def admin_detections():
     if label:
         filters.append("aigc = %s")
         params.append(label)
+    if cursor:
+        filters.append("itemid < %s")
+        params.append(cursor)
     where = f"WHERE {' AND '.join(filters)}" if filters else ""
-    params.append(limit)
+    params.append(limit + 1)
     select_clause = _detection_data_select_clause()
     rows = excute_detection_sql(
         f"""
@@ -1830,26 +2563,28 @@ def admin_detections():
         tuple(params),
     ) or []
     route_runs = admin_state.model_runs_by_itemids([row.get("itemid") for row in rows])
+    include_pii = _has_admin_permission(actor, "detection.read_pii")
     items = []
     for row in rows:
         items.append({
             "id": row.get("itemid"),
             "createdAt": format_createtime(row.get("createtime")),
             "filename": row.get("filename"),
-            "phone": row.get("phone"),
+            "phone": row.get("phone") if include_pii else _mask_phone(row.get("phone")),
             "label": row.get("aigc"),
             "probability": row.get("fake"),
             "detectorProbability": row.get("detector_probability"),
             "confidence": row.get("clarity"),
             "feedback": row.get("feedback"),
-            "modelRoute": route_runs.get(str(row.get("itemid"))) or None,
+            "modelRoute": _model_run_for_admin(route_runs.get(str(row.get("itemid"))), actor),
         })
-    return jsonify({"status": "success", "detections": items})
+    items, page = _page_payload(items, limit)
+    return jsonify({"status": "success", "detections": items, "page": page})
 
 
 @admin_blueprint.route("/api/admin/detections/<int:itemid>")
 def admin_detection_detail(itemid):
-    _, error = _admin_required("view")
+    actor, error = _admin_required("detection.view")
     if error:
         return error
     select_clause = _detection_data_select_clause()
@@ -1877,30 +2612,34 @@ def admin_detection_detail(itemid):
         except Exception:
             metadata = {}
     route_runs = admin_state.model_runs_by_itemids([itemid])
+    include_pii = _has_admin_permission(actor, "detection.read_pii")
     item = {
         "id": row.get("itemid"),
         "userId": row.get("Userid"),
-        "openid": row.get("openid"),
+        "openid": row.get("openid") if include_pii else _mask_identifier(row.get("openid")),
         "createdAt": format_createtime(row.get("createtime")),
         "filename": row.get("filename"),
-        "phone": row.get("phone"),
+        "phone": row.get("phone") if include_pii else _mask_phone(row.get("phone")),
         "label": row.get("aigc"),
         "probability": row.get("fake"),
         "detectorProbability": row.get("detector_probability"),
         "confidence": row.get("clarity"),
         "feedback": row.get("feedback"),
         "explanation": row.get("explantation") or "",
-        "metadata": metadata,
-        "modelRoute": route_runs.get(str(itemid)) or None,
+        "metadata": metadata if include_pii else _redact_metadata(metadata),
+        "modelRoute": _model_run_for_admin(route_runs.get(str(itemid)), actor),
     }
+    _audit(actor, "detection.detail.read", str(itemid), meta={"piiIncluded": include_pii})
     return jsonify({"status": "success", "detection": item})
 
 
 @admin_blueprint.route("/api/admin/detections/export")
 def admin_detections_export():
-    _, error = _admin_required("data.export")
+    actor, error = _admin_required("data.export")
     if error:
         return error
+    if not _has_admin_permission(actor, "detection.view"):
+        return _permission_error("detection.view")
     select_clause = _detection_data_select_clause()
     rows = excute_detection_sql(
         f"""
@@ -1911,6 +2650,8 @@ def admin_detections_export():
         """
     ) or []
     route_runs = admin_state.model_runs_by_itemids([row.get("itemid") for row in rows])
+    include_pii = _has_admin_permission(actor, "detection.read_pii")
+    _audit(actor, "detections.export", "detections", meta={"count": len(rows), "piiIncluded": include_pii})
     return _csv_response(
         "realguard-detections.csv",
         ["ID", "Created At", "Phone", "Filename", "Label", "Probability", "Detector Probability", "Confidence", "Feedback", "Model Route"],
@@ -1918,7 +2659,7 @@ def admin_detections_export():
             [
                 row.get("itemid"),
                 format_createtime(row.get("createtime")),
-                row.get("phone"),
+                row.get("phone") if include_pii else _mask_phone(row.get("phone")),
                 row.get("filename"),
                 row.get("aigc"),
                 row.get("fake"),
@@ -1946,11 +2687,7 @@ def admin_review_detection(itemid):
     if feedback not in (1, -1, 0, None):
         return jsonify({"status": "error", "message": "feedback 只能为 1、-1 或 0"}), 400
     before = excute_detection_sql("SELECT itemid, feedback FROM data WHERE itemid = %s LIMIT 1", (itemid,)) or []
-    db_value = None
-    if feedback == 1:
-        db_value = "满意"
-    elif feedback == -1:
-        db_value = "不满意"
+    db_value = feedback
     updated = excute_detection_sql(
         "UPDATE data SET feedback = %s WHERE itemid = %s",
         (db_value, itemid),
@@ -1967,19 +2704,28 @@ def admin_review_detection(itemid):
 
 @admin_blueprint.route("/api/admin/api-keys")
 def admin_api_keys():
-    _, error = _admin_required("view")
+    actor, error = _admin_required("api_key.view")
     if error:
         return error
+    include_pii = _has_admin_permission(actor, "user.read_pii")
     limit = _limit_arg(80, 200)
+    cursor = _cursor_arg()
     query = _search_term()
     filters = []
     params = []
     if query:
         like = f"%{query}%"
-        filters.append("(k.name LIKE %s OR u.phone LIKE %s OR u.username LIKE %s OR k.key_last4 LIKE %s)")
-        params.extend([like, like, like, like])
+        query_fields = ["k.name LIKE %s", "k.key_last4 LIKE %s"]
+        params.extend([like, like])
+        if include_pii:
+            query_fields.extend(["u.username LIKE %s", "u.phone LIKE %s"])
+            params.extend([like, like])
+        filters.append(f"({' OR '.join(query_fields)})")
+    if cursor:
+        filters.append("k.id < %s")
+        params.append(cursor)
     where = f"WHERE {' AND '.join(filters)}" if filters else ""
-    params.append(limit)
+    params.append(limit + 1)
     rows = excute_sql(
         f"""
         SELECT
@@ -1989,7 +2735,7 @@ def admin_api_keys():
         FROM developer_api_keys k
         LEFT JOIN user u ON u.Userid = k.user_id
         {where}
-        ORDER BY k.status = 'active' DESC, k.created_at DESC
+        ORDER BY k.id DESC
         LIMIT %s
         """,
         tuple(params),
@@ -2001,8 +2747,8 @@ def admin_api_keys():
         keys.append({
             "id": row.get("id"),
             "userId": row.get("user_id"),
-            "owner": row.get("username") or row.get("phone") or "",
-            "phone": row.get("phone") or "",
+            "owner": _api_key_owner_label(row.get("username"), row.get("phone"), include_pii),
+            "phone": (row.get("phone") or "") if include_pii else _mask_phone(row.get("phone")),
             "name": row.get("name"),
             "masked": f"{row.get('key_prefix') or 'rg_sk_'}...{row.get('key_last4') or '****'}",
             "scopes": row.get("scopes") or "",
@@ -2010,10 +2756,11 @@ def admin_api_keys():
             "createdAt": format_createtime(row.get("created_at")),
             "lastUsedAt": format_createtime(row.get("last_used_at")),
             "revokedAt": format_createtime(row.get("revoked_at")),
-            "lastUsedIp": row.get("last_used_ip") or "",
+            "lastUsedIp": (row.get("last_used_ip") or "") if include_pii else _mask_identifier(row.get("last_used_ip")),
             "quota": admin_state.get_api_key_quota(row.get("id")),
         })
-    return jsonify({"status": "success", "keys": keys})
+    keys, page = _page_payload(keys, limit)
+    return jsonify({"status": "success", "keys": keys, "page": page})
 
 
 @admin_blueprint.route("/api/admin/api-keys/<int:key_id>/quota", methods=["PATCH", "POST"])
@@ -2021,6 +2768,11 @@ def admin_api_key_quota(key_id):
     user, error = _admin_required("api_key.manage")
     if error:
         return error
+    key_rows = excute_sql("SELECT id FROM developer_api_keys WHERE id = %s LIMIT 1", (key_id,))
+    if key_rows is None:
+        return jsonify({"status": "error", "message": "API Key 信息读取失败"}), 500
+    if not key_rows:
+        return jsonify({"status": "error", "message": "API Key 不存在"}), 404
     payload = request.get_json(silent=True) or {}
     normalized = {}
     for field in ("dailyLimit", "rateLimitPerMinute"):
