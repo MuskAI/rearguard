@@ -161,6 +161,12 @@ def test_dashboard_metrics_count_today_detections(monkeypatch):
         "siteUniqueVisitors": 31,
         "onlineVisitors": 4,
         "onlineWindowMinutes": 5,
+        "cumulativeReady": False,
+        "cumulativeSince": "--",
+        "cumulativeHomepagePageViews": 0,
+        "cumulativeHomepageUniqueVisitors": 0,
+        "cumulativeSitePageViews": 0,
+        "cumulativeSiteUniqueVisitors": 0,
     }
     assert metrics["todayWindow"]["start"] == "2026-06-09 00:00:00"
     assert any(call[1] == ("2026-06-09 00:00:00", "2026-06-10 00:00:00") and call[2] for call in calls)

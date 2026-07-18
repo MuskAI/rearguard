@@ -4,10 +4,15 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime, timedelta
+import glob
+import gzip
+import hashlib
 import ipaddress
 import os
 from pathlib import Path
 import re
+import secrets
+import sqlite3
 import threading
 from typing import Callable, Iterable
 
@@ -21,6 +26,8 @@ except ImportError:  # Optional during local development and unit tests.
 
 DEFAULT_XDB_PATH = "/opt/realguard-data/ip2region_v4.xdb"
 DEFAULT_ACCESS_LOGS = "/var/log/nginx/access.log,/var/log/nginx/access.log.1"
+DEFAULT_ACCESS_LOG_GLOB = "/var/log/nginx/access.log*"
+DEFAULT_CUMULATIVE_DB_PATH = "/opt/realguard-data/traffic-cumulative.sqlite3"
 DEFAULT_WINDOW_HOURS = 24
 DEFAULT_ONLINE_WINDOW_MINUTES = 5
 DEFAULT_TAIL_BYTES = 4 * 1024 * 1024
@@ -70,6 +77,7 @@ PROVINCE_ALIASES = {
 _SEARCHER = None
 _SEARCHER_PATH = None
 _SEARCHER_LOCK = threading.Lock()
+_CUMULATIVE_LOCK = threading.Lock()
 
 
 def _clean_region_part(value: str) -> str:
@@ -208,6 +216,342 @@ def _tail_lines(path: str, max_bytes: int) -> list[str]:
         first_newline = data.find(b"\n")
         data = data[first_newline + 1 :] if first_newline >= 0 else b""
     return data.decode("utf-8", errors="replace").splitlines()
+
+
+def _cumulative_db_path() -> str:
+    return os.getenv("REALGUARD_TRAFFIC_CUMULATIVE_DB", DEFAULT_CUMULATIVE_DB_PATH).strip() or DEFAULT_CUMULATIVE_DB_PATH
+
+
+def _cumulative_log_paths() -> list[str]:
+    pattern = os.getenv("REALGUARD_ACCESS_LOG_GLOB", DEFAULT_ACCESS_LOG_GLOB).strip() or DEFAULT_ACCESS_LOG_GLOB
+    return sorted(
+        (path for path in glob.glob(pattern) if Path(path).is_file()),
+        key=lambda path: (Path(path).stat().st_mtime_ns, path),
+    )
+
+
+def _open_cumulative_db(path: str) -> sqlite3.Connection:
+    db_path = Path(path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(str(db_path), timeout=10)
+    connection.row_factory = sqlite3.Row
+    connection.executescript(
+        """
+        PRAGMA journal_mode=WAL;
+        PRAGMA synchronous=NORMAL;
+        CREATE TABLE IF NOT EXISTS traffic_metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS traffic_sources (
+            source_id TEXT PRIMARY KEY,
+            path TEXT NOT NULL,
+            offset_bytes INTEGER NOT NULL DEFAULT 0,
+            size_bytes INTEGER NOT NULL DEFAULT 0,
+            mtime_ns INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS traffic_events (
+            event_hash TEXT PRIMARY KEY,
+            occurred_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_traffic_events_occurred_at
+            ON traffic_events(occurred_at);
+        CREATE TABLE IF NOT EXISTS traffic_visitors (
+            visitor_hash TEXT PRIMARY KEY,
+            masked_ip TEXT NOT NULL,
+            first_seen INTEGER NOT NULL,
+            last_seen INTEGER NOT NULL,
+            site_requests INTEGER NOT NULL DEFAULT 0,
+            homepage_requests INTEGER NOT NULL DEFAULT 0,
+            country TEXT NOT NULL DEFAULT '',
+            province TEXT NOT NULL DEFAULT '',
+            city TEXT NOT NULL DEFAULT '',
+            isp TEXT NOT NULL DEFAULT '',
+            iso_code TEXT NOT NULL DEFAULT '',
+            agent TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_traffic_visitors_province
+            ON traffic_visitors(province);
+        CREATE TABLE IF NOT EXISTS traffic_visitor_paths (
+            visitor_hash TEXT NOT NULL,
+            path TEXT NOT NULL,
+            PRIMARY KEY (visitor_hash, path)
+        );
+        """
+    )
+    connection.commit()
+    return connection
+
+
+def _metadata_value(connection: sqlite3.Connection, key: str, factory: Callable[[], str]) -> str:
+    row = connection.execute("SELECT value FROM traffic_metadata WHERE key = ?", (key,)).fetchone()
+    if row:
+        return str(row["value"])
+    value = factory()
+    connection.execute("INSERT INTO traffic_metadata (key, value) VALUES (?, ?)", (key, value))
+    return value
+
+
+def _lines_with_offsets(data: bytes, start: int = 0) -> list[tuple[str, int]]:
+    result = []
+    offset = start
+    for raw_line in data.splitlines(keepends=True):
+        result.append((raw_line.rstrip(b"\r\n").decode("utf-8", errors="replace"), offset))
+        offset += len(raw_line)
+    return result
+
+
+def _read_unprocessed_source(connection: sqlite3.Connection, path: str) -> tuple[list[tuple[str, int]], str, int, os.stat_result]:
+    stat = os.stat(path)
+    source_id = f"{stat.st_dev}:{stat.st_ino}"
+    row = connection.execute(
+        "SELECT offset_bytes FROM traffic_sources WHERE source_id = ?",
+        (source_id,),
+    ).fetchone()
+    previous_offset = int(row["offset_bytes"]) if row else 0
+    if path.endswith(".gz"):
+        if row and previous_offset == stat.st_size:
+            return [], source_id, stat.st_size, stat
+        try:
+            with gzip.open(path, "rb") as handle:
+                return _lines_with_offsets(handle.read()), source_id, stat.st_size, stat
+        except (gzip.BadGzipFile, EOFError, OSError):
+            return [], source_id, previous_offset, stat
+
+    start = previous_offset if stat.st_size >= previous_offset else 0
+    if stat.st_size == start:
+        return [], source_id, start, stat
+    with open(path, "rb") as handle:
+        handle.seek(start)
+        data = handle.read()
+    last_newline = data.rfind(b"\n")
+    if last_newline < 0:
+        return [], source_id, start, stat
+    consumed = data[: last_newline + 1]
+    return _lines_with_offsets(consumed, start), source_id, start + last_newline + 1, stat
+
+
+def _update_cumulative_store(
+    connection: sqlite3.Connection,
+    paths: Iterable[str],
+    *,
+    resolver: Callable[[str], dict] = resolve_ip,
+) -> int:
+    salt = _metadata_value(connection, "visitor_salt", lambda: secrets.token_hex(32))
+    inserted = 0
+    for path in paths:
+        try:
+            lines, source_id, next_offset, stat = _read_unprocessed_source(connection, path)
+        except (FileNotFoundError, PermissionError, OSError):
+            continue
+        for line, line_offset in lines:
+            item = parse_access_line(line)
+            if not item:
+                continue
+            event_hash = hashlib.sha256(
+                f"{salt}\0{line_offset}\0{line}".encode("utf-8", errors="replace")
+            ).hexdigest()
+            occurred_at = int(item["timestamp"].timestamp())
+            cursor = connection.execute(
+                "INSERT OR IGNORE INTO traffic_events (event_hash, occurred_at) VALUES (?, ?)",
+                (event_hash, occurred_at),
+            )
+            if cursor.rowcount != 1:
+                continue
+            ip = item["ip"]
+            clean_path = item["path"].split("?", 1)[0]
+            is_homepage = clean_path in HOMEPAGE_PATHS
+            visitor_hash = hashlib.sha256(f"{salt}\0{ip}".encode("utf-8")).hexdigest()
+            location = resolver(ip) or {}
+            country = _clean_region_part(location.get("country", ""))
+            province = normalize_province(location.get("province", ""))
+            city = _clean_region_part(location.get("city", ""))
+            isp = _clean_region_part(location.get("isp", ""))
+            iso_code = _clean_region_part(location.get("isoCode", ""))
+            connection.execute(
+                """
+                INSERT INTO traffic_visitors (
+                    visitor_hash, masked_ip, first_seen, last_seen, site_requests,
+                    homepage_requests, country, province, city, isp, iso_code, agent
+                ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(visitor_hash) DO UPDATE SET
+                    first_seen = MIN(traffic_visitors.first_seen, excluded.first_seen),
+                    last_seen = MAX(traffic_visitors.last_seen, excluded.last_seen),
+                    site_requests = traffic_visitors.site_requests + 1,
+                    homepage_requests = traffic_visitors.homepage_requests + excluded.homepage_requests,
+                    country = CASE WHEN excluded.country != '' THEN excluded.country ELSE traffic_visitors.country END,
+                    province = CASE WHEN excluded.province != '' THEN excluded.province ELSE traffic_visitors.province END,
+                    city = CASE WHEN excluded.city != '' THEN excluded.city ELSE traffic_visitors.city END,
+                    isp = CASE WHEN excluded.isp != '' THEN excluded.isp ELSE traffic_visitors.isp END,
+                    iso_code = CASE WHEN excluded.iso_code != '' THEN excluded.iso_code ELSE traffic_visitors.iso_code END,
+                    agent = CASE WHEN excluded.agent != '' THEN excluded.agent ELSE traffic_visitors.agent END
+                """,
+                (
+                    visitor_hash,
+                    _masked_ip(ip),
+                    occurred_at,
+                    occurred_at,
+                    int(is_homepage),
+                    country,
+                    province,
+                    city,
+                    isp,
+                    iso_code,
+                    item["agent"],
+                ),
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO traffic_visitor_paths (visitor_hash, path) VALUES (?, ?)",
+                (visitor_hash, clean_path),
+            )
+            inserted += 1
+        connection.execute(
+            """
+            INSERT INTO traffic_sources (source_id, path, offset_bytes, size_bytes, mtime_ns, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_id) DO UPDATE SET
+                path = excluded.path,
+                offset_bytes = MAX(traffic_sources.offset_bytes, excluded.offset_bytes),
+                size_bytes = excluded.size_bytes,
+                mtime_ns = excluded.mtime_ns,
+                updated_at = excluded.updated_at
+            """,
+            (source_id, path, next_offset, stat.st_size, stat.st_mtime_ns, int(datetime.now().timestamp())),
+        )
+    retention_cutoff = int((datetime.now().astimezone() - timedelta(days=30)).timestamp())
+    connection.execute("DELETE FROM traffic_events WHERE occurred_at < ?", (retention_cutoff,))
+    connection.commit()
+    return inserted
+
+
+def _cumulative_payload(connection: sqlite3.Connection, visitor_detail_limit: int) -> dict:
+    rows = connection.execute(
+        """
+        SELECT v.*, COUNT(p.path) AS pages
+        FROM traffic_visitors v
+        LEFT JOIN traffic_visitor_paths p ON p.visitor_hash = v.visitor_hash
+        GROUP BY v.visitor_hash
+        ORDER BY v.last_seen DESC
+        """
+    ).fetchall()
+    unique_visitors = len(rows)
+    total_requests = sum(int(row["site_requests"]) for row in rows)
+    homepage_requests = sum(int(row["homepage_requests"]) for row in rows)
+    homepage_visitors = sum(1 for row in rows if int(row["homepage_requests"]) > 0)
+    located_rows = [row for row in rows if row["country"]]
+    domestic_rows = [row for row in located_rows if _is_domestic(row["country"], row["iso_code"])]
+    overseas_rows = [row for row in located_rows if not _is_domestic(row["country"], row["iso_code"])]
+
+    province_rows = defaultdict(list)
+    country_rows = defaultdict(list)
+    for row in rows:
+        if row["country"]:
+            country_rows[row["country"]].append(row)
+        if row["province"] and _is_domestic(row["country"], row["iso_code"]):
+            province_rows[row["province"]].append(row)
+
+    provinces = []
+    for name, visitors in province_rows.items():
+        city_visitors = defaultdict(int)
+        for visitor in visitors:
+            if visitor["city"]:
+                city_visitors[visitor["city"]] += 1
+        cities = [
+            {"name": city, "visitors": count}
+            for city, count in city_visitors.items()
+            if count >= 2
+        ]
+        cities.sort(key=lambda item: (-item["visitors"], item["name"]))
+        visible_cities = {item["name"] for item in cities}
+        details = []
+        for index, visitor in enumerate(visitors[:max(1, visitor_detail_limit)], start=1):
+            last_seen = datetime.fromtimestamp(int(visitor["last_seen"])).astimezone()
+            first_seen = datetime.fromtimestamp(int(visitor["first_seen"])).astimezone()
+            details.append({
+                "maskedIp": visitor["masked_ip"],
+                "city": visitor["city"] if visitor["city"] in visible_cities else "省内其他地区",
+                "network": visitor["isp"] or "未知网络",
+                "device": _device_label(visitor["agent"]),
+                "browser": _browser_label(visitor["agent"]),
+                "requests": int(visitor["site_requests"]),
+                "pages": int(visitor["pages"]),
+                "firstSeen": first_seen.strftime("%m-%d %H:%M"),
+                "lastSeen": last_seen.strftime("%m-%d %H:%M"),
+                "label": f"访客 {index:02d}",
+            })
+        request_count = sum(int(visitor["site_requests"]) for visitor in visitors)
+        provinces.append({
+            "name": name,
+            "visitors": len(visitors),
+            "requests": request_count,
+            "share": round(len(visitors) * 100 / unique_visitors, 1) if unique_visitors else 0.0,
+            "cities": cities[:5],
+            "visitorDetails": details,
+        })
+    provinces.sort(key=lambda item: (-item["visitors"], -item["requests"], item["name"]))
+    countries = [
+        {
+            "name": name,
+            "visitors": len(visitors),
+            "requests": sum(int(visitor["site_requests"]) for visitor in visitors),
+        }
+        for name, visitors in country_rows.items()
+    ]
+    countries.sort(key=lambda item: (-item["visitors"], -item["requests"], item["name"]))
+    first_seen = min((int(row["first_seen"]) for row in rows), default=0)
+    return {
+        "ready": True,
+        "scope": "cumulative",
+        "since": datetime.fromtimestamp(first_seen).astimezone().strftime("%Y-%m-%d") if first_seen else "--",
+        "requests": total_requests,
+        "uniqueVisitors": unique_visitors,
+        "homepage": {"pageViews": homepage_requests, "uniqueVisitors": homepage_visitors},
+        "site": {"pageViews": total_requests, "uniqueVisitors": unique_visitors},
+        "locatedVisitors": len(located_rows),
+        "coveragePercent": round(len(located_rows) * 100 / unique_visitors, 1) if unique_visitors else 0.0,
+        "domesticVisitors": len(domestic_rows),
+        "overseasVisitors": len(overseas_rows),
+        "unknownVisitors": unique_visitors - len(located_rows),
+        "provinces": provinces,
+        "countries": countries[:8],
+        "privacy": {"rawIpsIncluded": False, "granularity": "province_with_masked_visitor_detail"},
+    }
+
+
+def cumulative_traffic_summary(
+    *,
+    visitor_detail_limit: int = DEFAULT_VISITOR_DETAIL_LIMIT,
+    resolver: Callable[[str], dict] = resolve_ip,
+) -> dict:
+    paths = _cumulative_log_paths()
+    try:
+        with _CUMULATIVE_LOCK:
+            connection = _open_cumulative_db(_cumulative_db_path())
+            try:
+                _update_cumulative_store(connection, paths, resolver=resolver)
+                payload = _cumulative_payload(connection, visitor_detail_limit)
+            finally:
+                connection.close()
+    except (OSError, sqlite3.Error) as exc:
+        return {
+            "ready": False,
+            "scope": "cumulative",
+            "since": "--",
+            "requests": 0,
+            "uniqueVisitors": 0,
+            "homepage": {"pageViews": 0, "uniqueVisitors": 0},
+            "site": {"pageViews": 0, "uniqueVisitors": 0},
+            "provinces": [],
+            "countries": [],
+            "source": {"message": f"累计访问统计暂不可用：{exc}"},
+            "privacy": {"rawIpsIncluded": False, "granularity": "province_with_masked_visitor_detail"},
+        }
+    payload["source"] = {
+        "kind": "persistent-nginx-access-log",
+        "message": "累计数据已持久化；初始数据来自服务器现存轮转日志。",
+    }
+    return payload
 
 
 def _is_domestic(country: str, iso_code: str) -> bool:
@@ -405,4 +749,5 @@ def traffic_summary() -> dict:
             else "访问日志或离线 IP 归属数据库尚未就绪。"
         ),
     }
+    payload["cumulative"] = cumulative_traffic_summary(visitor_detail_limit=visitor_detail_limit)
     return payload

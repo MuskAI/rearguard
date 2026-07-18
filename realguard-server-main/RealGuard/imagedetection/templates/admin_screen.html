@@ -200,6 +200,10 @@
               <button class="segment active" type="button" data-primary-view="traffic" aria-pressed="true">访问地图</button>
               <button class="segment" type="button" data-primary-view="trend" aria-pressed="false">检测趋势</button>
             </div>
+            <div class="segmented" id="trafficControls" role="group" aria-label="访客地图统计范围">
+              <button class="segment active" type="button" data-traffic-range="recent" aria-pressed="true">24 小时</button>
+              <button class="segment" type="button" data-traffic-range="cumulative" aria-pressed="false">累计</button>
+            </div>
             <div class="view-controls" id="trendControls" hidden>
               <div class="segmented" role="group" aria-label="趋势时间范围">
                 <button class="segment" type="button" data-range="6" aria-pressed="false">6h</button>
@@ -214,7 +218,7 @@
         </div>
         <div class="canvas-wrap" id="trendView" hidden><canvas id="trend" tabindex="0" role="img" aria-label="图像与视频检测趋势，使用左右方向键选择时间点"></canvas><div class="chart-tooltip" id="trendTooltip" role="status"></div><p class="sr-only" id="trendSummary"></p></div>
         <div class="traffic-view" id="trafficView">
-          <div class="traffic-map-stage"><div class="traffic-map" id="trafficMap" tabindex="0" role="img" aria-label="最近 24 小时访客省级分布地图，可用方向键选择地区"></div></div>
+          <div class="traffic-map-stage"><div class="traffic-map" id="trafficMap" tabindex="0" role="img" aria-label="访客省级分布地图，可切换最近 24 小时与累计统计，并用方向键选择地区"></div></div>
           <aside class="traffic-rank">
             <div class="traffic-summary" id="trafficSummary"></div>
             <div class="province-list" id="provinceList"></div>
@@ -277,6 +281,7 @@
     const ui = {
       trendRange:24,
       primaryView:'traffic',
+      trafficRange:'recent',
       visibleSeries:new Set(['images','videos']),
       distributionMode:'all',
       hover:{trend:null,routes:null,distribution:null},
@@ -366,11 +371,13 @@
       }
     }
     function trafficDetail(item){
-      const traffic=state?.traffic || {};
+      const root=state?.traffic || {};
+      const traffic=ui.trafficRange==='cumulative'?(root.cumulative || {}):root;
+      const rangeLabel=ui.trafficRange==='cumulative'?`累计（自 ${traffic.since || '--'}）`:`最近 ${root.windowHours || 24} 小时`;
       const cities=(item.cities || []).map(city=>`${city.name} ${city.visitors}`).join('、') || '为保护隐私，少量城市不单列';
       const visitors=item.visitorDetails || [];
       const visitorHtml=`<section class="visitor-section"><div class="visitor-section-head"><h3>匿名访客明细</h3><span>最近 ${visitors.length} 位</span></div><p class="visitor-note">访问日志未关联登录账号；IP 已脱敏，少量城市自动隐藏。</p><div class="visitor-list">${visitors.length?visitors.map(visitor=>`<div class="visitor-row"><div class="visitor-primary"><strong>${esc(visitor.label)}</strong><code>${esc(visitor.maskedIp)}</code></div><div class="visitor-meta">${esc(visitor.city)} · ${esc(visitor.device)} · ${esc(visitor.browser)}<br>${esc(visitor.network)} · 账号未关联</div><div class="visitor-stats"><span>访问 <b>${esc(formatNumber(visitor.requests))}</b> 次 · ${esc(formatNumber(visitor.pages))} 个页面</span><span>最近 ${esc(visitor.lastSeen)}</span></div></div>`).join(''):'<div class="empty">该省暂无访客明细</div>'}</div></section>`;
-      return {kicker:'访问来源',title:item.name,rows:[['独立访客',`${formatNumber(item.visitors)} 人`],['页面访问',`${formatNumber(item.requests)} 次`],['访客占比',`${Number(item.share || 0).toFixed(1)}%`],['主要城市',cities],['统计窗口',`最近 ${traffic.windowHours || 24} 小时`],['定位方式','ip2region 离线省级归属']],contentHtml:visitorHtml,action:null};
+      return {kicker:'访问来源',title:item.name,rows:[['独立访客',`${formatNumber(item.visitors)} 人`],['页面访问',`${formatNumber(item.requests)} 次`],['访客占比',`${Number(item.share || 0).toFixed(1)}%`],['主要城市',cities],['统计范围',rangeLabel],['定位方式','ip2region 离线省级归属']],contentHtml:visitorHtml,action:null};
     }
     function selectTrafficProvince(name,{open=true,allowEmpty=false}={}){
       const found=ui.trafficItems.find(entry=>entry.name===name);
@@ -386,9 +393,13 @@
       if(open) openInspector(trafficDetail(item));
     }
     function renderTraffic(){
-      const traffic=state?.traffic || {};
+      const root=state?.traffic || {};
+      const traffic=ui.trafficRange==='cumulative'?(root.cumulative || {}):root;
       ui.trafficItems=(traffic.provinces || []).slice();
-      $('trafficSummary').innerHTML=[['主页访客',traffic.homepage?.uniqueVisitors],['主页访问',traffic.homepage?.pageViews],['网站访客',traffic.site?.uniqueVisitors ?? traffic.uniqueVisitors],['网站访问',traffic.site?.pageViews ?? traffic.requests],['当前在线',traffic.onlineVisitors],['定位覆盖',`${traffic.coveragePercent ?? 0}%`]].map(([label,value])=>`<div><span>${esc(label)}</span><strong>${esc(formatNumber(value))}</strong></div>`).join('');
+      const summary=ui.trafficRange==='cumulative'
+        ?[['累计主页访客',traffic.homepage?.uniqueVisitors],['累计主页访问',traffic.homepage?.pageViews],['累计网站访客',traffic.site?.uniqueVisitors ?? traffic.uniqueVisitors],['累计网站访问',traffic.site?.pageViews ?? traffic.requests],['累计起始',traffic.since&&traffic.since!=='--'?traffic.since.slice(5):'--'],['定位覆盖',`${traffic.coveragePercent ?? 0}%`]]
+        :[['主页访客',traffic.homepage?.uniqueVisitors],['主页访问',traffic.homepage?.pageViews],['网站访客',traffic.site?.uniqueVisitors ?? traffic.uniqueVisitors],['网站访问',traffic.site?.pageViews ?? traffic.requests],['当前在线',traffic.onlineVisitors],['定位覆盖',`${traffic.coveragePercent ?? 0}%`]];
+      $('trafficSummary').innerHTML=summary.map(([label,value])=>`<div><span>${esc(label)}</span><strong>${esc(formatNumber(value))}</strong></div>`).join('');
       $('provinceList').innerHTML=ui.trafficItems.length?ui.trafficItems.slice(0,10).map((item,index)=>`<button class="province-row ${ui.trafficSelected===item.name?'active':''}" type="button" data-province-index="${index}" aria-label="查看${esc(item.name)}访问详情"><span>${index+1}. ${esc(item.name)}</span><strong>${esc(formatNumber(item.visitors))} 人</strong></button>`).join(''):'<div class="empty">暂无可展示的省级访问数据</div>';
       if(!ui.trafficMapReady){ensureTrafficMap();return;}
       const max=Math.max(1,...ui.trafficItems.map(item=>Number(item.visitors)||0));
@@ -407,10 +418,13 @@
       $('trafficView').hidden=!traffic;$('trendView').hidden=traffic;$('trendControls').hidden=traffic;
       $('primaryTitle').textContent=traffic?'访问来源':'检测趋势';
       if(traffic){
-        const value=state?.traffic;
-        $('primarySubtitle').textContent=value?.ready?`过去 ${value.windowHours || 24} 小时 · 省级匿名聚合`:(value?.source?.message || '访问地域数据准备中');
+        const root=state?.traffic || {};
+        const value=ui.trafficRange==='cumulative'?(root.cumulative || {}):root;
+        $('primarySubtitle').textContent=value?.ready?(ui.trafficRange==='cumulative'?`累计自 ${value.since || '--'} · 持久化省级匿名聚合`:`过去 ${root.windowHours || 24} 小时 · 省级匿名聚合`):(value?.source?.message || '访问地域数据准备中');
+        $('trafficControls').hidden=false;
         requestAnimationFrame(()=>ui.trafficChart?.resize());
       }else{
+        $('trafficControls').hidden=true;
         drawTrend();
       }
       document.querySelectorAll('[data-primary-view]').forEach(button=>{const active=button.dataset.primaryView===ui.primaryView;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));});
@@ -864,6 +878,14 @@
       if((event.key==='Enter'||event.key===' ')&&ui.trafficSelected){event.preventDefault();selectTrafficProvince(ui.trafficSelected);}
     });
     document.querySelectorAll('[data-primary-view]').forEach(button=>button.addEventListener('click',()=>{ui.primaryView=button.dataset.primaryView;syncPrimaryView();renderCharts();}));
+    document.querySelectorAll('[data-traffic-range]').forEach(button=>button.addEventListener('click',()=>{
+      ui.trafficRange=button.dataset.trafficRange==='cumulative'?'cumulative':'recent';
+      ui.trafficSelected=null;
+      closeInspector();
+      document.querySelectorAll('[data-traffic-range]').forEach(option=>{const active=option.dataset.trafficRange===ui.trafficRange;option.classList.toggle('active',active);option.setAttribute('aria-pressed',String(active));});
+      syncPrimaryView();
+      renderTraffic();
+    }));
     document.querySelectorAll('[data-range]').forEach(button=>button.addEventListener('click',()=>{ui.trendRange=Number(button.dataset.range)||24;ui.hover.trend=null;ui.locked.trend=null;hideTooltip('trend');syncTrendControls();drawTrend();}));
     document.querySelectorAll('[data-series]').forEach(button=>button.addEventListener('click',()=>{const key=button.dataset.series;if(ui.visibleSeries.has(key)){if(ui.visibleSeries.size===1)return;ui.visibleSeries.delete(key);}else ui.visibleSeries.add(key);syncTrendControls();drawTrend();}));
     document.querySelectorAll('[data-distribution-mode]').forEach(button=>button.addEventListener('click',()=>{ui.distributionMode=button.dataset.distributionMode;ui.hover.distribution=null;ui.locked.distribution=null;hideTooltip('distribution');syncDistributionControls();drawDistribution();}));

@@ -1363,6 +1363,9 @@ def _v1_assurance(registry=None, models=None):
 def _traffic_metrics_payload(traffic):
     homepage = traffic.get("homepage") if isinstance(traffic.get("homepage"), dict) else {}
     site = traffic.get("site") if isinstance(traffic.get("site"), dict) else {}
+    cumulative = traffic.get("cumulative") if isinstance(traffic.get("cumulative"), dict) else {}
+    cumulative_homepage = cumulative.get("homepage") if isinstance(cumulative.get("homepage"), dict) else {}
+    cumulative_site = cumulative.get("site") if isinstance(cumulative.get("site"), dict) else {}
     return {
         "ready": bool(traffic.get("ready")),
         "windowHours": int(traffic.get("windowHours") or 24),
@@ -1372,6 +1375,12 @@ def _traffic_metrics_payload(traffic):
         "siteUniqueVisitors": int(site.get("uniqueVisitors", traffic.get("uniqueVisitors")) or 0),
         "onlineVisitors": int(traffic.get("onlineVisitors") or 0),
         "onlineWindowMinutes": int(traffic.get("onlineWindowMinutes") or 5),
+        "cumulativeReady": bool(cumulative.get("ready")),
+        "cumulativeSince": str(cumulative.get("since") or "--"),
+        "cumulativeHomepagePageViews": int(cumulative_homepage.get("pageViews") or 0),
+        "cumulativeHomepageUniqueVisitors": int(cumulative_homepage.get("uniqueVisitors") or 0),
+        "cumulativeSitePageViews": int(cumulative_site.get("pageViews", cumulative.get("requests")) or 0),
+        "cumulativeSiteUniqueVisitors": int(cumulative_site.get("uniqueVisitors", cumulative.get("uniqueVisitors")) or 0),
     }
 
 

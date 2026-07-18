@@ -144,3 +144,51 @@ def test_online_visitors_are_deduplicated_within_activity_window():
     assert payload["onlineVisitors"] == 1
     assert payload["homepage"] == {"pageViews": 2, "uniqueVisitors": 2}
     assert payload["site"] == {"pageViews": 3, "uniqueVisitors": 2}
+
+
+def test_cumulative_traffic_persists_and_deduplicates_log_reloads(tmp_path, monkeypatch):
+    access_log = tmp_path / "access.log"
+    state_db = tmp_path / "traffic.sqlite3"
+    access_log.write_text(
+        "\n".join([
+            log_line("8.8.8.8", "/"),
+            log_line("8.8.8.8", "/agent"),
+            log_line("1.1.1.1", "/"),
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("REALGUARD_ACCESS_LOG_GLOB", str(tmp_path / "access.log*"))
+    monkeypatch.setenv("REALGUARD_TRAFFIC_CUMULATIVE_DB", str(state_db))
+    locations = {
+        "8.8.8.8": {"country": "中国", "province": "浙江省", "city": "杭州市", "isoCode": "CN"},
+        "1.1.1.1": {"country": "中国", "province": "四川省", "city": "成都市", "isoCode": "CN"},
+    }
+
+    first = traffic_geo.cumulative_traffic_summary(resolver=lambda ip: locations.get(ip, {}))
+    duplicate_read = traffic_geo.cumulative_traffic_summary(resolver=lambda ip: locations.get(ip, {}))
+
+    assert first["homepage"] == {"pageViews": 2, "uniqueVisitors": 2}
+    assert first["site"] == {"pageViews": 3, "uniqueVisitors": 2}
+    assert duplicate_read["site"] == first["site"]
+    assert [item["name"] for item in first["provinces"]] == ["浙江", "四川"]
+
+    access_log.unlink()
+    persisted = traffic_geo.cumulative_traffic_summary(resolver=lambda ip: locations.get(ip, {}))
+
+    assert persisted["site"] == first["site"]
+    assert persisted["since"] == "2026-07-19"
+
+
+def test_cumulative_traffic_counts_identical_requests_at_different_log_offsets(tmp_path, monkeypatch):
+    access_log = tmp_path / "access.log"
+    repeated = log_line("8.8.8.8", "/")
+    access_log.write_text(f"{repeated}\n{repeated}\n", encoding="utf-8")
+    monkeypatch.setenv("REALGUARD_ACCESS_LOG_GLOB", str(access_log))
+    monkeypatch.setenv("REALGUARD_TRAFFIC_CUMULATIVE_DB", str(tmp_path / "traffic.sqlite3"))
+
+    payload = traffic_geo.cumulative_traffic_summary(
+        resolver=lambda _ip: {"country": "中国", "province": "浙江", "isoCode": "CN"},
+    )
+
+    assert payload["site"] == {"pageViews": 2, "uniqueVisitors": 1}
+    assert payload["homepage"] == {"pageViews": 2, "uniqueVisitors": 1}

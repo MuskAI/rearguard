@@ -178,9 +178,9 @@
     .secondary-stats>summary::-webkit-details-marker{display:none}
     .secondary-stats>summary .fa-angle-down{transition:transform .18s}
     .secondary-stats[open]>summary .fa-angle-down{transform:rotate(180deg)}
-    .secondary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:0 0 14px}
+    .secondary-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));padding:0 0 14px}
     .secondary-item{padding:2px 14px;border-left:1px solid var(--line-soft)}
-    .secondary-item:first-child{padding-left:0;border-left:0}
+    .secondary-item:first-child,.secondary-item:nth-child(4){padding-left:0;border-left:0}
     .secondary-item small{display:block;color:var(--muted);font-size:11px;margin-bottom:5px}
     .secondary-item strong{display:block;font-family:ui-monospace,monospace;font-size:14px;overflow-wrap:anywhere}
     .dashboard-grid{display:grid;grid-template-columns:minmax(340px,.78fr) minmax(520px,1.22fr);gap:14px;align-items:start}
@@ -726,8 +726,10 @@
       $('metrics').innerHTML = items.map((item) => `<article class="metric ${String(item.value || '').length > 8 ? 'compact' : ''}"><small>${esc(item.label)}</small><strong>${esc(item.value)}</strong><em>${esc(item.hint || '')}</em></article>`).join('');
       $('secondaryStats').innerHTML = [
         ['网站独立访客', `${traffic.siteUniqueVisitors ?? '--'} 人 · 最近 ${windowHours} 小时`],
+        ['累计网站访问', traffic.cumulativeReady ? `${traffic.cumulativeSitePageViews ?? '--'} 次 · ${traffic.cumulativeSiteUniqueVisitors ?? '--'} 位访客` : '数据准备中'],
         ['用户总数', `${metrics?.users?.total ?? '--'} 人 · 今日新增 ${metrics?.users?.todayNew ?? '--'}`],
         ['活跃 API 密钥', `${metrics?.users?.apiKeys ?? '--'} 个`],
+        ['累计起始时间', traffic.cumulativeReady ? (traffic.cumulativeSince || '--') : '--'],
         ['数据更新时间', win.generatedAt || '-'],
       ].map(([label,value]) => `<div class="secondary-item"><small>${esc(label)}</small><strong>${esc(value)}</strong></div>`).join('');
     }
