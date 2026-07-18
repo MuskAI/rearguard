@@ -86,6 +86,7 @@ export interface ProbabilityFactor {
   label: string;
   source?: string;
   group?: string;
+  direction?: "fake" | "real" | string;
   likelihoodRatio?: number;
   effectiveLikelihoodRatio?: number;
   correlationExponent?: number;
@@ -103,8 +104,37 @@ export interface ProbabilityModel {
   factors: ProbabilityFactor[];
   decisive?: boolean;
   corroborated?: boolean;
+  conflicting?: boolean;
   calibrationStatus?: string;
   note?: string;
+}
+
+export interface CaptureEvidenceItem {
+  key: string;
+  label: string;
+  value: string;
+  strength: "strong" | "medium" | "weak" | string;
+}
+
+export interface CaptureEvidence {
+  version: string;
+  level: "strong" | "medium" | "weak" | "none" | "conflict" | string;
+  levelText: string;
+  supportsRealCapture: boolean;
+  score: number;
+  likelihoodRatio: number;
+  title: string;
+  summary: string;
+  evidence: CaptureEvidenceItem[];
+  conflicts: CaptureEvidenceItem[];
+  limitations: string[];
+  groups: string[];
+  fieldCount: number;
+  privacy?: {
+    gpsRedacted?: boolean;
+    serialRedacted?: boolean;
+    captureTimeRedacted?: boolean;
+  };
 }
 
 export interface UnifiedForensicsRegion {
@@ -184,6 +214,7 @@ export interface DetectResult {
   explanation: string;
   synthid?: SynthIDResult;
   visibleWatermark?: VisibleWatermarkResult;
+  captureEvidence?: CaptureEvidence;
   probabilityModel?: ProbabilityModel;
   provenancePrecheck?: ProvenancePrecheckResult;
   unifiedForensics?: UnifiedForensicsOutput;
@@ -681,6 +712,7 @@ export interface ImageAgentResult {
   probabilityModel?: ProbabilityModel;
   synthid?: SynthIDResult;
   visibleWatermark?: VisibleWatermarkResult;
+  capture_evidence?: CaptureEvidence;
 }
 
 export interface ImageAgentJob {
@@ -1010,6 +1042,7 @@ export interface ProvenanceReport {
     preview: { path: string; value: string }[];
     errors: { section: string; message: string }[];
   };
+  captureEvidence?: CaptureEvidence;
   metadata?: Record<string, unknown>;
   synthid: { supported: boolean; detected: boolean | null; note: string };
   error: string | null;

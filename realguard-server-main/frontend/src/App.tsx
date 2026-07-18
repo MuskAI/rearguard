@@ -2061,6 +2061,7 @@ function ImageResult({
     return text && !text.includes("暂未提取") && !text.includes("无明显视觉可疑点");
   });
   const metadataCount = Object.keys(result.all_metadata || {}).length;
+  const capture = result.capture_evidence;
   const requiresReview = (probability > 35 && probability < 75) || result.confidence === "低";
   const verdictLabel = requiresReview ? tr("需人工复核", "Human review required") : result.final_label;
   const verdictTone = requiresReview ? "review" : result.final_label.includes("AI") ? "danger" : "ok";
@@ -2100,7 +2101,7 @@ function ImageResult({
       <p className="result-caveat"><IconfontIcon name="info" size={15} />{tr("模型概率用于辅助判断；边界结果请结合原图、元数据与证据报告复核。", "Model probability supports review. Borderline results should be checked against the source, metadata, and evidence report.")}</p>
       <div className="result-evidence-grid" aria-label={tr("证据完整度", "Evidence availability")}>
         <div><span>{tr("视觉复核", "Visual review")}</span><strong>{mode === "swarm" ? tr("多源复核", "Multi-source") : result.llm_used ? (visualIssues.length ? tr(`${visualIssues.length} 项线索`, `${visualIssues.length} signals`) : tr("未见明确可疑点", "No explicit issue")) : tr("未完成", "Unavailable")}</strong></div>
-        <div><span>{tr("文件元数据", "File metadata")}</span><strong>{metadataCount ? tr(`${metadataCount} 项已读取`, `${metadataCount} fields`) : tr("未读取到", "Unavailable")}</strong></div>
+        <div><span>{tr("实拍来源证据", "Capture evidence")}</span><strong>{capture?.supportsRealCapture ? tr(`${capture.levelText}支持`, `${capture.level} support`) : capture?.level === "conflict" ? tr("存在冲突", "Conflicting") : metadataCount ? tr(`${metadataCount} 项待核验`, `${metadataCount} fields`) : tr("未形成", "Unavailable")}</strong></div>
         <div><span>{tr("证据结论", "Evidence status")}</span><strong>{requiresReview ? tr("需要复核", "Review needed") : tr("可供参考", "Available")}</strong></div>
       </div>
       {visualIssues.length > 0 && (
@@ -2108,6 +2109,29 @@ function ImageResult({
           <h4>{tr("可复核视觉线索", "Reviewable visual signals")}</h4>
           <ul>{visualIssues.slice(0, 5).map((item) => <li key={item}>{item}</li>)}</ul>
         </div>
+      )}
+      {capture && (
+        <section className={`capture-evidence-band level-${capture.level}`} aria-label={tr("实拍来源证据", "Capture provenance evidence")}>
+          <div className="capture-evidence-head">
+            <span className="capture-evidence-icon"><IconfontIcon name="camera" size={18} /></span>
+            <div>
+              <h4>{capture.title}</h4>
+              <p>{capture.summary}</p>
+            </div>
+            <strong>{tr(`${capture.levelText}证据`, `${capture.level} evidence`)}</strong>
+          </div>
+          {(capture.evidence.length > 0 || capture.conflicts.length > 0) && (
+            <dl className="capture-evidence-list">
+              {capture.evidence.slice(0, 5).map((item) => (
+                <div key={item.key}><dt>{item.label}</dt><dd>{item.value}</dd></div>
+              ))}
+              {capture.conflicts.slice(0, 3).map((item) => (
+                <div className="is-conflict" key={`conflict-${item.key}`}><dt>{item.label}</dt><dd>{item.value}</dd></div>
+              ))}
+            </dl>
+          )}
+          <p className="capture-evidence-limit"><IconfontIcon name="info" size={14} />{capture.limitations[0] || tr("元数据仅作为辅助证据。", "Metadata remains supporting evidence only.")}</p>
+        </section>
       )}
       <div className="case-kv">
         <Info label={tr("置信度", "Confidence")} value={result.confidence || "-"} />

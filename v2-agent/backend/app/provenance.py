@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import json
 
+from . import capture_evidence
 from . import metadata as metadata_reader
 
 try:
@@ -62,6 +63,7 @@ def read_provenance(data: bytes, mime: str, filename: str = "") -> dict:
         "aiMetadata": ai_metadata,
         "metadata": metadata_report.get("metadata"),
         "metadataSummary": metadata_report.get("metadataSummary"),
+        "captureEvidence": metadata_report.get("captureEvidence"),
         "synthid": {"supported": False, "detected": None, "note": SYNTHID_NOTE},
         "error": None,
     }
@@ -117,6 +119,23 @@ def read_provenance(data: bytes, mime: str, filename: str = "") -> dict:
                 "title": ing.get("title"),
                 "relationship": ing.get("relationship"),
             })
+        source_types = {
+            str(item.get("digitalSourceType") or "")
+            for item in report.get("actions") or []
+            if isinstance(item, dict)
+        }
+        validation_state = str(report.get("validationState") or "").lower()
+        has_camera_declaration = any(any(kind in value for kind in CAMERA_SOURCE_TYPES) for value in source_types)
+        if (
+            report.get("hasCredentials")
+            and report.get("isAiGenerated") is False
+            and validation_state in {"valid", "trusted"}
+            and has_camera_declaration
+        ):
+            report["captureEvidence"] = capture_evidence.add_verified_camera_credential(
+                report.get("captureEvidence"),
+                issuer=str(report.get("issuer") or report.get("generator") or ""),
+            )
     except Exception as e:
         report["error"] = f"parse_error: {e}"
     finally:

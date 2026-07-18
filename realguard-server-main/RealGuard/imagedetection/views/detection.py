@@ -17,6 +17,7 @@ from werkzeug.utils import secure_filename
 from imagedetection.views import (
     admin_state,
     aliyun_green,
+    capture_evidence,
     model_registry,
     probability_fusion,
     reporting,
@@ -1169,6 +1170,13 @@ def _run_image_detection_payload(
         metadata = _metadata_for_item(data_itemid) if data_itemid else {}
         if not metadata and isinstance(data.get('full_exif_info'), dict):
             metadata = data.get('full_exif_info') or {}
+        capture = _capture_evidence_for_metadata(metadata)
+        probability, probability_model, metadata_probability = _fuse_fast_metadata_probability(
+            probability,
+            metadata,
+        )
+        if probability_model.get('factors'):
+            final_label = 'AI生成图像' if probability >= 0.5 else '真实图像'
         explanation = data.get('explanation') or data.get('explantation') or _to_user_explanation(
             final_label, confidence, has_metadata=bool(metadata)
         )
@@ -1189,7 +1197,7 @@ def _run_image_detection_payload(
             'probability': probability,
             'detector_probability': detector_probability,
             'p_visual': None,
-            'p_metadata': None,
+            'p_metadata': metadata_probability,
             'confidence': confidence,
             'explanation': explanation,
             'agent_reasoning': public_agent_reasoning,
@@ -1201,11 +1209,15 @@ def _run_image_detection_payload(
             'img_format': data.get('img_format') or (data.get('meta') or {}).get('img_format', ''),
             'resolution': data.get('resolution') or (data.get('meta') or {}).get('resolution', ''),
             'all_metadata': metadata,
+            'capture_evidence': capture,
             'feedback': None,
         }
+        if probability_model.get('factors'):
+            result['probabilityModel'] = probability_model
         if isinstance(visible_watermark, dict):
             result['visibleWatermark'] = visible_watermark
-            watermark_verdict.apply_to_result(result, visible_watermark)
+            if watermark_verdict.apply_to_result(result, visible_watermark):
+                result.pop('probabilityModel', None)
         if include_internal_evidence and isinstance(data.get('remote_evidence'), dict):
             result['_remote_evidence'] = data.get('remote_evidence')
         return {'status': 'success', 'result': result}, 200
@@ -1607,7 +1619,9 @@ def _swarm_primary_expert(image_bytes, filename, mimetype, user_info, is_guest):
         }
     result = payload.get('result') or {}
     remote_evidence = result.pop('_remote_evidence', {})
-    score = _clamp01(result.get('probability'), 0.5)
+    # Metadata and visible-watermark evidence are separate Swarm experts; keep
+    # the primary baseline on the raw detector score to avoid counting them twice.
+    score = _clamp01(result.get('detector_probability'), result.get('probability', 0.5))
     evidence = []
     if result.get('visual_issues'):
         evidence.extend([str(item) for item in (result.get('visual_issues') or [])[:2] if str(item).strip()])
@@ -1617,7 +1631,7 @@ def _swarm_primary_expert(image_bytes, filename, mimetype, user_info, is_guest):
     return result, {
         'status': 'success',
         'score': round(score, 4),
-        'verdict': result.get('final_label') or ('AI生成图像' if score >= 0.5 else '真实图像'),
+        'verdict': 'AI生成图像' if score >= 0.5 else '真实图像',
         'confidence': result.get('confidence') or _conf_level_from_score(score),
         'evidence': evidence[:3] or ['主路由完成基础图像鉴伪。'],
         'message': '主路由检测完成',
@@ -1662,9 +1676,37 @@ def _explicit_ai_metadata_markers(metadata):
     return matches[:4]
 
 
+def _capture_evidence_for_metadata(metadata):
+    metadata = metadata if isinstance(metadata, dict) else {}
+    return capture_evidence.analyze_capture_evidence(
+        metadata,
+        ai_markers=_explicit_ai_metadata_markers(metadata),
+    )
+
+
+def _fuse_fast_metadata_probability(probability, metadata):
+    metadata_result = _swarm_metadata_expert({'all_metadata': metadata or {}})
+    model = probability_fusion.fuse([
+        {
+            'id': 'primary',
+            'status': 'success',
+            'score': _clamp01(probability),
+            'weight': 1.0,
+        },
+        {
+            'id': 'metadata',
+            'weight': 0.08,
+            **metadata_result,
+        },
+    ])
+    fused = _clamp01(model.get('posterior'), probability) if model.get('factors') else _clamp01(probability)
+    return fused, model, _clamp01(metadata_result.get('score'), 0.5)
+
+
 def _swarm_metadata_expert(primary_result):
     metadata = (primary_result or {}).get('all_metadata') or {}
     keys = set(metadata.keys()) if isinstance(metadata, dict) else set()
+    capture = _capture_evidence_for_metadata(metadata)
     if not metadata:
         return {
             'status': 'success',
@@ -1673,38 +1715,39 @@ def _swarm_metadata_expert(primary_result):
             'confidence': '低',
             'evidence': ['图像未提供可验证的 EXIF/拍摄设备元数据。'],
             'message': '元数据缺失，保持中性',
-            'details': {'verifiedAiMetadata': False, 'aiMarkers': []},
+            'details': {'verifiedAiMetadata': False, 'aiMarkers': [], 'captureEvidence': capture},
             'latencyMs': 0,
         }
     ai_markers = _explicit_ai_metadata_markers(metadata)
-    normalized_keys = {str(key).lower().replace(':', '_') for key in keys}
-    camera_keys = {
-        'exif_make', 'exif_model', 'exif_lensmodel', 'exif_lensmake',
-        'composite_lensid', 'composite_lensspec', 'composite_focallength',
-    }
-    date_keys = {'exif_datetimeoriginal', 'exif_createdate', 'file_filemodifydate'}
-    has_camera = bool(normalized_keys.intersection(camera_keys))
-    has_date = bool(normalized_keys.intersection(date_keys))
     if ai_markers:
         score = 0.9
         verdict = '发现生成标识'
         confidence = '高'
         evidence = [f'元数据明确声明生成工具：{ai_markers[0]}']
-    elif has_camera and has_date:
-        score = 0.24
-        verdict = '拍摄链路较完整'
+    elif capture.get('level') == 'medium':
+        score = 0.28
+        verdict = '拍摄链路一致'
         confidence = '中'
-        evidence = ['元数据包含设备与时间字段，可为真实拍摄提供辅助支撑。']
-    elif has_camera:
-        score = 0.34
-        verdict = '含设备信息'
-        confidence = '中'
-        evidence = ['元数据包含相机或镜头信息，但拍摄链路不完整。']
+        evidence = [capture.get('summary')]
+    elif capture.get('level') == 'weak':
+        score = 0.4
+        verdict = '含部分拍摄线索'
+        confidence = '低'
+        evidence = [capture.get('summary')]
+    elif capture.get('level') == 'conflict':
+        score = 0.58
+        verdict = '拍摄元数据存在冲突'
+        confidence = '低'
+        evidence = [capture.get('summary')]
     else:
         score = 0.5
         verdict = '无明确来源信号'
         confidence = '低'
         evidence = ['已提取元数据，但没有明确生成器声明或完整拍摄链路。']
+    for item in (capture.get('evidence') or [])[:2]:
+        line = f"{item.get('label')}：{item.get('value')}"
+        if line not in evidence:
+            evidence.append(line)
     evidence.append(f'可读元数据字段数：{len(keys)}。')
     return {
         'status': 'success',
@@ -1713,9 +1756,39 @@ def _swarm_metadata_expert(primary_result):
         'confidence': confidence,
         'evidence': evidence[:3],
         'message': '元数据取证完成',
-        'details': {'verifiedAiMetadata': bool(ai_markers), 'aiMarkers': ai_markers},
+        'details': {
+            'verifiedAiMetadata': bool(ai_markers),
+            'aiMarkers': ai_markers,
+            'captureEvidence': capture,
+        },
         'latencyMs': 0,
     }
+
+
+def _capture_evidence_from_experts(experts, primary_result=None):
+    metadata_expert = next((item for item in experts or [] if item.get('id') == 'metadata'), None)
+    details = (metadata_expert or {}).get('details') or {}
+    capture = details.get('captureEvidence') if isinstance(details, dict) else None
+    if not isinstance(capture, dict):
+        capture = _capture_evidence_for_metadata((primary_result or {}).get('all_metadata') or {})
+
+    c2pa_expert = next((item for item in experts or [] if item.get('id') == 'c2pa'), None)
+    c2pa_details = (c2pa_expert or {}).get('details') or {}
+    chain_sources = set(c2pa_details.get('chain_sources') or []) if isinstance(c2pa_details, dict) else set()
+    validation_ok = str(c2pa_details.get('validation_severity') or '') == 'ok'
+    camera_only = 'camera' in chain_sources and 'ai' not in chain_sources
+    if (
+        (c2pa_expert or {}).get('status') == 'success'
+        and camera_only
+        and validation_ok
+        and not c2pa_details.get('chain_conflict')
+    ):
+        signer = c2pa_details.get('signer') or {}
+        generators = c2pa_details.get('generators') or []
+        issuer = signer.get('issuer') if isinstance(signer, dict) else ''
+        issuer = issuer or (generators[0] if generators else '')
+        capture = capture_evidence.add_verified_camera_credential(capture, issuer=str(issuer or ''))
+    return capture
 
 
 def _swarm_v2_expert(image_bytes, filename, mimetype):
@@ -1960,6 +2033,7 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
         final_label = '真实图像'
 
     provenance_summary = _swarm_provenance_summary(experts)
+    capture = _capture_evidence_from_experts(experts, primary_result)
 
     evidence = []
     if provenance_summary and provenance_summary.get('headline'):
@@ -2017,6 +2091,7 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
             'disagreement': disagreement,
         }, ensure_ascii=False),
         'llm_used': False,
+        'capture_evidence': capture,
         'swarm': {
             'enabled': True,
             'score': round(score, 4),
@@ -2427,12 +2502,16 @@ def image_result_api():
         return jsonify({'status': 'error', 'message': '未找到该检测记录'}), 404
     filename = item.get('filename', '')
     fake_pct = _to_float(item.get('fake', 0), 0.0)
-    fake = _prob01_from_percent(fake_pct)
+    detector_probability = _clamp01(item.get('detector_probability'), _prob01_from_percent(fake_pct))
     image_url = _backend_static_url('image', item)
 
     all_metadata = _metadata_for_item(itemid)
+    fake, probability_model, metadata_probability = _fuse_fast_metadata_probability(
+        detector_probability,
+        all_metadata,
+    )
 
-    final_label = 'AI生成图像' if fake_pct >= 50 else '真实图像'
+    final_label = 'AI生成图像' if fake >= 0.5 else '真实图像'
     feedback_raw = item.get('feedback')
     feedback = 1 if feedback_raw in (1, '1', '满意') else (-1 if feedback_raw in (-1, '-1', '不满意') else None)
 
@@ -2446,7 +2525,8 @@ def image_result_api():
         'itemid': item.get('itemid'),
         'final_label': final_label,
         'probability': fake,
-        'detector_probability': _clamp01(item.get('detector_probability'), fake),
+        'detector_probability': detector_probability,
+        'p_metadata': metadata_probability,
         'confidence': item.get('clarity', ''),
         'explanation': explanation,
         'agent_reasoning': '',
@@ -2457,12 +2537,16 @@ def image_result_api():
         'img_format': item.get('img_format', ''),
         'resolution': item.get('resolution', ''),
         'all_metadata': all_metadata,
+        'capture_evidence': _capture_evidence_for_metadata(all_metadata),
         'feedback': feedback,
     }
+    if probability_model.get('factors'):
+        result['probabilityModel'] = probability_model
     visible_watermark = _runtime_visible_watermark_for_item(item.get('itemid'))
     if isinstance(visible_watermark, dict):
         result['visibleWatermark'] = visible_watermark
-        watermark_verdict.apply_to_result(result, visible_watermark)
+        if watermark_verdict.apply_to_result(result, visible_watermark):
+            result.pop('probabilityModel', None)
     return jsonify({'status': 'success', 'result': result})
 
 
@@ -2477,29 +2561,41 @@ def image_report_api():
         return jsonify({'status': 'error', 'message': '未找到该检测记录'}), 404
 
     fake_pct = _to_float(item.get('fake', 0), 0.0)
+    report_metadata = _metadata_for_item(itemid)
+    detector_probability = _clamp01(item.get('detector_probability'), _prob01_from_percent(fake_pct))
+    report_probability, probability_model, metadata_probability = _fuse_fast_metadata_probability(
+        detector_probability,
+        report_metadata,
+    )
+    report_label = 'AI生成图像' if report_probability >= 0.5 else '真实图像'
     result = {
         'itemid': item.get('itemid'),
-        'final_label': 'AI生成图像' if fake_pct >= 50 else '真实图像',
-        'probability': _prob01_from_percent(fake_pct),
-        'detector_probability': _clamp01(item.get('detector_probability'), _prob01_from_percent(fake_pct)),
+        'final_label': report_label,
+        'probability': report_probability,
+        'detector_probability': detector_probability,
+        'p_metadata': metadata_probability,
         'confidence': item.get('clarity', ''),
         'explanation': item.get('explantation') or _to_user_explanation(
-            'AI生成图像' if fake_pct >= 50 else '真实图像',
+            report_label,
             item.get('clarity', ''),
-            has_metadata=bool(_metadata_for_item(itemid)),
+            has_metadata=bool(report_metadata),
         ),
         'image_url': _backend_static_url('image', item),
         'filename': item.get('filename', ''),
         'file_size': item.get('file_size', ''),
         'img_format': item.get('img_format', ''),
         'resolution': item.get('resolution', ''),
-        'visual_issues': _normalize_visual_issues([], final_label='AI生成图像' if fake_pct >= 50 else '真实图像'),
-        'all_metadata': _metadata_for_item(itemid),
+        'visual_issues': _normalize_visual_issues([], final_label=report_label),
+        'all_metadata': report_metadata,
+        'capture_evidence': _capture_evidence_for_metadata(report_metadata),
     }
+    if probability_model.get('factors'):
+        result['probabilityModel'] = probability_model
     visible_watermark = _runtime_visible_watermark_for_item(item.get('itemid'))
     if isinstance(visible_watermark, dict):
         result['visibleWatermark'] = visible_watermark
-        watermark_verdict.apply_to_result(result, visible_watermark)
+        if watermark_verdict.apply_to_result(result, visible_watermark):
+            result.pop('probabilityModel', None)
     pdf = reporting.image_report_pdf(item, result)
     return Response(
         pdf,

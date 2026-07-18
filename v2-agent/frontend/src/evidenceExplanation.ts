@@ -1,5 +1,5 @@
 import type { AgentOutcome } from "./agentTypes";
-import type { DetectResult, VisibleWatermarkHit, VisibleWatermarkResult } from "./api";
+import type { CaptureEvidence, DetectResult, VisibleWatermarkHit, VisibleWatermarkResult } from "./api";
 
 const MIN_WATERMARK_RISK = 0.95;
 
@@ -71,6 +71,28 @@ function watermarkPoint(report?: VisibleWatermarkResult): ExplanationPoint {
   return { label: "水印扫描", text: "扫描已完成，未检出带有效定位框的可见水印；本项未参与抬高风险。" };
 }
 
+function captureEvidencePoint(report?: CaptureEvidence): ExplanationPoint {
+  if (!report) {
+    return { label: "实拍来源证据", text: "本次结果未包含结构化实拍来源分析；元数据缺失本身不作为伪造证据。" };
+  }
+  if (report.level === "conflict") {
+    const conflicts = (report.conflicts || []).map((item) => item.label).slice(0, 2).join("、");
+    return {
+      label: "实拍证据冲突",
+      text: `${report.summary}${conflicts ? ` 已标记：${conflicts}。` : ""}这些字段不会用于降低 AI 风险。`,
+    };
+  }
+  if (report.supportsRealCapture) {
+    const evidence = (report.evidence || []).map((item) => item.label).slice(0, 3).join("、");
+    return {
+      label: "实拍来源证据",
+      decisive: report.level === "strong",
+      text: `${report.title}（${report.levelText || "辅助"}强度）：${report.summary}${evidence ? ` 可复核链路包括${evidence}。` : ""}该证据只用于降低伪造风险，普通 EXIF 不单独证明图片真实。`,
+    };
+  }
+  return { label: "实拍来源证据", text: `${report.summary} 本项保持中性，不因缺少拍摄字段抬高 AI 风险。` };
+}
+
 function imageExplanation(outcome: Extract<AgentOutcome, { kind: "image" }>, risk: number, verdictLabel: string): ExplanationPoint[] {
   const result = outcome.result;
   const report = result.visibleWatermark;
@@ -97,10 +119,7 @@ function imageExplanation(outcome: Extract<AgentOutcome, { kind: "image" }>, ris
     points.push({ label: "视觉复核", text: "未提取到明确异常线索，本项未参与抬高风险。" });
   }
 
-  const metadataCount = Object.keys(result.all_metadata || {}).length;
-  points.push(metadataCount > 0
-    ? { label: "元数据", text: `已读取 ${metadataCount} 项文件元数据，仅作辅助线索，不单独决定真伪。` }
-    : { label: "元数据", text: "未读取到可用元数据；元数据缺失本身不作为伪造证据。" });
+  points.push(captureEvidencePoint(result.capture_evidence));
   points.push({
     label: "综合结论",
     decisive: watermarkHit,
@@ -140,6 +159,7 @@ function evidenceExplanation(outcome: Extract<AgentOutcome, { kind: "evidence" }
   points.push(provenance?.hasCredentials
     ? { label: "来源凭证", text: `检测到内容凭证，签名状态为${provenance.validationState || "待验证"}；作为来源链辅助证据。` }
     : { label: "来源凭证", text: "未发现可验证的来源凭证；凭证缺失本身不作为伪造证据。" });
+  points.push(captureEvidencePoint(result.captureEvidence || provenance?.captureEvidence));
   points.push({
     label: "综合结论",
     decisive: watermarkHit,

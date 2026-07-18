@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   BadgeCheck,
+  Camera,
   CheckCircle2,
   CircleDashed,
   Download,
@@ -20,7 +21,7 @@ import {
   Video,
 } from "lucide-react";
 import type { AgentOutcome } from "../agentTypes";
-import type { ForensicReport, ProbabilityModel, ProvenanceReport, SynthIDResult, VisibleWatermarkResult } from "../api";
+import type { CaptureEvidence, ForensicReport, ProbabilityModel, ProvenanceReport, SynthIDResult, VisibleWatermarkResult } from "../api";
 import { buildEvidenceExplanation, hasLocalizedWatermark } from "../evidenceExplanation";
 
 type ResultTab = "summary" | "evidence" | "file";
@@ -190,6 +191,54 @@ function ProvenanceSection({ report }: { report?: ProvenanceReport }) {
         <div><dt>签发者</dt><dd>{report.issuer || "未声明"}</dd></div>
         <div><dt>AI 声明</dt><dd>{report.isAiGenerated === true ? "有" : report.isAiGenerated === false ? "无" : "未声明"}</dd></div>
       </dl>
+    </section>
+  );
+}
+
+function CaptureEvidenceSection({ report }: { report?: CaptureEvidence }) {
+  if (!report) return null;
+  const items = [...(report.evidence || []), ...(report.conflicts || [])];
+  const privacyProtected = Boolean(
+    report.privacy?.gpsRedacted
+    || report.privacy?.serialRedacted
+    || report.privacy?.captureTimeRedacted,
+  );
+  const stateLabel = report.level === "conflict"
+    ? "证据冲突"
+    : report.supportsRealCapture
+      ? `${report.levelText || "辅助"}强度支持`
+      : "保持中性";
+
+  return (
+    <section className={`result-band capture-chain-band level-${report.level}`}>
+      <div className="capture-chain-heading">
+        <div className="section-title"><Camera size={18} /><div><h3>实拍来源证据</h3><p>核对设备、光学参数、原始时间与可信来源凭证的一致性。</p></div></div>
+        <span className="capture-chain-state">{stateLabel}</span>
+      </div>
+      <div className="capture-chain-summary">
+        <span aria-hidden="true"><Camera size={20} /></span>
+        <div><strong>{report.title}</strong><p>{report.summary}</p></div>
+        <dl><dt>证据完整度</dt><dd>{Math.round(clamp01(report.score) * 100)}%</dd></dl>
+      </div>
+      {items.length > 0 && (
+        <div className="capture-chain-items" role="list" aria-label="实拍来源证据条目">
+          {items.map((item) => {
+            const conflict = (report.conflicts || []).some((entry) => entry.key === item.key);
+            return (
+              <div className={conflict ? "is-conflict" : ""} role="listitem" key={`${conflict ? "conflict" : "evidence"}-${item.key}`}>
+                <span>{conflict ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />}</span>
+                <strong>{item.label}</strong>
+                <p>{item.value}</p>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div className="capture-chain-boundary">
+        <Info size={15} />
+        <p>{(report.limitations || ["普通 EXIF 可以被修改或复制，因此不能单独证明图片真实。"]).join(" ")}</p>
+        {privacyProtected && <span><ShieldCheck size={13} /> 证据摘要已脱敏</span>}
+      </div>
     </section>
   );
 }
@@ -405,17 +454,20 @@ function ProbabilitySection({ model }: { model?: ProbabilityModel }) {
         </div>
       </div>
       <div className="probability-factors">
-        {model.factors.slice(0, 4).map((factor, index) => (
-          <div key={`${factor.kind}-${factor.source || index}`}>
-            <span>{String(index + 1).padStart(2, "0")}</span>
-            <strong>{factor.label}</strong>
-            <small>{Number(factor.correlationExponent ?? 1) < 1 ? "同源折扣" : "有效证据"}</small>
-          </div>
-        ))}
+        {model.factors.slice(0, 4).map((factor, index) => {
+          const lowersRisk = factor.direction === "real" || Number(factor.effectiveLikelihoodRatio ?? factor.likelihoodRatio ?? 1) < 1;
+          return (
+            <div className={lowersRisk ? "is-supporting-real" : "is-supporting-fake"} key={`${factor.kind}-${factor.source || index}`}>
+              <span>{String(index + 1).padStart(2, "0")}</span>
+              <strong>{factor.label}</strong>
+              <small>{Number(factor.correlationExponent ?? 1) < 1 ? "同源折扣" : lowersRisk ? "降低风险" : "抬高风险"}</small>
+            </div>
+          );
+        })}
       </div>
       <div className="probability-note">
         <Info size={15} />
-        <p>该数值表示自动化伪造风险，不等同于司法鉴定置信度；普通 Logo 与缺失元数据不参与抬分。</p>
+        <p>{model.conflicting ? "当前同时存在支持实拍与支持生成的证据，系统按证据强度融合并标记冲突。" : "该数值表示自动化伪造风险，不等同于司法鉴定置信度；普通 Logo 与缺失元数据不参与抬分。"}</p>
       </div>
     </section>
   );
@@ -444,6 +496,11 @@ export default function AgentResult(props: Props) {
   const probabilityModel = props.outcome.kind === "image" || props.outcome.kind === "evidence"
     ? props.outcome.result.probabilityModel || (props.outcome.kind === "image" ? props.outcome.result.swarm?.probabilityModel : undefined)
     : undefined;
+  const captureEvidence = props.outcome.kind === "image"
+    ? props.outcome.result.capture_evidence
+    : props.outcome.kind === "evidence"
+      ? props.outcome.result.captureEvidence || provenance?.captureEvidence
+      : undefined;
   const forensicsActionLabel = props.forensicsBusy
     ? props.forensicsPreviewState === "skipped" ? "服务端判读中" : forensics?.source === "browser-preview" ? "模型判读中" : forensics?.source === "vlm" ? "正在归档" : "本地图谱生成中"
     : forensics ? "重新生成取证图谱" : "生成取证图谱";
@@ -511,6 +568,7 @@ export default function AgentResult(props: Props) {
               <div className="consensus-track"><i style={{ width: `${Math.round(Number(props.outcome.result.swarm.consensusScore || 0) * 100)}%` }} /></div>
             </section>
           )}
+          <CaptureEvidenceSection report={captureEvidence} />
           <ProbabilitySection model={probabilityModel} />
           <SynthIDSection report={synthid} />
           <WatermarkSection report={visibleWatermark} preview={preview} />
@@ -539,6 +597,7 @@ export default function AgentResult(props: Props) {
             <div className="section-title"><Layers3 size={18} /><div><h3>证据摘要</h3><p>证据条目用于解释模型判断，不应脱离原始文件单独使用。</p></div></div>
             <EvidenceList items={evidenceItems} />
           </section>
+          <CaptureEvidenceSection report={captureEvidence} />
           <ProbabilitySection model={probabilityModel} />
           <SynthIDSection report={synthid} />
           <WatermarkSection report={visibleWatermark} preview={preview} />

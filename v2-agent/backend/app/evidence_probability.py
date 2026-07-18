@@ -44,12 +44,14 @@ def _known_watermark_lr(confidence: float) -> float:
 
 
 def _factor(kind: str, label: str, likelihood_ratio: float, group: str, *, source: str) -> dict[str, Any]:
+    ratio = min(max(float(likelihood_ratio), 0.01), 10_000.0)
     return {
         "kind": kind,
         "label": label,
         "source": source,
         "group": group,
-        "likelihoodRatio": round(max(float(likelihood_ratio), 1.0), 3),
+        "likelihoodRatio": round(ratio, 3),
+        "direction": "fake" if ratio > 1.0 else "real" if ratio < 1.0 else "neutral",
     }
 
 
@@ -64,6 +66,7 @@ def build_probability_model(report: dict[str, Any], known_hits: list[dict[str, A
     ai_from_metadata = bool(report.get("aiFromMetadata"))
     is_ai_generated = report.get("isAiGenerated") is True
     source_kind = str(report.get("aiSourceKind") or "")
+    capture = report.get("captureEvidence") if isinstance(report.get("captureEvidence"), dict) else {}
 
     if ai_from_metadata and is_ai_generated:
         if clashes:
@@ -110,6 +113,18 @@ def build_probability_model(report: dict[str, Any], known_hits: list[dict[str, A
             source="、".join(clashes[:3]),
         ))
 
+    capture_level = str(capture.get("level") or "")
+    if capture.get("supportsRealCapture") is True and capture_level in {"strong", "medium", "weak"}:
+        default_ratio = {"strong": 0.08, "medium": 0.65, "weak": 0.84}[capture_level]
+        ratio = min(max(float(capture.get("likelihoodRatio") or default_ratio), 0.05), 1.0)
+        factors.append(_factor(
+            "valid_camera_c2pa" if capture_level == "strong" else "camera_capture_metadata",
+            "通过校验的相机捕获内容凭证" if capture_level == "strong" else "一致的相机拍摄元数据" if capture_level == "medium" else "部分相机拍摄元数据",
+            ratio,
+            "camera_capture",
+            source="c2pa" if capture_level == "strong" else "metadata",
+        ))
+
     grouped: dict[str, list[dict[str, Any]]] = {}
     for factor in factors:
         grouped.setdefault(str(factor["group"]), []).append(factor)
@@ -136,6 +151,8 @@ def build_probability_model(report: dict[str, Any], known_hits: list[dict[str, A
         "known_visible_ai_watermark", "valid_ai_c2pa", "ai_generation_metadata", "ai_enhancement_declaration",
     }
     active_kinds = {str(item["kind"]) for item in effective_factors}
+    fake_groups = {str(item["group"]) for item in effective_factors if float(item["effectiveLikelihoodRatio"]) > 1.0}
+    real_groups = {str(item["group"]) for item in effective_factors if float(item["effectiveLikelihoodRatio"]) < 1.0}
     return {
         "version": MODEL_VERSION,
         "method": "bayesian_likelihood_ratio",
@@ -144,9 +161,10 @@ def build_probability_model(report: dict[str, Any], known_hits: list[dict[str, A
         "effectiveLikelihoodRatio": round(effective_lr, 3),
         "factors": effective_factors,
         "decisive": bool(active_kinds.intersection(decisive_kinds)),
-        "corroborated": len({item["group"] for item in effective_factors}) >= 2,
+        "corroborated": len(fake_groups) >= 2,
+        "conflicting": bool(fake_groups and real_groups),
         "calibrationStatus": "policy_prior_pending_dataset_calibration",
-        "note": "当前数值为版本化证据似然比模型输出；上线后应使用标注集进行温度缩放或等距回归校准。",
+        "note": "AI 来源证据抬高风险，一致的实拍来源证据适度降低风险；上线后仍需使用标注集校准。",
     }
 
 
@@ -154,8 +172,8 @@ def fuse_with_analysis(analysis: dict[str, Any], probability_model: dict[str, An
     """Fuse provenance likelihood ratios with a pixel-model baseline."""
     if not isinstance(probability_model, dict):
         return analysis
-    effective_lr = max(float(probability_model.get("effectiveLikelihoodRatio") or 1.0), 1.0)
-    if effective_lr <= 1.0:
+    effective_lr = max(float(probability_model.get("effectiveLikelihoodRatio") or 1.0), 0.01)
+    if abs(effective_lr - 1.0) <= 0.0001:
         return analysis
 
     merged = copy.deepcopy(analysis)
@@ -177,14 +195,25 @@ def fuse_with_analysis(analysis: dict[str, Any], probability_model: dict[str, An
         "posterior": round(fused, 4),
     }
     if kinds:
+        has_real_support = any(
+            float(item.get("effectiveLikelihoodRatio") or item.get("likelihoodRatio") or 1.0) < 1.0
+            for item in factors if isinstance(item, dict)
+        )
+        has_fake_support = any(
+            float(item.get("effectiveLikelihoodRatio") or item.get("likelihoodRatio") or 1.0) > 1.0
+            for item in factors if isinstance(item, dict)
+        )
         merged.setdefault("dimensions", []).append({
             "key": "evidence_probability",
             "label": "来源证据概率融合",
             "score": round(fused, 2),
             "result": "、".join(str(item.get("label") or "") for item in factors[:3] if isinstance(item, dict)),
         })
-        merged["explanation"] = (
-            f"{str(merged.get('explanation') or '').strip()}\n"
-            f"来源证据通过似然比更新像素模型基线，最终风险概率为 {fused * 100:.2f}%。"
-        ).strip()
+        if has_real_support and has_fake_support:
+            impact = "支持实拍与支持生成的来源证据相互制衡"
+        elif has_real_support:
+            impact = "一致的实拍来源证据对像素模型风险作了适度下调"
+        else:
+            impact = "AI 来源证据提高了像素模型风险"
+        merged["explanation"] = f"{str(merged.get('explanation') or '').strip()}\n{impact}，融合后风险概率为 {fused * 100:.2f}%。".strip()
     return merged

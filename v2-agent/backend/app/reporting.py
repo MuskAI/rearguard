@@ -209,6 +209,7 @@ def _render_provenance_block(provenance: dict | None) -> str:
     ingredients = provenance.get("ingredients", []) or []
     metadata_summary = provenance.get("metadataSummary") or {}
     ai_metadata = provenance.get("aiMetadata") or metadata_summary.get("aiDetection") or {}
+    capture = provenance.get("captureEvidence") or metadata_summary.get("captureEvidence") or {}
     action_parts = []
     for item in actions:
         label = escape(_safe_text(item.get("action")))
@@ -236,13 +237,33 @@ def _render_provenance_block(provenance: dict | None) -> str:
     signal_block = "".join(signal_items) or "<li class='muted'>未命中 AI 元数据线索</li>"
 
     preview_items = []
+    sensitive_metadata_tokens = ("gpslatitude", "gpslongitude", "serialnumber", "datetimeoriginal")
     for item in (metadata_summary.get("preview") or [])[:20]:
+        path = _safe_text(item.get("path"))
+        normalized_path = path.lower().replace("_", "").replace(":", "").replace(".", "")
+        value = "[已隐藏敏感值]" if any(token in normalized_path for token in sensitive_metadata_tokens) else _safe_text(item.get("value"))
         preview_items.append(
             "<li>"
-            f"{escape(_safe_text(item.get('path')))}：{escape(_safe_text(item.get('value')))}"
+            f"{escape(path)}：{escape(value)}"
             "</li>"
         )
     preview_block = "".join(preview_items) or "<li class='muted'>未读取到可展示元数据</li>"
+    capture_items = []
+    for item in (capture.get("evidence") or [])[:8]:
+        if not isinstance(item, dict):
+            continue
+        capture_items.append(
+            f"<li><strong>{escape(_safe_text(item.get('label')))}</strong>："
+            f"{escape(_safe_text(item.get('value')))}</li>"
+        )
+    for item in (capture.get("conflicts") or [])[:4]:
+        if not isinstance(item, dict):
+            continue
+        capture_items.append(
+            f"<li><strong>冲突 · {escape(_safe_text(item.get('label')))}</strong>："
+            f"{escape(_safe_text(item.get('value')))}</li>"
+        )
+    capture_block = "".join(capture_items) or "<li class='muted'>未形成可用实拍证据</li>"
 
     return f"""
     <section class="card">
@@ -276,6 +297,17 @@ def _render_provenance_block(provenance: dict | None) -> str:
         <div>
           <h3>元数据预览</h3>
           <ul>{preview_block}</ul>
+        </div>
+      </div>
+      <div class="grid single-gap">
+        <div>
+          <h3>实拍来源证据 · {escape(_safe_text(capture.get('levelText'), '无'))}</h3>
+          <p>{escape(_safe_text(capture.get('summary'), '未形成可用实拍证据'))}</p>
+          <ul>{capture_block}</ul>
+        </div>
+        <div>
+          <h3>证据边界</h3>
+          <ul>{''.join(f'<li>{escape(_safe_text(note))}</li>' for note in (capture.get('limitations') or [])[:3]) or "<li class='muted'>普通元数据仅作辅助判断</li>"}</ul>
         </div>
       </div>
       <p class="footnote">SynthID 说明：{escape(_safe_text((provenance.get('synthid') or {}).get('note')))}</p>

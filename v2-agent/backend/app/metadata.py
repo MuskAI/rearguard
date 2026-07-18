@@ -14,6 +14,8 @@ import zlib
 from dataclasses import dataclass
 from typing import Any
 
+from . import capture_evidence
+
 try:
     from PIL import ExifTags, Image
 except Exception:  # pragma: no cover - Pillow is an optional runtime dep.
@@ -404,6 +406,22 @@ def _read_pil_image(data: bytes) -> dict[str, Any] | None:
         if exif:
             tags = ExifTags.TAGS if ExifTags is not None else {}
             output["exif"] = {str(tags.get(tag, tag)): _sanitize(value) for tag, value in exif.items()}
+            if ExifTags is not None and hasattr(ExifTags, "IFD"):
+                nested_ifds = (
+                    ("exifDetails", ExifTags.IFD.Exif, ExifTags.TAGS),
+                    ("gps", ExifTags.IFD.GPSInfo, ExifTags.GPSTAGS),
+                    ("interop", ExifTags.IFD.Interop, ExifTags.TAGS),
+                )
+                for section, ifd_id, names in nested_ifds:
+                    try:
+                        values = exif.get_ifd(ifd_id)
+                    except (KeyError, TypeError, ValueError, SyntaxError):
+                        values = None
+                    if values:
+                        output[section] = {
+                            str(names.get(tag, tag)): _sanitize(value)
+                            for tag, value in values.items()
+                        }
         return output
 
 
@@ -753,6 +771,14 @@ def inspect_metadata(data: bytes, filename: str = "", mime: str | None = None) -
 
     sanitized = _sanitize(metadata)
     ai_detection = analyze_ai_metadata(sanitized)
+    capture = capture_evidence.analyze_capture_evidence(
+        sanitized,
+        ai_markers=(
+            [item.get("label") for item in ai_detection.get("signals") or [] if isinstance(item, dict)]
+            if ai_detection.get("isAiLikely")
+            else []
+        ),
+    )
     sections = [
         {"name": name, "fieldCount": _count_leaves(value)}
         for name, value in sanitized.items()
@@ -766,6 +792,7 @@ def inspect_metadata(data: bytes, filename: str = "", mime: str | None = None) -
         "hasEmbeddedMetadata": len(embedded_sections) > 0,
         "metadata": sanitized,
         "aiDetection": ai_detection,
+        "captureEvidence": capture,
         "metadataSummary": {
             "sectionCount": len(sections),
             "embeddedSectionCount": len(embedded_sections),
@@ -774,5 +801,6 @@ def inspect_metadata(data: bytes, filename: str = "", mime: str | None = None) -
             "preview": _flatten(sanitized),
             "errors": errors,
             "aiDetection": ai_detection,
+            "captureEvidence": capture,
         },
     }

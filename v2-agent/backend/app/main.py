@@ -564,6 +564,7 @@ def _build_result(
         "visibleWatermark": analysis.get("visibleWatermark"),
         "watermarkVerdictOverride": analysis.get("watermarkVerdictOverride"),
         "probabilityModel": analysis.get("probabilityModel"),
+        "captureEvidence": (provenance_report or {}).get("captureEvidence"),
         "provenancePrecheck": provenance_precheck_report or analysis.get("provenancePrecheck"),
         "disclaimer": "本结果由自动化来源证据与检测模型生成，仅供专业复核参考，不构成司法鉴定结论。",
     }

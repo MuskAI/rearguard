@@ -91,3 +91,41 @@ def test_more_independent_positive_evidence_is_monotonic():
         [_known_hit()],
     )
     assert corroborated["posterior"] > watermark_only["posterior"]
+
+
+def test_coherent_camera_metadata_reduces_pixel_risk_modestly():
+    model = evidence_probability.build_probability_model(
+        _report(captureEvidence={
+            "level": "medium",
+            "supportsRealCapture": True,
+            "likelihoodRatio": 0.65,
+        }),
+        [],
+    )
+    fused = evidence_probability.fuse_with_analysis(
+        {"confidence": 0.6, "verdict": "suspected_fake", "dimensions": [], "explanation": "像素模型处于边界区间。"},
+        model,
+    )
+
+    assert 0.45 < fused["confidence"] < 0.6
+    assert fused["probabilityModel"]["factors"][0]["direction"] == "real"
+    assert "适度下调" in fused["explanation"]
+
+
+def test_camera_metadata_cannot_override_known_ai_watermark():
+    model = evidence_probability.build_probability_model(
+        _report(captureEvidence={
+            "level": "medium",
+            "supportsRealCapture": True,
+            "likelihoodRatio": 0.65,
+        }),
+        [_known_hit(0.95)],
+    )
+    fused = evidence_probability.fuse_with_analysis(
+        {"confidence": 0.2, "verdict": "real", "dimensions": [], "explanation": "像素模型倾向真实。"},
+        model,
+    )
+
+    assert model["conflicting"] is True
+    assert fused["confidence"] > 0.9
+    assert "相互制衡" in fused["explanation"]

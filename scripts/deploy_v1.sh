@@ -45,7 +45,10 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 log_step 1 "Verify V1 backend"
 run_local "$BACKEND_DIR/.venv-test/bin/python" -m compileall "$BACKEND_DIR/imagedetection"
 run_local "$BACKEND_DIR/.venv-test/bin/python" -m py_compile "$BACKEND_DIR/detector_backend.py"
-run_local "$BACKEND_DIR/.venv-test/bin/pytest" "$BACKEND_DIR/tests"
+(
+  cd "$BACKEND_DIR"
+  run_local .venv-test/bin/python -m pytest tests
+)
 
 log_step 2 "Build V1 frontend"
 (

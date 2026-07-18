@@ -94,6 +94,12 @@ def image_report_content(item: dict, result: dict) -> str:
     accent = "#b36a12" if requires_review else ("#d9573f" if "AI" in str(final_label) else "#1b8f7a")
     image_url = escape(_safe_text(result.get("image_url"), ""))
     preview = f'<img class="preview" src="{image_url}" alt="{escape(_safe_text(result.get("filename")))}" />' if image_url else '<div class="preview" style="min-height:260px;"></div>'
+    capture = result.get("capture_evidence") if isinstance(result.get("capture_evidence"), dict) else {}
+    capture_items = "".join(
+        f"<li><strong>{escape(_safe_text(entry.get('label')))}</strong>：{escape(_safe_text(entry.get('value')))}</li>"
+        for entry in (capture.get("evidence") or [])[:6]
+        if isinstance(entry, dict)
+    ) or "<li>未形成可用的实拍支持证据</li>"
     return _html_page(
         f"慧鉴 AI 图像鉴伪报告 {item.get('itemid')}",
         accent,
@@ -128,8 +134,11 @@ def image_report_content(item: dict, result: dict) -> str:
             <tbody>
               <tr><td>视觉可疑点</td><td>{escape("；".join(result.get("visual_issues") or ["未完成视觉复核"]))}</td></tr>
               <tr><td>元数据</td><td>{escape("已提取，仅作辅助证据" if result.get("all_metadata") else "未提取到；缺失本身不代表伪造")}</td></tr>
+              <tr><td>实拍来源证据</td><td>{escape(_safe_text(capture.get("summary"), "未形成可用实拍证据"))}</td></tr>
             </tbody>
           </table>
+          <h2 style="margin-top:18px;">实拍证据链 · {escape(_safe_text(capture.get("levelText"), "无"))}</h2>
+          <ul>{capture_items}</ul>
           <div class="footnote">说明：本报告仅作业务留档与人工复核辅助，不构成司法或监管最终鉴定结论。</div>
         </section>
         """,

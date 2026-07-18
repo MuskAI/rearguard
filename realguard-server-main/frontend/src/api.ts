@@ -155,6 +155,28 @@ export type Counters = {
   video_detect: number;
 };
 
+export type CaptureEvidenceItem = {
+  key: string;
+  label: string;
+  value: string;
+  strength: "strong" | "medium" | "weak" | string;
+};
+
+export type CaptureEvidence = {
+  version: string;
+  level: "strong" | "medium" | "weak" | "none" | "conflict";
+  levelText: string;
+  supportsRealCapture: boolean;
+  score: number;
+  likelihoodRatio?: number;
+  title: string;
+  summary: string;
+  evidence: CaptureEvidenceItem[];
+  conflicts: CaptureEvidenceItem[];
+  limitations: string[];
+  groups?: string[];
+};
+
 export type ImageDetectionResult = {
   itemid: number;
   final_label: string;
@@ -171,6 +193,7 @@ export type ImageDetectionResult = {
   img_format?: string;
   visual_issues?: string[];
   all_metadata?: Record<string, unknown>;
+  capture_evidence?: CaptureEvidence;
   llm_used?: boolean;
   feedback?: 1 | -1 | null;
   swarm?: ExpertReviewResult;

@@ -171,6 +171,7 @@ def _build_report(
     explanation: Any,
     summary_rows: list[list[Any]],
     visible: dict[str, Any] | None = None,
+    capture: dict[str, Any] | None = None,
 ) -> bytes:
     _register_pdf_font()
     styles = _styles()
@@ -212,6 +213,29 @@ def _build_report(
         _p("综合判定依据", styles["section"]),
         _p(explanation, styles["body"], "暂无详细说明。"),
     ])
+
+    if capture:
+        story.append(_p("实拍来源证据", styles["section"]))
+        story.append(_meta_table([
+            ("证据等级", capture.get("levelText")),
+            ("链路评分", _percent(capture.get("score"), fraction=True)),
+            ("支持实拍", "是" if capture.get("supportsRealCapture") else "否"),
+            ("分析版本", capture.get("version")),
+        ], styles))
+        story.extend([Spacer(1, 2 * mm), _p(capture.get("summary"), styles["body"], "未形成可用实拍证据。")])
+        capture_rows = [["证据项", "脱敏结果", "强度"]]
+        for item in (capture.get("evidence") or [])[:8]:
+            capture_rows.append([
+                item.get("label"),
+                item.get("value"),
+                {"strong": "强", "medium": "中", "weak": "弱"}.get(item.get("strength"), item.get("strength")),
+            ])
+        for item in (capture.get("conflicts") or [])[:4]:
+            capture_rows.append([item.get("label"), item.get("value"), "冲突"])
+        if len(capture_rows) > 1:
+            story.extend([Spacer(1, 2 * mm), _table(capture_rows, [32 * mm, 112 * mm, 28 * mm])])
+        for note in (capture.get("limitations") or [])[:2]:
+            story.extend([Spacer(1, 1.5 * mm), _p(note, styles["small"])])
 
     if visible:
         story.append(_p("可见水印证据", styles["section"]))
@@ -274,8 +298,10 @@ def image_report_pdf(item: dict[str, Any], result: dict[str, Any]) -> bytes:
             ["字段", "内容", "状态"],
             ["视觉可疑点", issues or "未提取到明确视觉可疑点", "已完成"],
             ["元数据", "已提取，仅作辅助证据" if result.get("all_metadata") else "未提取到；缺失本身不代表伪造", "辅助"],
+            ["实拍来源证据", (result.get("capture_evidence") or {}).get("summary") or "未形成可用实拍证据", (result.get("capture_evidence") or {}).get("levelText") or "无"],
         ],
         visible=result.get("visibleWatermark") if isinstance(result.get("visibleWatermark"), dict) else None,
+        capture=result.get("capture_evidence") if isinstance(result.get("capture_evidence"), dict) else None,
     )
 
 

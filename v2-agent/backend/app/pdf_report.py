@@ -415,6 +415,27 @@ def build_report_pdf(
             ("AI 声明", "有" if provenance.get("isAiGenerated") is True else "无" if provenance.get("isAiGenerated") is False else "未声明"),
             ("签名算法", provenance.get("signatureAlg")),
         ], styles))
+        capture = provenance.get("captureEvidence") or (provenance.get("metadataSummary") or {}).get("captureEvidence") or {}
+        if capture:
+            story.extend([
+                Spacer(1, 3 * mm),
+                _paragraph("实拍来源证据", styles["section"]),
+                _meta_table([
+                    ("证据等级", capture.get("levelText")),
+                    ("支持实拍", "是" if capture.get("supportsRealCapture") else "否"),
+                    ("链路评分", _percent(capture.get("score"))),
+                    ("分析版本", capture.get("version")),
+                ], styles),
+                Spacer(1, 2 * mm),
+                _paragraph(capture.get("summary"), styles["body"], "未形成可用实拍证据。"),
+            ])
+            rows = [["证据项", "脱敏结果", "强度"]]
+            for item in (capture.get("evidence") or [])[:8]:
+                rows.append([_text(item.get("label")), _text(item.get("value")), _text(item.get("strength"))])
+            for item in (capture.get("conflicts") or [])[:4]:
+                rows.append([_text(item.get("label")), _text(item.get("value")), "冲突"])
+            if len(rows) > 1:
+                story.extend([Spacer(1, 2 * mm), _table(rows, [38 * mm, 105 * mm, 29 * mm])])
 
     story.extend([
         _paragraph("使用说明", styles["section"]),

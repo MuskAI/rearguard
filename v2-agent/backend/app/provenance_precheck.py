@@ -387,10 +387,16 @@ def _decision_from_probability_model(
     }
 
 
-def _reconcile_probability(result: dict[str, Any], local: tuple[dict[str, Any], dict[str, Any]] | None) -> None:
+def _reconcile_probability(
+    result: dict[str, Any],
+    local: tuple[dict[str, Any], dict[str, Any]] | None,
+    capture_evidence: dict[str, Any] | None = None,
+) -> None:
     if result.get("available") is not True:
         return
     report = dict(result.get("report") or {})
+    if isinstance(capture_evidence, dict):
+        report["captureEvidence"] = capture_evidence
     if local is not None:
         _, compact = local
         report["aiFromMetadata"] = bool(report.get("aiFromMetadata") or compact.get("aiFromMetadata"))
@@ -421,6 +427,9 @@ def _local_result(
     error: str | None = None,
 ) -> dict[str, Any]:
     _, compact_report = local
+    capture = local_report.get("captureEvidence")
+    if isinstance(capture, dict):
+        compact_report["captureEvidence"] = capture
     probability_model = evidence_probability.build_probability_model(compact_report, [])
     decision = _decision_from_probability_model(probability_model, compact_report, [])
     return {
@@ -442,6 +451,44 @@ def _local_result(
     }
 
 
+def _local_capture_result(
+    capture: dict[str, Any],
+    local_report: dict[str, Any],
+    data_size: int,
+    elapsed: int,
+    *,
+    error: str | None = None,
+) -> dict[str, Any]:
+    compact_report = {
+        "aiFromMetadata": False,
+        "isAiGenerated": None,
+        "aiSourceKind": None,
+        "platform": None,
+        "signals": [],
+        "integrityClashes": [],
+        "captureEvidence": capture,
+    }
+    probability_model = evidence_probability.build_probability_model(compact_report, [])
+    decision = _decision_from_probability_model(probability_model, compact_report, [])
+    return {
+        "status": "ok",
+        "available": True,
+        "engineVersion": "local-capture-evidence-v1",
+        "report": compact_report,
+        "visibleHits": [],
+        "decision": decision,
+        "elapsedMs": elapsed,
+        "roundTripMs": elapsed,
+        "transport": {
+            "mode": "local_capture_evidence" if error is None else "local_capture_fallback",
+            "originalBytes": data_size,
+            "remoteAttempts": [],
+            "remoteError": error,
+        },
+        "_provenanceReport": local_report,
+    }
+
+
 def inspect(data: bytes, filename: str) -> dict[str, Any]:
     """Run provenance locally, then use server 66 for visible-mark matching."""
     started = time.perf_counter()
@@ -451,6 +498,8 @@ def inspect(data: bytes, filename: str) -> dict[str, Any]:
         filename,
     )
     local = _local_source_decision(local_report)
+    capture = local_report.get("captureEvidence") if isinstance(local_report.get("captureEvidence"), dict) else {}
+    has_capture_support = capture.get("supportsRealCapture") is True
 
     if not BASE_URL or not API_TOKEN:
         elapsed = int((time.perf_counter() - started) * 1000)
@@ -461,6 +510,15 @@ def inspect(data: bytes, filename: str) -> dict[str, Any]:
                 "lastError": None,
                 "lastElapsedMs": elapsed,
                 "lastTransportMode": "local_source_evidence",
+            })
+            return result
+        if has_capture_support:
+            result = _local_capture_result(capture, local_report, len(data), elapsed)
+            _last_state.update({
+                "available": True,
+                "lastError": None,
+                "lastElapsedMs": elapsed,
+                "lastTransportMode": "local_capture_evidence",
             })
             return result
         result = {
@@ -548,8 +606,12 @@ def inspect(data: bytes, filename: str) -> dict[str, Any]:
         error_name = str(result.get("error") or "remote_unavailable")
         result = _local_result(local, local_report, len(data), elapsed, error=error_name)
         transport = dict(result["transport"])
+    elif result.get("available") is not True and has_capture_support:
+        error_name = str(result.get("error") or "remote_unavailable")
+        result = _local_capture_result(capture, local_report, len(data), elapsed, error=error_name)
+        transport = dict(result["transport"])
     else:
-        _reconcile_probability(result, local)
+        _reconcile_probability(result, local, capture)
     transport["remoteAttempts"] = attempts
     result["transport"] = transport
     result["roundTripMs"] = elapsed

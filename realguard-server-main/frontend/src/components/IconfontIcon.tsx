@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   Archive,
   BarChart3,
+  Camera,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -53,6 +54,7 @@ export type IconfontName =
   | "bar-chart"
   | "bolt"
   | "brand"
+  | "camera"
   | "check"
   | "check-circle"
   | "chevron-down"
@@ -107,6 +109,7 @@ const glyphs: Record<IconfontName, LucideIcon> = {
   "bar-chart": BarChart3,
   bolt: Zap,
   brand: ScanEye,
+  camera: Camera,
   check: Check,
   "check-circle": CheckCircle2,
   "chevron-down": ChevronDown,

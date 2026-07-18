@@ -67,6 +67,7 @@ def _precheck_model(experts: Iterable[dict[str, Any]]) -> dict[str, Any] | None:
 
 def _local_factors(experts: Iterable[dict[str, Any]], occupied_groups: set[str]) -> list[dict[str, Any]]:
     factors: list[dict[str, Any]] = []
+    capture_factors: list[dict[str, Any]] = []
     for expert in experts:
         if expert.get("status") != "success" or expert.get("score") is None:
             continue
@@ -81,6 +82,7 @@ def _local_factors(experts: Iterable[dict[str, Any]], occupied_groups: set[str])
                 "source": "swarm_watermark",
                 "likelihoodRatio": 120.0,
                 "effectiveLikelihoodRatio": 120.0,
+                "direction": "fake",
             })
         elif (
             expert_id == "metadata"
@@ -95,7 +97,42 @@ def _local_factors(experts: Iterable[dict[str, Any]], occupied_groups: set[str])
                 "source": "swarm_metadata",
                 "likelihoodRatio": 80.0,
                 "effectiveLikelihoodRatio": 80.0,
+                "direction": "fake",
             })
+        elif expert_id == "metadata" and details.get("verifiedAiMetadata") is not True:
+            capture = details.get("captureEvidence") if isinstance(details.get("captureEvidence"), dict) else {}
+            level = str(capture.get("level") or "")
+            if capture.get("supportsRealCapture") is True and level in {"medium", "weak"}:
+                ratio = min(max(float(capture.get("likelihoodRatio") or 1.0), 0.05), 1.0)
+                capture_factors.append({
+                    "kind": "camera_capture_metadata",
+                    "label": "一致的相机拍摄元数据" if level == "medium" else "部分相机拍摄元数据",
+                    "group": "camera_capture",
+                    "source": "swarm_metadata",
+                    "likelihoodRatio": ratio,
+                    "effectiveLikelihoodRatio": ratio,
+                    "direction": "real",
+                })
+        elif expert_id == "c2pa":
+            chain_sources = set(details.get("chain_sources") or [])
+            if (
+                score <= 0.15
+                and details.get("validation_severity") == "ok"
+                and "camera" in chain_sources
+                and "ai" not in chain_sources
+                and not details.get("chain_conflict")
+            ):
+                capture_factors.append({
+                    "kind": "valid_camera_c2pa",
+                    "label": "通过校验的相机捕获内容凭证",
+                    "group": "camera_capture",
+                    "source": "c2pa",
+                    "likelihoodRatio": 0.08,
+                    "effectiveLikelihoodRatio": 0.08,
+                    "direction": "real",
+                })
+    if capture_factors:
+        factors.append(min(capture_factors, key=lambda item: float(item["likelihoodRatio"])))
     return factors
 
 
@@ -107,16 +144,26 @@ def fuse(experts: list[dict[str, Any]]) -> dict[str, Any]:
     local_factors = _local_factors(experts, occupied_groups)
     factors.extend(local_factors)
 
-    effective_lr = max(float(precheck.get("effectiveLikelihoodRatio") or 1.0), 1.0)
+    effective_lr = max(float(precheck.get("effectiveLikelihoodRatio") or 1.0), 0.01)
     for factor in local_factors:
-        effective_lr *= max(float(factor.get("effectiveLikelihoodRatio") or 1.0), 1.0)
+        effective_lr *= max(float(factor.get("effectiveLikelihoodRatio") or 1.0), 0.01)
 
-    groups = {str(item.get("group") or "") for item in factors}
+    fake_groups = {
+        str(item.get("group") or "")
+        for item in factors
+        if float(item.get("effectiveLikelihoodRatio") or item.get("likelihoodRatio") or 1.0) > 1.0
+    }
+    real_groups = {
+        str(item.get("group") or "")
+        for item in factors
+        if float(item.get("effectiveLikelihoodRatio") or item.get("likelihoodRatio") or 1.0) < 1.0
+    }
     decisive = bool(precheck.get("decisive")) or any(
         item.get("kind") in {"known_invisible_ai_watermark", "ai_generation_metadata"}
         for item in local_factors
     )
-    corroborated = bool(precheck.get("corroborated")) or len(groups) >= 2
+    corroborated = bool(precheck.get("corroborated")) or len(fake_groups) >= 2
+    conflicting = bool(fake_groups and real_groups)
     adjusted_baseline = baseline
     if corroborated:
         adjusted_baseline = max(adjusted_baseline, 0.35)
@@ -124,7 +171,7 @@ def fuse(experts: list[dict[str, Any]]) -> dict[str, Any]:
         adjusted_baseline = max(adjusted_baseline, BASE_RATE)
 
     posterior = adjusted_baseline
-    if effective_lr > 1.0:
+    if abs(effective_lr - 1.0) > 0.0001:
         posterior = _probability(_odds(adjusted_baseline) * (effective_lr ** CROSS_MODAL_EXPONENT))
     return {
         "version": MODEL_VERSION,
@@ -138,7 +185,8 @@ def fuse(experts: list[dict[str, Any]]) -> dict[str, Any]:
         "factors": factors,
         "decisive": decisive,
         "corroborated": corroborated,
+        "conflicting": conflicting,
         "calibrationStatus": "policy_prior_pending_dataset_calibration",
-        "note": "像素模型形成基线，独立来源证据以似然比更新；同源证据已降权，普通 Logo 不参与。",
+        "note": "像素模型形成基线；AI 来源证据抬高风险，一致的实拍来源证据适度降低风险；同源证据已降权。",
         "logOdds": round(math.log(_odds(posterior)), 4),
     }

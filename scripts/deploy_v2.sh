@@ -39,7 +39,10 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 log_step 1 "Verify V2 backend"
 run_local python3 -m compileall "$BACKEND_DIR/app"
-run_local "$BACKEND_DIR/.venv/bin/pytest" "$BACKEND_DIR/tests"
+(
+  cd "$BACKEND_DIR"
+  run_local .venv/bin/python -m pytest tests
+)
 
 log_step 2 "Build V2 frontend"
 (
