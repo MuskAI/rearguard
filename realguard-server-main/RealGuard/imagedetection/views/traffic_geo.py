@@ -22,8 +22,10 @@ except ImportError:  # Optional during local development and unit tests.
 DEFAULT_XDB_PATH = "/opt/realguard-data/ip2region_v4.xdb"
 DEFAULT_ACCESS_LOGS = "/var/log/nginx/access.log,/var/log/nginx/access.log.1"
 DEFAULT_WINDOW_HOURS = 24
+DEFAULT_ONLINE_WINDOW_MINUTES = 5
 DEFAULT_TAIL_BYTES = 4 * 1024 * 1024
 DEFAULT_VISITOR_DETAIL_LIMIT = 20
+HOMEPAGE_PATHS = {"/", "/index.html"}
 
 LOG_PATTERN = re.compile(
     r'^(?P<ip>\S+)\s+\S+\s+\S+\s+\[(?P<time>[^]]+)]\s+'
@@ -220,12 +222,14 @@ def aggregate_access_lines(
     now: datetime | None = None,
     resolver: Callable[[str], dict] = resolve_ip,
     window_hours: int = DEFAULT_WINDOW_HOURS,
+    online_window_minutes: int = DEFAULT_ONLINE_WINDOW_MINUTES,
     visitor_detail_limit: int = DEFAULT_VISITOR_DETAIL_LIMIT,
 ) -> dict:
     now = now or datetime.now().astimezone()
     if now.tzinfo is None:
         now = now.astimezone()
     cutoff = now - timedelta(hours=max(1, window_hours))
+    online_cutoff = now - timedelta(minutes=max(1, online_window_minutes))
     activity_by_ip = {}
 
     for line in lines:
@@ -237,12 +241,15 @@ def aggregate_access_lines(
             "firstSeen": item["timestamp"],
             "lastSeen": item["timestamp"],
             "paths": set(),
+            "pathCounts": defaultdict(int),
             "agent": item["agent"],
         })
         activity["requests"] += 1
         activity["firstSeen"] = min(activity["firstSeen"], item["timestamp"])
         activity["lastSeen"] = max(activity["lastSeen"], item["timestamp"])
-        activity["paths"].add(item["path"].split("?", 1)[0])
+        clean_path = item["path"].split("?", 1)[0]
+        activity["paths"].add(clean_path)
+        activity["pathCounts"][clean_path] += 1
         if item["agent"]:
             activity["agent"] = item["agent"]
 
@@ -287,6 +294,18 @@ def aggregate_access_lines(
 
     unique_visitors = len(activity_by_ip)
     total_requests = sum(activity["requests"] for activity in activity_by_ip.values())
+    homepage_visitors = sum(
+        1 for activity in activity_by_ip.values()
+        if any(path in HOMEPAGE_PATHS for path in activity["paths"])
+    )
+    homepage_page_views = sum(
+        sum(count for path, count in activity["pathCounts"].items() if path in HOMEPAGE_PATHS)
+        for activity in activity_by_ip.values()
+    )
+    online_visitors = sum(
+        1 for activity in activity_by_ip.values()
+        if activity["lastSeen"] >= online_cutoff
+    )
     provinces = []
     for name, data in province_data.items():
         visitors = len(data["ips"])
@@ -326,6 +345,16 @@ def aggregate_access_lines(
         "windowHours": max(1, window_hours),
         "requests": total_requests,
         "uniqueVisitors": unique_visitors,
+        "homepage": {
+            "pageViews": homepage_page_views,
+            "uniqueVisitors": homepage_visitors,
+        },
+        "site": {
+            "pageViews": total_requests,
+            "uniqueVisitors": unique_visitors,
+        },
+        "onlineVisitors": online_visitors,
+        "onlineWindowMinutes": max(1, online_window_minutes),
         "locatedVisitors": located,
         "coveragePercent": round(located * 100 / unique_visitors, 1) if unique_visitors else 0.0,
         "domesticVisitors": domestic,
@@ -346,9 +375,13 @@ def traffic_summary() -> dict:
     try:
         max_bytes = max(64 * 1024, int(os.getenv("REALGUARD_ACCESS_LOG_TAIL_BYTES", DEFAULT_TAIL_BYTES)))
         window_hours = max(1, int(os.getenv("REALGUARD_TRAFFIC_WINDOW_HOURS", DEFAULT_WINDOW_HOURS)))
+        online_window_minutes = max(1, int(os.getenv("REALGUARD_TRAFFIC_ONLINE_MINUTES", DEFAULT_ONLINE_WINDOW_MINUTES)))
         visitor_detail_limit = max(1, min(50, int(os.getenv("REALGUARD_TRAFFIC_VISITOR_DETAIL_LIMIT", DEFAULT_VISITOR_DETAIL_LIMIT))))
     except ValueError:
-        max_bytes, window_hours, visitor_detail_limit = DEFAULT_TAIL_BYTES, DEFAULT_WINDOW_HOURS, DEFAULT_VISITOR_DETAIL_LIMIT
+        max_bytes = DEFAULT_TAIL_BYTES
+        window_hours = DEFAULT_WINDOW_HOURS
+        online_window_minutes = DEFAULT_ONLINE_WINDOW_MINUTES
+        visitor_detail_limit = DEFAULT_VISITOR_DETAIL_LIMIT
     readable_paths = [path for path in paths if os.access(path, os.R_OK)]
     lines = []
     for path in readable_paths:
@@ -358,6 +391,7 @@ def traffic_summary() -> dict:
     payload = aggregate_access_lines(
         lines,
         window_hours=window_hours,
+        online_window_minutes=online_window_minutes,
         visitor_detail_limit=visitor_detail_limit,
     )
     payload["ready"] = bool(readable_paths and database_ready)

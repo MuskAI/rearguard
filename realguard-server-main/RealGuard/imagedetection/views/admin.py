@@ -162,6 +162,7 @@ BIG_SCREEN_CACHE_TTL_SECONDS = int(os.environ.get("REALGUARD_BIG_SCREEN_CACHE_SE
 _BIG_SCREEN_CACHE = {"expires": 0, "payload": None}
 DASHBOARD_METRICS_CACHE_TTL_SECONDS = int(os.environ.get("REALGUARD_DASHBOARD_METRICS_CACHE_SECONDS", "15"))
 _DASHBOARD_METRICS_CACHE = {"expires": 0, "payload": None}
+_TRAFFIC_SUMMARY_CACHE = {"expires": 0, "payload": None}
 _PROCESS_STARTED_MONOTONIC = time.monotonic()
 _ALERT_WORKER_LOCK = threading.Lock()
 _ALERT_WORKER_THREAD = None
@@ -1359,6 +1360,32 @@ def _v1_assurance(registry=None, models=None):
     }
 
 
+def _traffic_metrics_payload(traffic):
+    homepage = traffic.get("homepage") if isinstance(traffic.get("homepage"), dict) else {}
+    site = traffic.get("site") if isinstance(traffic.get("site"), dict) else {}
+    return {
+        "ready": bool(traffic.get("ready")),
+        "windowHours": int(traffic.get("windowHours") or 24),
+        "homepagePageViews": int(homepage.get("pageViews") or 0),
+        "homepageUniqueVisitors": int(homepage.get("uniqueVisitors") or 0),
+        "sitePageViews": int(site.get("pageViews", traffic.get("requests")) or 0),
+        "siteUniqueVisitors": int(site.get("uniqueVisitors", traffic.get("uniqueVisitors")) or 0),
+        "onlineVisitors": int(traffic.get("onlineVisitors") or 0),
+        "onlineWindowMinutes": int(traffic.get("onlineWindowMinutes") or 5),
+    }
+
+
+def _cached_traffic_summary():
+    now = time.time()
+    payload = _TRAFFIC_SUMMARY_CACHE.get("payload")
+    if payload and now < float(_TRAFFIC_SUMMARY_CACHE.get("expires") or 0):
+        return payload
+    payload = traffic_geo.traffic_summary()
+    _TRAFFIC_SUMMARY_CACHE["payload"] = payload
+    _TRAFFIC_SUMMARY_CACHE["expires"] = now + max(1, DASHBOARD_METRICS_CACHE_TTL_SECONDS)
+    return payload
+
+
 def _dashboard_metrics():
     today_start, today_end = _today_bounds()
     yesterday_start, yesterday_end = _day_bounds(-1)
@@ -1399,6 +1426,7 @@ def _dashboard_metrics():
     )
     last_image_at = _scalar("SELECT createtime AS latest FROM data ORDER BY itemid DESC LIMIT 1", detection=True, default="")
     last_video_at = _scalar("SELECT createtime AS latest FROM video_data ORDER BY itemid DESC LIMIT 1", detection=True, default="")
+    traffic = _cached_traffic_summary()
     return {
         "users": {
             "total": _scalar("SELECT COUNT(*) AS count FROM user"),
@@ -1423,6 +1451,7 @@ def _dashboard_metrics():
             "feedbackPositive": _scalar("SELECT COUNT(*) AS count FROM data WHERE feedback IN (1, '1', '满意')", detection=True),
             "feedbackNegative": _scalar("SELECT COUNT(*) AS count FROM data WHERE feedback IN (-1, '-1', '不满意')", detection=True),
         },
+        "traffic": _traffic_metrics_payload(traffic),
         "todayWindow": {
             "start": today_start,
             "end": today_end,
@@ -1446,6 +1475,8 @@ def _cached_dashboard_metrics():
 def _clear_dashboard_metrics_cache():
     _DASHBOARD_METRICS_CACHE["expires"] = 0
     _DASHBOARD_METRICS_CACHE["payload"] = None
+    _TRAFFIC_SUMMARY_CACHE["expires"] = 0
+    _TRAFFIC_SUMMARY_CACHE["payload"] = None
 
 
 def _hourly_detection_series(hours=24):
@@ -1864,7 +1895,9 @@ def _big_screen_payload():
     registry = model_registry.load_registry()
     raw_models = _models_payload_with_health(registry.get("models", []))
     models = [_screen_model_payload(model) for model in raw_models]
-    metrics = _cached_dashboard_metrics()
+    metrics = dict(_cached_dashboard_metrics())
+    traffic = _cached_traffic_summary()
+    metrics["traffic"] = _traffic_metrics_payload(traffic)
     assurance_detail = _v1_assurance(registry=registry, models=raw_models)
     assurance = _screen_assurance_payload(assurance_detail)
     host = _host_telemetry()
@@ -1885,7 +1918,7 @@ def _big_screen_payload():
         "feedback": _feedback_distribution(),
         "routes": _route_distribution(),
         "performance": _model_run_performance(1000),
-        "traffic": traffic_geo.traffic_summary(),
+        "traffic": traffic,
         "recent": _recent_detection_items(12),
         "assurance": assurance,
         "anomalies": _big_screen_anomalies(metrics, models, assurance_detail, host),

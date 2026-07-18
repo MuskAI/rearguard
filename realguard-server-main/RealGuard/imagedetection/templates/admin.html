@@ -712,21 +712,22 @@
     }
     function renderMetrics(metrics){
       const win = metrics?.todayWindow || {};
+      const traffic = metrics?.traffic || {};
       const dateLabel = win.start ? win.start.slice(0, 10) : '今日';
       const timezone = win.timezone || 'Asia/Shanghai';
-      const lastImage = metrics?.detections?.lastImageAt || '-';
-      const lastVideo = metrics?.detections?.lastVideoAt || '-';
+      const windowHours = traffic.windowHours || 24;
+      const onlineMinutes = traffic.onlineWindowMinutes || 5;
       const items = [
         {label:'今日检测', value: metrics?.detections?.today ?? '--', hint:`${dateLabel} · 图像 ${metrics?.detections?.todayImages ?? '--'} / 视频 ${metrics?.detections?.todayVideos ?? '--'} · ${timezone}`},
-        {label:'近 7 日检测', value: metrics?.detections?.last7Days ?? '--', hint:`昨日 ${metrics?.detections?.yesterday ?? '--'} · 图像 ${metrics?.detections?.last7Images ?? '--'} / 视频 ${metrics?.detections?.last7Videos ?? '--'}`},
-        {label:'用户总数', value: metrics?.users?.total ?? '--', hint:`今日新增用户 ${metrics?.users?.todayNew ?? metrics?.users?.today ?? '--'}`},
-        {label:'活跃 API 密钥', value: metrics?.users?.apiKeys ?? '--', hint:`累计检测 ${Number(metrics?.detections?.images || 0) + Number(metrics?.detections?.videos || 0)}`},
+        {label:'主页访客', value: traffic.homepageUniqueVisitors ?? '--', hint:`最近 ${windowHours} 小时 · ${traffic.homepagePageViews ?? '--'} 次访问`},
+        {label:'网站访问量', value: traffic.sitePageViews ?? '--', hint:`最近 ${windowHours} 小时 · ${traffic.siteUniqueVisitors ?? '--'} 位访客`},
+        {label:'当前在线', value: traffic.onlineVisitors ?? '--', hint:`最近 ${onlineMinutes} 分钟有页面活动`},
       ];
       $('metrics').innerHTML = items.map((item) => `<article class="metric ${String(item.value || '').length > 8 ? 'compact' : ''}"><small>${esc(item.label)}</small><strong>${esc(item.value)}</strong><em>${esc(item.hint || '')}</em></article>`).join('');
       $('secondaryStats').innerHTML = [
-        ['昨日检测', `${metrics?.detections?.yesterday ?? '--'} 次`],
-        ['累计图像', `${metrics?.detections?.images ?? '--'} 次 · ${lastImage}`],
-        ['累计视频', `${metrics?.detections?.videos ?? '--'} 次 · ${lastVideo}`],
+        ['网站独立访客', `${traffic.siteUniqueVisitors ?? '--'} 人 · 最近 ${windowHours} 小时`],
+        ['用户总数', `${metrics?.users?.total ?? '--'} 人 · 今日新增 ${metrics?.users?.todayNew ?? '--'}`],
+        ['活跃 API 密钥', `${metrics?.users?.apiKeys ?? '--'} 个`],
         ['数据更新时间', win.generatedAt || '-'],
       ].map(([label,value]) => `<div class="secondary-item"><small>${esc(label)}</small><strong>${esc(value)}</strong></div>`).join('');
     }

@@ -388,7 +388,7 @@
     function renderTraffic(){
       const traffic=state?.traffic || {};
       ui.trafficItems=(traffic.provinces || []).slice();
-      $('trafficSummary').innerHTML=[['独立访客',traffic.uniqueVisitors],['页面访问',traffic.requests],['境内访客',traffic.domesticVisitors],['定位覆盖',`${traffic.coveragePercent ?? 0}%`]].map(([label,value])=>`<div><span>${esc(label)}</span><strong>${esc(formatNumber(value))}</strong></div>`).join('');
+      $('trafficSummary').innerHTML=[['主页访客',traffic.homepage?.uniqueVisitors],['主页访问',traffic.homepage?.pageViews],['网站访客',traffic.site?.uniqueVisitors ?? traffic.uniqueVisitors],['网站访问',traffic.site?.pageViews ?? traffic.requests],['当前在线',traffic.onlineVisitors],['定位覆盖',`${traffic.coveragePercent ?? 0}%`]].map(([label,value])=>`<div><span>${esc(label)}</span><strong>${esc(formatNumber(value))}</strong></div>`).join('');
       $('provinceList').innerHTML=ui.trafficItems.length?ui.trafficItems.slice(0,10).map((item,index)=>`<button class="province-row ${ui.trafficSelected===item.name?'active':''}" type="button" data-province-index="${index}" aria-label="查看${esc(item.name)}访问详情"><span>${index+1}. ${esc(item.name)}</span><strong>${esc(formatNumber(item.visitors))} 人</strong></button>`).join(''):'<div class="empty">暂无可展示的省级访问数据</div>';
       if(!ui.trafficMapReady){ensureTrafficMap();return;}
       const max=Math.max(1,...ui.trafficItems.map(item=>Number(item.visitors)||0));
@@ -521,13 +521,16 @@
       return {type:'bars',items:visibleItems,bars,total};
     }
     function renderMetrics(metrics){
+      const traffic=metrics?.traffic || {};
+      const windowHours=traffic.windowHours || 24;
+      const onlineMinutes=traffic.onlineWindowMinutes || 5;
       const rows = [
         {key:'today',label:'今日检测',value:metrics?.detections?.today,sub:`图像 ${metrics?.detections?.todayImages ?? 0} / 视频 ${metrics?.detections?.todayVideos ?? 0}`,rows:[['今日图像',`${metrics?.detections?.todayImages ?? 0} 次`],['今日视频',`${metrics?.detections?.todayVideos ?? 0} 次`],['昨日检测',`${metrics?.detections?.yesterday ?? 0} 次`]],action:{href:'/admin#detections',label:'查看检测记录'}},
-        {key:'images',label:'累计图像',value:metrics?.detections?.images,sub:'图像鉴伪记录',rows:[['累计图像',`${formatNumber(metrics?.detections?.images)} 次`],['最后检测',metrics?.detections?.lastImageAt || '-']],action:{href:'/admin#detections',label:'查看检测记录'}},
-        {key:'videos',label:'累计视频',value:metrics?.detections?.videos,sub:'视频鉴伪记录',rows:[['累计视频',`${formatNumber(metrics?.detections?.videos)} 次`],['最后检测',metrics?.detections?.lastVideoAt || '-']],action:{href:'/admin#detections',label:'查看检测记录'}},
+        {key:'homepage',label:'主页访客',value:traffic.homepageUniqueVisitors,sub:`${windowHours}h · ${formatNumber(traffic.homepagePageViews)} 次访问`,rows:[['主页独立访客',`${formatNumber(traffic.homepageUniqueVisitors)} 人`],['主页访问次数',`${formatNumber(traffic.homepagePageViews)} 次`],['统计窗口',`最近 ${windowHours} 小时`]]},
+        {key:'siteViews',label:'网站访问量',value:traffic.sitePageViews,sub:`${windowHours}h · ${formatNumber(traffic.siteUniqueVisitors)} 位访客`,rows:[['网站页面访问',`${formatNumber(traffic.sitePageViews)} 次`],['网站独立访客',`${formatNumber(traffic.siteUniqueVisitors)} 人`],['统计窗口',`最近 ${windowHours} 小时`]]},
+        {key:'online',label:'当前在线',value:traffic.onlineVisitors,sub:`最近 ${onlineMinutes} 分钟活跃`,rows:[['在线访客',`${formatNumber(traffic.onlineVisitors)} 人`],['在线口径',`最近 ${onlineMinutes} 分钟有页面访问`],['隐私说明','仅做匿名去重统计']]},
         {key:'users',label:'用户总数',value:metrics?.users?.total,sub:`今日新增 ${metrics?.users?.todayNew ?? 0}`,rows:[['用户总数',formatNumber(metrics?.users?.total)],['今日新增',formatNumber(metrics?.users?.todayNew)]],action:{href:'/admin#users',label:'查看用户'}},
         {key:'keys',label:'活跃 API 密钥',value:metrics?.users?.apiKeys,sub:'开发者接入',rows:[['活跃密钥',formatNumber(metrics?.users?.apiKeys)],['统计口径','当前可用开发者凭证']],action:{href:'/admin#keys',label:'查看访问凭证'}},
-        {key:'feedback',label:'负反馈',value:metrics?.detections?.feedbackNegative,sub:`正反馈 ${metrics?.detections?.feedbackPositive ?? 0}`,rows:[['负反馈',formatNumber(metrics?.detections?.feedbackNegative)],['正反馈',formatNumber(metrics?.detections?.feedbackPositive)],['负反馈占比',formatShare(metrics?.detections?.feedbackNegative,(Number(metrics?.detections?.feedbackNegative)||0)+(Number(metrics?.detections?.feedbackPositive)||0))]],action:{href:'/admin#detections',label:'抽检检测记录'}},
       ];
       ui.metrics=rows;
       $('metrics').innerHTML = rows.map((item,index)=>{

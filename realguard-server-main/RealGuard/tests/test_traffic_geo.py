@@ -54,6 +54,10 @@ def test_aggregate_access_lines_returns_only_anonymous_province_counts():
 
     assert payload["uniqueVisitors"] == 3
     assert payload["requests"] == 4
+    assert payload["homepage"] == {"pageViews": 2, "uniqueVisitors": 2}
+    assert payload["site"] == {"pageViews": 4, "uniqueVisitors": 3}
+    assert payload["onlineVisitors"] == 0
+    assert payload["onlineWindowMinutes"] == 5
     assert payload["domesticVisitors"] == 2
     assert payload["overseasVisitors"] == 1
     assert payload["coveragePercent"] == 100.0
@@ -121,3 +125,22 @@ def test_single_visitor_city_is_hidden_and_ip_is_masked():
     assert visitor["device"] == "移动端"
     assert visitor["browser"] == "Safari"
     assert "8.8.8.8" not in str(payload)
+
+
+def test_online_visitors_are_deduplicated_within_activity_window():
+    lines = [
+        log_line("8.8.8.8", "/", timestamp="18/Jul/2026:17:58:00 +0000"),
+        log_line("8.8.8.8", "/developer", timestamp="18/Jul/2026:17:59:00 +0000"),
+        log_line("1.1.1.1", "/", timestamp="18/Jul/2026:17:54:00 +0000"),
+    ]
+
+    payload = traffic_geo.aggregate_access_lines(
+        lines,
+        now=NOW,
+        resolver=lambda _ip: {},
+        online_window_minutes=5,
+    )
+
+    assert payload["onlineVisitors"] == 1
+    assert payload["homepage"] == {"pageViews": 2, "uniqueVisitors": 2}
+    assert payload["site"] == {"pageViews": 3, "uniqueVisitors": 2}

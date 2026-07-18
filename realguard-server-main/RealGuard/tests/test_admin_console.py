@@ -133,6 +133,15 @@ def test_dashboard_metrics_count_today_detections(monkeypatch):
         return 10
 
     monkeypatch.setattr(admin, "_scalar", fake_scalar)
+    monkeypatch.setattr(admin.traffic_geo, "traffic_summary", lambda: {
+        "ready": True,
+        "windowHours": 24,
+        "homepage": {"pageViews": 23, "uniqueVisitors": 17},
+        "site": {"pageViews": 81, "uniqueVisitors": 31},
+        "onlineVisitors": 4,
+        "onlineWindowMinutes": 5,
+    })
+    admin._clear_dashboard_metrics_cache()
 
     metrics = admin._dashboard_metrics()
 
@@ -143,6 +152,16 @@ def test_dashboard_metrics_count_today_detections(monkeypatch):
     assert metrics["detections"]["last7Days"] == 23
     assert metrics["detections"]["lastImageAt"] == "2026-06-09 13:27:16"
     assert metrics["users"]["todayNew"] == 1
+    assert metrics["traffic"] == {
+        "ready": True,
+        "windowHours": 24,
+        "homepagePageViews": 23,
+        "homepageUniqueVisitors": 17,
+        "sitePageViews": 81,
+        "siteUniqueVisitors": 31,
+        "onlineVisitors": 4,
+        "onlineWindowMinutes": 5,
+    }
     assert metrics["todayWindow"]["start"] == "2026-06-09 00:00:00"
     assert any(call[1] == ("2026-06-09 00:00:00", "2026-06-10 00:00:00") and call[2] for call in calls)
 
