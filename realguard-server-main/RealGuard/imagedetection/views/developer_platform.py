@@ -1198,3 +1198,104 @@ def admin_adjust_developer_account(user_id):
     after = _account_payload(_account_row(user_id))
     _audit(admin_user, "developer.account.adjust", str(user_id), before=before, after=after, meta={"note": note})
     return jsonify({"status": "success", "account": after})
+
+
+@developer_admin_blueprint.get("/accounts/<int:user_id>")
+def admin_developer_account(user_id):
+    _, auth_error = _admin_required("api_key.view")
+    if auth_error:
+        return auth_error
+    users = excute_sql("SELECT Userid FROM user WHERE Userid = %s LIMIT 1", (user_id,))
+    if users is None:
+        return jsonify({"status": "error", "message": "用户信息读取失败"}), 500
+    if not users:
+        return jsonify({"status": "error", "message": "用户不存在"}), 404
+    try:
+        account = _account_payload(_account_row(user_id))
+    except BillingError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), exc.status_code
+    return jsonify({"status": "success", "account": account})
+
+
+@developer_admin_blueprint.route("/accounts/<int:user_id>/quota", methods=["PATCH", "POST"])
+def admin_set_developer_quota(user_id):
+    admin_user, auth_error = _admin_required("api_key.manage")
+    if auth_error:
+        return auth_error
+    payload = request.get_json(silent=True) or {}
+    try:
+        remaining_calls = int(payload.get("remainingCalls"))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "remainingCalls 必须是整数"}), 400
+    if remaining_calls < 0 or remaining_calls > 10_000_000:
+        return jsonify({"status": "error", "message": "remainingCalls 必须在 0 到 10000000 之间"}), 400
+
+    users = excute_sql("SELECT Userid FROM user WHERE Userid = %s LIMIT 1", (user_id,))
+    if users is None:
+        return jsonify({"status": "error", "message": "用户信息读取失败"}), 500
+    if not users:
+        return jsonify({"status": "error", "message": "用户不存在"}), 404
+    if not _ensure_developer_account(user_id):
+        return jsonify({"status": "error", "message": "开发者账户初始化失败"}), 503
+
+    note = str(payload.get("note") or "管理员设置剩余调用次数").strip()[:500]
+    conn = get_db_connection()
+    try:
+        conn.begin()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT user_id, status, free_total, free_used, free_reserved,
+                       balance_fen, balance_reserved_fen, created_at, updated_at
+                FROM developer_accounts
+                WHERE user_id = %s
+                FOR UPDATE
+                """,
+                (user_id,),
+            )
+            account = cursor.fetchone()
+            if not account:
+                raise BillingError("开发者账户读取失败")
+            before = _account_payload(account)
+            next_free_total = (
+                int(account.get("free_used") or 0)
+                + int(account.get("free_reserved") or 0)
+                + remaining_calls
+            )
+            free_delta = next_free_total - int(account.get("free_total") or 0)
+            if free_delta:
+                cursor.execute(
+                    "UPDATE developer_accounts SET free_total = %s WHERE user_id = %s",
+                    (next_free_total, user_id),
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO developer_billing_ledger
+                        (user_id, entry_type, free_calls_delta, balance_delta_fen,
+                         amount_fen, balance_after_fen, note)
+                    VALUES (%s, 'admin_quota_set', %s, 0, 0, %s, %s)
+                    """,
+                    (user_id, free_delta, int(account.get("balance_fen") or 0), note),
+                )
+            after_row = dict(account)
+            after_row["free_total"] = next_free_total
+            after = _account_payload(after_row)
+        conn.commit()
+    except BillingError as exc:
+        conn.rollback()
+        return jsonify({"status": "error", "message": str(exc)}), exc.status_code
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({"status": "error", "message": f"调用次数设置失败: {exc}"}), 500
+    finally:
+        conn.close()
+
+    _audit(
+        admin_user,
+        "developer.account.quota.set",
+        str(user_id),
+        before=before,
+        after=after,
+        meta={"note": note},
+    )
+    return jsonify({"status": "success", "account": after})

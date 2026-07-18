@@ -842,14 +842,16 @@
       if(!box) return;
       if(!data){ box.innerHTML = ''; return; }
       const user = data.user || {};
+      const developer = data.developerAccount || null;
       box.innerHTML = `
         <section class="detail-drawer">
-          <div class="panel-head"><div><h2>用户详情 · ${esc(user.username || user.phone || user.id)}</h2><p class="mono">${esc(user.openid || '')}</p></div><button class="btn secondary" onclick="$('userDetail').innerHTML='';state.selectedUser=null">关闭</button></div>
+          <div class="panel-head"><div><h2>用户详情 · ${esc(user.username || user.phone || user.id)}</h2><p class="mono">${esc(user.openid || '')}</p></div><div class="action-row">${developer && can('api_key.manage') ? `<button class="btn" onclick="setDeveloperQuota(${Number(user.id)})">设置 API 次数</button>` : ''}<button class="btn secondary" onclick="$('userDetail').innerHTML='';state.selectedUser=null">关闭</button></div></div>
           <div class="secondary-grid">
             <div class="secondary-item"><small>图像检测</small><strong>${esc(data.stats?.imageDetections ?? 0)}</strong></div>
             <div class="secondary-item"><small>视频检测</small><strong>${esc(data.stats?.videoDetections ?? 0)}</strong></div>
             <div class="secondary-item"><small>访问凭证</small><strong>${esc(data.stats?.apiKeys ?? 0)}</strong></div>
             <div class="secondary-item"><small>注册时间</small><strong>${esc(user.createdAt || '-')}</strong></div>
+            ${developer ? `<div class="secondary-item"><small>API 剩余次数</small><strong>${esc(developer.freeRemaining)}</strong></div><div class="secondary-item"><small>API 已用 / 预占</small><strong>${esc(developer.freeUsed)} / ${esc(developer.freeReserved)}</strong></div>` : ''}
           </div>
           <h3>最近检测</h3>${table(['ID','时间','文件','结果','概率','后台模型','反馈'], (data.detections || []).map(d => `<tr><td class="mono">${esc(d.id)}</td><td>${esc(d.createdAt)}</td><td>${esc(d.filename)}</td><td>${esc(d.label)}</td><td>${esc(d.probability ?? '')}</td><td class="mono">${esc(routeModelLabel(d.modelRoute))}</td><td>${esc(d.feedback ?? '')}</td></tr>`), '暂无检测')}
         </section>`;
@@ -1262,7 +1264,23 @@
       toast(data.delivery?.ok?'测试通知已送达':'测试通知发送失败');
       await loadAlerts(); await loadAudit();
     }
-    async function openUser(id){ const data = await api(`/api/admin/users/${encodeURIComponent(id)}`); state.selectedUser = data; renderUserDetail(); }
+    async function openUser(id){
+      const accountRequest=can('api_key.view') ? api(`/api/admin/developer/accounts/${encodeURIComponent(id)}`).catch(()=>null) : Promise.resolve(null);
+      const [data,accountData]=await Promise.all([api(`/api/admin/users/${encodeURIComponent(id)}`),accountRequest]);
+      data.developerAccount=accountData?.account || null;state.selectedUser=data;renderUserDetail();
+    }
+    async function setDeveloperQuota(id){
+      if(!can('api_key.manage')){ toast('当前角色无开发者额度管理权限'); return; }
+      const account=state.selectedUser?.developerAccount;
+      if(!account){ toast('开发者账户尚未加载'); return; }
+      const values=await requestAction({title:'设置 API 剩余次数',message:`用户 #${id} · 已使用 ${account.freeUsed} 次，预占 ${account.freeReserved} 次`,warning:'这里设置的是当前可继续调用的次数，不会改写历史用量。',confirmText:'保存次数',fields:[
+        {name:'remainingCalls',label:'剩余可调用次数',type:'number',min:0,max:10000000,step:1,required:true,value:account.freeRemaining},
+        {name:'note',label:'调整原因',value:'管理员设置调用额度'},
+      ]});
+      if(!values) return;
+      const data=await api(`/api/admin/developer/accounts/${encodeURIComponent(id)}/quota`,{method:'POST',body:JSON.stringify(values)});
+      state.selectedUser.developerAccount=data.account;renderUserDetail();toast(`剩余调用次数已设置为 ${data.account.freeRemaining}`);await loadAudit();
+    }
     async function saveAdminAccount(id){
       if(!can('admin.manage')){ toast('当前角色无管理员管理权限'); return; }
       const role = $(`adminRole-${id}`)?.value || 'readonly';

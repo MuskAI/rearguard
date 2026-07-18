@@ -292,3 +292,75 @@ def test_rejected_task_exposes_terminal_error(monkeypatch):
 
     assert payload["progress"] == 100
     assert payload["error"]["message"] == "余额不足"
+
+
+def test_admin_sets_exact_remaining_calls_without_rewriting_usage(client, monkeypatch):
+    account = {
+        "user_id": 7,
+        "status": "active",
+        "free_total": 100,
+        "free_used": 37,
+        "free_reserved": 2,
+        "balance_fen": 0,
+        "balance_reserved_fen": 0,
+        "created_at": None,
+        "updated_at": None,
+    }
+    ledger = []
+    audits = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def execute(self, sql, params=None):
+            normalized = " ".join(sql.split())
+            if normalized.startswith("SELECT user_id, status, free_total"):
+                return 1
+            if normalized.startswith("UPDATE developer_accounts SET free_total"):
+                account["free_total"] = params[0]
+                return 1
+            if normalized.startswith("INSERT INTO developer_billing_ledger"):
+                ledger.append(params)
+                return 1
+            raise AssertionError(f"unexpected SQL: {normalized}")
+
+        def fetchone(self):
+            return dict(account)
+
+    class Connection:
+        def begin(self):
+            return None
+
+        def cursor(self):
+            return Cursor()
+
+        def commit(self):
+            return None
+
+        def rollback(self):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(platform, "_admin_required", lambda permission: ({"adminId": 1}, None))
+    monkeypatch.setattr(platform, "_ensure_developer_account", lambda user_id: True)
+    monkeypatch.setattr(platform, "get_db_connection", Connection)
+    monkeypatch.setattr(platform, "_audit", lambda *args, **kwargs: audits.append((args, kwargs)))
+    monkeypatch.setattr(platform, "excute_sql", lambda *args, **kwargs: [{"Userid": 7}])
+
+    with client.application.test_request_context(json={"remainingCalls": 250, "note": "测试额度"}):
+        response = platform.admin_set_developer_quota(7)
+
+    payload = response.get_json()
+    assert payload["status"] == "success"
+    assert payload["account"]["freeRemaining"] == 250
+    assert payload["account"]["freeUsed"] == 37
+    assert payload["account"]["freeReserved"] == 2
+    assert account["free_total"] == 289
+    assert ledger == [(7, 189, 0, "测试额度")]
+    assert audits[0][0][1] == "developer.account.quota.set"

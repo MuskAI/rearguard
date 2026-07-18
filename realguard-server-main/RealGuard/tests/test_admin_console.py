@@ -184,6 +184,20 @@ def test_admin_screen_renders_interactive_operations_controls(client, monkeypatc
     assert "['trend','routes','distribution'].forEach(setupCanvas)" in html
 
 
+def test_admin_page_exposes_exact_developer_call_quota_control(client, monkeypatch):
+    monkeypatch.setenv("REALGUARD_ADMIN_USER_IDS", "1")
+    monkeypatch.setattr(admin, "_admin_account_count", lambda: 0)
+    _login_session(client)
+
+    response = client.get("/admin")
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert "设置 API 次数" in html
+    assert "/api/admin/developer/accounts/" in html
+    assert "remainingCalls" in html
+
+
 def test_admin_account_login_sets_admin_session(client, monkeypatch):
     password_hash = admin.generate_password_hash("StrongPass123")
     monkeypatch.setattr(admin, "_admin_account_count", lambda: 1)
