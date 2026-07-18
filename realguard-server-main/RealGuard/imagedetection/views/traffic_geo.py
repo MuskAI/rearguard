@@ -23,6 +23,7 @@ DEFAULT_XDB_PATH = "/opt/realguard-data/ip2region_v4.xdb"
 DEFAULT_ACCESS_LOGS = "/var/log/nginx/access.log,/var/log/nginx/access.log.1"
 DEFAULT_WINDOW_HOURS = 24
 DEFAULT_TAIL_BYTES = 4 * 1024 * 1024
+DEFAULT_VISITOR_DETAIL_LIMIT = 20
 
 LOG_PATTERN = re.compile(
     r'^(?P<ip>\S+)\s+\S+\s+\S+\s+\[(?P<time>[^]]+)]\s+'
@@ -141,6 +142,33 @@ def _is_document_request(method: str, path: str, status: int, agent: str) -> boo
     return not any(clean_path.startswith(prefix) for prefix in IGNORED_PREFIXES)
 
 
+def _masked_ip(value: str) -> str:
+    parts = str(value or "").split(".")
+    return f"{parts[0]}.{parts[1]}.*.*" if len(parts) == 4 else "已脱敏"
+
+
+def _device_label(agent: str) -> str:
+    agent = str(agent or "").lower()
+    if any(token in agent for token in ("ipad", "tablet", "android 3", "android 4")):
+        return "平板"
+    if any(token in agent for token in ("mobile", "iphone", "android")):
+        return "移动端"
+    return "桌面端"
+
+
+def _browser_label(agent: str) -> str:
+    agent = str(agent or "").lower()
+    if "edg/" in agent:
+        return "Edge"
+    if "firefox/" in agent:
+        return "Firefox"
+    if "chrome/" in agent or "crios/" in agent:
+        return "Chrome"
+    if "safari/" in agent:
+        return "Safari"
+    return "其他浏览器"
+
+
 def parse_access_line(line: str) -> dict | None:
     match = LOG_PATTERN.match(line.strip())
     if not match:
@@ -155,7 +183,13 @@ def parse_access_line(line: str) -> dict | None:
         return None
     if not _is_document_request(data["method"], data["path"], status, data["agent"]):
         return None
-    return {"ip": data["ip"], "timestamp": timestamp, "path": data["path"], "status": status}
+    return {
+        "ip": data["ip"],
+        "timestamp": timestamp,
+        "path": data["path"],
+        "status": status,
+        "agent": data["agent"],
+    }
 
 
 def _tail_lines(path: str, max_bytes: int) -> list[str]:
@@ -186,24 +220,38 @@ def aggregate_access_lines(
     now: datetime | None = None,
     resolver: Callable[[str], dict] = resolve_ip,
     window_hours: int = DEFAULT_WINDOW_HOURS,
+    visitor_detail_limit: int = DEFAULT_VISITOR_DETAIL_LIMIT,
 ) -> dict:
     now = now or datetime.now().astimezone()
     if now.tzinfo is None:
         now = now.astimezone()
     cutoff = now - timedelta(hours=max(1, window_hours))
-    requests_by_ip = defaultdict(int)
+    activity_by_ip = {}
 
     for line in lines:
         item = parse_access_line(line)
         if not item or item["timestamp"] < cutoff or item["timestamp"] > now + timedelta(minutes=5):
             continue
-        requests_by_ip[item["ip"]] += 1
+        activity = activity_by_ip.setdefault(item["ip"], {
+            "requests": 0,
+            "firstSeen": item["timestamp"],
+            "lastSeen": item["timestamp"],
+            "paths": set(),
+            "agent": item["agent"],
+        })
+        activity["requests"] += 1
+        activity["firstSeen"] = min(activity["firstSeen"], item["timestamp"])
+        activity["lastSeen"] = max(activity["lastSeen"], item["timestamp"])
+        activity["paths"].add(item["path"].split("?", 1)[0])
+        if item["agent"]:
+            activity["agent"] = item["agent"]
 
-    province_data = defaultdict(lambda: {"ips": set(), "requests": 0, "cities": defaultdict(set)})
+    province_data = defaultdict(lambda: {"ips": set(), "requests": 0, "cities": defaultdict(set), "visitors": []})
     country_data = defaultdict(lambda: {"ips": set(), "requests": 0})
     located = domestic = overseas = unknown = 0
 
-    for ip, request_count in requests_by_ip.items():
+    for ip, activity in activity_by_ip.items():
+        request_count = activity["requests"]
         location = resolver(ip) or {}
         country = _clean_region_part(location.get("country", ""))
         province = normalize_province(location.get("province", ""))
@@ -222,11 +270,23 @@ def aggregate_access_lines(
                 province_data[province]["requests"] += request_count
                 if city:
                     province_data[province]["cities"][city].add(ip)
+                province_data[province]["visitors"].append({
+                    "maskedIp": _masked_ip(ip),
+                    "city": city,
+                    "network": _clean_region_part(location.get("isp", "")) or "未知网络",
+                    "device": _device_label(activity["agent"]),
+                    "browser": _browser_label(activity["agent"]),
+                    "requests": request_count,
+                    "pages": len(activity["paths"]),
+                    "firstSeen": activity["firstSeen"].strftime("%m-%d %H:%M"),
+                    "lastSeen": activity["lastSeen"].strftime("%m-%d %H:%M"),
+                    "_lastSeen": activity["lastSeen"],
+                })
         else:
             overseas += 1
 
-    unique_visitors = len(requests_by_ip)
-    total_requests = sum(requests_by_ip.values())
+    unique_visitors = len(activity_by_ip)
+    total_requests = sum(activity["requests"] for activity in activity_by_ip.values())
     provinces = []
     for name, data in province_data.items():
         visitors = len(data["ips"])
@@ -236,12 +296,23 @@ def aggregate_access_lines(
             if len(ips) >= 2
         ]
         cities.sort(key=lambda item: (-item["visitors"], item["name"]))
+        visible_cities = {item["name"] for item in cities}
+        visitor_details = sorted(
+            data["visitors"],
+            key=lambda item: (-item["_lastSeen"].timestamp(), -item["requests"], item["maskedIp"]),
+        )[:max(1, visitor_detail_limit)]
+        for index, visitor in enumerate(visitor_details, start=1):
+            visitor.pop("_lastSeen", None)
+            visitor["label"] = f"访客 {index:02d}"
+            if visitor["city"] not in visible_cities:
+                visitor["city"] = "省内其他地区"
         provinces.append({
             "name": name,
             "visitors": visitors,
             "requests": data["requests"],
             "share": round(visitors * 100 / unique_visitors, 1) if unique_visitors else 0.0,
             "cities": cities[:5],
+            "visitorDetails": visitor_details,
         })
     provinces.sort(key=lambda item: (-item["visitors"], -item["requests"], item["name"]))
 
@@ -262,7 +333,7 @@ def aggregate_access_lines(
         "unknownVisitors": unknown,
         "provinces": provinces,
         "countries": countries[:8],
-        "privacy": {"rawIpsIncluded": False, "granularity": "province"},
+        "privacy": {"rawIpsIncluded": False, "granularity": "province_with_masked_visitor_detail"},
     }
 
 
@@ -275,15 +346,20 @@ def traffic_summary() -> dict:
     try:
         max_bytes = max(64 * 1024, int(os.getenv("REALGUARD_ACCESS_LOG_TAIL_BYTES", DEFAULT_TAIL_BYTES)))
         window_hours = max(1, int(os.getenv("REALGUARD_TRAFFIC_WINDOW_HOURS", DEFAULT_WINDOW_HOURS)))
+        visitor_detail_limit = max(1, min(50, int(os.getenv("REALGUARD_TRAFFIC_VISITOR_DETAIL_LIMIT", DEFAULT_VISITOR_DETAIL_LIMIT))))
     except ValueError:
-        max_bytes, window_hours = DEFAULT_TAIL_BYTES, DEFAULT_WINDOW_HOURS
+        max_bytes, window_hours, visitor_detail_limit = DEFAULT_TAIL_BYTES, DEFAULT_WINDOW_HOURS, DEFAULT_VISITOR_DETAIL_LIMIT
     readable_paths = [path for path in paths if os.access(path, os.R_OK)]
     lines = []
     for path in readable_paths:
         lines.extend(_tail_lines(path, max_bytes))
 
     database_ready = _load_searcher() is not None
-    payload = aggregate_access_lines(lines, window_hours=window_hours)
+    payload = aggregate_access_lines(
+        lines,
+        window_hours=window_hours,
+        visitor_detail_limit=visitor_detail_limit,
+    )
     payload["ready"] = bool(readable_paths and database_ready)
     payload["source"] = {
         "kind": "nginx-access-log",

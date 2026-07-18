@@ -13,7 +13,7 @@ from imagedetection.views import traffic_geo  # noqa: E402
 NOW = datetime(2026, 7, 18, 18, 0, 0, tzinfo=timezone.utc)
 
 
-def log_line(ip, path="/", status=200, agent="Mozilla/5.0", timestamp="18/Jul/2026:17:30:00 +0000"):
+def log_line(ip, path="/", status=200, agent="Mozilla/5.0 Chrome/126.0", timestamp="18/Jul/2026:17:30:00 +0000"):
     return f'{ip} - - [{timestamp}] "GET {path} HTTP/1.1" {status} 1188 "-" "{agent}"'
 
 
@@ -63,8 +63,31 @@ def test_aggregate_access_lines_returns_only_anonymous_province_counts():
         "requests": 3,
         "share": 66.7,
         "cities": [{"name": "杭州市", "visitors": 2}],
+        "visitorDetails": [{
+            "maskedIp": "8.8.*.*",
+            "city": "杭州市",
+            "network": "未知网络",
+            "device": "桌面端",
+            "browser": "Chrome",
+            "requests": 2,
+            "pages": 2,
+            "firstSeen": "07-18 17:30",
+            "lastSeen": "07-18 17:30",
+            "label": "访客 01",
+        }, {
+            "maskedIp": "1.1.*.*",
+            "city": "杭州市",
+            "network": "未知网络",
+            "device": "桌面端",
+            "browser": "Chrome",
+            "requests": 1,
+            "pages": 1,
+            "firstSeen": "07-18 17:30",
+            "lastSeen": "07-18 17:30",
+            "label": "访客 02",
+        }],
     }]
-    assert payload["privacy"] == {"rawIpsIncluded": False, "granularity": "province"}
+    assert payload["privacy"] == {"rawIpsIncluded": False, "granularity": "province_with_masked_visitor_detail"}
     assert "8.8.8.8" not in str(payload)
 
 
@@ -77,3 +100,24 @@ def test_traffic_summary_degrades_without_log_or_database(monkeypatch):
     assert payload["ready"] is False
     assert payload["uniqueVisitors"] == 0
     assert payload["source"]["databaseReady"] is False
+
+
+def test_single_visitor_city_is_hidden_and_ip_is_masked():
+    payload = traffic_geo.aggregate_access_lines(
+        [log_line("8.8.8.8", agent="Mozilla/5.0 (iPhone) Safari/605.1")],
+        now=NOW,
+        resolver=lambda _ip: {
+            "country": "中国",
+            "province": "四川省",
+            "city": "成都市",
+            "isp": "示例网络",
+            "isoCode": "CN",
+        },
+    )
+
+    visitor = payload["provinces"][0]["visitorDetails"][0]
+    assert visitor["maskedIp"] == "8.8.*.*"
+    assert visitor["city"] == "省内其他地区"
+    assert visitor["device"] == "移动端"
+    assert visitor["browser"] == "Safari"
+    assert "8.8.8.8" not in str(payload)

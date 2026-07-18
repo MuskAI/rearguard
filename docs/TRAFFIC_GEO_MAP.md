@@ -10,8 +10,10 @@
 
 隐私约束：
 
-- API 响应不包含原始 IP。
-- 城市只有至少 2 个独立访客时才显示，并且仅作为省份详情的辅助信息。
+- API 响应不包含原始 IP，只返回前两段保留、后两段隐藏的脱敏地址。
+- 点击省份可查看最近匿名访客的脱敏 IP、设备、浏览器、网络、访问次数和最近访问时间。
+- 城市只有至少 2 个独立访客时才显示；单个访客的城市统一显示为“省内其他地区”。
+- Nginx 日志没有登录账号 ID，因此访客明细明确标记“账号未关联”，不会通过 IP 猜测用户身份。
 - 地图默认展示省级粒度，不提供用户级下钻。
 - access log 仍属于受控运维数据，应继续遵循服务器日志的访问权限和保留策略。
 
@@ -31,6 +33,7 @@
 | `REALGUARD_ACCESS_LOG_PATHS` | `/var/log/nginx/access.log,/var/log/nginx/access.log.1` | 逗号分隔的日志路径 |
 | `REALGUARD_ACCESS_LOG_TAIL_BYTES` | `4194304` | 每个日志最多读取的尾部字节数 |
 | `REALGUARD_TRAFFIC_WINDOW_HOURS` | `24` | 聚合时间窗口 |
+| `REALGUARD_TRAFFIC_VISITOR_DETAIL_LIMIT` | `20` | 每个省份最多返回的最近匿名访客数，最大 50 |
 
 部署脚本固定下载 ip2region commit `cd40e3a1d532d645697999d646cf0e10481cef33` 的 IPv4 XDB，并校验 SHA-256：
 

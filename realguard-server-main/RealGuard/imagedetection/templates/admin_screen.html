@@ -141,6 +141,19 @@
     .detail-row{display:grid;grid-template-columns:96px minmax(0,1fr);gap:12px;padding:11px 0;border-bottom:1px solid var(--line-soft)}
     .detail-row span{color:var(--muted);font-size:12px}
     .detail-row strong{font-size:13px;overflow-wrap:anywhere}
+    .visitor-section{margin-top:16px}
+    .visitor-section-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:5px}
+    .visitor-section-head h3{font-size:14px;margin:0}
+    .visitor-section-head span,.visitor-note{color:var(--muted);font-size:11px}
+    .visitor-note{margin:0 0 8px;line-height:1.5}
+    .visitor-list{border-top:1px solid var(--line-soft)}
+    .visitor-row{padding:10px 0;border-bottom:1px solid var(--line-soft)}
+    .visitor-primary,.visitor-stats{display:flex;align-items:center;justify-content:space-between;gap:10px}
+    .visitor-primary strong{font-size:13px}
+    .visitor-primary code{color:var(--cyan);font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:11px}
+    .visitor-meta{color:var(--muted);font-size:11px;line-height:1.5;margin:4px 0}
+    .visitor-stats{color:var(--muted);font-size:10px}
+    .visitor-stats b{color:var(--ink);font-weight:700}
     .inspector-actions{display:flex;gap:8px;padding-top:2px}
     .action-link{min-height:38px;padding:0 12px;border:1px solid var(--line);border-radius:6px;display:inline-flex;align-items:center;justify-content:center;gap:7px;color:var(--ink);background:var(--panel-2);font-weight:700;font-size:13px}
     .action-link:hover{border-color:#607168}
@@ -344,7 +357,7 @@
         ui.trafficChart=echarts.init($('trafficMap'),null,{renderer:'canvas'});
         ui.trafficChart.on('click',params=>{
           const name=shortProvinceName[params.name] || params.name;
-          if(ui.trafficItems.some(item=>item.name===name)) selectTrafficProvince(name);
+          if(name && provinceNames[name]) selectTrafficProvince(name,{allowEmpty:true});
         });
         ui.trafficMapReady=true;
         renderTraffic();
@@ -355,16 +368,20 @@
     function trafficDetail(item){
       const traffic=state?.traffic || {};
       const cities=(item.cities || []).map(city=>`${city.name} ${city.visitors}`).join('、') || '为保护隐私，少量城市不单列';
-      return {kicker:'访问来源',title:item.name,rows:[['独立访客',`${formatNumber(item.visitors)} 人`],['页面访问',`${formatNumber(item.requests)} 次`],['访客占比',`${Number(item.share || 0).toFixed(1)}%`],['主要城市',cities],['统计窗口',`最近 ${traffic.windowHours || 24} 小时`],['定位方式','ip2region 离线省级归属']],action:null};
+      const visitors=item.visitorDetails || [];
+      const visitorHtml=`<section class="visitor-section"><div class="visitor-section-head"><h3>匿名访客明细</h3><span>最近 ${visitors.length} 位</span></div><p class="visitor-note">访问日志未关联登录账号；IP 已脱敏，少量城市自动隐藏。</p><div class="visitor-list">${visitors.length?visitors.map(visitor=>`<div class="visitor-row"><div class="visitor-primary"><strong>${esc(visitor.label)}</strong><code>${esc(visitor.maskedIp)}</code></div><div class="visitor-meta">${esc(visitor.city)} · ${esc(visitor.device)} · ${esc(visitor.browser)}<br>${esc(visitor.network)} · 账号未关联</div><div class="visitor-stats"><span>访问 <b>${esc(formatNumber(visitor.requests))}</b> 次 · ${esc(formatNumber(visitor.pages))} 个页面</span><span>最近 ${esc(visitor.lastSeen)}</span></div></div>`).join(''):'<div class="empty">该省暂无访客明细</div>'}</div></section>`;
+      return {kicker:'访问来源',title:item.name,rows:[['独立访客',`${formatNumber(item.visitors)} 人`],['页面访问',`${formatNumber(item.requests)} 次`],['访客占比',`${Number(item.share || 0).toFixed(1)}%`],['主要城市',cities],['统计窗口',`最近 ${traffic.windowHours || 24} 小时`],['定位方式','ip2region 离线省级归属']],contentHtml:visitorHtml,action:null};
     }
-    function selectTrafficProvince(name,{open=true}={}){
-      const item=ui.trafficItems.find(entry=>entry.name===name);if(!item)return;
+    function selectTrafficProvince(name,{open=true,allowEmpty=false}={}){
+      const found=ui.trafficItems.find(entry=>entry.name===name);
+      if(!found && !allowEmpty)return;
+      const item=found || {name,visitors:0,requests:0,share:0,cities:[],visitorDetails:[]};
       const previous=ui.trafficSelected;ui.trafficSelected=name;
       document.querySelectorAll('[data-province-index]').forEach(button=>button.classList.toggle('active',ui.trafficItems[Number(button.dataset.provinceIndex)]?.name===name));
       if(ui.trafficChart){
         if(previous) ui.trafficChart.dispatchAction({type:'unselect',seriesIndex:0,name:provinceNames[previous] || previous});
         ui.trafficChart.dispatchAction({type:'select',seriesIndex:0,name:provinceNames[name] || name});
-        ui.trafficChart.dispatchAction({type:'showTip',seriesIndex:0,name:provinceNames[name] || name});
+        ui.trafficChart.dispatchAction(open?{type:'hideTip'}:{type:'showTip',seriesIndex:0,name:provinceNames[name] || name});
       }
       if(open) openInspector(trafficDetail(item));
     }
@@ -398,10 +415,11 @@
       }
       document.querySelectorAll('[data-primary-view]').forEach(button=>{const active=button.dataset.primaryView===ui.primaryView;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));});
     }
-    function openInspector({kicker='数据详情',title='查看详情',rows=[],action=null}){
+    function openInspector({kicker='数据详情',title='查看详情',rows=[],contentHtml='',action=null}){
       $('inspectorKicker').textContent = kicker;
       $('inspectorTitle').textContent = title;
-      $('inspectorBody').innerHTML = rows.map(([label,value]) => `<div class="detail-row"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join('') || '<div class="empty">暂无更多数据</div>';
+      const rowsHtml=rows.map(([label,value]) => `<div class="detail-row"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join('');
+      $('inspectorBody').innerHTML = rowsHtml || contentHtml ? `${rowsHtml}${contentHtml}` : '<div class="empty">暂无更多数据</div>';
       $('inspectorActions').innerHTML = action ? `<a class="action-link" href="${esc(action.href)}"><i class="fa fa-arrow-right" aria-hidden="true"></i>${esc(action.label)}</a>` : '';
       $('inspector').classList.add('open');
       $('inspector').setAttribute('aria-hidden','false');
