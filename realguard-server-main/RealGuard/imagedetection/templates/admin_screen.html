@@ -15,7 +15,7 @@
     button{border:0;color:inherit;cursor:pointer}
     a{color:inherit;text-decoration:none}
     :focus-visible{outline:2px solid var(--cyan);outline-offset:3px}
-    .screen{height:100dvh;min-height:0;overflow:hidden;padding:14px;display:grid;grid-template-rows:auto auto auto minmax(0,1fr) auto;gap:10px}
+    .screen{height:100dvh;min-height:0;overflow:hidden;padding:14px;display:grid;grid-template-rows:auto auto minmax(0,1fr) auto auto;gap:10px}
     .top{display:flex;align-items:center;justify-content:space-between;gap:18px;border-bottom:1px solid var(--line);padding-bottom:12px}
     .brand{display:flex;align-items:center;gap:14px;min-width:0}
     .mark{width:44px;height:44px;border-radius:var(--radius);background:var(--green);color:#071008;display:grid;place-items:center;font-weight:900;flex:0 0 auto}
@@ -43,7 +43,7 @@
     .metric strong{font-size:30px;line-height:1;font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
     .metric small{color:var(--green);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .metric.changed{animation:metricFlash .5s ease-out}
-    .runtime{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border:1px solid var(--line);border-radius:var(--radius);background:#121715;overflow:hidden}
+    .runtime{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));border:1px solid var(--line);border-radius:var(--radius);background:#121715;overflow:hidden}
     .runtime-item{width:100%;padding:10px 13px;border-right:1px solid var(--line);background:transparent;min-width:0;text-align:left;transition:background .18s}
     .runtime-item:last-child{border-right:0}
     .runtime-item:hover{background:rgba(255,255,255,.035)}
@@ -191,7 +191,6 @@
       </div>
     </header>
     <section class="metrics" id="metrics"></section>
-    <section class="runtime" id="runtime"></section>
     <section class="grid">
       <article class="panel trend-panel">
         <div class="panel-head">
@@ -253,6 +252,7 @@
         <div class="recent" id="recent"></div>
       </article>
     </section>
+    <section class="runtime" id="runtime" aria-label="服务器运行状态"></section>
     <div class="foot"><button class="active-filter" id="activeFilter" type="button" disabled><strong>全部检测</strong></button><span>管理员：{{ admin_user.username or admin_user.phone or "admin" }} · 数据不含用户身份信息</span></div>
   </main>
   <aside class="inspector" id="inspector" aria-hidden="true" aria-labelledby="inspectorTitle">
@@ -562,19 +562,24 @@
       const meter = hasPercent ? `<div class="meter"><i class="${meterClass(item.percent,item.inverse)}" style="width:${width}%"></i></div>` : '<div class="meter neutral"></div>';
       return `<button class="runtime-item" type="button" data-runtime-index="${index}" aria-label="查看${esc(item.label)}详情"><span>${esc(item.label)} · ${esc(item.detail)}</span><strong>${esc(item.value)}</strong>${meter}</button>`;
     }
-    function renderRuntime(host, services){
+    function renderRuntime(host, services, algorithm){
       const cpu = host?.cpu || {};
       const memory = host?.memory || {};
       const disk = host?.disk || {};
       const total = Number(services?.total) || 0;
       const online = Number(services?.online) || 0;
-      const servicePercent = total ? online * 100 / total : 0;
+      const algorithmStatus = algorithm?.status === 'healthy' ? '在线' : algorithm?.status === 'degraded' ? '降级' : algorithm?.status === 'offline' ? '离线' : '未知';
+      const algorithmPercent = algorithm?.status === 'healthy' ? 100 : algorithm?.status === 'degraded' ? 50 : 0;
+      const provider = algorithm?.provider === 'CUDAExecutionProvider' ? 'CUDA' : (algorithm?.provider || '推理设备未知');
+      const gpu = algorithm?.cudaDeviceId != null ? `GPU ${algorithm.cudaDeviceId}` : 'GPU 未识别';
+      const remoteLatency = algorithm?.latencyMs != null ? `${algorithm.latencyMs} ms` : '--';
       ui.runtimeItems = [
-        {label:'CPU 负载',value:`${cpu.loadPercent ?? '--'}%`,detail:`${cpu.cores ?? '--'} 核 · 1m ${cpu.load1 ?? '--'}`,percent:cpu.loadPercent,rows:[['当前负载',`${cpu.loadPercent ?? '--'}%`],['CPU 核心',`${cpu.cores ?? '--'} 核`],['1 分钟负载',cpu.load1 ?? '--']]},
-        {label:'内存',value:`${memory.usedPercent ?? '--'}%`,detail:`${formatBytes(memory.usedBytes)} / ${formatBytes(memory.totalBytes)}`,percent:memory.usedPercent,rows:[['使用率',`${memory.usedPercent ?? '--'}%`],['已使用',formatBytes(memory.usedBytes)],['总容量',formatBytes(memory.totalBytes)]]},
-        {label:'系统盘',value:`${disk.usedPercent ?? '--'}%`,detail:`${formatBytes(disk.usedBytes)} / ${formatBytes(disk.totalBytes)}`,percent:disk.usedPercent,rows:[['使用率',`${disk.usedPercent ?? '--'}%`],['已使用',formatBytes(disk.usedBytes)],['总容量',formatBytes(disk.totalBytes)]]},
-        {label:'模型服务',value:`${online}/${total || '--'} 在线`,detail:`降级 ${services?.degraded ?? 0} · 离线 ${services?.offline ?? 0}`,percent:servicePercent,inverse:true,rows:[['服务总数',total],['在线',online],['降级',services?.degraded ?? 0],['离线',services?.offline ?? 0]]},
-        {label:'运行时长',value:formatDuration(host?.uptimeSeconds),detail:`Web 进程 ${formatDuration(host?.processUptimeSeconds)}`,rows:[['系统运行',formatDuration(host?.uptimeSeconds)],['Web 进程',formatDuration(host?.processUptimeSeconds)]]},
+        {label:'Web 服务器 · CPU',value:`${cpu.loadPercent ?? '--'}%`,detail:`${cpu.cores ?? '--'} 核 · 1m ${cpu.load1 ?? '--'}`,percent:cpu.loadPercent,rows:[['节点','公网 Web 服务器'],['当前负载',`${cpu.loadPercent ?? '--'}%`],['CPU 核心',`${cpu.cores ?? '--'} 核`],['1 分钟负载',cpu.load1 ?? '--']]},
+        {label:'Web 服务器 · 内存',value:`${memory.usedPercent ?? '--'}%`,detail:`${formatBytes(memory.usedBytes)} / ${formatBytes(memory.totalBytes)}`,percent:memory.usedPercent,rows:[['节点','公网 Web 服务器'],['使用率',`${memory.usedPercent ?? '--'}%`],['已使用',formatBytes(memory.usedBytes)],['总容量',formatBytes(memory.totalBytes)]]},
+        {label:'Web 服务器 · 系统盘',value:`${disk.usedPercent ?? '--'}%`,detail:`${formatBytes(disk.usedBytes)} / ${formatBytes(disk.totalBytes)}`,percent:disk.usedPercent,rows:[['节点','公网 Web 服务器'],['使用率',`${disk.usedPercent ?? '--'}%`],['已使用',formatBytes(disk.usedBytes)],['总容量',formatBytes(disk.totalBytes)]]},
+        {label:'Web 服务器 · 运行时长',value:formatDuration(host?.uptimeSeconds),detail:`Web 进程 ${formatDuration(host?.processUptimeSeconds)}`,rows:[['节点','公网 Web 服务器'],['系统运行',formatDuration(host?.uptimeSeconds)],['Web 进程',formatDuration(host?.processUptimeSeconds)]]},
+        {label:'算法服务器 · 主鉴伪',value:algorithmStatus,detail:algorithm?.modelName || '未配置主模型',percent:algorithmPercent,inverse:true,rows:[['节点','后端算法服务器'],['运行状态',algorithmStatus],['主模型',algorithm?.modelName || '-'],['模型服务',`${online}/${total || '--'} 在线`],['降级 / 离线',`${services?.degraded ?? 0} / ${services?.offline ?? 0}`]]},
+        {label:'算法服务器 · GPU 推理',value:`${provider} · ${gpu}`,detail:`探测 ${remoteLatency}`,percent:algorithmPercent,inverse:true,rows:[['节点','后端算法服务器'],['推理设备',provider],['GPU',gpu],['远端探测',remoteLatency],['队列深度',algorithm?.queueDepth ?? '--']]},
       ];
       $('runtime').innerHTML = ui.runtimeItems.map(runtimeItem).join('');
     }
@@ -783,7 +788,7 @@
         setConnection('ok', '30 秒轮询正常');
         $('generated').textContent = `数据时间 ${state.generatedAt || '--'}`;
         renderMetrics(state.metrics);
-        renderRuntime(state.host, state.services);
+        renderRuntime(state.host, state.services, state.algorithmServer);
         renderModels(state.models, state.routing);
         renderRecent();
         renderAnomalies(state.anomalies);

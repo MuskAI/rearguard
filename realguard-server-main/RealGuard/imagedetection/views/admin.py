@@ -1754,6 +1754,58 @@ def _screen_routing_payload(routing):
     }
 
 
+def _screen_algorithm_server_payload(models, routing):
+    primary_id = str((routing or {}).get("imagePrimary") or "")
+    primary = next((model for model in models if str(model.get("id") or "") == primary_id), None)
+    if primary is None:
+        primary = next((model for model in models if model.get("enabled") is not False), None)
+    if primary is None:
+        return {
+            "status": "unknown",
+            "serviceReady": False,
+            "modelReady": False,
+            "modelId": "",
+            "modelName": "未配置主模型",
+            "inferenceMode": "",
+            "provider": "",
+            "cudaDeviceId": None,
+            "latencyMs": None,
+            "queueDepth": None,
+        }
+
+    health = primary.get("health") if isinstance(primary.get("health"), dict) else {}
+    telemetry = health.get("telemetry") if isinstance(health.get("telemetry"), dict) else {}
+    service_ready = bool(health.get("serviceOk"))
+    model_ready = bool(health.get("ok"))
+    remote_ready = telemetry.get("remoteReady")
+    provider = str(telemetry.get("activeProvider") or "")
+    accelerator_ready = remote_ready is not False and (
+        not provider or provider == "CUDAExecutionProvider"
+    )
+    if not service_ready:
+        status = "offline"
+    elif model_ready and accelerator_ready:
+        status = "healthy"
+    else:
+        status = "degraded"
+
+    latency = telemetry.get("remoteLatencyMs")
+    if latency is None:
+        latency = health.get("latencyMs")
+    return {
+        "status": status,
+        "serviceReady": service_ready,
+        "modelReady": model_ready,
+        "modelId": primary.get("id") or "",
+        "modelName": primary.get("name") or primary.get("id") or "主鉴伪模型",
+        "inferenceMode": telemetry.get("inferenceMode") or "",
+        "provider": provider,
+        "cudaDeviceId": telemetry.get("cudaDeviceId"),
+        "latencyMs": latency,
+        "queueDepth": telemetry.get("queueDepth"),
+    }
+
+
 def _screen_assurance_payload(assurance):
     return {
         "online": bool(assurance.get("online")),
@@ -1815,15 +1867,18 @@ def _big_screen_payload():
     assurance_detail = _v1_assurance(registry=registry, models=raw_models)
     assurance = _screen_assurance_payload(assurance_detail)
     host = _host_telemetry()
+    routing = _screen_routing_payload(registry.get("routing", {}))
+    algorithm_server = _screen_algorithm_server_payload(models, routing)
     now = datetime.now(_admin_timezone())
     return {
         "generatedAt": now.strftime("%Y-%m-%d %H:%M:%S"),
         "generatedAtIso": now.isoformat(),
         "metrics": metrics,
-        "routing": _screen_routing_payload(registry.get("routing", {})),
+        "routing": routing,
         "models": models,
         "services": _service_summary(models),
         "host": host,
+        "algorithmServer": algorithm_server,
         "series": _hourly_detection_series(24),
         "labels": _label_distribution(),
         "feedback": _feedback_distribution(),

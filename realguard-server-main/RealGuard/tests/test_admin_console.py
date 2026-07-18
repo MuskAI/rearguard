@@ -177,6 +177,8 @@ def test_admin_screen_renders_interactive_operations_controls(client, monkeypatc
     assert 'data-distribution-mode="feedback"' in html
     assert 'data-primary-view="traffic"' in html
     assert 'id="trafficMap"' in html
+    assert html.index('class="grid"') < html.index('id="runtime"')
+    assert "算法服务器 · GPU 推理" in html
     assert "/static/js/echarts-6.1.0.min.js" in html
     assert 'id="inspector"' in html
     assert "['trend','routes','distribution'].forEach(setupCanvas)" in html
@@ -376,6 +378,43 @@ def test_host_telemetry_reports_normalized_linux_resources(monkeypatch):
     assert payload["disk"]["usedPercent"] == 40.0
     assert payload["uptimeSeconds"] == 86461
     assert payload["processUptimeSeconds"] == 60
+
+
+def test_screen_algorithm_server_payload_uses_primary_model_gpu_telemetry():
+    payload = admin._screen_algorithm_server_payload(
+        [{
+            "id": "v1-onnx-mil",
+            "name": "RealGuard 主模型",
+            "enabled": True,
+            "health": {
+                "ok": True,
+                "serviceOk": True,
+                "latencyMs": 31,
+                "telemetry": {
+                    "inferenceMode": "remote-cuda",
+                    "activeProvider": "CUDAExecutionProvider",
+                    "cudaDeviceId": 0,
+                    "remoteReady": True,
+                    "remoteLatencyMs": 18.4,
+                    "queueDepth": 2,
+                },
+            },
+        }],
+        {"imagePrimary": "v1-onnx-mil"},
+    )
+
+    assert payload == {
+        "status": "healthy",
+        "serviceReady": True,
+        "modelReady": True,
+        "modelId": "v1-onnx-mil",
+        "modelName": "RealGuard 主模型",
+        "inferenceMode": "remote-cuda",
+        "provider": "CUDAExecutionProvider",
+        "cudaDeviceId": 0,
+        "latencyMs": 18.4,
+        "queueDepth": 2,
+    }
 
 
 def test_big_screen_payload_excludes_internal_topology_and_assurance_details(monkeypatch):
