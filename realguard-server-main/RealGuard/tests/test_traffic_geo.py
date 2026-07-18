@@ -13,8 +13,8 @@ from imagedetection.views import traffic_geo  # noqa: E402
 NOW = datetime(2026, 7, 18, 18, 0, 0, tzinfo=timezone.utc)
 
 
-def log_line(ip, path="/", status=200, agent="Mozilla/5.0 Chrome/126.0", timestamp="18/Jul/2026:17:30:00 +0000"):
-    return f'{ip} - - [{timestamp}] "GET {path} HTTP/1.1" {status} 1188 "-" "{agent}"'
+def log_line(ip, path="/", status=200, agent="Mozilla/5.0 Chrome/126.0", timestamp="18/Jul/2026:17:30:00 +0000", referer="-"):
+    return f'{ip} - - [{timestamp}] "GET {path} HTTP/1.1" {status} 1188 "{referer}" "{agent}"'
 
 
 def test_parse_access_line_accepts_public_document_request():
@@ -195,3 +195,40 @@ def test_confirmed_pageview_rejects_automation_and_invalid_payload(tmp_path, mon
 
     assert not traffic_geo.record_confirmed_pageview(agent="HeadlessChrome/126.0", **common)
     assert not traffic_geo.record_confirmed_pageview(agent="Mozilla/5.0", **{**common, "page": "admin"})
+
+
+def test_historical_import_recovers_only_same_site_browser_sessions(tmp_path, monkeypatch):
+    monkeypatch.setenv("REALGUARD_TRAFFIC_CUMULATIVE_DB", str(tmp_path / "traffic.sqlite3"))
+    browser = "Mozilla/5.0 Chrome/126.0"
+    valid = log_line(
+        "8.8.8.8",
+        "/api/me",
+        status=401,
+        agent=browser,
+        referer="https://www.rrreal.cn/?page=image",
+    )
+    lines = [
+        valid,
+        valid,
+        log_line("1.1.1.1", "/api/me", agent=browser, referer="https://www.rrreal.cn/"),
+        log_line("9.9.9.9", "/", agent=browser, referer="https://www.rrreal.cn/"),
+        log_line("7.7.7.7", "/api/me", agent="curl/8.7.1", referer="https://www.rrreal.cn/"),
+        log_line("6.6.6.6", "/api/me", agent=browser, referer="https://attacker.example/"),
+        log_line("5.5.5.5", "/api/me", agent=browser, referer="https://www.rrreal.cn/admin"),
+    ]
+
+    result = traffic_geo.import_historical_browser_sessions(
+        lines,
+        resolver=lambda ip: {
+            "country": "中国",
+            "province": "浙江省" if ip == "8.8.8.8" else "四川省",
+            "isoCode": "CN",
+        },
+    )
+    payload = traffic_geo.confirmed_traffic_summary(now=NOW)
+
+    assert result == {"ready": True, "imported": 2, "duplicates": 1, "rejected": 4}
+    assert payload["site"] == {"pageViews": 2, "uniqueVisitors": 2}
+    assert payload["homepage"] == {"pageViews": 1, "uniqueVisitors": 1}
+    assert [item["name"] for item in payload["provinces"]] == ["四川", "浙江"]
+    assert "8.8.8.8" not in str(payload)

@@ -13,6 +13,7 @@ import secrets
 import sqlite3
 import threading
 from typing import Callable, Iterable
+from urllib.parse import parse_qs, urlsplit
 
 try:
     import ip2region.searcher as ip2_searcher
@@ -32,7 +33,7 @@ HOMEPAGE_PATHS = {"/", "/index.html"}
 LOG_PATTERN = re.compile(
     r'^(?P<ip>\S+)\s+\S+\s+\S+\s+\[(?P<time>[^]]+)]\s+'
     r'"(?P<method>\S+)\s+(?P<path>\S+)(?:\s+HTTP/[^\"]+)?"\s+'
-    r'(?P<status>\d{3})\s+\S+\s+"[^"]*"\s+"(?P<agent>[^"]*)"'
+    r'(?P<status>\d{3})\s+\S+\s+"(?P<referer>[^"]*)"\s+"(?P<agent>[^"]*)"'
 )
 BOT_PATTERN = re.compile(
     r"apachebench|\bcurl\b|python-requests|uptimerobot|healthcheck|go-http-client|"
@@ -371,6 +372,154 @@ def record_confirmed_pageview(
                 connection.close()
     except (OSError, sqlite3.Error):
         return False
+
+
+def _historical_page_from_referer(referer: str, allowed_hosts: set[str]) -> str | None:
+    try:
+        parsed = urlsplit(str(referer or ""))
+    except ValueError:
+        return None
+    if parsed.scheme not in {"http", "https"} or (parsed.hostname or "").lower() not in allowed_hosts:
+        return None
+    if parsed.path.startswith("/admin"):
+        return None
+    page = parse_qs(parsed.query).get("page", [""])[0].lower()
+    return page if page in {"image", "video", "history"} else "home"
+
+
+def import_historical_browser_sessions(
+    lines: Iterable[str],
+    *,
+    resolver: Callable[[str], dict] = resolve_ip,
+    allowed_hosts: Iterable[str] | None = None,
+) -> dict:
+    """Recover high-confidence SPA visits from historical /api/me requests.
+
+    A same-site referer and a normal browser user agent are required. This keeps
+    raw document scans, load tools, admin traffic, and server probes out of the
+    cumulative visitor figures.
+    """
+    hosts = {
+        str(host).strip().lower()
+        for host in (
+            allowed_hosts
+            or os.getenv(
+                "REALGUARD_PUBLIC_HOSTS",
+                "rrreal.cn,www.rrreal.cn,124.221.92.85",
+            ).split(",")
+        )
+        if str(host).strip()
+    }
+    sessions = []
+    rejected = 0
+    for line in lines:
+        match = LOG_PATTERN.match(str(line).strip())
+        if not match:
+            continue
+        data = match.groupdict()
+        clean_path = data["path"].split("?", 1)[0]
+        agent = str(data.get("agent") or "").strip()
+        page = _historical_page_from_referer(data.get("referer", ""), hosts)
+        try:
+            status = int(data["status"])
+            timestamp = datetime.strptime(data["time"], "%d/%b/%Y:%H:%M:%S %z")
+        except (TypeError, ValueError):
+            rejected += 1
+            continue
+        if (
+            data["method"] != "GET"
+            or clean_path != "/api/me"
+            or status not in {200, 401}
+            or not _is_public_ipv4(data["ip"])
+            or not agent.startswith("Mozilla/")
+            or BOT_PATTERN.search(agent)
+            or page is None
+        ):
+            rejected += 1
+            continue
+        sessions.append((str(line).strip(), data["ip"], agent, timestamp, page))
+
+    imported = duplicates = 0
+    located_by_ip = {}
+    try:
+        with _CUMULATIVE_LOCK:
+            connection = _open_cumulative_db(_cumulative_db_path())
+            try:
+                salt = _metadata_value(connection, "visitor_salt", lambda: secrets.token_hex(32))
+                for raw_line, ip, agent, timestamp, page in sessions:
+                    visitor_hash = hashlib.sha256(
+                        f"{salt}\0historical\0{ip}\0{agent}".encode("utf-8")
+                    ).hexdigest()
+                    event_hash = hashlib.sha256(
+                        f"{salt}\0historical\0{raw_line}".encode("utf-8")
+                    ).hexdigest()
+                    is_homepage = page == "home"
+                    clean_page_path = "/" if is_homepage else f"/?page={page}"
+                    cursor = connection.execute(
+                        """
+                        INSERT OR IGNORE INTO traffic_events (
+                            event_hash, occurred_at, visitor_hash, path, is_homepage, confirmed
+                        ) VALUES (?, ?, ?, ?, ?, 1)
+                        """,
+                        (
+                            event_hash,
+                            int(timestamp.timestamp()),
+                            visitor_hash,
+                            clean_page_path,
+                            int(is_homepage),
+                        ),
+                    )
+                    if cursor.rowcount != 1:
+                        duplicates += 1
+                        continue
+                    location = located_by_ip.setdefault(ip, resolver(ip) or {})
+                    country = _clean_region_part(location.get("country", ""))
+                    province = normalize_province(location.get("province", ""))
+                    city = _clean_region_part(location.get("city", ""))
+                    isp = _clean_region_part(location.get("isp", ""))
+                    iso_code = _clean_region_part(location.get("isoCode", ""))
+                    epoch = int(timestamp.timestamp())
+                    connection.execute(
+                        """
+                        INSERT INTO traffic_visitors (
+                            visitor_hash, masked_ip, first_seen, last_seen, site_requests,
+                            homepage_requests, country, province, city, isp, iso_code, agent
+                        ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(visitor_hash) DO UPDATE SET
+                            first_seen = MIN(traffic_visitors.first_seen, excluded.first_seen),
+                            last_seen = MAX(traffic_visitors.last_seen, excluded.last_seen),
+                            site_requests = traffic_visitors.site_requests + 1,
+                            homepage_requests = traffic_visitors.homepage_requests + excluded.homepage_requests
+                        """,
+                        (
+                            visitor_hash,
+                            _masked_ip(ip),
+                            epoch,
+                            epoch,
+                            int(is_homepage),
+                            country,
+                            province,
+                            city,
+                            isp,
+                            iso_code,
+                            agent,
+                        ),
+                    )
+                    connection.execute(
+                        "INSERT OR IGNORE INTO traffic_visitor_paths (visitor_hash, path) VALUES (?, ?)",
+                        (visitor_hash, clean_page_path),
+                    )
+                    imported += 1
+                connection.execute(
+                    "INSERT OR REPLACE INTO traffic_metadata (key, value) VALUES (?, ?)",
+                    ("historical_browser_sessions_imported_at", datetime.now().astimezone().isoformat()),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+    except (OSError, sqlite3.Error) as exc:
+        return {"ready": False, "imported": imported, "duplicates": duplicates, "rejected": rejected, "error": str(exc)}
+    return {"ready": True, "imported": imported, "duplicates": duplicates, "rejected": rejected}
 
 
 def _stored_payload(

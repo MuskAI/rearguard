@@ -40,6 +40,7 @@ import {
   publicExpertReviewEvidence,
   publicExpertReviewJobSummary,
 } from "./swarmPublic";
+import { trackConfirmedPageview } from "./analytics";
 
 type PageKey = "home" | "image" | "video" | "history";
 type Status = { tone: "ok" | "error" | "info"; text: string } | null;
@@ -475,67 +476,6 @@ const UI_TEXT = {
 const IMAGE_MAX_BYTES = 25 * 1024 * 1024;
 const VIDEO_MAX_BYTES = 512 * 1024 * 1024;
 const V2_CONSOLE_MAX_BYTES = 25 * 1024 * 1024;
-const ANALYTICS_VISITOR_KEY = "realguard_analytics_visitor";
-const ANALYTICS_EVENT_KEY = "realguard_last_page_event";
-let transientAnalyticsVisitorId = "";
-
-function randomTrackingId() {
-  const cryptoApi = globalThis.crypto;
-  if (cryptoApi && typeof cryptoApi.randomUUID === "function") {
-    return cryptoApi.randomUUID();
-  }
-  if (cryptoApi && typeof cryptoApi.getRandomValues === "function") {
-    const values = new Uint32Array(4);
-    cryptoApi.getRandomValues(values);
-    return Array.from(values, (value) => value.toString(16).padStart(8, "0")).join("");
-  }
-  return Date.now().toString(36) + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
-}
-
-function analyticsVisitorId() {
-  const storage = getStorage();
-  const existing = storage?.getItem(ANALYTICS_VISITOR_KEY);
-  if (existing) return existing;
-  if (!storage && transientAnalyticsVisitorId) return transientAnalyticsVisitorId;
-  const created = randomTrackingId();
-  if (storage) storage.setItem(ANALYTICS_VISITOR_KEY, created);
-  else transientAnalyticsVisitorId = created;
-  return created;
-}
-
-function analyticsEventId(page: PageKey) {
-  try {
-    const previous = JSON.parse(window.sessionStorage.getItem(ANALYTICS_EVENT_KEY) || "null");
-    if (previous?.page === page && Date.now() - Number(previous?.at || 0) < 1500 && previous?.id) {
-      return String(previous.id);
-    }
-    const event = { page, at: Date.now(), id: randomTrackingId() };
-    window.sessionStorage.setItem(ANALYTICS_EVENT_KEY, JSON.stringify(event));
-    return event.id;
-  } catch {
-    return randomTrackingId();
-  }
-}
-
-function trackConfirmedPageview(page: PageKey) {
-  if (typeof window === "undefined" || navigator.webdriver || isDemoMode()) return;
-  const body = JSON.stringify({
-    visitorId: analyticsVisitorId(),
-    eventId: analyticsEventId(page),
-    page,
-  });
-  void fetch("/api/analytics/pageview", {
-    method: "POST",
-    credentials: "omit",
-    keepalive: true,
-    headers: {
-      "Content-Type": "application/json",
-      "X-RealGuard-Browser-Event": "1",
-    },
-    body,
-  }).catch(() => undefined);
-}
-
 function formatUsageNumber(value: number | undefined | null, lang: Lang = "zh") {
   return Number(value || 0).toLocaleString(localeFor(lang));
 }
