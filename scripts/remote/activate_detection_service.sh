@@ -308,16 +308,20 @@ done
 test "$health_ready" = "1"
 sudo systemctl is-active --quiet "$service_name"
 
-printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC' \
-  | base64 -d > /tmp/realguard-gpu-deployment-probe.png
+/home/ymk/miniconda3/envs/realguard/bin/python -c '
+from PIL import Image
+Image.new("RGB", (64, 64), (240, 244, 245)).save("/tmp/realguard-gpu-deployment-probe.png")
+'
 set -a
 . /home/ymk/services/watermark-precheck/.env
 set +a
-curl -fsS --max-time 60 \
-  -H "Authorization: Bearer $WATERMARK_PRECHECK_TOKEN" \
-  -F file=@/tmp/realguard-gpu-deployment-probe.png \
-  http://127.0.0.1:5066/v1/precheck \
-  | /home/ymk/miniconda3/envs/realguard/bin/python -c '
+precheck_probe_ready=0
+for _ in {1..3}; do
+  if curl -fsS --max-time 60 \
+    -H "Authorization: Bearer $WATERMARK_PRECHECK_TOKEN" \
+    -F file=@/tmp/realguard-gpu-deployment-probe.png \
+    http://127.0.0.1:5066/v1/precheck \
+    | /home/ymk/miniconda3/envs/realguard/bin/python -c '
 import json, sys
 payload = json.load(sys.stdin)
 generic = payload.get("genericVisibleWatermark") or {}
@@ -326,13 +330,22 @@ assert payload.get("status") == "ok"
 assert payload.get("coordinateSpace") == "display_normalized_v1"
 assert int(size.get("width") or 0) > 0 and int(size.get("height") or 0) > 0
 assert generic.get("available") is True
-'
-curl -fsS --max-time 180 \
-  -H "X-RealGuard-Internal-Token: $model_token" \
-  -H 'X-RealGuard-Request-Nonce: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
-  -F image_file=@/tmp/realguard-gpu-deployment-probe.png \
-  http://127.0.0.1:5000/internal/model/predict \
-  | /home/ymk/miniconda3/envs/realguard/bin/python -c '
+'; then
+    precheck_probe_ready=1
+    break
+  fi
+  sleep 2
+done
+test "$precheck_probe_ready" = "1"
+
+model_probe_ready=0
+for _ in {1..3}; do
+  if curl -fsS --max-time 180 \
+    -H "X-RealGuard-Internal-Token: $model_token" \
+    -H 'X-RealGuard-Request-Nonce: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    -F image_file=@/tmp/realguard-gpu-deployment-probe.png \
+    http://127.0.0.1:5000/internal/model/predict \
+    | /home/ymk/miniconda3/envs/realguard/bin/python -c '
 import json, sys
 payload = json.load(sys.stdin)
 data = payload.get("data") or {}
@@ -362,7 +375,13 @@ assert len(str(integrity.get("hmacSha256") or "")) == 64
 if decision.get("ready") is not True:
     assert data.get("finalLabel") == "需人工复核"
     assert float(data.get("fakeProbability")) == 0.5
-' "$expected_model_revision" "$expected_model_sha256" "$commit_sha"
+' "$expected_model_revision" "$expected_model_sha256" "$commit_sha"; then
+    model_probe_ready=1
+    break
+  fi
+  sleep 2
+done
+test "$model_probe_ready" = "1"
 
 sudo systemctl restart "$model_tunnel_service_name"
 sudo systemctl restart "$precheck_tunnel_service_name"
