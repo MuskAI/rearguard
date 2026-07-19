@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import base64
 from datetime import datetime
 from html import escape
+from pathlib import Path
+from typing import Any, Mapping
 from urllib.parse import quote
+from werkzeug.exceptions import UnprocessableEntity
 
-from .report_pdf import image_report_pdf, video_report_pdf
+from . import evidence_manifest
+from .report_pdf import image_report_pdf as _render_image_report_pdf
+from .report_pdf import video_report_pdf
 
 
 def _safe_text(value: object, default: str = "—") -> str:
@@ -84,7 +90,109 @@ def video_report_filename(itemid: int | str) -> str:
     return f"huijian-video-report-{itemid}.pdf"
 
 
-def image_report_content(item: dict, result: dict) -> str:
+def _signed_image_report(
+    item: Mapping[str, Any],
+    *,
+    source_path: str | Path | None = None,
+    model_run: Mapping[str, Any] | None = None,
+    generated_at: datetime | str | None = None,
+    signing_key: str | bytes | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    try:
+        envelope = evidence_manifest.create_signed_image_manifest(
+            item,
+            source_path=source_path,
+            model_run=model_run,
+            generated_at=generated_at,
+            key=signing_key,
+        )
+    except evidence_manifest.EvidenceManifestError as exc:
+        raise UnprocessableEntity(
+            description=f"无法生成可验证的图像报告：{exc}"
+        ) from exc
+    manifest = envelope["manifest"]
+    conclusion = manifest["conclusion"]
+    source = manifest["source"]
+    model = manifest["model"]
+    signature = envelope["signature"]
+    evidence_text = manifest["evidence_summary"]["text"]
+    human_manifest = "\n".join([
+        evidence_text,
+        "",
+        "电子证据清单（以下字段均由服务端签名）",
+        f"任务ID：{manifest['task_id']}",
+        f"记录ID：{manifest['record_id']}",
+        f"原文件SHA-256：{source['sha256']}",
+        f"模型版本：{model['version']}",
+        f"策略版本：{manifest['policy_version']}",
+        f"清单生成时间：{manifest['generated_at']}",
+        f"签名算法：{signature['algorithm']} · 密钥标识：{signature['key_id']}",
+        f"清单签名：{signature['value']}",
+    ])
+
+    # The rendering payload is rebuilt from signed server facts. In particular,
+    # no filename, verdict, score, model version, hash, or explanation supplied in
+    # the caller's result dictionary is promoted to authoritative report evidence.
+    authoritative_result = {
+        "itemid": item.get("itemid"),
+        "final_label": conclusion["label"],
+        "probability": float(conclusion["risk_score_percent"]) / 100.0,
+        "detector_probability": float(conclusion["risk_score_percent"]) / 100.0,
+        "confidence": conclusion["confidence"],
+        "explanation": human_manifest,
+        "filename": item.get("filename", ""),
+        "file_size": item.get("file_size", ""),
+        "img_format": item.get("img_format", ""),
+        "resolution": item.get("resolution", ""),
+        "visual_issues": [],
+        "all_metadata": {},
+        "capture_evidence": None,
+        "visibleWatermark": None,
+    }
+    return envelope, authoritative_result
+
+
+def _html_envelope_block(envelope: Mapping[str, Any]) -> str:
+    manifest = envelope["manifest"]
+    source = manifest["source"]
+    model = manifest["model"]
+    signature = envelope["signature"]
+    encoded = base64.urlsafe_b64encode(evidence_manifest.canonical_json(envelope)).decode("ascii")
+    return f"""
+        <section class="card" aria-labelledby="evidence-manifest-title">
+          <h2 id="evidence-manifest-title">不可变证据清单</h2>
+          <table>
+            <tbody>
+              <tr><td>任务 / 记录 ID</td><td>{escape(manifest['task_id'])} / {escape(manifest['record_id'])}</td></tr>
+              <tr><td>原文件 SHA-256</td><td style="word-break:break-all;">{escape(source['sha256'])}</td></tr>
+              <tr><td>模型 / 策略版本</td><td>{escape(model['version'])} / {escape(manifest['policy_version'])}</td></tr>
+              <tr><td>生成时间</td><td>{escape(manifest['generated_at'])}</td></tr>
+              <tr><td>HMAC 签名</td><td style="word-break:break-all;">{escape(signature['value'])}</td></tr>
+            </tbody>
+          </table>
+          <div class="footnote">签名算法：{escape(signature['algorithm'])}；密钥标识：{escape(signature['key_id'])}。验证时以签名清单为权威证据。</div>
+          <script type="application/vnd.huijian.evidence+base64">{encoded}</script>
+        </section>
+    """
+
+
+def image_report_content(
+    item: dict,
+    result: dict,
+    *,
+    source_path: str | Path | None = None,
+    model_run: Mapping[str, Any] | None = None,
+    generated_at: datetime | str | None = None,
+    signing_key: str | bytes | None = None,
+) -> str:
+    del result
+    envelope, result = _signed_image_report(
+        item,
+        source_path=source_path,
+        model_run=model_run,
+        generated_at=generated_at,
+        signing_key=signing_key,
+    )
     probability = round(float(result.get("probability", 0) or 0) * 100, 1)
     confidence = _safe_text(result.get("confidence"), "")
     requires_review = 35 < probability < 75 or confidence == "低"
@@ -141,8 +249,40 @@ def image_report_content(item: dict, result: dict) -> str:
           <ul>{capture_items}</ul>
           <div class="footnote">说明：本报告仅作业务留档与人工复核辅助，不构成司法或监管最终鉴定结论。</div>
         </section>
+        {_html_envelope_block(envelope)}
         """,
     )
+
+
+def image_report_pdf(
+    item: dict[str, Any],
+    result: dict[str, Any],
+    *,
+    source_path: str | Path | None = None,
+    model_run: Mapping[str, Any] | None = None,
+    generated_at: datetime | str | None = None,
+    signing_key: str | bytes | None = None,
+) -> bytes:
+    del result
+    envelope, authoritative_result = _signed_image_report(
+        item,
+        source_path=source_path,
+        model_run=model_run,
+        generated_at=generated_at,
+        signing_key=signing_key,
+    )
+    rendered = _render_image_report_pdf(item, authoritative_result)
+    try:
+        bound_envelope = evidence_manifest.bind_pdf_artifact(rendered, envelope, key=signing_key)
+        return evidence_manifest.embed_envelope_in_pdf(rendered, bound_envelope)
+    except evidence_manifest.EvidenceManifestError as exc:
+        raise UnprocessableEntity(
+            description=f"无法生成可验证的图像报告：{exc}"
+        ) from exc
+
+
+def verify_image_report(pdf: bytes, *, signing_key: str | bytes | None = None) -> bool:
+    return evidence_manifest.verify_pdf_report(pdf, key=signing_key)
 
 
 def video_report_content(item: dict, result: dict) -> str:

@@ -579,17 +579,27 @@ def test_v2_publishable_contract_accepts_verified_provenance_source():
     })
 
 
-def test_image_report_marks_borderline_result_for_human_review():
+def test_image_report_marks_borderline_result_for_human_review(tmp_path):
+    source = tmp_path / "sample.png"
+    source.write_bytes(b"sample-image")
     html = reporting.image_report_content(
-        {"itemid": 9, "fake": 66.1, "createtime": "2026-07-15 10:00:00"},
         {
-            "final_label": "AI生成图像",
-            "probability": 0.661,
-            "confidence": "低",
+            "itemid": 9,
             "filename": "sample.png",
-            "visual_issues": [],
-            "all_metadata": {},
+            "fake": 66.1,
+            "aigc": "AI生成图像",
+            "clarity": "低",
+            "explantation": "服务端证据摘要",
+            "createtime": "2026-07-15 10:00:00",
         },
+        {
+            "final_label": "客户端伪造标签",
+            "probability": 0.01,
+        },
+        source_path=source,
+        model_run={},
+        generated_at="2026-07-15T02:00:00Z",
+        signing_key="test-evidence-key-0123456789abcdef",
     )
 
     assert "需人工复核 · 66.1%" in html
@@ -1542,6 +1552,7 @@ def test_guest_image_report_downloads_attachment(client, monkeypatch):
         raise AssertionError(f"unexpected SQL: {sql}")
 
     monkeypatch.setattr(detection, "excute_detection_sql", fake_detection_sql)
+    monkeypatch.setattr(detection.reporting, "image_report_pdf", lambda item, result: b"%PDF-test")
 
     response = client.get("/image_upload/report?itemid=31")
 
