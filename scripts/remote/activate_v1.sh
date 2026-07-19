@@ -111,7 +111,7 @@ sudo bash -lc '
 # pointer switches, and process restart.
 sudo install -d -m 755 -o ubuntu -g ubuntu /opt/realguard-server/releases
 sudo rm -rf "$release_root"
-sudo install -d -m 755 -o ubuntu -g ubuntu "$release_root/RealGuard"
+sudo install -d -m 755 -o ubuntu -g ubuntu "$release_root" "$release_root/RealGuard"
 sudo tar -xzf /tmp/realguard-v1-backend.tgz -C "$release_root/RealGuard"
 sudo install -m 644 /tmp/realguard-v1.DEPLOYED_COMMIT "$release_root/DEPLOYED_COMMIT"
 sudo -u ubuntu python3 -m venv "$release_root/.venv"

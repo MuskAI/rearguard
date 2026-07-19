@@ -87,7 +87,8 @@ log_step 2 "Build V1 frontend"
 )
 
 log_step 3 "Package V1 release and pin IP geography data"
-run_tar_create "$BACKEND_DIR" "$ARCHIVE_PATH" run.py detector_backend.py requirements.txt imagedetection
+run_tar_create "$BACKEND_DIR" "$ARCHIVE_PATH" \
+  run.py detector_backend.py requirements.txt requirements.lock imagedetection
 run_tar_create "$FRONTEND_DIR/dist" "$FRONTEND_ARCHIVE_PATH" .
 run_tar_create "$NGINX_SNIPPETS_DIR" "$NGINX_SNIPPETS_ARCHIVE_PATH" .
 write_commit_marker "$MARKER_PATH" "$COMMIT_SHA"

@@ -138,3 +138,16 @@ def test_gpu_rollout_watchdogs_validate_the_tunnel_without_new_web_code():
     assert "REALGUARD_PUBLIC_READY_URL" not in gpu_rollback
     assert "http://127.0.0.1:15000/internal/model/health" in public_rollback
     assert "http://127.0.0.1:15001/health" not in public_rollback
+
+
+def test_v1_release_can_build_a_pinned_runtime_as_the_service_user():
+    deploy = (ROOT / "scripts" / "deploy_v1.sh").read_text(encoding="utf-8")
+    activate = (ROOT / "scripts" / "remote" / "activate_v1.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "requirements.txt requirements.lock imagedetection" in deploy
+    assert (
+        'sudo install -d -m 755 -o ubuntu -g ubuntu "$release_root" '
+        '"$release_root/RealGuard"'
+    ) in activate
