@@ -46,7 +46,7 @@ def isolate_evidence_persistence(monkeypatch):
     monkeypatch.setattr(
         detection,
         "_persist_and_freeze_completed_image_result",
-        lambda itemid, result: True,
+        lambda itemid, result, **kwargs: True,
     )
 
 
@@ -948,7 +948,7 @@ def test_swarm_detect_async_job_returns_expert_consensus(client, monkeypatch, tm
     monkeypatch.setattr(
         detection,
         "_persist_and_freeze_completed_image_result",
-        lambda itemid, result: frozen_results.append((itemid, dict(result))) or True,
+        lambda itemid, result, **kwargs: frozen_results.append((itemid, dict(result))) or True,
     )
     primary_freeze_flags = []
 

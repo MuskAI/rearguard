@@ -10,7 +10,7 @@ def isolate_evidence_persistence(monkeypatch):
     monkeypatch.setattr(
         detection,
         "_persist_and_freeze_completed_image_result",
-        lambda itemid, result: True,
+        lambda itemid, result, **kwargs: True,
     )
 
 

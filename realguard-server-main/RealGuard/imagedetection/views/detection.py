@@ -449,6 +449,30 @@ def _load_detection_record(table, itemid):
     return rows[0] if rows else None
 
 
+def _load_detection_record_for_actor(table, itemid, actor, *, is_guest=False):
+    if table not in ('data', 'video_data'):
+        return None
+    actor = actor or {}
+    if is_guest:
+        openid = str(actor.get('openid') or '').strip()
+        if not openid:
+            return None
+        rows = excute_detection_sql(
+            f"SELECT * FROM {table} WHERE itemid = %s AND Userid IS NULL "
+            "AND (phone IS NULL OR phone = '') AND openid = %s LIMIT 1",
+            (itemid, openid),
+        )
+    else:
+        account_uuid = normalize_account_uuid(actor.get('account_uuid'))
+        if not account_uuid:
+            return None
+        rows = excute_detection_sql(
+            f"SELECT * FROM {table} WHERE itemid = %s AND owner_account_uuid = %s LIMIT 1",
+            (itemid, account_uuid),
+        )
+    return rows[0] if rows else None
+
+
 def _detection_actor():
     user_info = session.get('user_info')
     if isinstance(user_info, dict) and user_info:
@@ -657,7 +681,7 @@ def _record_model_run(itemid, data, user_info):
         print(f"[MODEL RUN LOG ERROR] {exc}")
 
 
-def _persist_and_freeze_completed_image_result(itemid, result):
+def _persist_and_freeze_completed_image_result(itemid, result, *, actor=None, is_guest=False):
     """Persist the final fused verdict before freezing its signed evidence."""
     if not itemid:
         raise RuntimeError('检测结果缺少历史记录 ID')
@@ -689,7 +713,11 @@ def _persist_and_freeze_completed_image_result(itemid, result):
     if updated is None:
         raise RuntimeError('最终融合结论写入历史失败')
 
-    item = _load_detection_record('data', itemid)
+    item = (
+        _load_detection_record('data', itemid)
+        if actor is None
+        else _load_detection_record_for_actor('data', itemid, actor, is_guest=is_guest)
+    )
     if not item:
         raise RuntimeError('最终融合结论写入后无法读取历史记录')
     try:
@@ -1419,6 +1447,8 @@ def _run_image_detection_payload(
             result['evidenceSnapshotReady'] = _persist_and_freeze_completed_image_result(
                 data_itemid,
                 result,
+                actor=user_info,
+                is_guest=is_guest,
             )
         if include_internal_evidence and isinstance(data.get('remote_evidence'), dict):
             result['_remote_evidence'] = data.get('remote_evidence')
@@ -2561,6 +2591,8 @@ def _run_swarm_detection_payload(image_bytes, filename, mimetype, user_info, *, 
     final_result['evidenceSnapshotReady'] = _persist_and_freeze_completed_image_result(
         itemid,
         final_result,
+        actor=user_info,
+        is_guest=is_guest,
     )
     payload = {'status': 'success', 'result': final_result}
     _swarm_update_job(job_id, experts, 100, 'Swarm 专家会诊完成', status='success', result=payload)

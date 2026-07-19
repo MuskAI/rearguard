@@ -158,6 +158,37 @@ def test_detection_fails_closed_when_completion_snapshot_cannot_be_frozen(monkey
         })
 
 
+def test_background_completion_loads_record_from_explicit_actor(monkeypatch):
+    actor = {"account_uuid": "11111111-1111-4111-8111-111111111111"}
+    captured = {}
+    monkeypatch.setattr(detection, "excute_detection_sql", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(
+        detection,
+        "_load_detection_record",
+        lambda *_: (_ for _ in ()).throw(AssertionError("must not access request session")),
+    )
+
+    def load_for_actor(table, itemid, received_actor, *, is_guest=False):
+        captured.update(table=table, itemid=itemid, actor=received_actor, is_guest=is_guest)
+        return _item()
+
+    monkeypatch.setattr(detection, "_load_detection_record_for_actor", load_for_actor)
+    monkeypatch.setattr(detection.reporting, "freeze_image_evidence_snapshot", lambda item: {"ok": True})
+
+    assert detection._persist_and_freeze_completed_image_result(
+        73,
+        {
+            "probability": 0.2,
+            "detector_probability": 0.2,
+            "final_label": "真实图像",
+            "confidence": "高",
+            "explanation": "test",
+        },
+        actor=actor,
+    ) is True
+    assert captured == {"table": "data", "itemid": 73, "actor": actor, "is_guest": False}
+
+
 @pytest.mark.parametrize(
     ("path", "value"),
     [
