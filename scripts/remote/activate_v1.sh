@@ -76,6 +76,7 @@ sudo rm -rf /var/www/realguard-frontend.previous
 sudo install -d -m 755 /etc/nginx/snippets
 sudo tar -xzf /tmp/realguard-nginx-snippets.tgz -C /etc/nginx/snippets --no-same-owner
 sudo install -m 644 /etc/nginx/snippets/realguard-zones.conf /etc/nginx/conf.d/00-realguard-zones.conf
+sudo rm -f /etc/nginx/conf.d/00-realguard-security-zones.conf
 sudo install -m 644 /tmp/realguard-frontend.nginx.conf /etc/nginx/sites-enabled/realguard-frontend
 sudo install -m 644 /tmp/realguard-https.nginx.conf /etc/nginx/conf.d/myapp.conf
 sudo nginx -t
