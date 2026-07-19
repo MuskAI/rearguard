@@ -229,6 +229,11 @@ def _generic_yolo_hits(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]
         "roundTripMs": elapsed_ms,
         "model": payload.get("model") or "corzent/yolo11x_watermark_detection",
         "modelRevision": payload.get("modelRevision"),
+        "modelSha256": payload.get("modelSha256"),
+        "device": payload.get("device"),
+        "gpu": payload.get("gpu"),
+        "cudaRequired": payload.get("cudaRequired"),
+        "cudaReady": payload.get("cudaReady"),
         "confidenceThreshold": payload.get("confidenceThreshold"),
     }
 

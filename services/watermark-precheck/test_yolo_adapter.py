@@ -133,6 +133,46 @@ def test_yolo_detection_validation_rejects_empty_payload():
     assert yolo_adapter._yolo_detection_error({}) == "service_not_ok"
 
 
+def test_generic_yolo_status_preserves_runtime_identity(monkeypatch, tmp_path):
+    image_path = tmp_path / "probe.png"
+    image_path.write_bytes(b"image")
+    monkeypatch.setattr(yolo_adapter, "YOLO_TOKEN", "test-token")
+    payload = {
+        "status": "ok",
+        "model": yolo_adapter.YOLO_EXPECTED_MODEL,
+        "modelRevision": yolo_adapter.YOLO_EXPECTED_REVISION,
+        "modelSha256": yolo_adapter.YOLO_EXPECTED_SHA256,
+        "device": "0",
+        "gpu": "NVIDIA TITAN Xp",
+        "cudaRequired": True,
+        "cudaReady": True,
+        "confidenceThreshold": 0.35,
+        "elapsedMs": 9,
+        "image": {"width": 64, "height": 64},
+        "detected": False,
+        "count": 0,
+        "detections": [],
+    }
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return payload
+
+    monkeypatch.setattr(yolo_adapter.requests, "post", lambda *_args, **_kwargs: Response())
+
+    hits, status = yolo_adapter._generic_yolo_hits(image_path)
+
+    assert hits == []
+    assert status["available"] is True
+    assert status["modelSha256"] == yolo_adapter.YOLO_EXPECTED_SHA256
+    assert status["device"] == "0"
+    assert status["gpu"] == "NVIDIA TITAN Xp"
+    assert status["cudaReady"] is True
+
+
 def test_yolo_detection_validation_rejects_invalid_box(monkeypatch):
     monkeypatch.setattr(yolo_adapter, "YOLO_REQUIRE_CUDA", True)
     payload = {

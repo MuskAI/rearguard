@@ -74,7 +74,7 @@
 
 - V1 后端：464 passed
 - V2 后端：117 passed
-- 水印预检：23 passed
+- 水印预检：24 passed
 - GPU 检测服务与发布契约：26 passed
 - V1 前端：生产构建通过
 - V2 前端：ESLint 与生产构建通过
