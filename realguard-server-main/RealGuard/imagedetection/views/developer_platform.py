@@ -12,6 +12,7 @@ import uuid
 import warnings
 from datetime import datetime, timedelta
 
+import pymysql
 from PIL import Image, UnidentifiedImageError
 from flask import Blueprint, Response, jsonify, request
 
@@ -492,6 +493,17 @@ def _ensure_developer_platform_tables():
               PRIMARY KEY (id),
               KEY idx_developer_ledger_user_created (user_id, created_at),
               KEY idx_developer_ledger_task (task_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS developer_admin_operations (
+              operation_id VARCHAR(128) NOT NULL,
+              operation_type VARCHAR(32) NOT NULL,
+              user_id INT NOT NULL,
+              request_sha256 CHAR(64) NOT NULL,
+              created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (operation_id),
+              KEY idx_developer_admin_operations_user_created (user_id, created_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
         )
@@ -2991,12 +3003,33 @@ def admin_adjust_developer_account(user_id):
         return jsonify({"status": "error", "message": "调整值必须是整数"}), 400
     if balance_delta == 0 and free_delta == 0:
         return jsonify({"status": "error", "message": "至少提供一项非零调整"}), 400
+    operation_id = str(
+        payload.get("operationId") or request.headers.get("Idempotency-Key") or ""
+    ).strip()
+    if not (
+        8 <= len(operation_id) <= 128
+        and all(char.isalnum() or char in "-_.:" for char in operation_id)
+    ):
+        return jsonify({"status": "error", "message": "operationId 必须是 8 到 128 位安全字符"}), 400
     users = excute_sql("SELECT Userid FROM user WHERE Userid = %s LIMIT 1", (user_id,))
     if users is None:
         return jsonify({"status": "error", "message": "用户信息读取失败"}), 500
     if not users:
         return jsonify({"status": "error", "message": "用户不存在"}), 404
     note = str(payload.get("note") or "管理员手工调整").strip()[:500]
+    request_fingerprint = hashlib.sha256(
+        json.dumps(
+            {
+                "userId": user_id,
+                "balanceDeltaFen": balance_delta,
+                "freeTotalDelta": free_delta,
+                "note": note,
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     if not _ensure_developer_account(user_id):
         return jsonify({"status": "error", "message": "开发者账户初始化失败"}), 503
     before = _account_payload(_account_row(user_id))
@@ -3004,6 +3037,14 @@ def admin_adjust_developer_account(user_id):
     try:
         conn.begin()
         with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO developer_admin_operations
+                    (operation_id, operation_type, user_id, request_sha256)
+                VALUES (%s, 'account_adjustment', %s, %s)
+                """,
+                (operation_id, user_id, request_fingerprint),
+            )
             cursor.execute(
                 """
                 SELECT free_total, free_used, free_reserved, balance_fen, balance_reserved_fen
@@ -3032,6 +3073,35 @@ def admin_adjust_developer_account(user_id):
                 (user_id, free_delta, balance_delta, next_balance, note),
             )
         conn.commit()
+    except pymysql.err.IntegrityError as exc:
+        conn.rollback()
+        if int(exc.args[0] or 0) != 1062:
+            return jsonify({"status": "error", "message": f"账户调整失败: {exc}"}), 500
+        operations = excute_sql(
+            """
+            SELECT operation_type, user_id, request_sha256
+            FROM developer_admin_operations WHERE operation_id = %s LIMIT 1
+            """,
+            (operation_id,),
+        )
+        if not operations:
+            return jsonify({"status": "error", "message": "幂等操作状态读取失败"}), 503
+        operation = operations[0]
+        if (
+            str(operation.get("operation_type") or "") != "account_adjustment"
+            or int(operation.get("user_id") or 0) != int(user_id)
+            or str(operation.get("request_sha256") or "") != request_fingerprint
+        ):
+            return jsonify({"status": "error", "message": "operationId 已被其他操作使用"}), 409
+        replay_account = _account_payload(_account_row(user_id))
+        return jsonify(
+            {
+                "status": "success",
+                "account": replay_account,
+                "operationId": operation_id,
+                "idempotentReplay": True,
+            }
+        )
     except BillingError as exc:
         conn.rollback()
         return jsonify({"status": "error", "message": str(exc)}), exc.status_code
@@ -3041,8 +3111,22 @@ def admin_adjust_developer_account(user_id):
     finally:
         conn.close()
     after = _account_payload(_account_row(user_id))
-    _audit(admin_user, "developer.account.adjust", str(user_id), before=before, after=after, meta={"note": note})
-    return jsonify({"status": "success", "account": after})
+    _audit(
+        admin_user,
+        "developer.account.adjust",
+        str(user_id),
+        before=before,
+        after=after,
+        meta={"note": note, "operationId": operation_id},
+    )
+    return jsonify(
+        {
+            "status": "success",
+            "account": after,
+            "operationId": operation_id,
+            "idempotentReplay": False,
+        }
+    )
 
 
 @developer_admin_blueprint.get("/accounts/<int:user_id>")

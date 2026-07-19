@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app import detector  # noqa: E402
+from app import detector, document_utils  # noqa: E402
 import pytest
 
 
@@ -54,6 +54,31 @@ def test_pdf_document_without_extractable_text_returns_unavailable():
 
     assert "当前未支持 PDF 正文抽取" in str(exc_info.value)
     assert "未生成真实性结论" in str(exc_info.value)
+
+
+def test_docx_zip_bomb_is_rejected_before_expansion():
+    xml = b"A" * (document_utils.MAX_DOCX_DOCUMENT_XML_BYTES + 1)
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("word/document.xml", xml)
+
+    extracted = document_utils.extract_text("bomb.docx", output.getvalue())
+
+    assert extracted.text == ""
+    assert extracted.note == "DOCX 文件超出安全解析限制"
+
+
+def test_docx_member_count_has_a_hard_limit():
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        archive.writestr("word/document.xml", "<document />")
+        for index in range(document_utils.MAX_DOCX_MEMBERS):
+            archive.writestr(f"word/extra-{index}.xml", "x")
+
+    extracted = document_utils.extract_text("many-members.docx", output.getvalue())
+
+    assert extracted.text == ""
+    assert extracted.note == "DOCX 文件超出安全解析限制"
 
 
 def test_image_model_failure_never_returns_a_mock_result(monkeypatch):

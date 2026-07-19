@@ -5,7 +5,8 @@ set -euo pipefail
 DETECTOR_PORT="${REALGUARD_DETECTOR_PORT:-15001}"
 commit_sha="$(tr -d '[:space:]' </tmp/realguard-v1.DEPLOYED_COMMIT)"
 [[ "$commit_sha" =~ ^[0-9a-f]{7,40}$ ]]
-release_root="/opt/realguard-server/releases/$commit_sha"
+release_id="${commit_sha}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+release_root="/opt/realguard-server/releases/$release_id"
 current_backend=""
 backend_switched=0
 frontend_switched=0

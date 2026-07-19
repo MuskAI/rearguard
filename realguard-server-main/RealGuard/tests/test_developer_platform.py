@@ -896,6 +896,191 @@ def test_admin_sets_exact_remaining_calls_without_rewriting_usage(client, monkey
     assert audits[0][0][1] == "developer.account.quota.set"
 
 
+def test_admin_account_adjustment_requires_idempotency_key(client, monkeypatch):
+    monkeypatch.setattr(platform, "_admin_required", lambda permission: ({"adminId": 1}, None))
+
+    with client.application.test_request_context(json={"freeTotalDelta": 10}):
+        response, status = platform.admin_adjust_developer_account(7)
+
+    assert status == 400
+    assert "operationId" in response.get_json()["message"]
+
+
+def test_admin_account_adjustment_records_one_idempotent_operation(client, monkeypatch):
+    account = {
+        "user_id": 7,
+        "status": "active",
+        "free_total": 100,
+        "free_used": 5,
+        "free_reserved": 1,
+        "balance_fen": 300,
+        "balance_reserved_fen": 20,
+    }
+    operations = []
+    ledger = []
+    audits = []
+
+    class Cursor:
+        current = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def execute(self, sql, params=None):
+            normalized = " ".join(sql.split())
+            if normalized.startswith("INSERT INTO developer_admin_operations"):
+                operations.append(params)
+                return 1
+            if normalized.startswith("SELECT free_total, free_used"):
+                self.current = dict(account)
+                return 1
+            if normalized.startswith("UPDATE developer_accounts SET free_total"):
+                account["free_total"], account["balance_fen"] = params[:2]
+                return 1
+            if normalized.startswith("INSERT INTO developer_billing_ledger"):
+                ledger.append(params)
+                return 1
+            raise AssertionError(f"unexpected SQL: {normalized}")
+
+        def fetchone(self):
+            return dict(self.current)
+
+    class Connection:
+        def begin(self):
+            return None
+
+        def cursor(self):
+            return Cursor()
+
+        def commit(self):
+            return None
+
+        def rollback(self):
+            raise AssertionError("valid adjustment must not roll back")
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(platform, "_admin_required", lambda permission: ({"adminId": 1}, None))
+    monkeypatch.setattr(platform, "_ensure_developer_account", lambda user_id: True)
+    monkeypatch.setattr(platform, "_account_row", lambda user_id: dict(account))
+    monkeypatch.setattr(platform, "get_db_connection", Connection)
+    monkeypatch.setattr(platform, "_audit", lambda *args, **kwargs: audits.append((args, kwargs)))
+    monkeypatch.setattr(platform, "excute_sql", lambda *args, **kwargs: [{"Userid": 7}])
+
+    payload = {
+        "freeTotalDelta": 10,
+        "balanceDeltaFen": 200,
+        "note": "commercial credit",
+        "operationId": "adjustment-20260719-001",
+    }
+    with client.application.test_request_context(json=payload):
+        response = platform.admin_adjust_developer_account(7)
+
+    body = response.get_json()
+    assert body["idempotentReplay"] is False
+    assert body["operationId"] == payload["operationId"]
+    assert account["free_total"] == 110
+    assert account["balance_fen"] == 500
+    assert len(operations) == 1
+    assert operations[0][0] == payload["operationId"]
+    assert len(ledger) == 1
+    assert audits[0][1]["meta"]["operationId"] == payload["operationId"]
+
+
+def test_duplicate_admin_account_adjustment_replays_without_mutation(client, monkeypatch):
+    payload = {
+        "freeTotalDelta": 10,
+        "balanceDeltaFen": 200,
+        "note": "commercial credit",
+        "operationId": "adjustment-20260719-001",
+    }
+    fingerprint = platform.hashlib.sha256(
+        platform.json.dumps(
+            {
+                "userId": 7,
+                "balanceDeltaFen": 200,
+                "freeTotalDelta": 10,
+                "note": "commercial credit",
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    audits = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def execute(self, sql, params=None):
+            normalized = " ".join(sql.split())
+            if normalized.startswith("INSERT INTO developer_admin_operations"):
+                raise platform.pymysql.err.IntegrityError(1062, "duplicate operation")
+            raise AssertionError(f"unexpected SQL: {normalized}")
+
+    class Connection:
+        def begin(self):
+            return None
+
+        def cursor(self):
+            return Cursor()
+
+        def commit(self):
+            raise AssertionError("duplicate operation must not commit")
+
+        def rollback(self):
+            return None
+
+        def close(self):
+            return None
+
+    def execute(statement, params=None, fetch=True):
+        normalized = " ".join(statement.split())
+        if normalized.startswith("SELECT Userid FROM user"):
+            return [{"Userid": 7}]
+        if normalized.startswith("SELECT operation_type, user_id, request_sha256"):
+            return [{
+                "operation_type": "account_adjustment",
+                "user_id": 7,
+                "request_sha256": fingerprint,
+            }]
+        raise AssertionError(f"unexpected SQL: {normalized}")
+
+    account = {
+        "user_id": 7,
+        "status": "active",
+        "free_total": 110,
+        "free_used": 0,
+        "free_reserved": 0,
+        "balance_fen": 200,
+        "balance_reserved_fen": 0,
+    }
+    monkeypatch.setattr(platform, "_admin_required", lambda permission: ({"adminId": 1}, None))
+    monkeypatch.setattr(platform, "_ensure_developer_account", lambda user_id: True)
+    monkeypatch.setattr(platform, "_account_row", lambda user_id: dict(account))
+    monkeypatch.setattr(platform, "get_db_connection", Connection)
+    monkeypatch.setattr(platform, "excute_sql", execute)
+    monkeypatch.setattr(platform, "_audit", lambda *args, **kwargs: audits.append((args, kwargs)))
+
+    with client.application.test_request_context(json=payload):
+        response = platform.admin_adjust_developer_account(7)
+
+    body = response.get_json()
+    assert body["status"] == "success"
+    assert body["idempotentReplay"] is True
+    assert body["operationId"] == payload["operationId"]
+    assert body["account"]["freeTotal"] == 110
+    assert audits == []
+
+
 def test_task_payload_rewrites_browser_only_media_link(monkeypatch):
     monkeypatch.setattr(platform.admin_state, "get_detection_job", lambda task_id: None)
     monkeypatch.setattr(platform, "_reservation_payload", lambda task_id: None)

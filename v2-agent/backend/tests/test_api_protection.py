@@ -145,6 +145,21 @@ def test_metrics_requires_token(client):
     assert auth.status_code == 200
 
 
+def test_static_admin_token_is_rejected_on_proxied_public_requests(client):
+    headers = {
+        "X-Jianzhen-Token": "test-token",
+        "X-Forwarded-For": "203.0.113.10",
+        "X-Real-IP": "203.0.113.10",
+        "X-Forwarded-Proto": "https",
+    }
+
+    metrics = client.get("/api/metrics", headers=headers)
+    history = client.get("/api/history", headers=headers)
+
+    assert metrics.status_code == 403
+    assert history.status_code == 401
+
+
 def test_request_metric_storage_failure_does_not_replace_business_response(client, monkeypatch):
     import app.main as main  # noqa: WPS433
 

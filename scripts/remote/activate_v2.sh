@@ -3,7 +3,8 @@ set -euo pipefail
 
 commit_sha="$(tr -d '[:space:]' </tmp/jianzhen-v2.DEPLOYED_COMMIT)"
 [[ "$commit_sha" =~ ^[0-9a-f]{7,40}$ ]]
-release_root="/opt/jianzhen-v2/releases/$commit_sha"
+release_id="${commit_sha}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+release_root="/opt/jianzhen-v2/releases/$release_id"
 current_app=""
 frontend_switched=0
 app_switched=0

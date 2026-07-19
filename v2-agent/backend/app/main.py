@@ -274,6 +274,19 @@ def _request_token(request: Request) -> str:
 
 
 def _admin_access_granted(request: Request) -> bool:
+    if not request.client:
+        return False
+    try:
+        peer = ipaddress.ip_address(request.client.host)
+    except ValueError:
+        return False
+    if not peer.is_loopback:
+        return False
+    if any(
+        request.headers.get(name)
+        for name in ("x-forwarded-for", "x-real-ip", "x-forwarded-host", "x-forwarded-proto")
+    ):
+        return False
     return bool(ADMIN_ACCESS_TOKEN) and secrets.compare_digest(_request_token(request), ADMIN_ACCESS_TOKEN)
 
 
@@ -1436,6 +1449,7 @@ def report_public(report_id: str, request: Request) -> Response:
         headers={
             "Cache-Control": "private, no-store, max-age=0",
             "X-Robots-Tag": "noindex",
+            "Referrer-Policy": "no-referrer",
         },
     )
 
