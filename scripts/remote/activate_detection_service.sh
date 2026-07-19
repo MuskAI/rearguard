@@ -37,7 +37,7 @@ managed_service_names=(
   "$model_tunnel_service_name"
   "$precheck_tunnel_service_name"
 )
-rollback_unit="realguard-gpu-deploy-rollback-${commit_sha}"
+rollback_unit="realguard-gpu-deploy-rollback-${commit_sha}-$$"
 rollback_script_target="/var/lib/realguard-deploy/${release_id}-rollback.sh"
 
 rollback() {

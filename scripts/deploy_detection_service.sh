@@ -61,8 +61,8 @@ restore_public_config() {
 
 rollback_gpu_release() {
   ssh -tt "${ssh_options[@]}" "$GPU_USER@$GPU_HOST" \
-    'current=$(readlink -f /home/ymk/realguard-detection-releases/current); \
-     test -n "$current"; \
+    'current=$(readlink -f /home/ymk/realguard-detection-releases/current 2>/dev/null || true); \
+     if [[ -z "$current" || ! -f "$current/DEPLOYED_COMMIT" ]]; then exit 0; fi; \
      test "$(tr -d "[:space:]" < "$current/DEPLOYED_COMMIT")" = "'"$commit_sha"'" || exit 0; \
      rollback_script=$(cat "$current/rollback_script_path"); \
      sudo "$rollback_script" "$current" force'
@@ -251,10 +251,17 @@ fi
 commit_visible=0
 for _ in {1..60}; do
   if public_ssh \
-      "curl -fsS --max-time 10 http://127.0.0.1:15001/health | \
-       python3 -c 'import json,sys; p=json.load(sys.stdin); r=p.get(\"remoteInference\") or {}; assert p.get(\"capabilityReady\") is True; assert r.get(\"deploymentCommit\") == sys.argv[1]' '$commit_sha'" \
+      "model_token=\$(sudo awk -F= '/^REALGUARD_MODEL_INTERNAL_TOKEN=/{print substr(\$0, index(\$0, \"=\") + 1); exit}' /etc/realguard/model-inference.env); \
+       response_key_id=\$(sudo awk -F= '/^REALGUARD_MODEL_RESPONSE_HMAC_KEY_ID=/{print substr(\$0, index(\$0, \"=\") + 1); exit}' /etc/realguard/model-inference.env); \
+       response_key_id=\${response_key_id:-v1}; \
+       test \"\${#model_token}\" -ge 32; \
+       curl -fsS --max-time 10 -H \"X-RealGuard-Internal-Token: \$model_token\" \
+         http://127.0.0.1:15000/internal/model/health | \
+       python3 -c 'import json,sys; p=json.load(sys.stdin); d=p.get(\"data\") or {}; assert p.get(\"code\") == 200; assert d.get(\"activeProvider\") == \"CUDAExecutionProvider\"; assert d.get(\"deploymentCommit\") == sys.argv[1]; assert d.get(\"responseIntegrityReady\") is True; assert d.get(\"responseIntegrityKeyId\") == sys.argv[2]' '$commit_sha' \"\$response_key_id\"; \
+       curl -fsS --max-time 10 http://127.0.0.1:15001/health | \
+       python3 -c 'import json,sys; p=json.load(sys.stdin); assert p.get(\"capabilityReady\") is True'" \
     && curl -fsS --max-time 10 https://www.rrreal.cn/api/ready \
-      | python3 -c 'import json,sys; p=json.load(sys.stdin); d=p.get("detector") or {}; assert d.get("capabilityReady") is True; assert d.get("deploymentCommit") == sys.argv[1]' "$commit_sha" \
+      | python3 -c 'import json,sys; p=json.load(sys.stdin); assert p.get("status") == "ready"' \
     && ssh "${ssh_options[@]}" "$GPU_USER@$GPU_HOST" \
       "test \"\$(tr -d '[:space:]' < /home/ymk/realguard-detection-releases/current/DEPLOYED_COMMIT)\" = '$commit_sha'"; then
     commit_visible=1

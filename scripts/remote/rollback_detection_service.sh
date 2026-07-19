@@ -25,7 +25,6 @@ if [[ "$current_release" != "$release_root" ]]; then
 fi
 
 watchdog_probe() {
-  public_ready_url="${REALGUARD_PUBLIC_READY_URL:-https://www.rrreal.cn/api/ready}"
   services_healthy=1
   for service in \
     realguard-detection.service \
@@ -39,14 +38,23 @@ watchdog_probe() {
       break
     fi
   done
-  [[ "$services_healthy" == "1" ]] && curl -fsS --connect-timeout 3 --max-time 10 "$public_ready_url" \
+  model_token="$(awk -F= '/^REALGUARD_MODEL_INTERNAL_TOKEN=/{print substr($0, index($0, "=") + 1); exit}' /etc/realguard/model-inference.env)"
+  response_key_id="$(awk -F= '/^REALGUARD_MODEL_RESPONSE_HMAC_KEY_ID=/{print substr($0, index($0, "=") + 1); exit}' /etc/realguard/model-inference.env)"
+  response_key_id="${response_key_id:-v1}"
+  [[ "$services_healthy" == "1" && "${#model_token}" -ge 32 ]] \
+    && curl -fsS --connect-timeout 3 --max-time 10 \
+      -H "X-RealGuard-Internal-Token: $model_token" \
+      http://127.0.0.1:5000/internal/model/health \
     | /home/ymk/miniconda3/envs/realguard/bin/python -c '
 import json, sys
 payload = json.load(sys.stdin)
-detector = payload.get("detector") or {}
-assert detector.get("deploymentCommit") == sys.argv[1]
-assert detector.get("capabilityReady") is True
-' "$expected_commit"
+data = payload.get("data") or {}
+assert payload.get("code") == 200
+assert data.get("activeProvider") == "CUDAExecutionProvider"
+assert data.get("deploymentCommit") == sys.argv[1]
+assert data.get("responseIntegrityReady") is True
+assert data.get("responseIntegrityKeyId") == sys.argv[2]
+' "$expected_commit" "$response_key_id"
 }
 if [[ "$mode" == "watchdog" ]]; then
   for attempt in 1 2 3 4 5 6; do

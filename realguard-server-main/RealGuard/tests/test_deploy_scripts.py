@@ -79,6 +79,11 @@ def test_release_directories_are_unique_for_repeated_commit_deployments():
         assert 'releases/$release_id' in body
         assert 'releases/$commit_sha"' not in body
 
+    gpu_activate = (
+        ROOT / "scripts" / "remote" / "activate_detection_service.sh"
+    ).read_text(encoding="utf-8")
+    assert 'rollback_unit="realguard-gpu-deploy-rollback-${commit_sha}-$$"' in gpu_activate
+
 
 def test_public_report_share_credentials_are_not_written_to_access_log():
     configs = (
@@ -117,3 +122,19 @@ def test_first_gpu_deploy_rollback_handles_missing_public_marker():
 
     assert 'if [[ -f "$marker_target" ]]; then' in rollback
     assert "Port 5000 is still owned by a process outside" in gpu_activate
+
+
+def test_gpu_rollout_watchdogs_validate_the_tunnel_without_new_web_code():
+    deploy = (ROOT / "scripts" / "deploy_detection_service.sh").read_text(encoding="utf-8")
+    gpu_rollback = (
+        ROOT / "scripts" / "remote" / "rollback_detection_service.sh"
+    ).read_text(encoding="utf-8")
+    public_rollback = (
+        ROOT / "scripts" / "remote" / "rollback_public_gpu_deploy.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "http://127.0.0.1:15000/internal/model/health" in deploy
+    assert "http://127.0.0.1:5000/internal/model/health" in gpu_rollback
+    assert "REALGUARD_PUBLIC_READY_URL" not in gpu_rollback
+    assert "http://127.0.0.1:15000/internal/model/health" in public_rollback
+    assert "http://127.0.0.1:15001/health" not in public_rollback
