@@ -68,10 +68,16 @@ def _auth_read_once(index: int, args: argparse.Namespace) -> dict[str, Any]:
                 timeout=args.request_timeout,
             )
             if login.status_code != 200:
+                try:
+                    error_payload = login.json()
+                except ValueError:
+                    error_payload = {}
                 return {
                     "index": index,
                     "status": "failed",
                     "error": f"login_http_{login.status_code}",
+                    "errorCode": error_payload.get("code"),
+                    "message": error_payload.get("message"),
                     "latencySeconds": time.monotonic() - started,
                 }
             history = session.get(

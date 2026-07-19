@@ -443,9 +443,10 @@ def _reserve_password_login_attempt(phone, client_ip=None, now=None):
             for scope_key, scope_type, _ in scopes:
                 cursor.execute(
                     """
-                    INSERT IGNORE INTO sms_send_limits
+                    INSERT INTO sms_send_limits
                         (scope_key, scope_type, window_started_at, request_count, last_sent_at)
                     VALUES (%s, %s, 0, 0, 0)
+                    ON DUPLICATE KEY UPDATE scope_type = VALUES(scope_type)
                     """,
                     (scope_key, scope_type),
                 )
@@ -525,9 +526,10 @@ def _reserve_sms_send(scene, phone, client_ip, now=None):
             for scope_key, scope_type in scope_rows:
                 cursor.execute(
                     """
-                    INSERT IGNORE INTO sms_send_limits
+                    INSERT INTO sms_send_limits
                         (scope_key, scope_type, window_started_at, request_count, last_sent_at)
                     VALUES (%s, %s, 0, 0, 0)
+                    ON DUPLICATE KEY UPDATE scope_type = VALUES(scope_type)
                     """,
                     (scope_key, scope_type),
                 )

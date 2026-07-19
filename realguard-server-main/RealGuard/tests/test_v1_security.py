@@ -141,7 +141,7 @@ class _SmsTestCursor:
         params = params or ()
         self.result = []
         self.rowcount = 0
-        if normalized.startswith("INSERT IGNORE INTO sms_send_limits"):
+        if normalized.startswith("INSERT INTO sms_send_limits"):
             scope_key, scope_type = params
             if scope_key not in self.database.limits:
                 self.database.limits[scope_key] = {
