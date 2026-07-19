@@ -127,12 +127,13 @@ sudo find /opt/jianzhen-v2/releases -mindepth 1 -maxdepth 1 -type d \
   | cut -d' ' -f2- \
   | xargs -r sudo rm -rf
 
+sudo rm -f /tmp/jianzhen-v2-backend.service.previous
+
 rm -f \
   /tmp/jianzhen-v2-backend.tgz \
   /tmp/jianzhen-v2-frontend.tgz \
   /tmp/jianzhen-v2.DEPLOYED_COMMIT \
   /tmp/jianzhen-v2-backend.service \
-  /tmp/jianzhen-v2-backend.service.previous \
   /tmp/jianzhen-activate-v2.sh
 
 cat /opt/jianzhen-v2/DEPLOYED_COMMIT
