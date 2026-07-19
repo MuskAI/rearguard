@@ -22,7 +22,10 @@ def test_backup_script_creates_consistent_local_snapshot(tmp_path):
     fake_bin.mkdir()
     _write_executable(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
     _write_executable(fake_bin / "sort", "#!/bin/sh\ncat\n")
-    _write_executable(fake_bin / "mysqldump", "#!/bin/sh\nprintf '%s\\n' '-- deterministic test dump'\n")
+    _write_executable(
+        fake_bin / "mysqldump",
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >>\"$MYSQLDUMP_ARGS_LOG\"\nprintf '%s\\n' '-- deterministic test dump'\n",
+    )
 
     v2_db = tmp_path / "v2.sqlite3"
     traffic_db = tmp_path / "traffic.sqlite3"
@@ -35,6 +38,7 @@ def test_backup_script_creates_consistent_local_snapshot(tmp_path):
     uploads.mkdir()
     (uploads / "sample.txt").write_text("upload evidence", encoding="utf-8")
     backup_root = tmp_path / "backups"
+    mysqldump_args_log = tmp_path / "mysqldump-args.log"
     env = {
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
@@ -49,6 +53,7 @@ def test_backup_script_creates_consistent_local_snapshot(tmp_path):
         "JIANZHEN_DB_PATH": str(v2_db),
         "REALGUARD_TRAFFIC_CUMULATIVE_DB": str(traffic_db),
         "REALGUARD_UPLOADS_DIR": str(uploads),
+        "MYSQLDUMP_ARGS_LOG": str(mysqldump_args_log),
     }
 
     completed = subprocess.run(
@@ -68,6 +73,9 @@ def test_backup_script_creates_consistent_local_snapshot(tmp_path):
     assert (snapshot / "jianzhen-v2.sqlite3").is_file()
     assert (snapshot / "traffic-cumulative.sqlite3").is_file()
     assert (snapshot / "uploads.tgz").is_file()
+    mysqldump_calls = mysqldump_args_log.read_text(encoding="utf-8").splitlines()
+    assert len(mysqldump_calls) == 2
+    assert all("--no-tablespaces" in call for call in mysqldump_calls)
 
     for line in (snapshot / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
         digest, relative_path = line.split(maxsplit=1)

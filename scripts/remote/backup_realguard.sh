@@ -39,6 +39,7 @@ dump_mysql() {
     --port="$port" \
     --user="$user" \
     --single-transaction \
+    --no-tablespaces \
     --routines \
     --events \
     --triggers \

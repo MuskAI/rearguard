@@ -58,7 +58,7 @@ sudo bash -lc '
 
 sudo systemctl daemon-reload
 sudo systemctl enable realguard-backend.service realguard-detector-backend.service >/dev/null
-sudo systemctl enable realguard-backup.timer >/dev/null
+sudo systemctl enable --now realguard-backup.timer >/dev/null
 sudo systemctl restart realguard-detector-backend.service
 sudo systemctl restart realguard-backend.service
 
@@ -95,6 +95,7 @@ test "$health_ready" = "1"
 systemctl is-active --quiet realguard-detector-backend.service
 systemctl is-active --quiet realguard-backend.service
 systemctl is-enabled --quiet realguard-backup.timer
+systemctl is-active --quiet realguard-backup.timer
 sudo systemctl start realguard-backup.service
 test -L /var/backups/realguard/latest
 test -r /opt/realguard-data/ip2region_v4.xdb
