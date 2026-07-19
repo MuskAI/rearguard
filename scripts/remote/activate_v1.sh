@@ -24,6 +24,14 @@ if ! sudo grep -q '^SECRET_KEY=' /etc/realguard/session.env 2>/dev/null; then
 fi
 sudo chmod 600 /etc/realguard/session.env
 sudo chown root:root /etc/realguard/session.env
+sudo touch /etc/realguard/realguard-backend.env
+if ! sudo grep -q '^REALGUARD_CONSENT_AUDIT_SALT=' /etc/realguard/realguard-backend.env; then
+  consent_salt="$(openssl rand -hex 32)"
+  printf 'REALGUARD_CONSENT_AUDIT_SALT=%s\n' "$consent_salt" \
+    | sudo tee -a /etc/realguard/realguard-backend.env >/dev/null
+fi
+sudo chmod 600 /etc/realguard/realguard-backend.env
+sudo chown root:root /etc/realguard/realguard-backend.env
 
 sudo install -m 644 /tmp/realguard-backend.service /etc/systemd/system/realguard-backend.service
 sudo sed "s/15001/$DETECTOR_PORT/g" /tmp/realguard-detector-backend.service \
