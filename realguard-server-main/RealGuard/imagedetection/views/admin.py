@@ -1281,6 +1281,9 @@ def _probe_model(model):
     endpoint = str(model.get("endpoint") or "").strip()
     if not endpoint:
         return {"ok": False, "message": "endpoint not configured"}
+    endpoint_error = model_registry.validate_model_url(endpoint, allow_internal=True)
+    if endpoint_error:
+        return {"ok": False, "message": endpoint_error}
     start = time.time()
     timeout = min(max(int(model.get("timeoutSeconds") or 30), 1), 60)
     headers = {}
@@ -1299,7 +1302,14 @@ def _probe_model(model):
     try:
         with requests.Session() as sess:
             sess.trust_env = False
-            resp = sess.post(endpoint, headers=headers, files=files, data=data, timeout=timeout)
+            resp = sess.post(
+                endpoint,
+                headers=headers,
+                files=files,
+                data=data,
+                timeout=timeout,
+                allow_redirects=False,
+            )
         latency = int((time.time() - start) * 1000)
         payload = None
         try:
@@ -2180,9 +2190,10 @@ def admin_update_model(model_id):
         return error
     payload = request.get_json(silent=True) or {}
     before = model_registry.get_model(model_id)
-    _, model = model_registry.update_model(model_id, payload)
+    _, model, message = model_registry.update_model(model_id, payload)
     if not model:
-        return jsonify({"status": "error", "message": "模型不存在"}), 404
+        status = 404 if message == "模型不存在" else 400
+        return jsonify({"status": "error", "message": message or "模型更新失败"}), status
     model_registry.clear_health_cache()
     _audit(user, "model.update", model_id, before=before, after=model)
     return jsonify({"status": "success", "model": _model_payload(model, include_health=True)})
@@ -2867,7 +2878,7 @@ def admin_api_key_quota(key_id):
     user, error = _admin_required("api_key.manage")
     if error:
         return error
-    key_rows = excute_sql("SELECT id FROM developer_api_keys WHERE id = %s LIMIT 1", (key_id,))
+    key_rows = excute_sql("SELECT id, user_id FROM developer_api_keys WHERE id = %s LIMIT 1", (key_id,))
     if key_rows is None:
         return jsonify({"status": "error", "message": "API Key 信息读取失败"}), 500
     if not key_rows:
@@ -2889,5 +2900,12 @@ def admin_api_key_quota(key_id):
             normalized[field] = str(payload.get(field) or "").strip()
     before = admin_state.get_api_key_quota(key_id)
     quota = admin_state.set_api_key_quota(key_id, normalized)
-    _audit(user, "api_key.quota.update", str(key_id), before=before, after=quota)
-    return jsonify({"status": "success", "quota": quota})
+    if quota is None:
+        return jsonify({
+            "status": "error",
+            "code": "quota_persistence_failed",
+            "message": "API Key 配额保存失败，请稍后重试",
+        }), 503
+    account_id = key_rows[0].get("user_id")
+    _audit(user, "api_key.quota.update", f"account:{account_id}", before=before, after=quota)
+    return jsonify({"status": "success", "quota": quota, "scope": "account", "userId": account_id})

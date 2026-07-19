@@ -4,6 +4,7 @@ import ipaddress
 import io
 import os
 import secrets
+import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -14,12 +15,18 @@ from PIL import Image
 from flask import Blueprint, Response, jsonify, request, send_file, session, stream_with_context
 
 from imagedetection.views.historical_record import DETECTION_BACKEND_BASE_URL
-from imagedetection.views import traffic_geo
+from imagedetection.views import admin_state, traffic_geo
 from imagedetection.views.login import (
+    PasswordLoginRateLimitError,
+    SmsStorageError,
     _authenticate_password_user,
+    _clear_password_phone_attempts,
     _find_user_by_phone,
     _hash_password,
     _is_valid_phone,
+    _reserve_password_login_attempt,
+    _record_terms_acceptance as _append_terms_acceptance,
+    _session_version,
     _sync_detection_user,
     _verify_sms_code,
 )
@@ -29,6 +36,8 @@ from imagedetection.views.utils import (
     excute_sql,
     excute_sql_lastid,
     format_createtime,
+    get_db_connection,
+    get_detection_db_connection,
 )
 
 
@@ -59,7 +68,7 @@ DEVELOPER_USAGE_URL = os.environ.get(
     "REALGUARD_DEVELOPER_USAGE_URL",
     "http://127.0.0.1:8848/api/developer/token-usage",
 ).strip()
-TERMS_VERSION = os.environ.get("REALGUARD_TERMS_VERSION", "2026-06-03")
+TERMS_VERSION = os.environ.get("REALGUARD_TERMS_VERSION", "2026-07-15")
 PASSWORD_MIN_LENGTH = int(os.environ.get("REALGUARD_PASSWORD_MIN_LENGTH", "8"))
 _DEVELOPER_KEY_TABLE_READY = False
 _DEVELOPER_USAGE_TABLE_READY = False
@@ -114,6 +123,7 @@ def _ensure_user_account_columns():
         ("terms_version", "VARCHAR(32) NULL COMMENT '用户协议版本'"),
         ("terms_accepted_at", "DATETIME NULL COMMENT '用户协议同意时间'"),
         ("password_updated_at", "DATETIME NULL COMMENT '密码更新时间'"),
+        ("session_version", "INT NOT NULL DEFAULT 1 COMMENT '登录态版本'"),
     ]
     for column, definition in columns:
         if not _ensure_column("user", column, definition):
@@ -131,19 +141,13 @@ def _set_session_user(user, phone):
         "username": user.get("username") or phone,
         "phone": phone,
         "openid": user.get("openid", ""),
+        "session_version": _session_version(user),
     }
     return session["user_info"]
 
 
 def _record_terms_acceptance(phone):
-    if not _ensure_user_account_columns():
-        return False
-    result = excute_sql(
-        "UPDATE user SET terms_version = %s, terms_accepted_at = NOW() WHERE phone = %s",
-        (TERMS_VERSION, phone),
-        fetch=False,
-    )
-    return result is not None
+    return _append_terms_acceptance(phone, channel="v2_api_auth")
 
 
 def _developer_key_hash(api_key):
@@ -370,6 +374,9 @@ def _ensure_developer_api_key_table():
         result = all((
             _ensure_column("developer_api_keys", "expires_at", "DATETIME NULL COMMENT '密钥有效期'"),
             _ensure_column("developer_api_keys", "ip_allowlist", "TEXT NULL COMMENT '逗号分隔的 IP/CIDR 白名单'"),
+            _ensure_column("developer_api_keys", "last_used_ip", "VARCHAR(64) NULL COMMENT '最近调用 IP'"),
+            admin_state.ensure_api_key_quota_storage(),
+            admin_state.sync_api_key_quotas_to_db(),
         ))
     _DEVELOPER_KEY_TABLE_READY = result is not None and bool(result)
     return _DEVELOPER_KEY_TABLE_READY
@@ -476,11 +483,226 @@ def _active_developer_key(api_key, *, touch=True):
     return row, None
 
 
+def _quota_retry_after(now, *, daily=False):
+    if daily:
+        boundary = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    else:
+        boundary = (now + timedelta(minutes=1)).replace(second=0, microsecond=0)
+    return max(1, int((boundary - now).total_seconds()) + 1)
+
+
+def _consume_developer_key_request(api_key):
+    """Authenticate and atomically consume the account-level request-rate quota."""
+    if not _ensure_developer_api_key_table():
+        return None, "API Key 存储初始化失败", "storage_unavailable", None
+    if not api_key.startswith(DEVELOPER_API_KEY_PREFIX):
+        return None, None, None, None
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        conn.begin()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT k.id, k.user_id, k.name, k.scopes, k.status, k.expires_at,
+                       k.ip_allowlist, u.phone, u.username, u.openid,
+                       q.daily_limit, q.rate_limit_per_minute,
+                       NOW() AS quota_now
+                FROM developer_api_keys k
+                JOIN user u ON u.Userid = k.user_id
+                LEFT JOIN developer_api_account_quotas q ON q.user_id = k.user_id
+                WHERE k.key_hash = %s
+                LIMIT 1
+                FOR UPDATE
+                """,
+                (_developer_key_hash(api_key),),
+            )
+            row = cursor.fetchone()
+            if not row or row.get("status") != "active":
+                conn.rollback()
+                return None, None, None, None
+
+            now = row.get("quota_now")
+            if not isinstance(now, datetime):
+                now = datetime.now()
+            expires_at = row.get("expires_at")
+            if expires_at and not isinstance(expires_at, datetime):
+                try:
+                    expires_at = datetime.fromisoformat(str(expires_at))
+                except ValueError:
+                    conn.rollback()
+                    return None, "API Key 有效期数据异常", "storage_unavailable", None
+            if expires_at and expires_at <= now:
+                conn.rollback()
+                return None, None, None, None
+            if not _developer_ip_allowed(row.get("ip_allowlist")):
+                conn.rollback()
+                return None, "当前来源 IP 不在该 API Key 的白名单中", "ip_not_allowed", None
+
+            # Serialize all keys that belong to this account before touching shared counters.
+            cursor.execute(
+                "SELECT Userid FROM `user` WHERE Userid = %s FOR UPDATE",
+                (row["user_id"],),
+            )
+            if not cursor.fetchone():
+                conn.rollback()
+                return None, "开发者账号不存在", "storage_unavailable", None
+
+            day_bucket = now.date()
+            minute_bucket = now.replace(second=0, microsecond=0)
+            cursor.execute(
+                """
+                SELECT day_bucket, daily_count, minute_bucket, minute_count
+                FROM developer_api_account_quota_usage
+                WHERE user_id = %s
+                FOR UPDATE
+                """,
+                (row["user_id"],),
+            )
+            usage = cursor.fetchone() or {}
+            daily_count = int(usage.get("daily_count") or 0) if usage.get("day_bucket") == day_bucket else 0
+            minute_count = int(usage.get("minute_count") or 0) if usage.get("minute_bucket") == minute_bucket else 0
+            daily_limit = row.get("daily_limit")
+            minute_limit = row.get("rate_limit_per_minute")
+            if minute_limit is not None and minute_count >= int(minute_limit):
+                conn.rollback()
+                return row, "该账号请求过于频繁", "rate_limit_exceeded", _quota_retry_after(now)
+
+            cursor.execute(
+                """
+                INSERT INTO developer_api_account_quota_usage
+                    (user_id, day_bucket, daily_count, minute_bucket, minute_count)
+                VALUES (%s, %s, %s, %s, 1)
+                ON DUPLICATE KEY UPDATE
+                    day_bucket = VALUES(day_bucket),
+                    daily_count = %s,
+                    minute_bucket = VALUES(minute_bucket),
+                    minute_count = %s
+                """,
+                (
+                    row["user_id"],
+                    day_bucket,
+                    daily_count,
+                    minute_bucket,
+                    daily_count,
+                    minute_count + 1,
+                ),
+            )
+            cursor.execute(
+                """
+                UPDATE developer_api_keys
+                SET last_used_at = NOW(), last_used_ip = %s
+                WHERE id = %s AND status = 'active'
+                """,
+                (_developer_request_ip()[:64], row["id"]),
+            )
+        conn.commit()
+        return row, None, None, None
+    except Exception as exc:
+        if conn is not None:
+            conn.rollback()
+        print(f"[API KEY QUOTA ERROR] {exc}")
+        return None, "API Key 配额服务暂不可用", "storage_unavailable", None
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _change_developer_daily_detection_quota(actor, delta):
+    """Reserve or release one accepted detection against the account daily limit."""
+    user_id = int((actor or {}).get("user_id") or 0)
+    if user_id <= 0 or delta not in {-1, 1}:
+        return "开发者账号数据异常", "storage_unavailable", None
+    conn = None
+    try:
+        conn = get_db_connection()
+        conn.begin()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT u.Userid, q.daily_limit, NOW() AS quota_now
+                FROM `user` u
+                LEFT JOIN developer_api_account_quotas q ON q.user_id = u.Userid
+                WHERE u.Userid = %s
+                LIMIT 1
+                FOR UPDATE
+                """,
+                (user_id,),
+            )
+            account = cursor.fetchone()
+            if not account:
+                conn.rollback()
+                return "开发者账号不存在", "storage_unavailable", None
+            now = account.get("quota_now")
+            if not isinstance(now, datetime):
+                now = datetime.now()
+            day_bucket = now.date()
+            cursor.execute(
+                """
+                SELECT day_bucket, daily_count
+                FROM developer_api_account_quota_usage
+                WHERE user_id = %s
+                FOR UPDATE
+                """,
+                (user_id,),
+            )
+            usage = cursor.fetchone() or {}
+            daily_count = int(usage.get("daily_count") or 0) if usage.get("day_bucket") == day_bucket else 0
+            daily_limit = account.get("daily_limit")
+            if delta > 0 and daily_limit is not None and daily_count >= int(daily_limit):
+                conn.rollback()
+                return "该账号已达到每日调用上限", "daily_limit_exceeded", _quota_retry_after(now, daily=True)
+            next_count = max(0, daily_count + delta)
+            minute_bucket = now.replace(second=0, microsecond=0)
+            cursor.execute(
+                """
+                INSERT INTO developer_api_account_quota_usage
+                    (user_id, day_bucket, daily_count, minute_bucket, minute_count)
+                VALUES (%s, %s, %s, %s, 0)
+                ON DUPLICATE KEY UPDATE
+                    day_bucket = VALUES(day_bucket),
+                    daily_count = VALUES(daily_count)
+                """,
+                (user_id, day_bucket, next_count, minute_bucket),
+            )
+        conn.commit()
+        return None, None, None
+    except Exception as exc:
+        if conn is not None:
+            conn.rollback()
+        print(f"[API DAILY QUOTA ERROR] {exc}")
+        return "API Key 配额服务暂不可用", "storage_unavailable", None
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _reserve_developer_daily_detection(actor):
+    error, code, retry_after = _change_developer_daily_detection_quota(actor, 1)
+    if not error:
+        return None
+    response = jsonify({"status": "error", "code": code, "message": error})
+    status = 429 if code == "daily_limit_exceeded" else 503
+    if retry_after:
+        response.headers["Retry-After"] = str(retry_after)
+    return response, status
+
+
+def _release_developer_daily_detection(actor):
+    error, _, _ = _change_developer_daily_detection_quota(actor, -1)
+    return error is None
+
+
 def _developer_key_required():
-    row, error = _active_developer_key(_developer_key_from_request())
+    row, error, error_code, retry_after = _consume_developer_key_request(_developer_key_from_request())
+    if error_code in {"daily_limit_exceeded", "rate_limit_exceeded"}:
+        response = jsonify({"status": "error", "code": error_code, "message": error})
+        response.headers["Retry-After"] = str(retry_after)
+        return None, (response, 429)
     if error:
-        status_code = 403 if "IP" in error else 500
-        return None, (jsonify({"status": "error", "message": error}), status_code)
+        status_code = 403 if error_code == "ip_not_allowed" else 503
+        return None, (jsonify({"status": "error", "code": error_code, "message": error}), status_code)
     if not row:
         return None, (jsonify({"status": "error", "message": "API Key 缺失、无效或已撤销"}), 401)
     return row, None
@@ -809,6 +1031,7 @@ def _contains_history_query(fields, query):
 def _image_history_record(item):
     fake_pct = round(float(item.get("fake", 0) or 0), 1)
     issue_count = _history_visual_issue_count(item)
+    stored_label = str(item.get("aigc") or "").strip()
     return {
         "itemid": item.get("itemid"),
         "filename": item.get("filename", ""),
@@ -816,7 +1039,7 @@ def _image_history_record(item):
         "thumbnail_url": _thumbnail_url(item),
         "real_prob": round(100 - fake_pct, 1),
         "fake_prob": fake_pct,
-        "final_label": "AI生成图像" if fake_pct >= 50 else "真实图像",
+        "final_label": stored_label or ("AI生成图像" if fake_pct >= 50 else "真实图像"),
         "confidence": item.get("clarity", ""),
         "createtime": format_createtime(item.get("createtime", "")),
         "report_url": f"/image_upload/report?itemid={item.get('itemid')}",
@@ -937,9 +1160,19 @@ def login_password():
     if not accepted_terms:
         return jsonify({"status": "error", "message": "请先阅读并同意用户协议和隐私政策"}), 400
 
+    try:
+        _reserve_password_login_attempt(phone)
+    except PasswordLoginRateLimitError as exc:
+        response = jsonify({"status": "error", "code": "login_rate_limited", "message": str(exc)})
+        response.headers["Retry-After"] = str(exc.retry_after)
+        return response, 429
+    except SmsStorageError as exc:
+        return jsonify({"status": "error", "code": "login_protection_unavailable", "message": str(exc)}), 503
+
     user = _authenticate_password_user(phone, secret)
     if not user:
         return jsonify({"status": "error", "message": "手机号或密码错误"}), 401
+    _clear_password_phone_attempts(phone)
     if not _record_terms_acceptance(phone):
         return jsonify({"status": "error", "message": "协议确认记录失败，请稍后重试"}), 500
 
@@ -1009,6 +1242,8 @@ def register():
     )
     if not affected:
         return jsonify({"status": "error", "message": "注册失败，请重试"}), 500
+    if not _record_terms_acceptance(phone):
+        return jsonify({"status": "error", "message": "协议确认记录失败，请稍后重试"}), 500
 
     _sync_detection_user(phone, username, phone)
     return jsonify({"status": "success", "message": "注册成功，请登录"})
@@ -1036,7 +1271,7 @@ def reset_password():
     if not user:
         return jsonify({"status": "error", "message": "该手机号尚未注册，无法找回密码"}), 404
     affected = excute_sql(
-        "UPDATE user SET secret = %s, password_updated_at = NOW() WHERE phone = %s",
+        "UPDATE user SET secret = %s, session_version = session_version + 1, password_updated_at = NOW() WHERE phone = %s",
         (_hash_password(secret), phone),
         fetch=False,
     )
@@ -1386,14 +1621,20 @@ def _serve_owned_media(kind, itemid):
     if not rows:
         return jsonify({"status": "error", "message": "媒体不存在"}), 404
 
-    item = rows[0]
+    return _serve_detection_media_item(kind, rows[0])
+
+
+def _serve_detection_media_item(kind, item):
+    """Serve a database-authorized media row without re-evaluating its owner."""
+    if kind not in {"image", "video"}:
+        return jsonify({"status": "error", "message": "媒体类型不受支持"}), 404
+
     filename = str(item.get("filename") or "").strip()
     folder = str(item.get("openid") or item.get("phone") or "guest").strip()
     if not filename or not folder:
         return jsonify({"status": "error", "message": "媒体不存在"}), 404
 
-    media_root = (Path(__file__).resolve().parents[1] / "static" / "uploads").resolve()
-    local_path = (media_root / folder / kind / filename).resolve()
+    media_root, local_path = _local_detection_media_path(kind, item)
     try:
         local_path.relative_to(media_root)
     except ValueError:
@@ -1441,6 +1682,85 @@ def _serve_owned_media(kind, itemid):
     )
 
 
+def _local_detection_media_path(kind, item):
+    media_root = (Path(__file__).resolve().parents[1] / "static" / "uploads").resolve()
+    folder = str((item or {}).get("openid") or (item or {}).get("phone") or "guest").strip()
+    filename = str((item or {}).get("filename") or "").strip()
+    return media_root, (media_root / folder / kind / filename).resolve()
+
+
+def _delete_owned_history_record(kind, itemid, actor):
+    if kind not in {"image", "video"}:
+        return False, "媒体类型不受支持", 404
+    table = "data" if kind == "image" else "video_data"
+    if actor.get("mode") == "guest":
+        owner_where = "Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s"
+        owner_params = (actor.get("openid"),)
+    else:
+        owner_where, owner_params = _history_actor_where(actor)
+
+    conn = None
+    quarantine_path = None
+    original_path = None
+    item = None
+    try:
+        conn = get_detection_db_connection()
+        conn.begin()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"SELECT * FROM {table} WHERE itemid = %s AND ({owner_where}) LIMIT 1 FOR UPDATE",
+                (itemid, *owner_params),
+            )
+            item = cursor.fetchone()
+            if not item:
+                conn.rollback()
+                return False, "记录不存在", 404
+
+            media_root, original_path = _local_detection_media_path(kind, item)
+            try:
+                original_path.relative_to(media_root)
+            except ValueError:
+                conn.rollback()
+                return False, "媒体路径无效", 500
+            if original_path.is_file():
+                quarantine_path = original_path.with_name(f".{original_path.name}.deleting-{uuid.uuid4().hex}")
+                original_path.replace(quarantine_path)
+
+            if kind == "image":
+                cursor.execute("DELETE FROM exif WHERE data_itemid = %s", (itemid,))
+            cursor.execute(
+                f"DELETE FROM {table} WHERE itemid = %s AND ({owner_where})",
+                (itemid, *owner_params),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("删除记录时属主状态发生变化")
+        conn.commit()
+    except Exception:
+        if conn:
+            conn.rollback()
+        if quarantine_path and quarantine_path.exists() and original_path and not original_path.exists():
+            try:
+                quarantine_path.replace(original_path)
+            except OSError:
+                pass
+        return False, "删除失败，请稍后重试", 500
+    finally:
+        if conn:
+            conn.close()
+
+    if quarantine_path:
+        try:
+            quarantine_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+    if kind == "image" and item:
+        try:
+            _thumbnail_cache_path(item).unlink(missing_ok=True)
+        except OSError:
+            pass
+    return True, "", 204
+
+
 @api_blueprint.route("/media/image/<int:itemid>")
 def image_detection_media(itemid):
     return _serve_owned_media("image", itemid)
@@ -1449,6 +1769,28 @@ def image_detection_media(itemid):
 @api_blueprint.route("/media/video/<int:itemid>")
 def video_detection_media(itemid):
     return _serve_owned_media("video", itemid)
+
+
+@api_blueprint.route("/history/image-detections/<int:itemid>", methods=["DELETE"])
+def delete_image_detection_history(itemid):
+    actor, error = _history_identity()
+    if error:
+        return error
+    deleted, message, status = _delete_owned_history_record("image", itemid, actor)
+    if not deleted:
+        return jsonify({"status": "error", "message": message}), status
+    return "", status
+
+
+@api_blueprint.route("/history/video-detections/<int:itemid>", methods=["DELETE"])
+def delete_video_detection_history(itemid):
+    actor, error = _history_identity()
+    if error:
+        return error
+    deleted, message, status = _delete_owned_history_record("video", itemid, actor)
+    if not deleted:
+        return jsonify({"status": "error", "message": message}), status
+    return "", status
 
 
 @api_blueprint.route("/history/video-detections")

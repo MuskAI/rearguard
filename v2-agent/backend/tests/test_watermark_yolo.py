@@ -12,7 +12,7 @@ def _analysis():
     }
 
 
-def test_merge_promotes_unmatched_yolo_watermark_to_high_confidence_fake():
+def test_merge_keeps_unmatched_yolo_watermark_as_non_decisive_context():
     analysis = _analysis()
     merged = watermark_yolo.merge(analysis, {
         "status": "ok",
@@ -37,9 +37,9 @@ def test_merge_promotes_unmatched_yolo_watermark_to_high_confidence_fake():
         }],
     })
 
-    assert merged["verdict"] == "highly_suspected_fake"
-    assert merged["confidence"] == 0.95
-    assert merged["watermarkVerdictOverride"]["modelConfidence"] == 0.82
+    assert merged["verdict"] == "real"
+    assert merged["confidence"] == 0.82
+    assert "watermarkVerdictOverride" not in merged
     assert analysis.get("visibleWatermark") is None
     visible = merged["visibleWatermark"]
     assert visible["supported"] is True
@@ -50,7 +50,7 @@ def test_merge_promotes_unmatched_yolo_watermark_to_high_confidence_fake():
     assert visible["hits"][0]["provider"] == "yolo11x_watermark"
     assert visible["hits"][0]["decisive"] is False
     assert "平台归属尚未确认" in visible["note"]
-    assert "高置信度伪造证据" in visible["note"]
+    assert "不单独影响 AI 生成结论" in visible["note"]
 
 
 def test_merge_exposes_registry_and_yolo_as_distinct_engines():

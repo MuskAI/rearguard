@@ -1,0 +1,28 @@
+[Unit]
+Description=RealGuard V1 Detector Backend
+After=network.target mysql.service jianzhen-v2-backend.service
+Requires=mysql.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/realguard-server/RealGuard
+Environment=REALGUARD_DETECTOR_HOST=127.0.0.1
+Environment=REALGUARD_DETECTOR_PORT=15001
+EnvironmentFile=-/etc/realguard/realguard-backend.env
+EnvironmentFile=-/etc/realguard/detector-db.env
+EnvironmentFile=-/etc/realguard/agent.env
+EnvironmentFile=-/etc/realguard/model-inference.env
+ExecStart=/opt/realguard-server/.venv/bin/gunicorn --worker-class gthread --workers 1 --threads 4 --timeout 300 --graceful-timeout 30 --keep-alive 5 --bind 127.0.0.1:15001 --access-logfile - --error-logfile - detector_backend:app
+Restart=always
+RestartSec=3
+TimeoutStopSec=45
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/opt/realguard-server/RealGuard/imagedetection/static /tmp
+
+[Install]
+WantedBy=multi-user.target

@@ -342,10 +342,7 @@ export default function ResultCard({
     if (reportBusy) return;
     setReportBusy(true);
     try {
-      await downloadReport(result.reportId, {
-        forensics: forensicsReport,
-        provenance,
-      });
+      await downloadReport(result.reportId);
     } catch (error) {
       window.alert(actionErrorMessage(error, "下载报告失败"));
     } finally {

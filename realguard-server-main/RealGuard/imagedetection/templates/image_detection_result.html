@@ -166,7 +166,7 @@
                             <div class="verdict-text"><h3 id="verdictLabel">-</h3><p id="verdictSub">-</p></div>
                         </div>
                         <div class="prob-bars">
-                            <div class="prob-bar-item"><label><span id="probLabel">综合AI生成概率</span><span class="val" id="probVal" style="color:var(--danger)">-</span></label><div class="bar-track"><div class="bar-fill red" id="probBar" style="width:0%"></div></div></div>
+                            <div class="prob-bar-item"><label><span id="probLabel">AI 生成概率</span><span class="val" id="probVal" style="color:var(--danger)">-</span></label><div class="bar-track"><div class="bar-fill red" id="probBar" style="width:0%"></div></div></div>
                             <div class="prob-bar-item"><label><span id="detProbLabel">检测器原始AI概率</span><span class="val" id="detProbVal" style="color:var(--primary)">-</span></label><div class="bar-track"><div class="bar-fill blue" id="detProbBar" style="width:0%"></div></div></div>
                         </div>
                         <div class="info-grid">
@@ -325,10 +325,10 @@
         var v=document.getElementById('verdict');v.className='verdict '+(isFake?'fake':'real');
         document.getElementById('verdictIcon').innerHTML='<i class="fa '+(isFake?'fa-times':'fa-check')+'"></i>';
         document.getElementById('verdictLabel').textContent=verdictLabel;
-        document.getElementById('verdictSub').textContent='置信度: '+(r.confidence||'-')+'  |  '+(hasExpertReview?'综合伪造风险: ':'综合 AI 生成概率: ')+prob+'%';
+        document.getElementById('verdictSub').textContent='置信度: '+(r.confidence||'-')+'  |  '+(hasExpertReview?'综合异常风险: ':'AI 生成概率: ')+prob+'%';
 
-        document.getElementById('probLabel').textContent=hasExpertReview?'专家会诊综合伪造风险':'综合AI生成概率';
-        document.getElementById('detProbLabel').textContent=hasExpertReview?'主检测器原始概率':'检测器原始AI概率';
+        document.getElementById('probLabel').textContent=hasExpertReview?'专家会诊综合异常风险':'AI 生成概率';
+        document.getElementById('detProbLabel').textContent=hasExpertReview?'主检测器 AI 风险':'检测器原始 AI 概率';
         document.getElementById('probVal').textContent=prob+'%';
         document.getElementById('probVal').style.color=isFake?'var(--danger)':'var(--success)';
         document.getElementById('detProbVal').textContent=detProb+'%';

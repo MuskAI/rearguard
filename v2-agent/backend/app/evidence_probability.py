@@ -12,6 +12,14 @@ CORRELATED_EVIDENCE_EXPONENT = 0.65
 REPEATED_WATERMARK_EXPONENT = 0.35
 CROSS_MODAL_EXPONENT = 0.75
 KNOWN_VISIBLE_PROVIDERS = frozenset({"gemini", "doubao", "jimeng", "jimeng_pill", "samsung"})
+KNOWN_VISIBLE_MIN_CONFIDENCE = {
+    "gemini": 0.72,
+    "doubao": 0.80,
+    "jimeng": 0.80,
+    "jimeng_pill": 0.80,
+    "samsung": 0.80,
+}
+KNOWN_VISIBLE_MIN_AREA = 0.0001
 
 
 def clamp_probability(value: Any, default: float = 0.0) -> float:
@@ -43,6 +51,19 @@ def _known_watermark_lr(confidence: float) -> float:
     return round(min(240.0, max(60.0, 20.0 * _odds(confidence))), 3)
 
 
+def _confirmed_known_watermark(hit: dict[str, Any]) -> bool:
+    provider = str(hit.get("provider") or "")
+    bbox = hit.get("bbox") if isinstance(hit.get("bbox"), dict) else {}
+    area = max(float(bbox.get("w") or 0.0), 0.0) * max(float(bbox.get("h") or 0.0), 0.0)
+    return (
+        provider in KNOWN_VISIBLE_PROVIDERS
+        and hit.get("decisive") is True
+        and float(hit.get("confidence") or 0.0) >= KNOWN_VISIBLE_MIN_CONFIDENCE[provider]
+        and area >= KNOWN_VISIBLE_MIN_AREA
+        and (hit.get("localizationConfirmed") is True or hit.get("yoloCorroborated") is True)
+    )
+
+
 def _factor(kind: str, label: str, likelihood_ratio: float, group: str, *, source: str) -> dict[str, Any]:
     ratio = min(max(float(likelihood_ratio), 0.01), 10_000.0)
     return {
@@ -66,34 +87,35 @@ def build_probability_model(report: dict[str, Any], known_hits: list[dict[str, A
     ai_from_metadata = bool(report.get("aiFromMetadata"))
     is_ai_generated = report.get("isAiGenerated") is True
     source_kind = str(report.get("aiSourceKind") or "")
+    c2pa_trusted = report.get("c2paTrusted") is True
     capture = report.get("captureEvidence") if isinstance(report.get("captureEvidence"), dict) else {}
 
     if ai_from_metadata and is_ai_generated:
-        if clashes:
+        if "c2pa" in signal_names and not c2pa_trusted:
             factors.append(_factor(
-                "unverified_ai_declaration", "签名异常的 AI 来源声明", 1.5,
-                "untrusted_provenance", source="c2pa" if "c2pa" in signal_names else "metadata",
+                "unverified_ai_declaration", "未通过可信校验的 AI 来源声明", 1.5,
+                "untrusted_provenance", source="c2pa",
             ))
-        elif source_kind == "enhanced":
+        elif "c2pa" in signal_names and c2pa_trusted and source_kind == "enhanced":
             factors.append(_factor(
                 "ai_enhancement_declaration", "AI 合成编辑来源声明", 150.0,
-                "origin_declaration", source="c2pa" if "c2pa" in signal_names else "metadata",
+                "origin_declaration", source="c2pa",
             ))
-        elif "c2pa" in signal_names:
+        elif "c2pa" in signal_names and c2pa_trusted:
             factors.append(_factor(
                 "valid_ai_c2pa", "通过校验的 AI 生成内容凭证", 1000.0,
                 "origin_declaration", source="c2pa",
             ))
         else:
             factors.append(_factor(
-                "ai_generation_metadata", "明确的 AI 生成元数据或参数", 250.0,
-                "origin_declaration", source="metadata",
+                "editable_ai_metadata", "可编辑的 AI 生成元数据或参数", 1.25,
+                "metadata_context", source="metadata",
             ))
 
     best_by_provider: dict[str, dict[str, Any]] = {}
     for hit in known_hits:
         provider = str(hit.get("provider") or "unknown")
-        if provider not in KNOWN_VISIBLE_PROVIDERS or hit.get("decisive") is not True:
+        if not _confirmed_known_watermark(hit):
             continue
         previous = best_by_provider.get(provider)
         if previous is None or float(hit.get("confidence") or 0.0) > float(previous.get("confidence") or 0.0):
@@ -148,7 +170,7 @@ def build_probability_model(report: dict[str, Any], known_hits: list[dict[str, A
 
     posterior = _probability(_odds(BASE_RATE) * effective_lr)
     decisive_kinds = {
-        "known_visible_ai_watermark", "valid_ai_c2pa", "ai_generation_metadata", "ai_enhancement_declaration",
+        "known_visible_ai_watermark", "valid_ai_c2pa", "ai_enhancement_declaration",
     }
     active_kinds = {str(item["kind"]) for item in effective_factors}
     fake_groups = {str(item["group"]) for item in effective_factors if float(item["effectiveLikelihoodRatio"]) > 1.0}

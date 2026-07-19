@@ -12,6 +12,7 @@ import time
 import hashlib
 import hmac
 import io
+import logging
 from datetime import datetime, timezone
 from urllib import error as urlerror
 from urllib.parse import quote
@@ -37,7 +38,9 @@ from . import (
 )
 
 app = FastAPI(title="慧鉴 AI 鉴伪工作台", version="0.3.0")
+logger = logging.getLogger(__name__)
 ACCESS_TOKEN = os.getenv("JIANZHEN_ACCESS_TOKEN", "").strip()
+ADMIN_ACCESS_TOKEN = os.getenv("JIANZHEN_ADMIN_ACCESS_TOKEN", "").strip()
 MAX_UPLOAD_BYTES = int(os.getenv("JIANZHEN_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
 SESSION_AUTH_URL = (
     os.getenv("JIANZHEN_SESSION_AUTH_URL")
@@ -50,10 +53,9 @@ DEVELOPER_AUTH_SECRET = (
     or os.getenv("JIANZHEN_DEVELOPER_AUTH_SECRET")
     or ""
 ).strip()
-REQUIRE_DEVELOPER_API_KEY = str(os.getenv("JIANZHEN_REQUIRE_DEVELOPER_API_KEY", "0")).lower() in {"1", "true", "yes"}
+ALLOW_ANONYMOUS_DETECT = str(os.getenv("JIANZHEN_ALLOW_ANONYMOUS_DETECT", "0")).lower() in {"1", "true", "yes"}
 ALLOW_DIRECT_DEVELOPER_KEYS = str(os.getenv("JIANZHEN_ALLOW_DIRECT_DEVELOPER_KEYS", "0")).lower() in {"1", "true", "yes"}
 DEVELOPER_AUTH_CONFIGURED = bool(DEVELOPER_AUTH_URL and DEVELOPER_AUTH_SECRET)
-DEVELOPER_API_KEY_REQUIRED = REQUIRE_DEVELOPER_API_KEY
 REPORT_SHARE_SECRET = os.getenv("JIANZHEN_REPORT_SHARE_SECRET", "").strip()
 REPORT_SHARE_DEFAULT_SECONDS = int(os.getenv("JIANZHEN_REPORT_SHARE_DEFAULT_SECONDS", str(7 * 24 * 60 * 60)))
 REPORT_SHARE_MAX_SECONDS = int(os.getenv("JIANZHEN_REPORT_SHARE_MAX_SECONDS", str(30 * 24 * 60 * 60)))
@@ -61,6 +63,14 @@ FORENSICS_CACHE_MAX_AGE_SECONDS = int(os.getenv("JIANZHEN_FORENSICS_CACHE_MAX_AG
 FORENSICS_MAX_SOURCE_PIXELS = int(os.getenv("JIANZHEN_FORENSICS_MAX_SOURCE_PIXELS", "24000000"))
 FORENSICS_MAX_CONCURRENCY = max(1, int(os.getenv("JIANZHEN_FORENSICS_MAX_CONCURRENCY", "2")))
 _FORENSICS_SEMAPHORE = asyncio.Semaphore(FORENSICS_MAX_CONCURRENCY)
+TELEMETRY_QUEUE_MAX = max(64, int(os.getenv("JIANZHEN_TELEMETRY_QUEUE_MAX", "2048")))
+TELEMETRY_PRUNE_INTERVAL_SECONDS = max(
+    300,
+    int(os.getenv("JIANZHEN_TELEMETRY_PRUNE_INTERVAL_SECONDS", "21600")),
+)
+_TELEMETRY_QUEUE: asyncio.Queue | None = None
+_TELEMETRY_WORKER: asyncio.Task | None = None
+_TELEMETRY_MAINTENANCE: asyncio.Task | None = None
 PROTECTED_ENDPOINTS = [
     "/api/admin/health",
     "/api/history",
@@ -98,6 +108,70 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _enqueue_telemetry(func, *args, **kwargs) -> bool:
+    queue = _TELEMETRY_QUEUE
+    if queue is None:
+        # ASGI servers normally run lifespan startup. Keep embedded/test hosts
+        # compatible without ever allowing telemetry failure to replace the
+        # business response.
+        try:
+            func(*args, **kwargs)
+            return True
+        except Exception:
+            logger.exception("telemetry persistence failed without lifespan worker")
+            return False
+    try:
+        queue.put_nowait((func, args, kwargs))
+        return True
+    except asyncio.QueueFull:
+        logger.warning("dropping telemetry event because the queue is full")
+        return False
+
+
+async def _telemetry_worker() -> None:
+    assert _TELEMETRY_QUEUE is not None
+    while True:
+        func, args, kwargs = await _TELEMETRY_QUEUE.get()
+        try:
+            await run_in_threadpool(func, *args, **kwargs)
+        except Exception:
+            logger.exception("telemetry persistence failed")
+        finally:
+            _TELEMETRY_QUEUE.task_done()
+
+
+async def _telemetry_maintenance() -> None:
+    _enqueue_telemetry(storage.prune_telemetry)
+    while True:
+        await asyncio.sleep(TELEMETRY_PRUNE_INTERVAL_SECONDS)
+        _enqueue_telemetry(storage.prune_telemetry)
+
+
+@app.on_event("startup")
+async def start_telemetry_worker() -> None:
+    global _TELEMETRY_QUEUE, _TELEMETRY_WORKER, _TELEMETRY_MAINTENANCE
+    _TELEMETRY_QUEUE = asyncio.Queue(maxsize=TELEMETRY_QUEUE_MAX)
+    _TELEMETRY_WORKER = asyncio.create_task(_telemetry_worker())
+    _TELEMETRY_MAINTENANCE = asyncio.create_task(_telemetry_maintenance())
+
+
+@app.on_event("shutdown")
+async def stop_telemetry_worker() -> None:
+    global _TELEMETRY_QUEUE, _TELEMETRY_WORKER, _TELEMETRY_MAINTENANCE
+    if _TELEMETRY_MAINTENANCE:
+        _TELEMETRY_MAINTENANCE.cancel()
+    if _TELEMETRY_QUEUE:
+        try:
+            await asyncio.wait_for(_TELEMETRY_QUEUE.join(), timeout=2)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            pass
+    if _TELEMETRY_WORKER:
+        _TELEMETRY_WORKER.cancel()
+    _TELEMETRY_QUEUE = None
+    _TELEMETRY_WORKER = None
+    _TELEMETRY_MAINTENANCE = None
 
 
 @app.middleware("http")
@@ -153,6 +227,10 @@ def _request_token(request: Request) -> str:
 
 
 def _admin_access_granted(request: Request) -> bool:
+    return bool(ADMIN_ACCESS_TOKEN) and secrets.compare_digest(_request_token(request), ADMIN_ACCESS_TOKEN)
+
+
+def _internal_access_granted(request: Request) -> bool:
     return bool(ACCESS_TOKEN) and secrets.compare_digest(_request_token(request), ACCESS_TOKEN)
 
 
@@ -274,6 +352,8 @@ def _verify_developer_key_sync(api_key: str, request: Request) -> dict:
 async def _require_developer_access(request: Request) -> dict:
     if _admin_access_granted(request):
         return {"mode": "admin"}
+    if _internal_access_granted(request):
+        return {"mode": "internal"}
     actor = await run_in_threadpool(_session_access_granted, request)
     if actor:
         return actor
@@ -287,7 +367,7 @@ async def _require_developer_access(request: Request) -> dict:
         if not DEVELOPER_AUTH_CONFIGURED:
             raise HTTPException(status_code=503, detail="API Key 校验服务未配置")
         return await run_in_threadpool(_verify_developer_key_sync, api_key, request)
-    if not DEVELOPER_API_KEY_REQUIRED:
+    if ALLOW_ANONYMOUS_DETECT:
         return {"mode": "public"}
     raise HTTPException(status_code=401, detail="请先登录慧鉴 AI")
 
@@ -314,6 +394,10 @@ def _require_internal_developer_auth(request: Request) -> None:
 
 def _require_owned_item(request: Request, item: dict, *, missing_detail: str) -> dict:
     actor = _require_protected_access(request)
+    return _require_actor_owns_item(actor, item, missing_detail=missing_detail)
+
+
+def _require_actor_owns_item(actor: dict, item: dict, *, missing_detail: str) -> dict:
     if actor.get("mode") == "admin":
         return actor
     item_user_id = str(item.get("_developerUserId") or "")
@@ -325,6 +409,17 @@ def _require_owned_item(request: Request, item: dict, *, missing_detail: str) ->
     raise HTTPException(status_code=404, detail=missing_detail)
 
 
+def _require_matching_history_upload(actor: dict, task_id: str, sha256: str) -> dict:
+    item = storage.get_history(task_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    _require_actor_owns_item(actor, item, missing_detail="记录不存在")
+    stored_sha256 = str((item.get("fileMeta") or {}).get("sha256") or "").strip().lower()
+    if not stored_sha256 or not secrets.compare_digest(stored_sha256, sha256.lower()):
+        raise HTTPException(status_code=409, detail="上传文件与原检测任务不一致")
+    return item
+
+
 def _require_report_access(request: Request, item: dict) -> dict:
     return _require_owned_item(request, item, missing_detail="报告不存在")
 
@@ -334,7 +429,7 @@ def _require_report_share_access(request: Request, item: dict) -> dict:
 
 
 def _report_share_secret() -> str:
-    secret = REPORT_SHARE_SECRET or DEVELOPER_AUTH_SECRET or ACCESS_TOKEN
+    secret = REPORT_SHARE_SECRET
     if not secret:
         raise HTTPException(status_code=503, detail="报告分享签名密钥未配置")
     return secret
@@ -455,7 +550,8 @@ async def collect_request_metrics(request: Request, call_next) -> Response:
         status = response.status_code
         return response
     finally:
-        storage.record_event(
+        _enqueue_telemetry(
+            storage.record_event,
             "request",
             client_ip=_client_ip(request),
             user_agent=request.headers.get("user-agent"),
@@ -514,6 +610,35 @@ def _token_usage_from_payload(payload: dict | None, *, cache_hit: bool = False) 
     }
 
 
+def _analysis_risk_vector(analysis: dict) -> dict[str, float | None]:
+    supplied = analysis.get("riskVector") if isinstance(analysis.get("riskVector"), dict) else {}
+    dimensions = {
+        str(item.get("key") or ""): item
+        for item in analysis.get("dimensions") or []
+        if isinstance(item, dict)
+    }
+
+    def dimension_score(*keys: str) -> float | None:
+        for key in keys:
+            if supplied.get(key) is not None:
+                return round(min(max(float(supplied[key]), 0.0), 1.0), 4)
+            item = dimensions.get(key)
+            if item and item.get("score") is not None:
+                return round(min(max(float(item["score"]), 0.0), 1.0), 4)
+        return None
+
+    generated = analysis.get("aiProbability")
+    if generated is None:
+        generated = dimension_score("aiGenerated", "aigc", "aigc_image", "aigc_text")
+    if generated is None and analysis.get("source") == "provenance":
+        generated = analysis.get("confidence")
+    return {
+        "aiGenerated": None if generated is None else round(min(max(float(generated), 0.0), 1.0), 4),
+        "tampered": dimension_score("tampered", "tamper"),
+        "deepfake": dimension_score("deepfake"),
+    }
+
+
 def _build_result(
     *,
     filename: str,
@@ -535,6 +660,7 @@ def _build_result(
     seq = storage.next_sequence(day)
     task_id = f"rj-{day}-{seq:04d}"
     report_id = f"RJ-RPT-{day}-{seq:04d}"
+    risk_vector = _analysis_risk_vector(analysis)
 
     result = {
         "taskId": task_id,
@@ -551,6 +677,9 @@ def _build_result(
         },
         "verdict": analysis["verdict"],
         "confidence": analysis["confidence"],
+        "riskScore": analysis.get("riskScore", analysis["confidence"]),
+        "aiProbability": risk_vector.get("aiGenerated"),
+        "riskVector": risk_vector,
         "modelVersion": analysis["modelVersion"],
         "source": analysis["source"],
         "cacheVersion": storage.ANALYSIS_CACHE_VERSION,
@@ -677,7 +806,8 @@ async def detect(request: Request, file: UploadFile = File(...), fileType: str |
         provenance_report=provenance_report,
         provenance_precheck_report=precheck_report,
     )
-    storage.record_token_usage(
+    _enqueue_telemetry(
+        storage.record_token_usage,
         actor=actor,
         endpoint="/api/detect",
         file_type=ftype,
@@ -685,7 +815,8 @@ async def detect(request: Request, file: UploadFile = File(...), fileType: str |
         usage=token_usage,
         cache_hit=cache_hit,
     )
-    storage.record_event(
+    _enqueue_telemetry(
+        storage.record_event,
         "detect",
         client_ip=_client_ip(request),
         user_agent=request.headers.get("user-agent"),
@@ -701,7 +832,11 @@ async def detect(request: Request, file: UploadFile = File(...), fileType: str |
 
 
 @app.post("/api/forensics")
-async def forensics(request: Request, file: UploadFile = File(...)) -> dict:
+async def forensics(
+    request: Request,
+    file: UploadFile = File(...),
+    taskId: str | None = Form(default=None),
+) -> dict:
     actor = await _require_developer_access(request)
     data = await _read_upload(file)
     if not data:
@@ -714,6 +849,7 @@ async def forensics(request: Request, file: UploadFile = File(...)) -> dict:
 
     started = time.perf_counter()
     sha256 = hashlib.sha256(data).hexdigest()
+    history_item = _require_matching_history_upload(actor, taskId, sha256) if taskId else None
     cache_scope = _forensics_cache_scope(actor)
     cache_type = (
         f"image-forensics:{detector.FORENSICS_PIPELINE_VERSION}:{detector.VLM_MODEL}:{cache_scope}"
@@ -776,20 +912,38 @@ async def forensics(request: Request, file: UploadFile = File(...)) -> dict:
         verdict=report.get("verdict"),
         cache_hit=cache_hit,
     )
+    if history_item is not None:
+        await run_in_threadpool(
+            storage.put_history_artifacts,
+            history_item["taskId"],
+            forensics=report,
+        )
     return report
 
 
 @app.post("/api/provenance")
-async def provenance_check(request: Request, file: UploadFile = File(...)) -> dict:
-    await _require_developer_access(request)
+async def provenance_check(
+    request: Request,
+    file: UploadFile = File(...),
+    taskId: str | None = Form(default=None),
+) -> dict:
+    actor = await _require_developer_access(request)
     data = await _read_upload(file)
     if not data:
         raise HTTPException(status_code=400, detail="空文件")
     filename = file.filename or "unknown"
+    sha256 = hashlib.sha256(data).hexdigest()
+    history_item = _require_matching_history_upload(actor, taskId, sha256) if taskId else None
     started = time.perf_counter()
     report = await run_in_threadpool(provenance.read_provenance, data, provenance.mime_for(filename), filename)
     report["elapsedMs"] = int((time.perf_counter() - started) * 1000)
     report["fileMeta"] = {"name": filename, "size": f"{len(data) / 1024:.1f}KB"}
+    if history_item is not None:
+        await run_in_threadpool(
+            storage.put_history_artifacts,
+            history_item["taskId"],
+            provenance=report,
+        )
     return report
 
 
@@ -853,18 +1007,15 @@ def history_item(task_id: str, request: Request) -> dict:
 
 
 @app.post("/api/history/{task_id}/artifacts")
-def history_artifacts(task_id: str, request: Request, payload: dict | None = Body(default=None)) -> dict:
+def history_artifacts(task_id: str, request: Request) -> dict:
     item = storage.get_history(task_id)
     if not item:
         raise HTTPException(status_code=404, detail="记录不存在")
     _require_owned_item(request, item, missing_detail="记录不存在")
-    body = payload or {}
-    storage.put_history_artifacts(
-        item["taskId"],
-        forensics=body.get("forensics"),
-        provenance=body.get("provenance"),
+    raise HTTPException(
+        status_code=410,
+        detail="客户端证据归档接口已停用；请在服务端取证请求中提交 taskId",
     )
-    return {"ok": True, "taskId": item["taskId"]}
 
 
 @app.delete("/api/history/{task_id}")
@@ -909,18 +1060,17 @@ def report_download(report_id: str, request: Request) -> Response:
 
 
 @app.post("/api/report/{report_id}/export")
-def report_export(report_id: str, request: Request, payload: dict | None = Body(default=None)) -> Response:
+def report_export(report_id: str, request: Request) -> Response:
     item = storage.get_history(report_id)
     if not item:
         raise HTTPException(status_code=404, detail="报告不存在")
     _require_report_access(request, item)
     clean_item = _strip_internal_history_fields(item)
     filename = reporting.download_filename(clean_item)
-    body = payload or {}
     pdf = reporting.build_report_pdf(
         clean_item,
-        forensics=body.get("forensics") or clean_item.get("forensics"),
-        provenance=body.get("provenance") or clean_item.get("provenance"),
+        forensics=clean_item.get("forensics"),
+        provenance=clean_item.get("provenance"),
     )
     return Response(
         content=pdf,

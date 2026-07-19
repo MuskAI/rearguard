@@ -72,7 +72,7 @@ def _boxed_report() -> dict:
     }
 
 
-def test_history_reuses_boxed_watermark_only_for_same_user_and_exact_sha(isolated_storage):
+def test_history_results_remain_immutable_for_same_user_and_exact_sha(isolated_storage):
     storage = isolated_storage
     shared_sha = "a" * 64
     owner_one = {"userId": "user-1", "keyId": "key-1"}
@@ -107,26 +107,14 @@ def test_history_reuses_boxed_watermark_only_for_same_user_and_exact_sha(isolate
         actor=owner_one,
     )
 
-    reused = storage.get_history("old-owner-one")
+    original = storage.get_history("old-owner-one")
     other_owner = storage.get_history("old-owner-two")
     different_file = storage.get_history("different-file")
     original_hit = storage.get_history("new-owner-one")
 
-    assert reused["verdict"] == "real"
-    assert reused["confidence"] == 0.23
-    assert reused["visibleWatermark"]["detected"] is True
-    assert reused["visibleWatermark"]["hits"][0]["bbox"] == {
-        "x": 0.8923,
-        "y": 0.939,
-        "w": 0.0984,
-        "h": 0.0401,
-    }
-    assert reused["visibleWatermark"]["reanalysis"] == {
-        "reused": True,
-        "basis": "same-user-exact-sha256",
-        "sourceTaskId": "new-owner-one",
-        "sourceCreatedAt": "2026-07-16T09:04:00+00:00",
-    }
+    assert original["verdict"] == "real"
+    assert original["confidence"] == 0.23
+    assert original["visibleWatermark"]["detected"] is False
     assert other_owner["visibleWatermark"]["detected"] is False
     assert different_file["visibleWatermark"]["detected"] is False
     assert "reanalysis" not in original_hit["visibleWatermark"]
@@ -135,13 +123,13 @@ def test_history_reuses_boxed_watermark_only_for_same_user_and_exact_sha(isolate
     owner_two_items, _, owner_two_counts = storage.list_history(owner_user_id="user-2")
     owner_one_by_task = {item["taskId"]: item for item in owner_one_items}
 
-    assert owner_one_by_task["old-owner-one"]["hasVisibleWatermark"] is True
-    assert owner_one_counts["watermark"] == 2
+    assert owner_one_by_task["old-owner-one"]["hasVisibleWatermark"] is False
+    assert owner_one_counts["watermark"] == 1
     assert owner_two_items[0]["hasVisibleWatermark"] is False
     assert owner_two_counts["watermark"] == 0
 
 
-def test_admin_only_legacy_rows_reuse_exact_file_watermark(isolated_storage):
+def test_admin_legacy_history_results_also_remain_immutable(isolated_storage):
     storage = isolated_storage
     shared_sha = "c" * 64
     storage.put_history(
@@ -159,13 +147,10 @@ def test_admin_only_legacy_rows_reuse_exact_file_watermark(isolated_storage):
         actor=None,
     )
 
-    reused = storage.get_history("legacy-old")
+    original = storage.get_history("legacy-old")
     all_items, _, counts = storage.list_history(owner_user_id=None)
     by_task = {item["taskId"]: item for item in all_items}
 
-    assert reused["visibleWatermark"]["detected"] is True
-    assert reused["visibleWatermark"]["reanalysis"]["basis"] == "legacy-unowned-exact-sha256"
-    assert reused["visibleWatermark"]["reanalysis"]["sourceTaskId"] == "legacy-new"
-    assert "仅管理员可访问" in reused["visibleWatermark"]["note"]
-    assert by_task["legacy-old"]["hasVisibleWatermark"] is True
-    assert counts["watermark"] == 2
+    assert original["visibleWatermark"]["detected"] is False
+    assert by_task["legacy-old"]["hasVisibleWatermark"] is False
+    assert counts["watermark"] == 1

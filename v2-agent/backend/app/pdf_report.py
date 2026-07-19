@@ -82,6 +82,13 @@ def _percent(value: Any) -> str:
     return f"{number:.1f}%"
 
 
+def _fingerprint(value: Any) -> str:
+    text = _text(value)
+    if text == "-":
+        return text
+    return " ".join(text[index:index + 8] for index in range(0, len(text), 8))
+
+
 def _paragraph(value: Any, style: ParagraphStyle, default: str = "-") -> Paragraph:
     rendered = escape(_text(value, default)).replace("\n", "<br/>")
     return Paragraph(rendered, style)
@@ -311,7 +318,7 @@ def build_report_pdf(
     }.get(verdict, "需要人工复核")
     verdict_color = TEAL if verdict == "real" else RED if verdict == "highly_suspected_fake" else AMBER
     verdict_table = Table(
-        [[_paragraph(verdict_label, styles["verdict"]), _paragraph(f"AI 风险 / 置信度 {_percent(result.get('confidence'))}", styles["verdict"])]],
+        [[_paragraph(verdict_label, styles["verdict"]), _paragraph(f"综合异常风险 {_percent(result.get('riskScore', result.get('confidence')))}", styles["verdict"])]],
         colWidths=[82 * mm, 90 * mm],
     )
     verdict_table.setStyle(TableStyle([
@@ -325,11 +332,16 @@ def build_report_pdf(
     story.extend([verdict_table, _paragraph("文件信息", styles["section"])])
 
     file_meta = result.get("fileMeta") or {}
+    risk_vector = result.get("riskVector") or {}
     story.append(_meta_table([
         ("文件名", file_meta.get("name")),
         ("文件类型", file_meta.get("type")),
         ("文件大小", file_meta.get("size")),
         ("分辨率", file_meta.get("resolution")),
+        ("原件 SHA-256", _fingerprint(file_meta.get("sha256"))),
+        ("AI 生成风险", _percent(result.get("aiProbability", risk_vector.get("aiGenerated")))),
+        ("篡改风险", _percent(risk_vector.get("tampered"))),
+        ("深伪风险", _percent(risk_vector.get("deepfake"))),
         ("模型版本", result.get("modelVersion")),
         ("结果来源", result.get("source")),
         ("生成时间", result.get("createdAt")),

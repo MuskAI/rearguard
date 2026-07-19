@@ -112,10 +112,11 @@ function integrationExamples(origin: string, mode: "fast" | "swarm"): Record<Cod
     curl: [
       `ORIGIN="${origin}"`,
       'API_KEY="rg_sk_..."',
+      'IDEMPOTENCY_KEY="$(uuidgen)"',
       "",
       `TASK=$(curl -sS -X POST "${endpoint}" \\`,
       '  -H "Authorization: Bearer $API_KEY" \\',
-      '  -H "Idempotency-Key: your-request-id" \\',
+      '  -H "Idempotency-Key: $IDEMPOTENCY_KEY" \\',
       `  -F "mode=${mode}" \\`,
       '  -F "image=@./sample.jpg")',
       "",
@@ -123,20 +124,28 @@ function integrationExamples(origin: string, mode: "fast" | "swarm"): Record<Cod
       'curl -sS "$STATUS_URL" -H "Authorization: Bearer $API_KEY" | jq',
     ].join("\n"),
     python: [
-      "import os, time, requests",
+      "import os, time, uuid, requests",
       "",
       `ORIGIN = "${origin}"`,
       'API_KEY = os.environ["HUIJIAN_API_KEY"]',
-      'headers = {"Authorization": f"Bearer {API_KEY}", "Idempotency-Key": "your-request-id"}',
+      'headers = {"Authorization": f"Bearer {API_KEY}"}',
+      'create_headers = {**headers, "Idempotency-Key": str(uuid.uuid4())}',
       "",
       'with open("sample.jpg", "rb") as image:',
-      `    response = requests.post(f"{ORIGIN}/api/openapi/v1/image-detections", headers=headers, data={"mode": "${mode}"}, files={"image": image}, timeout=30)`,
+      `    response = requests.post(f"{ORIGIN}/api/openapi/v1/image-detections", headers=create_headers, data={"mode": "${mode}"}, files={"image": image}, timeout=30)`,
       "response.raise_for_status()",
       "task = response.json()",
       "",
-      'while task["status"] not in {"success", "failed"}:',
+      "deadline = time.monotonic() + 300",
+      'while task["status"] not in {"success", "failed", "rejected"}:',
+      '    if time.monotonic() >= deadline: raise TimeoutError("检测任务等待超时")',
       "    time.sleep(1.5)",
-      '    task = requests.get(ORIGIN + task["links"]["self"], headers=headers, timeout=15).json()',
+      '    response = requests.get(ORIGIN + task["links"]["self"], headers=headers, timeout=15)',
+      '    if response.status_code == 429:',
+      '        time.sleep(int(response.headers.get("Retry-After", "2"))); continue',
+      "    response.raise_for_status()",
+      "    task = response.json()",
+      'if task["status"] != "success": raise RuntimeError(task.get("error") or task["status"])',
       "print(task)",
     ].join("\n"),
     typescript: [
@@ -148,12 +157,21 @@ function integrationExamples(origin: string, mode: "fast" | "swarm"): Record<Cod
       `body.set("mode", "${mode}");`,
       'body.set("image", new Blob([await readFile("sample.jpg")]), "sample.jpg");',
       "",
-      'const headers = { Authorization: `Bearer ${apiKey}`, "Idempotency-Key": "your-request-id" };',
-      'let task = await fetch(`${origin}/api/openapi/v1/image-detections`, { method: "POST", headers, body }).then(r => r.json());',
-      'while (!["success", "failed"].includes(task.status)) {',
+      'const headers = { Authorization: `Bearer ${apiKey}` };',
+      'const createHeaders = { ...headers, "Idempotency-Key": crypto.randomUUID() };',
+      'let response = await fetch(`${origin}/api/openapi/v1/image-detections`, { method: "POST", headers: createHeaders, body });',
+      'if (!response.ok) throw new Error(await response.text());',
+      "let task = await response.json();",
+      "const deadline = Date.now() + 300_000;",
+      'while (!["success", "failed", "rejected"].includes(task.status)) {',
+      '  if (Date.now() >= deadline) throw new Error("检测任务等待超时");',
       "  await new Promise(resolve => setTimeout(resolve, 1500));",
-      "  task = await fetch(new URL(task.links.self, origin), { headers }).then(r => r.json());",
+      "  response = await fetch(new URL(task.links.self, origin), { headers });",
+      '  if (response.status === 429) { await new Promise(resolve => setTimeout(resolve, Number(response.headers.get("Retry-After") || 2) * 1000)); continue; }',
+      '  if (!response.ok) throw new Error(await response.text());',
+      "  task = await response.json();",
       "}",
+      'if (task.status !== "success") throw new Error(task.error || task.status);',
       "console.log(task);",
     ].join("\n"),
     java: [
@@ -166,10 +184,10 @@ function integrationExamples(origin: string, mode: "fast" | "swarm"): Record<Cod
       '    .addFormDataPart("image", "sample.jpg", RequestBody.create(new File("sample.jpg"), MediaType.get("image/jpeg")))',
       "    .build();",
       'Request request = new Request.Builder().url(origin + "/api/openapi/v1/image-detections")',
-      '    .header("Authorization", "Bearer " + apiKey).header("Idempotency-Key", "your-request-id")',
+      '    .header("Authorization", "Bearer " + apiKey).header("Idempotency-Key", UUID.randomUUID().toString())',
       "    .post(body).build();",
       "JSONObject task = new JSONObject(client.newCall(request).execute().body().string());",
-      "while (!task.getString(\"status\").matches(\"success|failed\")) {",
+      "for (int poll = 0; poll < 200 && !task.getString(\"status\").matches(\"success|failed|rejected\"); poll++) {",
       "    Thread.sleep(1500);",
       '    request = new Request.Builder().url(origin + task.getJSONObject("links").getString("self"))',
       '        .header("Authorization", "Bearer " + apiKey).build();',
@@ -191,10 +209,10 @@ function integrationExamples(origin: string, mode: "fast" | "swarm"): Record<Cod
       '  req, _ := http.NewRequest("POST", origin + "/api/openapi/v1/image-detections", &body)',
       '  req.Header.Set("Authorization", "Bearer " + os.Getenv("HUIJIAN_API_KEY"))',
       '  req.Header.Set("Content-Type", writer.FormDataContentType())',
-      '  req.Header.Set("Idempotency-Key", "your-request-id")',
+      '  req.Header.Set("Idempotency-Key", fmt.Sprintf("%d", time.Now().UnixNano()))',
       "  response, _ := http.DefaultClient.Do(req)",
       "  var task map[string]any; json.NewDecoder(response.Body).Decode(&task)",
-      '  for task["status"] != "success" && task["status"] != "failed" {',
+      '  for poll := 0; poll < 200 && task["status"] != "success" && task["status"] != "failed" && task["status"] != "rejected"; poll++ {',
       "    time.Sleep(1500 * time.Millisecond)",
       '    url := origin + task["links"].(map[string]any)["self"].(string)',
       '    req, _ = http.NewRequest("GET", url, nil); req.Header.Set("Authorization", "Bearer " + os.Getenv("HUIJIAN_API_KEY"))',
@@ -367,7 +385,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
         <header className="developer-topbar">
           <div>
             <p>慧鉴AI / Developer</p>
-            <h1>{NAV_ITEMS.find((item) => item.key === tab)?.label}</h1>
+            <h1 tabIndex={-1}>{NAV_ITEMS.find((item) => item.key === tab)?.label}</h1>
           </div>
           <div className="developer-topbar-actions">
             {error && <span className="developer-inline-error">{error}</span>}
@@ -508,7 +526,7 @@ function DocsPanel({ endpoint, mode, language, code, copied, onModeChange, onLan
         <div className="developer-doc-content">
           <section id="create-task"><p className="developer-method-line"><span>POST</span><code>/api/openapi/v1/image-detections</code></p><h3>创建图像鉴伪任务</h3><p>使用 multipart/form-data 上传图片。相同的 Idempotency-Key 与文件可安全重试，不会重复扣费。</p><div className="developer-mode-selector" aria-label="示例检测模式"><button type="button" className={mode === "fast" ? "is-active" : ""} onClick={() => onModeChange("fast")}><Gauge size={16} /><span><strong>快速检测</strong><small>主模型 + 水印</small></span></button><button type="button" className={mode === "swarm" ? "is-active" : ""} onClick={() => onModeChange("swarm")}><ShieldCheck size={16} /><span><strong>Swarm</strong><small>多源交叉复核</small></span></button></div></section>
           <section className="developer-code-section"><header><div className="developer-language-tabs">{(Object.keys(LANGUAGE_LABELS) as CodeLanguage[]).map((item) => <button type="button" key={item} className={language === item ? "is-active" : ""} onClick={() => onLanguageChange(item)}>{LANGUAGE_LABELS[item]}</button>)}</div><button type="button" onClick={() => void onCopy(code, "code")}>{copied === "code" ? <Check size={15} /> : <Copy size={15} />}{copied === "code" ? "已复制" : "复制"}</button></header><pre><code>{code}</code></pre></section>
-          <section id="poll-task"><p className="developer-method-line"><span className="get">GET</span><code>/api/openapi/v1/image-detections/{'{task_id}'}</code></p><h3>查询任务状态</h3><p>建议从 1.5 秒间隔开始轮询，并逐步放慢。终态为 success 或 failed；只有 success 会完成额度结算。</p><div className="developer-response-grid"><div><small>status</small><code>queued · running · success · failed</code></div><div><small>billing.status</small><code>reserved · settled · released</code></div></div></section>
+          <section id="poll-task"><p className="developer-method-line"><span className="get">GET</span><code>/api/openapi/v1/image-detections/{'{task_id}'}</code></p><h3>查询任务状态</h3><p>建议从 1.5 秒间隔开始轮询，并逐步放慢；收到 429 时遵守 Retry-After。终态为 success、failed 或 rejected，只有 success 会完成额度结算。</p><div className="developer-response-grid"><div><small>status</small><code>queued · running · success · failed · rejected</code></div><div><small>billing.status</small><code>reserved · settled · released</code></div></div></section>
           <section id="download-report"><p className="developer-method-line"><span className="get">GET</span><code>/api/openapi/v1/image-detections/{'{task_id}'}/report</code></p><h3>下载 PDF 报告</h3><p>任务成功后可下载报告。报告与任务都按开发者账号隔离，轮换 Key 后仍可使用同账号的新 Key 访问。</p></section>
           <section id="agent-skill" className="developer-skill-section"><span><Code2 size={22} /></span><div><h3>慧鉴AI Agent Skill</h3><p>为 Codex 或兼容 Agent 提供图片提交、轮询、证据摘要和 PDF 下载流程。通过 HUIJIAN_API_KEY 配置密钥。</p><code>HUIJIAN_API_KEY=rg_sk_...</code></div><a href="https://github.com/MuskAI/rearguard/tree/main/skills/huijian-image-forensics" target="_blank" rel="noreferrer">查看 Skill <ExternalLink size={15} /></a></section>
           <section className="developer-endpoint-note"><SquareTerminal size={18} /><div><strong>完整端点</strong><code>{endpoint}</code></div></section>

@@ -20,9 +20,26 @@ CREATE TABLE IF NOT EXISTS `user` (
   `terms_version` VARCHAR(32) NULL DEFAULT NULL COMMENT '用户协议版本',
   `terms_accepted_at` DATETIME NULL DEFAULT NULL COMMENT '用户协议同意时间',
   `password_updated_at` DATETIME NULL DEFAULT NULL COMMENT '密码更新时间',
+  `session_version` INT NOT NULL DEFAULT 1 COMMENT '登录态版本，重置密码时递增',
   PRIMARY KEY (`Userid`),
   UNIQUE KEY `uk_user_phone` (`phone`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户';
+
+CREATE TABLE IF NOT EXISTS `consent_events` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
+  `user_id` INT NOT NULL,
+  `phone_hash` CHAR(64) NOT NULL,
+  `document_version` VARCHAR(32) NOT NULL,
+  `terms_sha256` CHAR(64) NOT NULL,
+  `privacy_sha256` CHAR(64) NOT NULL,
+  `channel` VARCHAR(64) NOT NULL,
+  `client_ip_hash` CHAR(64) NULL,
+  `user_agent_hash` CHAR(64) NULL,
+  `accepted_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_consent_events_user_time` (`user_id`, `accepted_at`),
+  CONSTRAINT `fk_consent_events_user` FOREIGN KEY (`user_id`) REFERENCES `user` (`Userid`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='不可覆盖的协议同意事件';
 
 -- ---------------------------------------------------------------------------
 -- 开发者 API Key（仅保存哈希和预览，完整 key 只在创建时返回一次）
@@ -39,6 +56,8 @@ CREATE TABLE IF NOT EXISTS `developer_api_keys` (
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `last_used_at` DATETIME NULL,
   `revoked_at` DATETIME NULL,
+  `expires_at` DATETIME NULL,
+  `ip_allowlist` TEXT NULL,
   `last_used_ip` VARCHAR(64) NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_developer_api_key_hash` (`key_hash`),
@@ -48,6 +67,29 @@ CREATE TABLE IF NOT EXISTS `developer_api_keys` (
     FOREIGN KEY (`user_id`) REFERENCES `user` (`Userid`)
     ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='开发者 API Key';
+
+CREATE TABLE IF NOT EXISTS `developer_api_account_quotas` (
+  `user_id` INT NOT NULL,
+  `daily_limit` INT NULL,
+  `rate_limit_per_minute` INT NULL,
+  `scopes` VARCHAR(255) NULL,
+  `notes` TEXT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`user_id`),
+  CONSTRAINT `fk_developer_api_account_quotas_user` FOREIGN KEY (`user_id`) REFERENCES `user` (`Userid`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='账号级 API 配额';
+
+CREATE TABLE IF NOT EXISTS `developer_api_account_quota_usage` (
+  `user_id` INT NOT NULL,
+  `day_bucket` DATE NOT NULL,
+  `daily_count` BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  `minute_bucket` DATETIME NOT NULL,
+  `minute_count` INT UNSIGNED NOT NULL DEFAULT 0,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`user_id`),
+  CONSTRAINT `fk_developer_api_account_quota_usage_user` FOREIGN KEY (`user_id`) REFERENCES `user` (`Userid`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='账号级 API 配额计数';
 
 -- ---------------------------------------------------------------------------
 -- 后台管理员账号（独立于普通用户登录）
@@ -75,7 +117,7 @@ CREATE TABLE IF NOT EXISTS `data` (
   `itemid` INT NOT NULL AUTO_INCREMENT,
   `createtime` DATETIME NULL,
   `filename` VARCHAR(255) NULL,
-  `fake` DOUBLE NULL COMMENT '综合/展示用 AI 概率 0~1',
+  `fake` DOUBLE NULL COMMENT '综合/展示用风险百分数 0~100',
   `detector_probability` DOUBLE NULL DEFAULT NULL COMMENT '检测器原始 AI 概率',
   `openid` VARCHAR(128) NULL,
   `phone` VARCHAR(32) NULL,

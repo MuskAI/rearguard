@@ -16,15 +16,16 @@ def test_photographer_copyright_and_negative_aigc_scan_are_not_ai_metadata():
     assert result["details"]["aiMarkers"] == []
 
 
-def test_named_generator_in_parameters_is_verified_ai_metadata():
+def test_named_generator_in_parameters_is_editable_context_only():
     result = detection._swarm_metadata_expert({
         "all_metadata": {
             "PNG:Parameters": "Stable Diffusion, Steps: 30, Sampler: Euler",
         }
     })
 
-    assert result["score"] == 0.9
-    assert result["details"]["verifiedAiMetadata"] is True
+    assert result["score"] == 0.5
+    assert result["details"]["verifiedAiMetadata"] is False
+    assert result["details"]["editableAiMetadata"] is True
     assert "Stable Diffusion" in result["details"]["aiMarkers"][0]
 
 

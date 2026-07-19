@@ -69,7 +69,6 @@ CAMERA_DIGITAL_SOURCE_TYPES = {
     "http://cv.iptc.org/newscodes/digitalsourcetype/negativefilm",
     "http://cv.iptc.org/newscodes/digitalsourcetype/positivefilm",
     "http://cv.iptc.org/newscodes/digitalsourcetype/print",
-    "http://cv.iptc.org/newscodes/digitalsourcetype/minorhumanedits",
 }
 
 
@@ -174,10 +173,11 @@ def _collect_digital_source_types(manifest: Dict[str, Any]) -> List[str]:
 
 
 def _validation_summary(manifest_envelope: Dict[str, Any]) -> Tuple[str, List[str]]:
-    """Return (severity, issues) where severity in {ok, warning, error}."""
+    """Return (severity, issues) where missing validation is never trusted."""
     results = manifest_envelope.get("validation_results") if isinstance(manifest_envelope, dict) else None
     issues: List[str] = []
-    severity = "ok"
+    severity = "unknown"
+    saw_success = False
     if isinstance(results, dict):
         for bucket_name in ("activeManifest", "active_manifest", "ingredient_active_manifest"):
             bucket = results.get(bucket_name) if isinstance(results.get(bucket_name), dict) else None
@@ -197,6 +197,12 @@ def _validation_summary(manifest_envelope: Dict[str, Any]) -> Tuple[str, List[st
                         if any(k in code.lower() for k in ("trust", "untrusted", "revoked")):
                             severity = "warning"
                             issues.append(f"信任链警告: {_truncate(explanation, 80)}")
+                    elif level == "success":
+                        saw_success = True
+    if saw_success and severity == "unknown":
+        severity = "ok"
+    if severity == "unknown":
+        issues.append("C2PA 未返回可验证的签名校验结果。")
     return severity, issues
 
 
@@ -335,15 +341,15 @@ def _decide_verdict(
             evidence.append(f"C2PA claim_generator 指向 AI 工具：{', '.join(sorted(set(ai_gen_hits))[:3])}")
         if ai_dst_hits:
             evidence.append("C2PA digitalSourceType 标注为合成媒体。")
-        if validation_severity == "warning":
-            evidence.append(validation_issues[0] if validation_issues else "C2PA 信任链未在白名单内。")
-            return 0.86, "C2PA 标识为生成内容（信任链待验证）", "中", evidence
+        if validation_severity != "ok":
+            evidence.append(validation_issues[0] if validation_issues else "C2PA 信任链未验证。")
+            return 0.58, "C2PA 声明为生成内容（凭证未验证）", "低", evidence
         return 0.94, "C2PA 标识为生成内容", "高", evidence
 
     if cam_dst_hits:
-        if validation_severity == "warning":
-            evidence.append("C2PA 标识为相机拍摄，但信任链未验证。")
-            return 0.32, "C2PA 标识为相机拍摄（信任链待验证）", "中", evidence
+        if validation_severity != "ok":
+            evidence.append("C2PA 声明为相机拍摄，但签名或信任链未验证；该声明保持中性。")
+            return 0.5, "C2PA 相机声明未验证", "低", evidence
         evidence.append("C2PA digitalSourceType 标注为相机捕获。")
         if generators:
             evidence.append(f"凭证签名方：{_truncate(generators[0], 60)}")
@@ -351,7 +357,7 @@ def _decide_verdict(
 
     if generators:
         evidence.append(f"C2PA 凭证由 {_truncate(generators[0], 60)} 签发，但来源类别未明示。")
-        if validation_severity == "warning":
+        if validation_severity != "ok":
             evidence.append(validation_issues[0] if validation_issues else "C2PA 信任链未验证。")
         return 0.5, "C2PA 凭证存在但来源未知", "低", evidence
 

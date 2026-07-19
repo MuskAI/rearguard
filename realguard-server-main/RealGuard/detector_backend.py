@@ -14,6 +14,7 @@ from werkzeug.utils import secure_filename
 
 from imagedetection.views.utils import (
     create_folder,
+    excute_detection_sql,
     excute_detection_sql_lastid,
     get_file_size_str,
     get_image_info,
@@ -271,6 +272,18 @@ def _consume_remote_inference_evidence():
     return {}
 
 
+def _detection_user_id(phone="", openid=""):
+    phone = str(phone or "").strip()
+    openid = str(openid or "").strip()
+    if phone:
+        rows = excute_detection_sql("SELECT Userid FROM user WHERE phone = %s LIMIT 1", (phone,))
+    elif openid and not openid.startswith("guest-"):
+        rows = excute_detection_sql("SELECT Userid FROM user WHERE openid = %s LIMIT 1", (openid,))
+    else:
+        return None
+    return (rows or [{}])[0].get("Userid")
+
+
 def _persist_result(payload, image_bytes, filename, openid, phone):
     folder = openid or phone or "guest"
     stored_name, file_path = _save_upload(image_bytes, folder, filename)
@@ -293,8 +306,8 @@ def _persist_result(payload, image_bytes, filename, openid, phone):
         """
         INSERT INTO data
             (createtime, filename, fake, detector_probability, openid, phone, aigc,
-             file_size, img_format, resolution, clarity, explantation)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             file_size, img_format, resolution, clarity, explantation, Userid)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -309,6 +322,7 @@ def _persist_result(payload, image_bytes, filename, openid, phone):
             resolution,
             confidence,
             safe_truncate(explanation, 500),
+            _detection_user_id(phone, openid),
         ),
     )
     if not itemid:

@@ -1316,8 +1316,8 @@
       if(!can('api_key.manage')){ toast('当前角色无 访问凭证 管理权限'); return; }
       const key = state.keys.find(k => Number(k.id) === Number(id)) || {};
       const values=await requestAction({title:'调整 API 配额',message:`${key.name || `Key #${id}`} · ${key.masked || ''}`,confirmText:'保存配额',fields:[
-        {name:'dailyLimit',label:'每日调用上限（留空表示不限）',type:'number',min:0,step:1,value:key.quota?.dailyLimit ?? ''},
-        {name:'rateLimitPerMinute',label:'每分钟限流（留空表示不限）',type:'number',min:0,step:1,value:key.quota?.rateLimitPerMinute ?? ''},
+        {name:'dailyLimit',label:'账号每日调用上限（同账号 Token 共享）',type:'number',min:0,step:1,value:key.quota?.dailyLimit ?? ''},
+        {name:'rateLimitPerMinute',label:'账号每分钟限流（同账号 Token 共享）',type:'number',min:0,step:1,value:key.quota?.rateLimitPerMinute ?? ''},
       ]});
       if(!values) return;
       await api(`/api/admin/api-keys/${encodeURIComponent(id)}/quota`, {method:'POST', body:JSON.stringify(values)});

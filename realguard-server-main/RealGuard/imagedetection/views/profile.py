@@ -66,10 +66,11 @@ def change_password():
         return jsonify({'status': 'error', 'message': '当前密码错误'}), 400
 
     affected = excute_sql(
-        "UPDATE user SET secret = %s WHERE phone = %s",
+        "UPDATE user SET secret = %s, session_version = session_version + 1, password_updated_at = NOW() WHERE phone = %s",
         (_hash_password(new_password), phone),
         fetch=False,
     )
     if affected and affected > 0:
-        return jsonify({'status': 'success', 'message': '密码修改成功'})
+        session.clear()
+        return jsonify({'status': 'success', 'message': '密码修改成功，请重新登录'})
     return jsonify({'status': 'error', 'message': '修改失败'}), 500

@@ -250,7 +250,10 @@ def build(result: dict[str, Any]) -> dict[str, Any]:
         if converted is not None
     )
 
-    uncertainty_score = round(1.0 - confidence, 3)
+    # `confidence` is the probability/risk of synthetic content, not
+    # confidence in the categorical verdict. Values near either 0 or 1 are
+    # low-uncertainty; values near the decision boundary are high-uncertainty.
+    uncertainty_score = round(1.0 - abs(confidence - 0.5) * 2.0, 3)
     uncertainty_factors = []
     if result.get("source") == "mock":
         uncertainty_factors.append("mock_fallback")

@@ -29,6 +29,9 @@ import {
   ImageHistoryRecord,
   VideoHistoryRecord,
   detect,
+  deleteHistory,
+  deleteImageHistory,
+  deleteVideoHistory,
   detectVideoWithAgent,
   downloadReport,
   fetchCurrentUser,
@@ -43,7 +46,6 @@ import {
   imageReportUrl,
   isRateLimitedError,
   logoutAccount,
-  persistArtifacts,
   runForensics,
   runProvenance,
   startImageAgent,
@@ -62,7 +64,7 @@ import ResultFeedback from "./components/ResultFeedback";
 import "./interaction.css";
 
 const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
-const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
+const MAX_VIDEO_BYTES = 256 * 1024 * 1024;
 const AGENT_POLL_INITIAL_MS = 1_200;
 const AGENT_POLL_MAX_MS = 2_400;
 const AGENT_POLL_RATE_LIMIT_RETRIES = 8;
@@ -70,6 +72,12 @@ const ACCEPTED_FILES = "image/jpeg,image/png,image/webp,image/bmp,image/gif,vide
 
 type UploadKind = "image" | "video" | "audio" | "document" | "unknown";
 type AppView = "home" | "workspace" | "developer";
+type FallbackOffer = {
+  file: File;
+  previewUrl?: string;
+  mode: ImageAnalysisMode;
+  reason: string;
+};
 
 function initialAppView(): AppView {
   const params = new URLSearchParams(window.location.search);
@@ -191,12 +199,15 @@ export default function App() {
   const [historyQuery, setHistoryQuery] = useState("");
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyMessage, setHistoryMessage] = useState("");
+  const [deletingHistoryKey, setDeletingHistoryKey] = useState<string>();
   const [mobileHistoryOpen, setMobileHistoryOpen] = useState(false);
   const [activeKey, setActiveKey] = useState<string>();
   const [pendingFile, setPendingFile] = useState<PendingFile | null>(null);
   const [progress, setProgress] = useState<AgentProgress | null>(null);
   const [outcome, setOutcome] = useState<AgentOutcome | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [failedAction, setFailedAction] = useState<"forensics" | "provenance" | "download" | null>(null);
   const [busy, setBusy] = useState(false);
   const [forensicsBusy, setForensicsBusy] = useState(false);
   const [forensicsPreviewState, setForensicsPreviewState] = useState<"idle" | "running" | "complete" | "skipped">("idle");
@@ -206,6 +217,9 @@ export default function App() {
   const [imageAnalysisMode, setImageAnalysisMode] = useState<ImageAnalysisMode>("fast");
   const [feedbackBusy, setFeedbackBusy] = useState(false);
   const [feedbackError, setFeedbackError] = useState("");
+  const [fallbackOffer, setFallbackOffer] = useState<FallbackOffer | null>(null);
+  const [guestConsent, setGuestConsent] = useState(false);
+  const [consentWarning, setConsentWarning] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const resultRef = useRef<HTMLDivElement>(null);
@@ -282,17 +296,26 @@ export default function App() {
     return () => window.removeEventListener("popstate", syncViewFromUrl);
   }, []);
 
+  useEffect(() => {
+    document.title = view === "home" ? "慧鉴AI - 数字内容鉴伪" : view === "developer" ? "开发者平台 - 慧鉴AI" : "鉴伪工作台 - 慧鉴AI";
+    window.requestAnimationFrame(() => {
+      const selector = view === "home" ? "#official-home-title" : view === "developer" ? ".developer-topbar h1" : ".topbar-title h1";
+      document.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
+    });
+  }, [view]);
+
   const outcomeId = outcome?.id;
   useEffect(() => {
-    if (!progress && !outcomeId && !errorMessage) return;
+    if (!progress && !outcomeId && !errorMessage && !fallbackOffer) return;
     window.requestAnimationFrame(() => {
       if (outcomeId) {
         resultRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+        resultRef.current?.focus({ preventScroll: true });
         return;
       }
       workspaceRef.current?.scrollTo({ top: workspaceRef.current.scrollHeight, behavior: "smooth" });
     });
-  }, [errorMessage, outcomeId, progress]);
+  }, [errorMessage, fallbackOffer, outcomeId, progress]);
 
   const resetTask = useCallback(() => {
     runTokenRef.current += 1;
@@ -311,11 +334,14 @@ export default function App() {
     setProgress(null);
     setOutcome(null);
     setErrorMessage("");
+    setActionError("");
+    setFailedAction(null);
     setBusy(false);
     setForensicsBusy(false);
     setForensicsPreviewState("idle");
     setFeedbackBusy(false);
     setFeedbackError("");
+    setFallbackOffer(null);
     setActiveKey(undefined);
   }, []);
 
@@ -359,6 +385,8 @@ export default function App() {
     setHistoryMessage("");
     setHistoryQuery("");
     setMobileHistoryOpen(false);
+    setGuestConsent(false);
+    setConsentWarning(false);
     void logoutAccount().catch(() => undefined);
   }
 
@@ -420,31 +448,16 @@ export default function App() {
       if (isRateLimitedError(error)) {
         throw new Error("当前提交任务较多，请稍候几秒后重试当前文件");
       }
-      setProgress({
-        title: "正在切换可用检测链路",
-        detail: `${mode === "swarm" ? "Swarm 复核" : "主模型服务"}未完成，改用可信视觉模型继续分析`,
-        percent: 46,
-        stage: "dispatch",
-        fallback: true,
-        analysisMode: mode,
-      });
-      const result = await detect(file, "image");
-      if (runTokenRef.current !== token) return;
-      setProgress({ title: "鉴伪完成", detail: "检测结果与内容凭证已整理完成", percent: 100, stage: "report", fallback: true, analysisMode: mode });
-      setOutcome({
-        kind: "evidence",
-        id: `evidence:${result.taskId}`,
-        result,
-        file,
-        previewUrl,
-        provenance: result.provenance || undefined,
-        analysisMode: mode,
-        fallbackFromImage: true,
-      });
+      setProgress(null);
+      setFallbackOffer({ file, previewUrl, mode, reason: message });
     }
   }
 
   async function analyzeFile(file: File, modeOverride = imageAnalysisMode, accountOverride?: AccountUser) {
+    if (!(accountOverride || user) && !guestConsent) {
+      setConsentWarning(true);
+      return;
+    }
     resetTask();
     retryFileRef.current = file;
     const kind = inferKind(file.name);
@@ -490,7 +503,7 @@ export default function App() {
         await runImage(file, previewUrl, token, controller, modeOverride);
       } else if (kind === "video") {
         setProgress({ title: "正在分析视频", detail: "抽取关键帧并检查时序合成线索", percent: 42, stage: "evidence" });
-        const response = await detectVideoWithAgent(file);
+        const response = await detectVideoWithAgent(file, controller.signal);
         if (runTokenRef.current !== token) return;
         setProgress({ title: "鉴伪完成", detail: "视频风险与关键指标已经整理完成", percent: 100, stage: "report" });
         setOutcome({ kind: "video", id: `video:${response.result.itemid}`, result: response.result, file, previewUrl });
@@ -524,6 +537,10 @@ export default function App() {
     event.preventDefault();
     setDragging(false);
     if (busy) return;
+    if (!user && !guestConsent) {
+      setConsentWarning(true);
+      return;
+    }
     const file = event.dataTransfer.files?.[0];
     if (file) void analyzeFile(file);
   }
@@ -535,6 +552,62 @@ export default function App() {
       return;
     }
     fileInputRef.current?.click();
+  }
+
+  function requestFileSelection() {
+    if (!user && !guestConsent) {
+      setConsentWarning(true);
+      return;
+    }
+    fileInputRef.current?.click();
+  }
+
+  async function runFallbackChain() {
+    const offer = fallbackOffer;
+    if (!offer || busy) return;
+    const controller = new AbortController();
+    runControllerRef.current = controller;
+    const token = ++runTokenRef.current;
+    setFallbackOffer(null);
+    setErrorMessage("");
+    setBusy(true);
+    setProgress({
+      title: "正在使用备用证据链",
+      detail: "已按你的选择切换；最终报告会明确标注本次检测来源",
+      percent: 46,
+      stage: "dispatch",
+      fallback: true,
+      analysisMode: offer.mode,
+    });
+    try {
+      const result = await detect(offer.file, "image");
+      if (runTokenRef.current !== token) return;
+      setProgress({
+        title: "鉴伪完成",
+        detail: "备用模型结果与内容凭证已整理完成",
+        percent: 100,
+        stage: "report",
+        fallback: true,
+        analysisMode: offer.mode,
+      });
+      setOutcome({
+        kind: "evidence",
+        id: `evidence:${result.taskId}`,
+        result,
+        file: offer.file,
+        previewUrl: offer.previewUrl,
+        provenance: result.provenance || undefined,
+        analysisMode: offer.mode,
+        fallbackFromImage: true,
+      });
+      if (user && userIdRef.current === user.Userid) void loadHistoryForUser(user);
+    } catch (error) {
+      if (isAbort(error) || runTokenRef.current !== token) return;
+      setProgress(null);
+      setErrorMessage(error instanceof Error ? error.message : "备用证据链未完成，请稍后重试");
+    } finally {
+      if (runTokenRef.current === token) setBusy(false);
+    }
   }
 
   async function selectHistory(entry: AgentHistoryEntry) {
@@ -586,10 +659,27 @@ export default function App() {
     }
   }
 
+  async function removeHistoryEntry(entry: AgentHistoryEntry) {
+    if (!user || deletingHistoryKey) return;
+    if (!window.confirm(`确认永久删除“${entry.title}”及其归档证据吗？此操作无法撤销。`)) return;
+    setDeletingHistoryKey(entry.key);
+    setHistoryMessage("");
+    try {
+      if (entry.origin === "evidence") await deleteHistory(entry.recordId);
+      else if (entry.origin === "image") await deleteImageHistory(Number(entry.recordId));
+      else await deleteVideoHistory(Number(entry.recordId));
+      setHistory((current) => current.filter((item) => item.key !== entry.key));
+      if (activeKey === entry.key) resetTask();
+    } catch (error) {
+      setHistoryMessage(error instanceof Error ? error.message : "记录删除失败，请稍后重试");
+    } finally {
+      setDeletingHistoryKey(undefined);
+    }
+  }
+
   async function createForensics() {
     if (!outcome?.file || forensicsBusy) return;
     const outcomeId = outcome.id;
-    const targetKind = outcome.kind;
     const targetTaskId = outcome.kind === "evidence" ? outcome.result.taskId : null;
     const file = outcome.file;
     const requestController = new AbortController();
@@ -611,9 +701,10 @@ export default function App() {
 
     setForensicsBusy(true);
     setForensicsPreviewState("running");
-    setErrorMessage("");
+    setActionError("");
+    setFailedAction(null);
 
-    const serverRequest = runForensics(file, requestController.signal);
+    const serverRequest = runForensics(file, requestController.signal, targetTaskId || undefined);
     const previewTask = generateForensicPreview(file, (report) => {
       if (authoritativeReady || !isCurrent()) return;
       previewRendered = true;
@@ -633,13 +724,6 @@ export default function App() {
       authoritativeReady = true;
       previewController.abort();
       updateReport(report);
-      if (targetKind === "evidence" && targetTaskId) {
-        try {
-          await persistArtifacts(targetTaskId, { forensics: report });
-        } catch {
-          if (isCurrent()) setErrorMessage("模型判读已完成，但取证图谱暂时无法写入历史归档。");
-        }
-      }
       return { ok: true as const, report };
     }).catch((error: unknown) => ({
       ok: false as const,
@@ -662,9 +746,11 @@ export default function App() {
             },
           };
         });
-        setErrorMessage("本地预览已生成，但服务端模型判读失败，请稍后重试。");
+        setActionError("本地预览已生成，但服务端模型判读失败，请稍后重试。");
+        setFailedAction("forensics");
       } else {
-        setErrorMessage(serverResult.error instanceof Error ? serverResult.error.message : "取证图谱生成失败");
+        setActionError(serverResult.error instanceof Error ? serverResult.error.message : "取证图谱生成失败");
+        setFailedAction("forensics");
       }
     }
     if (forensicsTokenRef.current === requestToken) {
@@ -677,12 +763,17 @@ export default function App() {
     if (!outcome?.file || provenanceBusy) return;
     const outcomeId = outcome.id;
     setProvenanceBusy(true);
+    setActionError("");
+    setFailedAction(null);
     try {
-      const report = await runProvenance(outcome.file);
+      const report = await runProvenance(
+        outcome.file,
+        outcome.kind === "evidence" ? outcome.result.taskId : undefined,
+      );
       setOutcome((current) => current && current.id === outcomeId && (current.kind === "image" || current.kind === "evidence") ? { ...current, provenance: report } : current);
-      if (outcome.kind === "evidence") await persistArtifacts(outcome.result.taskId, { provenance: report });
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "内容凭证验证失败");
+      setActionError(error instanceof Error ? error.message : "内容凭证验证失败");
+      setFailedAction("provenance");
     } finally {
       setProvenanceBusy(false);
     }
@@ -691,9 +782,11 @@ export default function App() {
   async function downloadOutcome() {
     if (!outcome || downloadBusy) return;
     setDownloadBusy(true);
+    setActionError("");
+    setFailedAction(null);
     try {
       if (outcome.kind === "evidence") {
-        await downloadReport(outcome.result.reportId, { forensics: outcome.forensics, provenance: outcome.provenance || outcome.result.provenance });
+        await downloadReport(outcome.result.reportId);
       } else {
         const link = document.createElement("a");
         link.href = outcome.kind === "image" ? imageReportUrl(outcome.result.itemid) : videoReportUrl(outcome.result.itemid);
@@ -703,10 +796,17 @@ export default function App() {
         link.remove();
       }
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "报告下载失败");
+      setActionError(error instanceof Error ? error.message : "报告下载失败");
+      setFailedAction("download");
     } finally {
       setDownloadBusy(false);
     }
+  }
+
+  function retryFailedAction() {
+    if (failedAction === "forensics") void createForensics();
+    else if (failedAction === "provenance") void verifyProvenance();
+    else if (failedAction === "download") void downloadOutcome();
   }
 
   async function recordImageFeedback(value: 1 | -1) {
@@ -797,6 +897,8 @@ export default function App() {
         mobileOpen={mobileHistoryOpen}
         onQueryChange={setHistoryQuery}
         onSelect={(entry) => void selectHistory(entry)}
+        onDelete={(entry) => void removeHistoryEntry(entry)}
+        deletingKey={deletingHistoryKey}
         onNew={resetTask}
         onLogin={() => setAuthOpen(true)}
         onLogout={logout}
@@ -811,12 +913,12 @@ export default function App() {
               <Home size={16} /><span>官网首页</span>
             </button>
             <div>
-              <h1><span className="desktop-task-title">{screenTitle}</span><span className="mobile-task-title">{pendingFile?.name || "慧鉴AI"}</span></h1>
+              <h1 tabIndex={-1}><span className="desktop-task-title">{screenTitle}</span><span className="mobile-task-title">{pendingFile?.name || "慧鉴AI"}</span></h1>
               <p>{pendingFile ? "慧鉴AI 正在为这份内容整理可信证据" : "一个入口完成检测、取证、凭证核验与报告归档"}</p>
             </div>
           </div>
           <div className="topbar-actions">
-            <span className={`service-pill ${health == null ? "checking" : serviceAvailable ? "online" : "limited"}`}>
+            <span className={`service-pill ${health == null ? "checking" : serviceAvailable ? "online" : "limited"}`} role="status" aria-label={health == null ? "服务检查中" : serviceAvailable ? "检测服务可用" : "部分能力受限"} title={health == null ? "服务检查中" : serviceAvailable ? "检测服务可用" : "部分能力受限"}>
               <i /> {health == null ? "服务检查中" : serviceAvailable ? "检测服务可用" : "部分能力受限"}
             </span>
             {authReady && (user ? (
@@ -836,7 +938,13 @@ export default function App() {
               user={user}
               analysisMode={imageAnalysisMode}
               onAnalysisModeChange={setImageAnalysisMode}
-              onOpenFile={() => fileInputRef.current?.click()}
+              guestConsent={guestConsent}
+              consentWarning={consentWarning}
+              onGuestConsentChange={(checked) => {
+                setGuestConsent(checked);
+                if (checked) setConsentWarning(false);
+              }}
+              onOpenFile={requestFileSelection}
               onDragEnter={() => setDragging(true)}
               onDragLeave={() => setDragging(false)}
               onDrop={dropFile}
@@ -850,7 +958,20 @@ export default function App() {
                 <div className="file-message-copy"><span>请帮我鉴别这份内容</span><strong>{pendingFile.name}</strong><small>{pendingFile.typeLabel}{pendingFile.size ? ` · ${formatBytes(pendingFile.size)}` : " · 已归档任务"}{pendingFile.analysisMode ? <span className="pending-mode-chip">{pendingFile.analysisMode === "swarm" ? "Swarm 复核" : "快速检测"}</span> : null}</small></div>
                 {pendingFile.previewUrl ? <img src={pendingFile.previewUrl} alt="待检测文件预览" /> : <span className="file-message-icon"><Paperclip size={20} /></span>}
               </div>
-              {(progress || busy) && !outcome && <AgentProgressPanel progress={progress} />}
+              {(progress || busy) && !outcome && <AgentProgressPanel progress={progress} onCancel={resetTask} />}
+              {fallbackOffer && !busy && (
+                <div className="fallback-choice" role="alert" aria-live="polite">
+                  <span><ShieldCheck size={19} /></span>
+                  <div>
+                    <strong>{fallbackOffer.mode === "swarm" ? "Swarm 复核未完成" : "快速检测未完成"}</strong>
+                    <p>{fallbackOffer.reason}。文件尚未提交到备用模型，你可以重试原模式，或明确选择备用证据链。</p>
+                    <div className="fallback-choice-actions">
+                      <button type="button" className="secondary-button" onClick={retryCurrentFile}><RefreshCw size={15} /> 重试原模式</button>
+                      <button type="button" className="primary-button" onClick={() => void runFallbackChain()}><ShieldCheck size={15} /> 使用备用证据链</button>
+                    </div>
+                  </div>
+                </div>
+              )}
               {errorMessage && (
                 <div className="agent-error-message" role="alert">
                   <span><Bot size={18} /></span>
@@ -858,13 +979,15 @@ export default function App() {
                 </div>
               )}
               {outcome && (
-                <div ref={resultRef} className="result-anchor">
+                <div ref={resultRef} className="result-anchor" role="region" aria-label="检测结果" aria-live="polite" tabIndex={-1}>
                   <AgentResult
                     outcome={outcome}
                     forensicsBusy={forensicsBusy}
                     forensicsPreviewState={forensicsPreviewState}
                     provenanceBusy={provenanceBusy}
                     downloadBusy={downloadBusy}
+                    actionError={actionError}
+                    onRetryAction={failedAction ? retryFailedAction : undefined}
                     onForensics={() => void createForensics()}
                     onProvenance={() => void verifyProvenance()}
                     onDownload={() => void downloadOutcome()}
@@ -908,6 +1031,8 @@ function WelcomeWorkspace({
   busy,
   dragging,
   user,
+  guestConsent,
+  consentWarning,
   analysisMode,
   onAnalysisModeChange,
   onOpenFile,
@@ -915,10 +1040,13 @@ function WelcomeWorkspace({
   onDragLeave,
   onDrop,
   onLogin,
+  onGuestConsentChange,
 }: {
   busy: boolean;
   dragging: boolean;
   user: AccountUser | null;
+  guestConsent: boolean;
+  consentWarning: boolean;
   analysisMode: ImageAnalysisMode;
   onAnalysisModeChange: (mode: ImageAnalysisMode) => void;
   onOpenFile: () => void;
@@ -926,6 +1054,7 @@ function WelcomeWorkspace({
   onDragLeave: () => void;
   onDrop: (event: DragEvent<HTMLElement>) => void;
   onLogin: () => void;
+  onGuestConsentChange: (checked: boolean) => void;
 }) {
   return (
     <div className="welcome-page">
@@ -960,6 +1089,13 @@ function WelcomeWorkspace({
             <small>按所选模式调度</small>
           </div>
           <AnalysisModeSwitch mode={analysisMode} disabled={busy} onChange={onAnalysisModeChange} />
+          {!user && (
+            <label className={`guest-upload-consent ${consentWarning ? "has-error" : ""}`}>
+              <input type="checkbox" checked={guestConsent} onChange={(event) => onGuestConsentChange(event.target.checked)} />
+              <span>我同意将文件上传用于本次鉴伪处理，并已阅读 <a href="/legal/terms.html" target="_blank" rel="noreferrer">用户协议</a> 与 <a href="/legal/privacy.html" target="_blank" rel="noreferrer">隐私政策</a></span>
+            </label>
+          )}
+          {consentWarning && !user && <p className="guest-consent-warning" role="alert">请先确认文件处理与隐私授权，再选择或拖放文件。</p>}
           <button type="button" className="upload-stage-core" disabled={busy} onClick={onOpenFile}>
             <div className="upload-stage-icon"><UploadCloud size={28} /></div>
             <h3>{dragging ? "松开即可开始鉴伪" : "上传或拖放待鉴别内容"}</h3>
@@ -972,7 +1108,7 @@ function WelcomeWorkspace({
             <div><FileText size={18} /><span><strong>文档</strong><small>正文检测</small></span><Check size={14} /></div>
             <div className="unavailable"><Volume2 size={18} /><span><strong>音频</strong><small>尚未部署</small></span><CircleDashed size={14} /></div>
           </div>
-          <small className="upload-limits">图片/文档不超过 25 MB · 视频不超过 100 MB</small>
+          <small className="upload-limits">图片/文档不超过 25 MB · 视频不超过 256 MB</small>
         </section>
 
         <div className="trust-notes">
@@ -985,7 +1121,7 @@ function WelcomeWorkspace({
   );
 }
 
-function AgentProgressPanel({ progress }: { progress: AgentProgress | null }) {
+function AgentProgressPanel({ progress, onCancel }: { progress: AgentProgress | null; onCancel: () => void }) {
   const current = progress || { title: "正在准备鉴伪任务", detail: "请稍候", percent: 8, stage: "validate" as const };
   const stages = current.analysisMode === "fast" ? [
     { key: "validate", label: "文件校验" },
@@ -1005,11 +1141,11 @@ function AgentProgressPanel({ progress }: { progress: AgentProgress | null }) {
   ] as const;
   const stageIndex = stages.findIndex((stage) => stage.key === current.stage);
   return (
-    <div className="agent-progress-message">
+    <div className="agent-progress-message" role="status" aria-live="polite">
       <div className="agent-avatar"><img src="/brand/huijian-mascot.webp" alt="" /></div>
       <div className="progress-panel">
         <div className="progress-heading"><span><LoaderCircle size={17} className={current.percent < 100 ? "spin" : ""} /></span><div><strong>{current.title}</strong><p>{current.detail}</p></div><b>{Math.round(current.percent)}%</b></div>
-        <div className="progress-track"><i style={{ width: `${current.percent}%` }} /></div>
+        <div className="progress-track" role="progressbar" aria-label={current.title} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(current.percent)}><i style={{ width: `${current.percent}%` }} /></div>
         <div className="progress-stages">
           {stages.map((stage, index) => <span key={stage.key} className={index < stageIndex ? "done" : index === stageIndex ? "active" : ""}><i>{index < stageIndex ? <Check size={11} /> : index + 1}</i>{stage.label}</span>)}
         </div>
@@ -1019,6 +1155,7 @@ function AgentProgressPanel({ progress }: { progress: AgentProgress | null }) {
           </div>
         )}
         {current.fallback && <div className="fallback-note"><ShieldCheck size={14} /> 已切换至可用的可信检测链路，不会返回模拟结论。</div>}
+        <button type="button" className="cancel-analysis-button" onClick={onCancel}>取消检测</button>
       </div>
     </div>
   );

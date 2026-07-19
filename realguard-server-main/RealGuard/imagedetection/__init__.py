@@ -1,9 +1,10 @@
 import os
 import secrets
 from datetime import timedelta
+from urllib.parse import urlsplit
 
 import click
-from flask import Flask, abort, render_template, request, send_from_directory, session, redirect
+from flask import Flask, abort, jsonify, render_template, request, send_from_directory, session, redirect
 from .views import detection
 from .views import login
 from .views import historical_record
@@ -34,6 +35,40 @@ def creat_app():
     app.register_blueprint(developer_platform.developer_platform_blueprint)
     app.register_blueprint(developer_platform.openapi_blueprint)
     app.register_blueprint(developer_platform.developer_admin_blueprint)
+
+    @app.before_request
+    def validate_account_session():
+        if request.path.startswith('/static/'):
+            return None
+        login.validate_current_user_session(allow_legacy=bool(app.testing))
+        return None
+
+    @app.before_request
+    def reject_cross_site_browser_writes():
+        """Reject CSRF-shaped browser writes outside token-authenticated APIs."""
+        if request.method in ('GET', 'HEAD', 'OPTIONS', 'TRACE'):
+            return None
+        if request.path.startswith('/api/openapi/') or request.path == '/api/developer/keys/verify':
+            return None
+
+        fetch_site = str(request.headers.get('Sec-Fetch-Site') or '').strip().lower()
+        if fetch_site in ('cross-site', 'none'):
+            return jsonify({'status': 'error', 'message': '拒绝跨站请求'}), 403
+
+        allowed_origins = {
+            item.strip().rstrip('/')
+            for item in os.environ.get('REALGUARD_ALLOWED_ORIGINS', '').split(',')
+            if item.strip()
+        }
+        allowed_origins.add(request.host_url.rstrip('/'))
+
+        source = request.headers.get('Origin') or request.headers.get('Referer') or ''
+        if source:
+            parsed = urlsplit(source)
+            source_origin = f'{parsed.scheme}://{parsed.netloc}'.rstrip('/')
+            if not parsed.scheme or not parsed.netloc or source_origin not in allowed_origins:
+                return jsonify({'status': 'error', 'message': '拒绝跨站请求'}), 403
+        return None
 
     @app.before_request
     def protect_all_admin_api_writes():

@@ -1,10 +1,10 @@
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import secrets
-import random
 import re
 import time
 import uuid
@@ -12,23 +12,49 @@ from datetime import datetime
 from urllib.parse import quote
 
 import requests
-from flask import Blueprint, jsonify, render_template, request, session, redirect, url_for
+from flask import Blueprint, jsonify, has_request_context, render_template, request, session, redirect, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from imagedetection.views.utils import excute_sql, excute_detection_sql, create_folder
+from imagedetection.views.utils import create_folder, excute_detection_sql, excute_sql, get_db_connection
 
 login_blueprint = Blueprint('login_blueprint', __name__)
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
 PHONE_RE = re.compile(r'^1[3-9]\d{9}$')
-SMS_SESSION_KEY = 'sms_verify_codes'
 SMS_CODE_TTL = int(os.environ.get('SMS_CODE_TTL', '300'))
 SMS_INTERVAL = int(os.environ.get('SMS_INTERVAL', '60'))
 SMS_CODE_LENGTH = int(os.environ.get('SMS_CODE_LENGTH', '6'))
-TERMS_VERSION = os.environ.get('REALGUARD_TERMS_VERSION', '2026-06-03')
+SMS_MAX_ATTEMPTS = max(1, int(os.environ.get('SMS_MAX_ATTEMPTS', '5')))
+SMS_IP_WINDOW = max(60, int(os.environ.get('SMS_IP_WINDOW', '3600')))
+SMS_IP_WINDOW_LIMIT = max(1, int(os.environ.get('SMS_IP_WINDOW_LIMIT', '20')))
+SMS_IP_MIN_INTERVAL = max(0, int(os.environ.get('SMS_IP_MIN_INTERVAL', '1')))
+TERMS_VERSION = os.environ.get('REALGUARD_TERMS_VERSION', '2026-07-15')
+TERMS_SHA256 = os.environ.get('REALGUARD_TERMS_SHA256', '09707ba3b915db9904cc6f8b4951b5c9bbfff7e768fd237c04eedf90fef89ff')
+PRIVACY_SHA256 = os.environ.get('REALGUARD_PRIVACY_SHA256', 'cdf839825c20ce283ed76944aba09c5c2962abfb05592244004489b73fae80bb')
 PASSWORD_MIN_LENGTH = int(os.environ.get('REALGUARD_PASSWORD_MIN_LENGTH', '8'))
+PASSWORD_LOGIN_WINDOW = max(60, int(os.environ.get('REALGUARD_PASSWORD_LOGIN_WINDOW', '900')))
+PASSWORD_LOGIN_PHONE_LIMIT = max(1, int(os.environ.get('REALGUARD_PASSWORD_LOGIN_PHONE_LIMIT', '8')))
+PASSWORD_LOGIN_IP_LIMIT = max(1, int(os.environ.get('REALGUARD_PASSWORD_LOGIN_IP_LIMIT', '40')))
 _USER_ACCOUNT_COLUMNS_READY = False
+_SMS_STORAGE_READY = False
+_CONSENT_STORAGE_READY = False
+
+
+class SmsStorageError(RuntimeError):
+    pass
+
+
+class SmsRateLimitError(RuntimeError):
+    def __init__(self, retry_after):
+        self.retry_after = max(1, int(retry_after or 1))
+        super().__init__(f'请 {self.retry_after} 秒后再获取验证码')
+
+
+class PasswordLoginRateLimitError(RuntimeError):
+    def __init__(self, retry_after):
+        self.retry_after = max(1, int(retry_after or 1))
+        super().__init__('登录尝试过于频繁，请稍后重试')
 
 
 def _is_valid_phone(phone):
@@ -71,6 +97,7 @@ def _ensure_user_account_columns():
         ('terms_version', "VARCHAR(32) NULL COMMENT '用户协议版本'"),
         ('terms_accepted_at', "DATETIME NULL COMMENT '用户协议同意时间'"),
         ('password_updated_at', "DATETIME NULL COMMENT '密码更新时间'"),
+        ('session_version', "INT NOT NULL DEFAULT 1 COMMENT '登录态版本'"),
     ]
     for column, definition in columns:
         if not _ensure_column('user', column, definition):
@@ -79,22 +106,93 @@ def _ensure_user_account_columns():
     return True
 
 
-def _record_terms_acceptance(phone):
+def _ensure_consent_event_storage():
+    global _CONSENT_STORAGE_READY
+    if _CONSENT_STORAGE_READY:
+        return True
+    result = excute_sql(
+        """
+        CREATE TABLE IF NOT EXISTS consent_events (
+          id BIGINT NOT NULL AUTO_INCREMENT,
+          user_id INT NOT NULL,
+          phone_hash CHAR(64) NOT NULL,
+          document_version VARCHAR(32) NOT NULL,
+          terms_sha256 CHAR(64) NOT NULL,
+          privacy_sha256 CHAR(64) NOT NULL,
+          channel VARCHAR(64) NOT NULL,
+          client_ip_hash CHAR(64) NULL,
+          user_agent_hash CHAR(64) NULL,
+          accepted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          KEY idx_consent_events_user_time (user_id, accepted_at),
+          CONSTRAINT fk_consent_events_user FOREIGN KEY (user_id) REFERENCES `user`(Userid)
+            ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        fetch=False,
+    )
+    _CONSENT_STORAGE_READY = result is not None
+    return _CONSENT_STORAGE_READY
+
+
+def _consent_hash(value):
+    salt = os.environ.get('REALGUARD_CONSENT_AUDIT_SALT', 'realguard-consent-v1')
+    return hashlib.sha256(f'{salt}:{value or ""}'.encode('utf-8')).hexdigest()
+
+
+def _record_terms_acceptance(phone, channel='web_auth'):
     if not _ensure_user_account_columns():
         return False
-    result = excute_sql(
-        "UPDATE user SET terms_version = %s, terms_accepted_at = NOW() WHERE phone = %s",
-        (TERMS_VERSION, phone),
-        fetch=False
-    )
-    return result is not None
+    if not _ensure_consent_event_storage():
+        return False
+    client_ip = request.remote_addr if has_request_context() else ''
+    user_agent = request.headers.get('User-Agent', '') if has_request_context() else ''
+    conn = None
+    try:
+        conn = get_db_connection()
+        conn.begin()
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT Userid FROM `user` WHERE phone = %s LIMIT 1 FOR UPDATE", (phone,))
+            user = cursor.fetchone()
+            if not user:
+                conn.rollback()
+                return False
+            cursor.execute(
+                """
+                INSERT INTO consent_events
+                    (user_id, phone_hash, document_version, terms_sha256, privacy_sha256,
+                     channel, client_ip_hash, user_agent_hash)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    user['Userid'], _consent_hash(phone), TERMS_VERSION, TERMS_SHA256, PRIVACY_SHA256,
+                    str(channel or 'web_auth')[:64], _consent_hash(client_ip), _consent_hash(user_agent),
+                ),
+            )
+            cursor.execute(
+                "UPDATE `user` SET terms_version = %s, terms_accepted_at = NOW() WHERE Userid = %s",
+                (TERMS_VERSION, user['Userid']),
+            )
+        conn.commit()
+        return True
+    except Exception as exc:
+        if conn is not None:
+            conn.rollback()
+        print(f'[CONSENT EVENT ERROR] {exc}')
+        return False
+    finally:
+        if conn is not None:
+            conn.close()
 
 
-_SMS_HASH_SECRET = os.environ.get('SECRET_KEY') or os.environ.get('REALGUARD_SECRET_KEY') or secrets.token_urlsafe(48)
-
-
-def _hash_code(code):
-    return hashlib.sha256((_SMS_HASH_SECRET + ':' + code).encode('utf-8')).hexdigest()
+def _hash_code(code, salt=''):
+    """Derive a challenge-specific code hash that is stable across workers."""
+    return hashlib.pbkdf2_hmac(
+        'sha256',
+        str(code or '').encode('utf-8'),
+        str(salt or '').encode('ascii'),
+        120_000,
+    ).hex()
 
 
 def _is_password_hash(value):
@@ -145,47 +243,448 @@ def _authenticate_password_user(phone, candidate):
     return user
 
 
-def _get_sms_bucket():
-    bucket = session.get(SMS_SESSION_KEY)
-    if not isinstance(bucket, dict):
-        bucket = {}
-    return bucket
+def _session_version(user):
+    try:
+        return max(1, int((user or {}).get('session_version') or 1))
+    except (TypeError, ValueError):
+        return 1
 
 
-def _save_sms_code(scene, phone, code):
-    bucket = _get_sms_bucket()
-    bucket[f'{scene}:{phone}'] = {
-        'hash': _hash_code(code),
-        'expires_at': int(time.time()) + SMS_CODE_TTL,
-        'sent_at': int(time.time()),
+def _user_session_payload(user, phone=None):
+    resolved_phone = str(phone if phone is not None else (user or {}).get('phone') or '').strip()
+    return {
+        'Userid': user['Userid'],
+        'username': user.get('username') or resolved_phone,
+        'phone': resolved_phone,
+        'openid': user.get('openid', ''),
+        'session_version': _session_version(user),
     }
-    session[SMS_SESSION_KEY] = bucket
-    session.modified = True
 
 
-def _verify_sms_code(scene, phone, code):
-    bucket = _get_sms_bucket()
-    key = f'{scene}:{phone}'
-    item = bucket.get(key)
-    if not item:
-        return False, '请先获取短信验证码'
-    if int(item.get('expires_at', 0)) < int(time.time()):
-        bucket.pop(key, None)
-        session[SMS_SESSION_KEY] = bucket
-        session.modified = True
-        return False, '验证码已过期，请重新获取'
-    if not hmac.compare_digest(item.get('hash', ''), _hash_code(code or '')):
-        return False, '验证码错误'
-    bucket.pop(key, None)
-    session[SMS_SESSION_KEY] = bucket
-    session.modified = True
-    return True, ''
+def validate_current_user_session(*, allow_legacy=False):
+    """Validate the signed cookie against the account's revocation version."""
+    user_info = session.get('user_info')
+    if not isinstance(user_info, dict):
+        return True
+    claimed_version = user_info.get('session_version')
+    if claimed_version in (None, ''):
+        if allow_legacy:
+            return True
+        session.clear()
+        return False
+    if not _ensure_user_account_columns():
+        session.clear()
+        return False
+    user_id = user_info.get('Userid') or user_info.get('userId') or user_info.get('id')
+    if user_id in (None, ''):
+        session.clear()
+        return False
+    rows = excute_sql(
+        "SELECT Userid, phone, openid, session_version FROM user WHERE Userid = %s LIMIT 1",
+        (user_id,),
+    )
+    if not rows:
+        session.clear()
+        return False
+    account = rows[0]
+    try:
+        valid_version = int(claimed_version) == _session_version(account)
+    except (TypeError, ValueError):
+        valid_version = False
+    claimed_phone = str(user_info.get('phone') or '').strip()
+    account_phone = str(account.get('phone') or '').strip()
+    claimed_openid = str(user_info.get('openid') or '').strip()
+    account_openid = str(account.get('openid') or '').strip()
+    identity_matches = (claimed_phone and claimed_phone == account_phone) or (
+        not claimed_phone and claimed_openid and claimed_openid == account_openid
+    )
+    if not valid_version or not identity_matches:
+        session.clear()
+        return False
+    return True
+
+
+def _ensure_sms_storage():
+    global _SMS_STORAGE_READY
+    if _SMS_STORAGE_READY:
+        return True
+    challenge_result = excute_sql(
+        """
+        CREATE TABLE IF NOT EXISTS sms_verification_challenges (
+            scene VARCHAR(16) NOT NULL,
+            phone VARCHAR(32) NOT NULL,
+            code_hash CHAR(64) NOT NULL,
+            code_salt CHAR(32) NOT NULL,
+            expires_at BIGINT UNSIGNED NOT NULL,
+            sent_at BIGINT UNSIGNED NOT NULL,
+            failed_attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
+            consumed_at BIGINT UNSIGNED NULL,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (scene, phone),
+            KEY idx_sms_challenge_expiry (expires_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        fetch=False,
+    )
+    limit_result = excute_sql(
+        """
+        CREATE TABLE IF NOT EXISTS sms_send_limits (
+            scope_key CHAR(64) NOT NULL,
+            scope_type VARCHAR(16) NOT NULL,
+            window_started_at BIGINT UNSIGNED NOT NULL DEFAULT 0,
+            request_count INT UNSIGNED NOT NULL DEFAULT 0,
+            last_sent_at BIGINT UNSIGNED NOT NULL DEFAULT 0,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (scope_key),
+            KEY idx_sms_limit_updated (updated_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        fetch=False,
+    )
+    _SMS_STORAGE_READY = challenge_result is not None and limit_result is not None
+    return _SMS_STORAGE_READY
+
+
+def _normalized_ip(value):
+    try:
+        return str(ipaddress.ip_address(str(value or '').strip()))
+    except ValueError:
+        return ''
+
+
+def _trusted_proxy_networks():
+    configured = os.environ.get('REALGUARD_TRUSTED_PROXY_IPS', '127.0.0.0/8,::1/128')
+    networks = []
+    for raw in configured.split(','):
+        try:
+            networks.append(ipaddress.ip_network(raw.strip(), strict=False))
+        except ValueError:
+            continue
+    return networks
+
+
+def _trusted_client_ip():
+    peer = _normalized_ip(request.remote_addr)
+    try:
+        peer_address = ipaddress.ip_address(peer)
+    except ValueError:
+        return 'unknown'
+    if any(peer_address in network for network in _trusted_proxy_networks()):
+        forwarded = _normalized_ip(request.headers.get('X-Real-IP'))
+        if forwarded:
+            return forwarded
+    return peer
+
+
+def _sms_scope_key(scope_type, value):
+    return hashlib.sha256(f'{scope_type}:{value}'.encode('utf-8')).hexdigest()
+
+
+def _reserve_password_login_attempt(phone, client_ip=None, now=None):
+    """Atomically limit password attempts across workers by phone and IP."""
+    if not _ensure_sms_storage():
+        raise SmsStorageError('登录保护服务暂不可用')
+    now = int(time.time() if now is None else now)
+    phone_key = _sms_scope_key('password-phone', phone)
+    ip_key = _sms_scope_key('password-ip', client_ip or _trusted_client_ip() or 'unknown')
+    scopes = sorted((
+        (phone_key, 'password-phone', PASSWORD_LOGIN_PHONE_LIMIT),
+        (ip_key, 'password-ip', PASSWORD_LOGIN_IP_LIMIT),
+    ), key=lambda item: item[0])
+    conn = None
+    try:
+        conn = get_db_connection()
+        conn.begin()
+        with conn.cursor() as cursor:
+            for scope_key, scope_type, _ in scopes:
+                cursor.execute(
+                    """
+                    INSERT IGNORE INTO sms_send_limits
+                        (scope_key, scope_type, window_started_at, request_count, last_sent_at)
+                    VALUES (%s, %s, 0, 0, 0)
+                    """,
+                    (scope_key, scope_type),
+                )
+            cursor.execute(
+                """
+                SELECT scope_key, scope_type, window_started_at, request_count
+                FROM sms_send_limits
+                WHERE scope_key IN (%s, %s)
+                ORDER BY scope_key
+                FOR UPDATE
+                """,
+                (scopes[0][0], scopes[1][0]),
+            )
+            rows = {row['scope_key']: row for row in (cursor.fetchall() or [])}
+            updates = []
+            for scope_key, _, limit in scopes:
+                row = rows.get(scope_key) or {}
+                window_start = int(row.get('window_started_at') or 0)
+                count = int(row.get('request_count') or 0)
+                if window_start <= 0 or now - window_start >= PASSWORD_LOGIN_WINDOW:
+                    window_start = now
+                    count = 0
+                if count >= limit:
+                    raise PasswordLoginRateLimitError(window_start + PASSWORD_LOGIN_WINDOW - now)
+                updates.append((window_start, count + 1, scope_key))
+            for window_start, count, scope_key in updates:
+                cursor.execute(
+                    """
+                    UPDATE sms_send_limits
+                    SET window_started_at = %s, request_count = %s, last_sent_at = %s
+                    WHERE scope_key = %s
+                    """,
+                    (window_start, count, now, scope_key),
+                )
+        conn.commit()
+    except PasswordLoginRateLimitError:
+        if conn:
+            conn.rollback()
+        raise
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        raise SmsStorageError('登录保护服务暂不可用') from exc
+    finally:
+        if conn:
+            conn.close()
+
+
+def _clear_password_phone_attempts(phone):
+    if not phone:
+        return False
+    result = excute_sql(
+        """
+        UPDATE sms_send_limits
+        SET window_started_at = 0, request_count = 0, last_sent_at = 0
+        WHERE scope_key = %s
+        """,
+        (_sms_scope_key('password-phone', phone),),
+        fetch=False,
+    )
+    return result is not None
+
+
+def _reserve_sms_send(scene, phone, client_ip, now=None):
+    """Atomically reserve both phone and IP rate-limit capacity."""
+    if not _ensure_sms_storage():
+        raise SmsStorageError('短信验证服务暂不可用')
+    now = int(time.time() if now is None else now)
+    phone_key = _sms_scope_key('phone', phone)
+    ip_key = _sms_scope_key('ip', client_ip or 'unknown')
+    scope_rows = sorted(((phone_key, 'phone'), (ip_key, 'ip')), key=lambda item: item[0])
+    conn = None
+    try:
+        conn = get_db_connection()
+        conn.begin()
+        with conn.cursor() as cursor:
+            for scope_key, scope_type in scope_rows:
+                cursor.execute(
+                    """
+                    INSERT IGNORE INTO sms_send_limits
+                        (scope_key, scope_type, window_started_at, request_count, last_sent_at)
+                    VALUES (%s, %s, 0, 0, 0)
+                    """,
+                    (scope_key, scope_type),
+                )
+            cursor.execute(
+                """
+                SELECT scope_key, scope_type, window_started_at, request_count, last_sent_at
+                FROM sms_send_limits
+                WHERE scope_key IN (%s, %s)
+                ORDER BY scope_key
+                FOR UPDATE
+                """,
+                (scope_rows[0][0], scope_rows[1][0]),
+            )
+            rows = {row['scope_key']: row for row in (cursor.fetchall() or [])}
+            phone_row = rows.get(phone_key) or {}
+            phone_remain = int(phone_row.get('last_sent_at') or 0) + SMS_INTERVAL - now
+            if phone_remain > 0:
+                raise SmsRateLimitError(phone_remain)
+
+            ip_row = rows.get(ip_key) or {}
+            ip_window_start = int(ip_row.get('window_started_at') or 0)
+            ip_count = int(ip_row.get('request_count') or 0)
+            if ip_window_start <= 0 or now - ip_window_start >= SMS_IP_WINDOW:
+                ip_window_start = now
+                ip_count = 0
+            ip_remain = int(ip_row.get('last_sent_at') or 0) + SMS_IP_MIN_INTERVAL - now
+            if ip_remain > 0:
+                raise SmsRateLimitError(ip_remain)
+            if ip_count >= SMS_IP_WINDOW_LIMIT:
+                raise SmsRateLimitError(ip_window_start + SMS_IP_WINDOW - now)
+
+            cursor.execute(
+                """
+                UPDATE sms_send_limits
+                SET window_started_at = %s, request_count = request_count + 1, last_sent_at = %s
+                WHERE scope_key = %s
+                """,
+                (now, now, phone_key),
+            )
+            cursor.execute(
+                """
+                UPDATE sms_send_limits
+                SET window_started_at = %s, request_count = %s, last_sent_at = %s
+                WHERE scope_key = %s
+                """,
+                (ip_window_start, ip_count + 1, now, ip_key),
+            )
+        conn.commit()
+    except SmsRateLimitError:
+        if conn:
+            conn.rollback()
+        raise
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        raise SmsStorageError('短信验证服务暂不可用') from exc
+    finally:
+        if conn:
+            conn.close()
+
+
+def _save_sms_code(scene, phone, code, now=None):
+    if not _ensure_sms_storage():
+        raise SmsStorageError('短信验证服务暂不可用')
+    now = int(time.time() if now is None else now)
+    salt = secrets.token_hex(16)
+    conn = None
+    try:
+        conn = get_db_connection()
+        conn.begin()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO sms_verification_challenges
+                    (scene, phone, code_hash, code_salt, expires_at, sent_at, failed_attempts, consumed_at)
+                VALUES (%s, %s, %s, %s, %s, %s, 0, NULL)
+                ON DUPLICATE KEY UPDATE
+                    code_hash = VALUES(code_hash),
+                    code_salt = VALUES(code_salt),
+                    expires_at = VALUES(expires_at),
+                    sent_at = VALUES(sent_at),
+                    failed_attempts = 0,
+                    consumed_at = NULL
+                """,
+                (scene, phone, _hash_code(code, salt), salt, now + SMS_CODE_TTL, now),
+            )
+        conn.commit()
+        return True
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        raise SmsStorageError('短信验证服务暂不可用') from exc
+    finally:
+        if conn:
+            conn.close()
+
+
+def _delete_sms_challenge(scene, phone):
+    if not _ensure_sms_storage():
+        return False
+    result = excute_sql(
+        "DELETE FROM sms_verification_challenges WHERE scene = %s AND phone = %s",
+        (scene, phone),
+        fetch=False,
+    )
+    return result is not None
+
+
+def _verify_sms_code(scene, phone, code, now=None):
+    """Verify and consume one challenge while holding its database row lock."""
+    if not _ensure_sms_storage():
+        return False, '短信验证服务暂不可用，请稍后重试'
+    now = int(time.time() if now is None else now)
+    conn = None
+    try:
+        conn = get_db_connection()
+        conn.begin()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT code_hash, code_salt, expires_at, failed_attempts, consumed_at
+                FROM sms_verification_challenges
+                WHERE scene = %s AND phone = %s
+                LIMIT 1
+                FOR UPDATE
+                """,
+                (scene, phone),
+            )
+            item = cursor.fetchone()
+            if not item:
+                conn.commit()
+                return False, '验证码无效或已过期，请重新获取'
+            attempts = int(item.get('failed_attempts') or 0)
+            if item.get('consumed_at') is not None or attempts >= SMS_MAX_ATTEMPTS:
+                conn.commit()
+                return False, '验证码无效或已过期，请重新获取'
+            if int(item.get('expires_at') or 0) < now:
+                cursor.execute(
+                    """
+                    UPDATE sms_verification_challenges
+                    SET consumed_at = %s
+                    WHERE scene = %s AND phone = %s AND consumed_at IS NULL
+                    """,
+                    (now, scene, phone),
+                )
+                conn.commit()
+                return False, '验证码无效或已过期，请重新获取'
+
+            candidate_hash = _hash_code(code, item.get('code_salt') or '')
+            if not hmac.compare_digest(str(item.get('code_hash') or ''), candidate_hash):
+                attempts += 1
+                consumed_at = now if attempts >= SMS_MAX_ATTEMPTS else None
+                cursor.execute(
+                    """
+                    UPDATE sms_verification_challenges
+                    SET failed_attempts = %s, consumed_at = %s
+                    WHERE scene = %s AND phone = %s AND consumed_at IS NULL
+                    """,
+                    (attempts, consumed_at, scene, phone),
+                )
+                conn.commit()
+                if attempts >= SMS_MAX_ATTEMPTS:
+                    return False, '验证码错误次数过多，请重新获取'
+                return False, f'验证码错误，还可尝试 {SMS_MAX_ATTEMPTS - attempts} 次'
+
+            cursor.execute(
+                """
+                UPDATE sms_verification_challenges
+                SET consumed_at = %s
+                WHERE scene = %s AND phone = %s
+                  AND consumed_at IS NULL AND failed_attempts < %s
+                """,
+                (now, scene, phone, SMS_MAX_ATTEMPTS),
+            )
+            consumed = cursor.rowcount == 1
+        conn.commit()
+        if consumed:
+            return True, ''
+        return False, '验证码无效或已过期，请重新获取'
+    except Exception:
+        if conn:
+            conn.rollback()
+        return False, '短信验证服务暂不可用，请稍后重试'
+    finally:
+        if conn:
+            conn.close()
 
 
 def _check_sms_interval(scene, phone):
-    item = _get_sms_bucket().get(f'{scene}:{phone}') or {}
-    remain = int(item.get('sent_at', 0)) + SMS_INTERVAL - int(time.time())
-    return max(remain, 0)
+    """Compatibility helper for callers that only need the phone cooldown."""
+    del scene
+    if not _ensure_sms_storage():
+        raise SmsStorageError('短信验证服务暂不可用')
+    rows = excute_sql(
+        "SELECT last_sent_at FROM sms_send_limits WHERE scope_key = %s LIMIT 1",
+        (_sms_scope_key('phone', phone),),
+    )
+    if rows is None:
+        raise SmsStorageError('短信验证服务暂不可用')
+    last_sent_at = int((rows[0] if rows else {}).get('last_sent_at') or 0)
+    return max(0, last_sent_at + SMS_INTERVAL - int(time.time()))
 
 
 def _percent_encode(value):
@@ -280,17 +779,20 @@ def _send_sms_by_aliyun(phone, code, scene):
 
 
 def _send_sms_code(phone, scene):
-    code = ''.join(random.choice('0123456789') for _ in range(SMS_CODE_LENGTH))
+    code = ''.join(secrets.choice('0123456789') for _ in range(SMS_CODE_LENGTH))
     provider = os.environ.get('SMS_PROVIDER', '').strip().lower()
     if not provider:
         provider = 'aliyun' if os.environ.get('ALIYUN_ACCESS_KEY_ID') else 'disabled'
 
-    if provider == 'aliyun':
-        _send_sms_by_aliyun(phone, code, scene)
-    elif provider != 'mock':
-        raise RuntimeError('短信服务未配置，请设置 SMS_PROVIDER=aliyun；本地测试需显式设置 SMS_PROVIDER=mock')
-
     _save_sms_code(scene, phone, code)
+    try:
+        if provider == 'aliyun':
+            _send_sms_by_aliyun(phone, code, scene)
+        elif provider != 'mock':
+            raise RuntimeError('短信服务未配置，请设置 SMS_PROVIDER=aliyun；本地测试需显式设置 SMS_PROVIDER=mock')
+    except Exception:
+        _delete_sms_challenge(scene, phone)
+        raise
     return code if os.environ.get('SMS_DEBUG_RETURN_CODE') == '1' else None
 
 
@@ -321,24 +823,34 @@ def send_sms_code():
 
     existing = excute_sql("SELECT Userid FROM user WHERE phone = %s LIMIT 1", (phone,))
     if existing is None:
-        return jsonify({'success': False, 'message': '数据库连接失败，请稍后重试'}), 500
-    if scene == 'register' and existing:
-        return jsonify({'success': False, 'message': '该手机号已注册，请直接登录'}), 400
-    if scene == 'login' and not existing:
-        return jsonify({'success': False, 'message': '该手机号尚未注册，请先注册'}), 400
-    if scene == 'reset' and not existing:
-        return jsonify({'success': False, 'message': '该手机号尚未注册，无法找回密码'}), 400
+        return jsonify({'success': False, 'message': '短信验证服务暂不可用，请稍后重试'}), 503
 
-    remain = _check_sms_interval(scene, phone)
-    if remain > 0:
-        return jsonify({'success': False, 'message': f'请 {remain} 秒后再获取验证码', 'remain': remain}), 429
+    try:
+        _reserve_sms_send(scene, phone, _trusted_client_ip())
+    except SmsRateLimitError as exc:
+        response = jsonify({
+            'success': False,
+            'message': str(exc),
+            'remain': exc.retry_after,
+        })
+        response.headers['Retry-After'] = str(exc.retry_after)
+        return response, 429
+    except SmsStorageError:
+        return jsonify({'success': False, 'message': '短信验证服务暂不可用，请稍后重试'}), 503
+
+    eligible = (scene == 'register' and not existing) or (scene in ('login', 'reset') and bool(existing))
+    generic_message = '如手机号符合当前操作条件，验证码将发送，请留意短信'
+    if not eligible:
+        return jsonify({'success': True, 'message': generic_message, 'expires_in': SMS_CODE_TTL})
 
     try:
         debug_code = _send_sms_code(phone, scene)
+    except SmsStorageError:
+        return jsonify({'success': False, 'message': '短信验证服务暂不可用，请稍后重试'}), 503
     except Exception as exc:
         return jsonify({'success': False, 'message': str(exc)}), 500
 
-    data = {'success': True, 'message': '验证码已发送', 'expires_in': SMS_CODE_TTL}
+    data = {'success': True, 'message': generic_message, 'expires_in': SMS_CODE_TTL}
     if debug_code:
         data['debug_code'] = debug_code
         data['message'] = f'开发模式验证码：{debug_code}'
@@ -367,19 +879,22 @@ def login_verify():
         if not _truthy(request.form.get('accepted_terms')):
             return render_template('login.html', error='请先阅读并同意用户协议和隐私政策')
 
+        try:
+            _reserve_password_login_attempt(phone)
+        except PasswordLoginRateLimitError as exc:
+            return render_template('login.html', error=str(exc)), 429, {'Retry-After': str(exc.retry_after)}
+        except SmsStorageError as exc:
+            return render_template('login.html', error=str(exc)), 503
+
         user = _authenticate_password_user(phone, secret)
         if user:
+            _clear_password_phone_attempts(phone)
             if not _record_terms_acceptance(phone):
                 return render_template('login.html', error='协议确认记录失败，请稍后重试')
             _sync_detection_user(phone, user.get('username') or phone, user.get('openid', '') or phone)
             session.clear()
             session.permanent = True
-            session['user_info'] = {
-                'Userid': user['Userid'],
-                'username': user.get('username') or phone,
-                'phone': phone,
-                'openid': user.get('openid', ''),
-            }
+            session['user_info'] = _user_session_payload(user, phone)
             return redirect('/index')
         return render_template('login.html', error='手机号或密码错误')
     return render_template('login.html', error='登录失败')
@@ -407,12 +922,7 @@ def login_sms_verify():
             _sync_detection_user(phone, user.get('username') or phone, user.get('openid', '') or phone)
             session.clear()
             session.permanent = True
-            session['user_info'] = {
-                'Userid': user['Userid'],
-                'username': user.get('username') or phone,
-                'phone': phone,
-                'openid': user.get('openid', ''),
-            }
+            session['user_info'] = _user_session_payload(user, phone)
             return redirect('/index')
         return render_template('login.html', error='该手机号尚未注册', login_mode='sms')
     return render_template('login.html', error='登录失败', login_mode='sms')
@@ -441,7 +951,7 @@ def password_reset_verify():
         if not user:
             return render_template('login.html', error='该手机号尚未注册，无法找回密码', login_mode='reset')
         result = excute_sql(
-            "UPDATE user SET secret = %s, password_updated_at = NOW() WHERE phone = %s",
+            "UPDATE user SET secret = %s, session_version = session_version + 1, password_updated_at = NOW() WHERE phone = %s",
             (_hash_password(secret), phone),
             fetch=False
         )
@@ -491,6 +1001,8 @@ def register_verify():
         result = excute_sql(sql, (phone, _hash_password(secret), username, '', TERMS_VERSION), fetch=False)
 
         if result and result > 0:
+            if not _record_terms_acceptance(phone, channel='web_register'):
+                return render_template('register.html', error='协议确认记录失败，请稍后重试')
             _sync_detection_user(phone, username, phone)
             # 创建用户文件夹
             user_dir = os.path.join(current_dir, '..', 'static', 'uploads', phone)

@@ -4,6 +4,16 @@ from typing import Any
 
 
 MIN_WATERMARK_FAKE_PROBABILITY = 0.95
+DECISIVE_PROVIDERS = frozenset({"gemini", "doubao", "jimeng", "jimeng_pill", "samsung"})
+DECISIVE_METHOD = "remove_ai_watermarks_registry"
+MIN_LOCALIZED_AREA = 0.0001
+PROVIDER_MIN_CONFIDENCE = {
+    "gemini": 0.72,
+    "doubao": 0.80,
+    "jimeng": 0.80,
+    "jimeng_pill": 0.80,
+    "samsung": 0.80,
+}
 
 _PROVIDER_LABELS = {
     "gemini": "Google Gemini",
@@ -41,6 +51,23 @@ def has_localized_watermark(visible: Any) -> bool:
     return bool(_localized_hits(visible))
 
 
+def _decisive_hits(visible: Any) -> list[dict[str, Any]]:
+    return [
+        hit
+        for hit in _localized_hits(visible)
+        if hit.get("decisive") is True
+        and (provider := str(hit.get("provider") or "").strip().lower()) in DECISIVE_PROVIDERS
+        and str(hit.get("method") or "").strip() == DECISIVE_METHOD
+        and _clamp01(hit.get("confidence")) >= PROVIDER_MIN_CONFIDENCE[provider]
+        and _clamp01((hit.get("bbox") or {}).get("w")) * _clamp01((hit.get("bbox") or {}).get("h")) >= MIN_LOCALIZED_AREA
+        and (hit.get("localizationConfirmed") is True or hit.get("yoloCorroborated") is True)
+    ]
+
+
+def has_decisive_ai_watermark(visible: Any) -> bool:
+    return bool(_decisive_hits(visible))
+
+
 def _percent(value: Any) -> str:
     return f"{_clamp01(value) * 100:.1f}%"
 
@@ -65,7 +92,7 @@ def _positive_visual_issues(value: Any) -> list[str]:
 
 
 def build_explanation(result: dict[str, Any], visible: Any) -> str:
-    hits = _localized_hits(visible)
+    hits = _decisive_hits(visible)
     if not hits:
         return str(result.get("explanation") or "").strip()
 
@@ -87,9 +114,9 @@ def build_explanation(result: dict[str, Any], visible: Any) -> str:
 
     lines = [
         (
-            f"决定性证据：可见水印检测定位到 {len(hits)} 处有效区域"
+            f"决定性证据：已知 AI 平台水印注册表定位到 {len(hits)} 处有效区域"
             f"（{'、'.join(provider_names)}，最高置信度 {_percent(highest_confidence)}）。"
-            f"按当前规则，有效水印定位框属于直接伪造证据，综合 AI 风险提升至至少 "
+            f"经平台类型归属确认，该标记属于直接来源证据，综合 AI 风险提升至至少 "
             f"{round(MIN_WATERMARK_FAKE_PROBABILITY * 100)}%。"
         ),
         (
@@ -119,12 +146,12 @@ def build_explanation(result: dict[str, Any], visible: Any) -> str:
         lines.append(f"元数据：已读取 {len(metadata)} 项，仅作辅助线索；本次不是决定性依据。")
     else:
         lines.append("元数据：未读取到可用元数据；元数据缺失本身不作为伪造证据。")
-    lines.append("综合结论：本次由有效水印定位证据主导，判定为 AI 生成图像；当前置信度：高。")
+    lines.append("综合结论：本次由已确认的 AI 平台水印来源证据主导，判定为 AI 生成图像；当前置信度：高。")
     return "\n".join(lines)
 
 
 def apply_to_result(result: dict[str, Any], visible: Any) -> bool:
-    if not has_localized_watermark(visible):
+    if not has_decisive_ai_watermark(visible):
         return False
     existing_override = result.get("watermark_verdict_override") or {}
     original_probability = result.get("detector_probability")
@@ -138,7 +165,7 @@ def apply_to_result(result: dict[str, Any], visible: Any) -> bool:
     result["confidence"] = "高"
     result["watermark_verdict_override"] = {
         "applied": True,
-        "reason": "localized_visible_watermark",
+        "reason": "known_ai_platform_visible_watermark",
         "minimum_probability": MIN_WATERMARK_FAKE_PROBABILITY,
         "model_probability": round(original_probability, 4),
     }

@@ -16,6 +16,14 @@ from imagedetection.views import admin  # noqa: E402
 from imagedetection.views import developer_platform  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def allow_test_model_origins(monkeypatch):
+    monkeypatch.setenv(
+        "REALGUARD_MODEL_ALLOWED_ORIGINS",
+        "http://127.0.0.1:15001,http://127.0.0.1:19000,https://model.test",
+    )
+
+
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setattr(admin, "_refresh_admin_session", lambda user: user)
@@ -919,7 +927,9 @@ def test_admin_alerts_and_api_key_quota_are_persisted(client, monkeypatch, tmp_p
     monkeypatch.setattr(
         admin,
         "excute_sql",
-        lambda sql, params=None, fetch=True: [{"id": 4}] if "SELECT id FROM developer_api_keys" in sql else 1,
+        lambda sql, params=None, fetch=True: [{"id": 4, "user_id": 9}]
+        if "SELECT id, user_id FROM developer_api_keys" in sql
+        else 1,
     )
     _login_session(client, admin_role="admin")
 
@@ -1409,6 +1419,17 @@ def test_health_rejects_authentication_error_as_service_ok(monkeypatch):
     assert health["httpStatus"] == 401
     assert health["serviceOk"] is False
     assert health["ok"] is False
+
+
+def test_model_registry_rejects_unlisted_metadata_service_origin(monkeypatch, tmp_path):
+    monkeypatch.setattr(admin.model_registry, "REGISTRY_PATH", tmp_path / "registry.json")
+    _, model, error = admin.model_registry.create_model({
+        "id": "metadata-target",
+        "endpoint": "http://169.254.169.254/latest/meta-data",
+    })
+
+    assert model is None
+    assert "未获授权" in error
 
 
 def test_webhook_delivery_pins_validated_public_address_and_rejects_redirect(monkeypatch):

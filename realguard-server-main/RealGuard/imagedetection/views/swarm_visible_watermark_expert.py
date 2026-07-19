@@ -209,12 +209,12 @@ def _visible_result(payload: Dict[str, Any]) -> Dict[str, Any]:
         notes.append(
             f"YOLO11x 检测到 {len(generic_hits)} 处平台待确认的可见水印，"
             f"并对 {len(confirmed_hits)} 处已知平台标记完成区域复核；"
-            "有效定位框将按当前策略提升最终 AI 风险。"
+            "通用水印仅作定位线索，已确认的平台标记按来源证据规则参与融合。"
         )
     elif generic_hits:
         notes.append(
             f"YOLO11x 检测到 {len(generic_hits)} 处可见水印，平台归属尚未确认；"
-            "有效定位框将按当前策略提升最终 AI 风险。"
+            "该结果可能是 Logo、台标或版权标记，不单独影响 AI 生成结论。"
         )
     elif confirmed_hits:
         notes.append(f"YOLO11x 已对其中 {len(confirmed_hits)} 处平台标记完成区域复核。")

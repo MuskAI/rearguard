@@ -1,5 +1,6 @@
 from pathlib import Path
 import binascii
+from concurrent.futures import ThreadPoolExecutor
 import importlib
 import json
 import sys
@@ -75,9 +76,12 @@ def _forensic_analysis() -> dict:
 
 @pytest.fixture
 def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("JIANZHEN_ACCESS_TOKEN", "test-token")
+    monkeypatch.setenv("JIANZHEN_ACCESS_TOKEN", "internal-token")
+    monkeypatch.setenv("JIANZHEN_ADMIN_ACCESS_TOKEN", "test-token")
+    monkeypatch.setenv("JIANZHEN_REPORT_SHARE_SECRET", "independent-report-share-secret")
     monkeypatch.setenv("JIANZHEN_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-dashscope-key")
+    monkeypatch.setenv("JIANZHEN_ALLOW_ANONYMOUS_DETECT", "true")
     for module_name in ("app.storage", "app.main", "storage", "main"):
         sys.modules.pop(module_name, None)
     import app.storage as storage  # noqa: WPS433
@@ -92,9 +96,10 @@ def client(monkeypatch, tmp_path):
 
 @pytest.fixture
 def developer_key_client(monkeypatch, tmp_path):
-    monkeypatch.setenv("JIANZHEN_ACCESS_TOKEN", "admin-token")
+    monkeypatch.setenv("JIANZHEN_ACCESS_TOKEN", "internal-token")
+    monkeypatch.setenv("JIANZHEN_ADMIN_ACCESS_TOKEN", "admin-token")
+    monkeypatch.setenv("JIANZHEN_REPORT_SHARE_SECRET", "independent-report-share-secret")
     monkeypatch.setenv("JIANZHEN_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("JIANZHEN_REQUIRE_DEVELOPER_API_KEY", "true")
     monkeypatch.setenv("JIANZHEN_ALLOW_DIRECT_DEVELOPER_KEYS", "true")
     monkeypatch.setenv("JIANZHEN_DEVELOPER_AUTH_URL", "http://realguard-v1.internal/api/developer/keys/verify")
     monkeypatch.setenv("REALGUARD_DEVELOPER_AUTH_SECRET", "internal-secret")
@@ -125,6 +130,17 @@ def test_metrics_requires_token(client):
 
     assert unauth.status_code == 401
     assert auth.status_code == 200
+
+
+def test_request_metric_storage_failure_does_not_replace_business_response(client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    monkeypatch.setattr(main.storage, "record_event", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")))
+
+    response = client.get("/api/health")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
 
 
 def test_forensics_cache_is_scoped_by_user_and_does_not_leak_filename(developer_key_client, monkeypatch):
@@ -452,6 +468,81 @@ def test_admin_health_requires_token_and_exposes_diagnostics(client):
     assert "repoPath" in payload["synthid"]
 
 
+def test_internal_detection_token_has_no_admin_or_history_access(client):
+    headers = {"X-Jianzhen-Token": "internal-token"}
+
+    health = client.get("/api/admin/health", headers=headers)
+    history = client.get("/api/history", headers=headers)
+    metrics = client.get("/api/metrics", headers=headers)
+
+    assert health.status_code == 403
+    assert history.status_code == 401
+    assert metrics.status_code == 403
+
+
+def test_internal_detection_token_still_allows_model_calls(developer_key_client):
+    response = developer_key_client.post(
+        "/api/detect",
+        headers={"X-Jianzhen-Token": "internal-token"},
+        files={"file": ("internal.txt", b"internal model request", "text/plain")},
+        data={"fileType": "document"},
+    )
+
+    assert response.status_code == 200
+
+
+def test_history_delete_removes_content_unlinks_usage_and_preserves_shared_cache(client):
+    import app.storage as storage  # noqa: WPS433
+
+    first = client.post(
+        "/api/detect",
+        files={"file": ("first.txt", b"same private content", "text/plain")},
+    ).json()
+    second = client.post(
+        "/api/detect",
+        files={"file": ("second.txt", b"same private content", "text/plain")},
+    ).json()
+    storage.put_history_artifacts(first["taskId"], forensics={"summary": "private evidence"})
+    storage.record_token_usage(
+        actor={"userId": 7, "keyId": 9},
+        endpoint="/api/detect",
+        file_type="document",
+        result=first,
+    )
+
+    deleted_first = client.delete(
+        f"/api/history/{first['taskId']}",
+        headers={"X-Jianzhen-Token": "test-token"},
+    )
+
+    assert deleted_first.status_code == 200
+    assert storage.get_history(first["taskId"]) is None
+    with storage._connect() as conn:
+        assert conn.execute(
+            "SELECT 1 FROM history_artifacts WHERE task_id = ?",
+            (first["taskId"],),
+        ).fetchone() is None
+        usage = conn.execute(
+            "SELECT task_id, report_id FROM token_usage_events WHERE developer_key_id = '9'",
+        ).fetchone()
+        assert dict(usage) == {"task_id": None, "report_id": None}
+        assert conn.execute(
+            "SELECT COUNT(*) AS n FROM analysis_cache WHERE sha256 = ?",
+            (first["fileMeta"]["sha256"],),
+        ).fetchone()["n"] == 1
+
+    deleted_second = client.delete(
+        f"/api/history/{second['taskId']}",
+        headers={"X-Jianzhen-Token": "test-token"},
+    )
+    assert deleted_second.status_code == 200
+    with storage._connect() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) AS n FROM analysis_cache WHERE sha256 = ?",
+            (second["fileMeta"]["sha256"],),
+        ).fetchone()["n"] == 0
+
+
 def test_developer_key_required_for_detect_when_enabled(developer_key_client):
     health = developer_key_client.get("/api/health")
     missing = developer_key_client.post(
@@ -476,6 +567,9 @@ def test_developer_key_required_for_detect_when_enabled(developer_key_client):
     assert "developerKeyAuthConfigured" not in health.json()
     assert "developerProtectedEndpoints" not in health.json()
     assert valid.json()["reportId"].startswith("RJ-RPT-")
+    assert valid.json()["aiProbability"] == 0.22
+    assert valid.json()["riskScore"] == valid.json()["confidence"]
+    assert valid.json()["riskVector"]["aiGenerated"] == 0.22
     unified = valid.json()["unifiedForensics"]
     assert unified["interface_version"] == "aigc-forensics-unified-v0.1"
     assert unified["verdict"] == valid.json()["verdict"]
@@ -486,6 +580,24 @@ def test_developer_key_required_for_detect_when_enabled(developer_key_client):
     assert "temporal_segments" in unified
     assert "provenance_signals" in unified
     assert unified["compute_cost"]["cache_hit"] is False
+
+
+@pytest.mark.parametrize(
+    ("risk", "expected_uncertainty"),
+    [(0.05, 0.1), (0.5, 1.0), (0.95, 0.1)],
+)
+def test_unified_forensics_uncertainty_tracks_distance_from_boundary(risk, expected_uncertainty):
+    from app import unified_forensics  # noqa: WPS433
+
+    unified = unified_forensics.build({
+        "verdict": "real" if risk < 0.5 else "highly_suspected_fake",
+        "confidence": risk,
+        "fileMeta": {"type": "image"},
+        "dimensions": [],
+        "regions": [],
+    })
+
+    assert unified["uncertainty"]["score"] == expected_uncertainty
 
 
 def test_direct_v2_developer_keys_are_retired_by_default(developer_key_client, monkeypatch):
@@ -500,6 +612,19 @@ def test_direct_v2_developer_keys_are_retired_by_default(developer_key_client, m
 
     assert response.status_code == 410
     assert "/api/openapi/v1/image-detections" in response.json()["detail"]
+
+
+def test_v2_detection_is_not_anonymous_by_default(client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    monkeypatch.setattr(main, "ALLOW_ANONYMOUS_DETECT", False)
+    response = client.post(
+        "/api/detect",
+        files={"file": ("sample.txt", b"anonymous access must fail closed", "text/plain")},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "请先登录慧鉴 AI"
 
 
 def test_v1_session_can_detect_when_developer_api_key_is_required(developer_key_client, monkeypatch):
@@ -642,6 +767,25 @@ def test_developer_key_report_share_is_scoped_to_owner(developer_key_client):
     assert tampered.status_code == 403
 
 
+def test_report_share_requires_independent_signing_secret(client, monkeypatch):
+    from app import main
+
+    detect = client.post(
+        "/api/detect",
+        files={"file": ("sample.txt", b"independent share secret", "text/plain")},
+    )
+    monkeypatch.setattr(main, "REPORT_SHARE_SECRET", "")
+
+    response = client.post(
+        f"/api/report/{detect.json()['reportId']}/share",
+        headers={"X-Jianzhen-Token": "test-token"},
+        json={},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "报告分享签名密钥未配置"
+
+
 def test_report_download_returns_attachment_pdf(client):
     detect = client.post(
         "/api/detect",
@@ -775,12 +919,22 @@ def test_history_detail_backfills_file_meta_for_legacy_rows(client):
     assert payload["fileMeta"]["thumbnail"] == "data:image/png;base64,abc"
 
 
-def test_report_export_includes_forensics_and_provenance_sections(client):
+def test_report_export_ignores_client_supplied_evidence(client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
     detect = client.post(
         "/api/detect",
         files={"file": ("sample.txt", b"hello world from pytest", "text/plain")},
     )
     report_id = detect.json()["reportId"]
+    captured = {}
+
+    def fake_pdf(result, *, forensics=None, provenance=None):
+        captured["forensics"] = forensics
+        captured["provenance"] = provenance
+        return b"%PDF-authoritative"
+
+    monkeypatch.setattr(main.reporting, "build_report_pdf", fake_pdf)
 
     response = client.post(
         f"/api/report/{report_id}/export",
@@ -812,58 +966,104 @@ def test_report_export_includes_forensics_and_provenance_sections(client):
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/pdf")
-    assert response.content.startswith(b"%PDF-")
-    assert len(response.content) > 1500
+    assert response.content == b"%PDF-authoritative"
+    assert captured == {"forensics": None, "provenance": None}
 
 
-def test_history_artifacts_persist_into_history_and_download(client):
+def test_history_artifacts_are_persisted_only_by_server_analysis(client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    image = _png_with_itxt("Comment", "pytest image")
+    monkeypatch.setattr(main.provenance_precheck, "inspect", lambda *_args: {})
+    monkeypatch.setattr(main.provenance_precheck, "build_analysis", lambda *_args: None)
+    monkeypatch.setattr(main.detector, "explainable", lambda *_args: _forensic_analysis())
+    monkeypatch.setattr(
+        main.provenance,
+        "read_provenance",
+        lambda *_args: {
+            "hasCredentials": False,
+            "validationState": "none",
+            "generator": None,
+            "issuer": None,
+            "signatureAlg": None,
+            "isAiGenerated": None,
+            "actions": [],
+            "ingredients": [],
+            "synthid": {"note": "未检测到 SynthID"},
+            "error": None,
+        },
+    )
     detect = client.post(
         "/api/detect",
-        files={"file": ("sample.txt", b"persist artifact flow", "text/plain")},
+        files={"file": ("sample.png", image, "image/png")},
     )
     task_id = detect.json()["taskId"]
     report_id = detect.json()["reportId"]
 
-    save = client.post(
+    forged = client.post(
         f"/api/history/{task_id}/artifacts",
         headers={"X-Jianzhen-Token": "test-token"},
-        json={
-            "forensics": {
-                "verdict": "real",
-                "confidence": 0.33,
-                "summary": "未见明显异常。",
-                "items": [{"key": "ela", "title": "压缩对齐分析", "status": "ok", "finding": "未见明显异常"}],
-                "modelVersion": "huijian-forensic-maps-v1",
-                "source": "maps-only",
-            },
-            "provenance": {
-                "hasCredentials": False,
-                "validationState": "none",
-                "generator": None,
-                "issuer": None,
-                "signatureAlg": None,
-                "isAiGenerated": None,
-                "actions": [],
-                "ingredients": [],
-                "synthid": {"note": "未检测到 SynthID"},
-            },
-        },
+        json={"forensics": {"summary": "伪造证据"}},
+    )
+    forensics = client.post(
+        "/api/forensics",
+        headers={"X-Jianzhen-Token": "test-token"},
+        data={"taskId": task_id},
+        files={"file": ("sample.png", image, "image/png")},
+    )
+    provenance_result = client.post(
+        "/api/provenance",
+        headers={"X-Jianzhen-Token": "test-token"},
+        data={"taskId": task_id},
+        files={"file": ("sample.png", image, "image/png")},
     )
     listing = client.get("/api/history", headers={"X-Jianzhen-Token": "test-token"})
     history = client.get(f"/api/history/{task_id}", headers={"X-Jianzhen-Token": "test-token"})
     download = client.get(f"/api/report/{report_id}/download", headers={"X-Jianzhen-Token": "test-token"})
 
-    assert save.status_code == 200
+    assert forged.status_code == 410
+    assert forensics.status_code == 200
+    assert provenance_result.status_code == 200
     assert listing.status_code == 200
     assert listing.json()["items"][0]["hasForensics"] is True
     assert listing.json()["items"][0]["hasProvenance"] is True
     assert history.status_code == 200
     payload = history.json()
-    assert payload["forensics"]["summary"] == "未见明显异常。"
+    assert payload["forensics"]["summary"] == "pytest 取证判读"
     assert payload["provenance"]["validationState"] == "none"
     assert download.status_code == 200
     assert download.headers["content-type"].startswith("application/pdf")
     assert download.content.startswith(b"%PDF-")
+
+
+def test_concurrent_server_artifact_updates_preserve_both_evidence_types(client):
+    import app.storage as storage  # noqa: WPS433
+
+    detect = client.post(
+        "/api/detect",
+        files={"file": ("sample.txt", b"concurrent artifact flow", "text/plain")},
+    )
+    task_id = detect.json()["taskId"]
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = []
+        for index in range(12):
+            futures.append(executor.submit(
+                storage.put_history_artifacts,
+                task_id,
+                forensics={"summary": f"forensics-{index}"},
+            ))
+            futures.append(executor.submit(
+                storage.put_history_artifacts,
+                task_id,
+                provenance={"validationState": f"provenance-{index}"},
+            ))
+        for future in futures:
+            future.result()
+
+    item = storage.get_history(task_id)
+    assert item["forensics"]["summary"].startswith("forensics-")
+    assert item["provenance"]["validationState"].startswith("provenance-")
 
 
 def test_history_listing_exposes_source_and_watermark_summary(client, monkeypatch):
@@ -1085,18 +1285,17 @@ def test_history_filters_and_counts_include_verdict_breakdown(client, monkeypatc
 
 
 def test_metrics_include_source_and_evidence_breakdown(client):
+    import app.storage as storage  # noqa: WPS433
+
     detect = client.post(
         "/api/detect",
         files={"file": ("sample.txt", b"metrics evidence flow", "text/plain")},
     )
     task_id = detect.json()["taskId"]
-    client.post(
-        f"/api/history/{task_id}/artifacts",
-        headers={"X-Jianzhen-Token": "test-token"},
-        json={
-            "forensics": {"summary": "done"},
-            "provenance": {"validationState": "valid"},
-        },
+    storage.put_history_artifacts(
+        task_id,
+        forensics={"summary": "done"},
+        provenance={"validationState": "valid"},
     )
 
     metrics = client.get("/api/metrics", headers={"X-Jianzhen-Token": "test-token"})
@@ -1132,6 +1331,7 @@ def test_metrics_supports_window_sizes(client):
 
 def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
     import app.main as main  # noqa: WPS433
+    import app.storage as storage  # noqa: WPS433
 
     baseline = client.get("/api/history", headers={"X-Jianzhen-Token": "test-token"})
     assert baseline.status_code == 200
@@ -1204,16 +1404,8 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
     task_a = detect_a.json()["taskId"]
     task_b = detect_b.json()["taskId"]
 
-    client.post(
-        f"/api/history/{task_a}/artifacts",
-        headers={"X-Jianzhen-Token": "test-token"},
-        json={"forensics": {"summary": "done"}},
-    )
-    client.post(
-        f"/api/history/{task_b}/artifacts",
-        headers={"X-Jianzhen-Token": "test-token"},
-        json={"provenance": {"validationState": "valid"}},
-    )
+    storage.put_history_artifacts(task_a, forensics={"summary": "done"})
+    storage.put_history_artifacts(task_b, provenance={"validationState": "valid"})
 
     limited = client.get("/api/history?limit=1", headers={"X-Jianzhen-Token": "test-token"})
     by_source = client.get(

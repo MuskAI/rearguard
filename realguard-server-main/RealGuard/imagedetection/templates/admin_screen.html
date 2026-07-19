@@ -863,7 +863,7 @@
     $('recent').addEventListener('click',event=>{
       const button=event.target.closest('[data-recent-index]');if(!button) return;
       const item=ui.recentItems[Number(button.dataset.recentIndex)];if(!item) return;
-      openInspector({kicker:'检测流水',title:`记录 #${item.id}`,rows:[['检测时间',item.createdAt || '-'],['检测结论',item.label || '-'],['生成概率',formatProbability(item.probability)],['置信度',item.confidence || '-'],['执行模型',item.modelRoute?.model?.id || '未记录'],['路由状态',item.modelRoute?.status || '-'],['用户反馈',item.feedback ?? '暂无']],action:{href:'/admin#detections',label:'进入检测记录'}});
+      openInspector({kicker:'检测流水',title:`记录 #${item.id}`,rows:[['检测时间',item.createdAt || '-'],['检测结论',item.label || '-'],['综合风险',formatProbability(item.probability)],['置信度',item.confidence || '-'],['执行模型',item.modelRoute?.model?.id || '未记录'],['路由状态',item.modelRoute?.status || '-'],['用户反馈',item.feedback ?? '暂无']],action:{href:'/admin#detections',label:'进入检测记录'}});
     });
     $('anomalies').addEventListener('click',event=>{
       const button=event.target.closest('[data-anomaly-index]');if(!button) return;

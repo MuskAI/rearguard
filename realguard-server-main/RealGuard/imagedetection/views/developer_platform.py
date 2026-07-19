@@ -3,6 +3,8 @@ import io
 import json
 import os
 import threading
+import time
+import uuid
 from datetime import datetime, timedelta
 
 from PIL import Image, UnidentifiedImageError
@@ -13,12 +15,15 @@ from imagedetection.views.admin import _admin_required, _audit
 from imagedetection.views.api import (
     _auth_required,
     _developer_key_required,
+    _release_developer_daily_detection,
+    _reserve_developer_daily_detection,
     _developer_scopes,
     _developer_usage_from_v1,
     _developer_usage_from_v2,
     _empty_developer_usage,
     _merge_developer_usage,
     _record_developer_usage_event,
+    _serve_detection_media_item,
 )
 from imagedetection.views import detection
 from imagedetection.views.utils import (
@@ -59,9 +64,30 @@ DEVELOPER_SWARM_BILLING_ENABLED = str(
     os.environ.get("REALGUARD_DEVELOPER_SWARM_BILLING_ENABLED", "0")
 ).strip().lower() in {"1", "true", "yes", "on"}
 BACKGROUND_THREAD_CLASS = threading.Thread
+DEVELOPER_TASK_LEASE_SECONDS = max(
+    60,
+    int(os.environ.get("REALGUARD_DEVELOPER_TASK_LEASE_SECONDS", "300")),
+)
+DEVELOPER_TASK_HEARTBEAT_SECONDS = max(
+    5,
+    min(
+        DEVELOPER_TASK_LEASE_SECONDS // 3,
+        int(os.environ.get("REALGUARD_DEVELOPER_TASK_HEARTBEAT_SECONDS", "30")),
+    ),
+)
+DEVELOPER_TASK_RECONCILE_INTERVAL_SECONDS = max(
+    0,
+    int(os.environ.get("REALGUARD_DEVELOPER_TASK_RECONCILE_INTERVAL_SECONDS", "15")),
+)
+DEVELOPER_TASK_RECONCILE_BATCH_SIZE = max(
+    1,
+    min(200, int(os.environ.get("REALGUARD_DEVELOPER_TASK_RECONCILE_BATCH_SIZE", "50"))),
+)
 
 _PLATFORM_TABLES_READY = False
 _PLATFORM_TABLES_LOCK = threading.Lock()
+_TASK_RECONCILE_LOCK = threading.Lock()
+_TASK_RECONCILE_LAST_MONOTONIC = 0.0
 
 
 class BillingError(RuntimeError):
@@ -69,6 +95,10 @@ class BillingError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.status_code = status_code
+
+
+class TaskRecoveryError(RuntimeError):
+    pass
 
 
 def _error(message, status_code, code):
@@ -117,6 +147,8 @@ def _ensure_developer_platform_tables():
               request_sha256 CHAR(64) NOT NULL,
               idempotency_key VARCHAR(128) NULL,
               status VARCHAR(24) NOT NULL DEFAULT 'queued',
+              lease_owner VARCHAR(64) NULL,
+              lease_expires_at DATETIME(6) NULL,
               result_item_id INT NULL,
               result_json MEDIUMTEXT NULL,
               error_message VARCHAR(500) NULL,
@@ -126,7 +158,8 @@ def _ensure_developer_platform_tables():
               PRIMARY KEY (task_id),
               UNIQUE KEY uk_developer_task_idempotency (user_id, idempotency_key),
               KEY idx_developer_tasks_user_created (user_id, created_at),
-              KEY idx_developer_tasks_key_created (key_id, created_at)
+              KEY idx_developer_tasks_key_created (key_id, created_at),
+              KEY idx_developer_tasks_lease (status, lease_expires_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
             """
@@ -169,6 +202,8 @@ def _ensure_developer_platform_tables():
         for statement in statements:
             if excute_sql(statement, fetch=False) is None:
                 return False
+        if not _ensure_task_lease_schema():
+            return False
         defaults = (
             ("fast", "快速检测", DEVELOPER_FAST_PRICE_FEN, int(DEVELOPER_FAST_BILLING_ENABLED)),
             ("swarm", "Swarm 多源复核", DEVELOPER_SWARM_PRICE_FEN, int(DEVELOPER_SWARM_BILLING_ENABLED)),
@@ -185,6 +220,102 @@ def _ensure_developer_platform_tables():
                 return False
         _PLATFORM_TABLES_READY = True
         return True
+
+
+def _ensure_task_lease_schema():
+    """Migrate existing task tables without assuming a specific MySQL minor version."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT COLUMN_NAME
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'developer_detection_tasks'
+                """
+            )
+            columns = {str(row.get("COLUMN_NAME") or "").lower() for row in cursor.fetchall()}
+            additions = (
+                ("lease_owner", "ALTER TABLE developer_detection_tasks ADD COLUMN lease_owner VARCHAR(64) NULL AFTER status"),
+                (
+                    "lease_expires_at",
+                    "ALTER TABLE developer_detection_tasks ADD COLUMN lease_expires_at DATETIME(6) NULL AFTER lease_owner",
+                ),
+            )
+            for column, statement in additions:
+                if column in columns:
+                    continue
+                try:
+                    cursor.execute(statement)
+                except Exception:
+                    cursor.execute(
+                        """
+                        SELECT COLUMN_NAME
+                        FROM INFORMATION_SCHEMA.COLUMNS
+                        WHERE TABLE_SCHEMA = DATABASE()
+                          AND TABLE_NAME = 'developer_detection_tasks'
+                          AND COLUMN_NAME = %s
+                        """,
+                        (column,),
+                    )
+                    if not cursor.fetchone():
+                        raise
+                columns.add(column)
+
+            cursor.execute(
+                """
+                SELECT INDEX_NAME
+                FROM INFORMATION_SCHEMA.STATISTICS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'developer_detection_tasks'
+                  AND INDEX_NAME = 'idx_developer_tasks_lease'
+                LIMIT 1
+                """
+            )
+            if not cursor.fetchone():
+                try:
+                    cursor.execute(
+                        """
+                        ALTER TABLE developer_detection_tasks
+                        ADD INDEX idx_developer_tasks_lease (status, lease_expires_at)
+                        """
+                    )
+                except Exception:
+                    cursor.execute(
+                        """
+                        SELECT INDEX_NAME
+                        FROM INFORMATION_SCHEMA.STATISTICS
+                        WHERE TABLE_SCHEMA = DATABASE()
+                          AND TABLE_NAME = 'developer_detection_tasks'
+                          AND INDEX_NAME = 'idx_developer_tasks_lease'
+                        LIMIT 1
+                        """
+                    )
+                    if not cursor.fetchone():
+                        raise
+
+            cursor.execute(
+                """
+                UPDATE developer_detection_tasks
+                SET lease_owner = COALESCE(lease_owner, CONCAT('legacy-', task_id)),
+                    lease_expires_at = DATE_ADD(NOW(6), INTERVAL %s SECOND)
+                WHERE status IN ('queued', 'running')
+                  AND lease_expires_at IS NULL
+                """,
+                (DEVELOPER_TASK_LEASE_SECONDS,),
+            )
+        conn.commit()
+        return True
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        print(f"[DEVELOPER TASK RECOVERY ERROR] lease schema migration failed: {exc}")
+        return False
+    finally:
+        if conn:
+            conn.close()
 
 
 def _ensure_developer_account(user_id):
@@ -275,6 +406,23 @@ def _reserve_billing(user_id, key_id, task_id, mode):
     try:
         conn.begin()
         with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT task_id
+                FROM developer_detection_tasks
+                WHERE task_id = %s
+                  AND status = 'queued'
+                  AND lease_expires_at > NOW(6)
+                FOR UPDATE
+                """,
+                (task_id,),
+            )
+            if not cursor.fetchone():
+                raise BillingError(
+                    "任务调度租约已失效，请重新提交",
+                    code="task_lease_expired",
+                    status_code=503,
+                )
             cursor.execute(
                 "INSERT IGNORE INTO developer_accounts (user_id, free_total) VALUES (%s, %s)",
                 (user_id, DEVELOPER_FREE_CALLS),
@@ -490,6 +638,286 @@ def _release_billing(task_id, note="检测未成功，释放预占额度"):
         conn.close()
 
 
+def _fail_task_and_release(task_id, message, *, lease_owner=None, require_expired=False):
+    """Atomically terminalize an active task and release its billing reservation."""
+    if require_expired:
+        lease_condition = " AND lease_expires_at IS NOT NULL AND lease_expires_at <= NOW(6)"
+        lease_params = ()
+    elif lease_owner:
+        lease_condition = " AND lease_owner = %s AND lease_expires_at > NOW(6)"
+        lease_params = (lease_owner,)
+    else:
+        lease_condition = ""
+        lease_params = ()
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        conn.begin()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT task_id, user_id, status, lease_owner, lease_expires_at
+                FROM developer_detection_tasks
+                WHERE task_id = %s
+                  AND status IN ('queued', 'running')
+                  {lease_condition}
+                FOR UPDATE
+                """,
+                (task_id, *lease_params),
+            )
+            task = cursor.fetchone()
+            if not task:
+                conn.rollback()
+                return False
+
+            cursor.execute(
+                """
+                SELECT user_id, source, amount_fen, status
+                FROM developer_billing_reservations
+                WHERE task_id = %s
+                FOR UPDATE
+                """,
+                (task_id,),
+            )
+            reservation = cursor.fetchone()
+            if reservation and int(reservation.get("user_id") or 0) != int(task.get("user_id") or 0):
+                raise TaskRecoveryError(f"task {task_id} reservation owner mismatch")
+
+            if reservation and reservation.get("status") == "reserved":
+                user_id = reservation["user_id"]
+                source = reservation.get("source")
+                amount_fen = int(reservation.get("amount_fen") or 0)
+                cursor.execute(
+                    """
+                    SELECT free_reserved, balance_reserved_fen
+                    FROM developer_accounts
+                    WHERE user_id = %s
+                    FOR UPDATE
+                    """,
+                    (user_id,),
+                )
+                account = cursor.fetchone()
+                if not account:
+                    raise TaskRecoveryError(f"task {task_id} developer account is missing")
+
+                if source == "free":
+                    cursor.execute(
+                        """
+                        UPDATE developer_accounts
+                        SET free_reserved = free_reserved - 1
+                        WHERE user_id = %s AND free_reserved >= 1
+                        """,
+                        (user_id,),
+                    )
+                elif source == "balance":
+                    if amount_fen <= 0:
+                        raise TaskRecoveryError(f"task {task_id} has an invalid balance reservation")
+                    cursor.execute(
+                        """
+                        UPDATE developer_accounts
+                        SET balance_reserved_fen = balance_reserved_fen - %s
+                        WHERE user_id = %s AND balance_reserved_fen >= %s
+                        """,
+                        (amount_fen, user_id, amount_fen),
+                    )
+                else:
+                    raise TaskRecoveryError(f"task {task_id} has an unknown reservation source")
+                if cursor.rowcount != 1:
+                    raise TaskRecoveryError(f"task {task_id} reserved balance is inconsistent")
+
+                cursor.execute(
+                    """
+                    UPDATE developer_billing_reservations
+                    SET status = 'released', released_at = NOW()
+                    WHERE task_id = %s AND status = 'reserved'
+                    """,
+                    (task_id,),
+                )
+                if cursor.rowcount != 1:
+                    raise TaskRecoveryError(f"task {task_id} reservation changed during recovery")
+            elif reservation and reservation.get("status") == "settled":
+                raise TaskRecoveryError(f"task {task_id} is unfinished but its reservation is settled")
+            elif reservation and reservation.get("status") != "released":
+                raise TaskRecoveryError(f"task {task_id} has an invalid reservation status")
+
+            cursor.execute(
+                f"""
+                UPDATE developer_detection_tasks
+                SET status = 'failed', error_message = %s, completed_at = NOW(),
+                    lease_owner = NULL, lease_expires_at = NULL
+                WHERE task_id = %s
+                  AND status IN ('queued', 'running')
+                  {lease_condition}
+                """,
+                (str(message or "任务执行失败")[:500], task_id, *lease_params),
+            )
+            if cursor.rowcount != 1:
+                raise TaskRecoveryError(f"task {task_id} lease changed during terminalization")
+        conn.commit()
+        return True
+    except TaskRecoveryError:
+        if conn:
+            conn.rollback()
+        raise
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        raise TaskRecoveryError(f"failed to terminalize task {task_id}: {exc}") from exc
+    finally:
+        if conn:
+            conn.close()
+
+
+def _expire_task_lease(task_id):
+    """Fail one expired task and release its reservation in one transaction."""
+    message = "任务执行租约已过期，系统已终止任务并释放预留额度"
+    recovered = _fail_task_and_release(task_id, message, require_expired=True)
+    if not recovered:
+        return False
+    try:
+        admin_state.update_detection_job(
+            task_id,
+            {"status": "failed", "error": message, "progress": 100},
+        )
+    except Exception as exc:
+        print(f"[DEVELOPER TASK RECOVERY ERROR] recovered {task_id}, but job cache update failed: {exc}")
+    return True
+
+
+def _reservation_status_strict(task_id):
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT status
+                FROM developer_billing_reservations
+                WHERE task_id = %s
+                LIMIT 1
+                """,
+                (task_id,),
+            )
+            reservation = cursor.fetchone()
+    except Exception as exc:
+        raise TaskRecoveryError(f"failed to verify reservation {task_id}: {exc}") from exc
+    finally:
+        if conn:
+            conn.close()
+    if not reservation:
+        raise TaskRecoveryError(f"successful task {task_id} has no billing reservation")
+    return reservation.get("status")
+
+
+def _reconcile_success_reservation(task_id):
+    if _settle_billing(task_id):
+        settled_now = True
+    else:
+        status = _reservation_status_strict(task_id)
+        if status != "settled":
+            raise TaskRecoveryError(
+                f"successful task {task_id} billing settlement remains {status or 'unknown'}"
+            )
+        settled_now = False
+    try:
+        admin_state.update_detection_job(
+            task_id,
+            {"status": "success", "progress": 100, "summary": "检测完成，计费对账已完成"},
+        )
+    except Exception as exc:
+        print(f"[DEVELOPER TASK RECOVERY ERROR] settled {task_id}, but job cache update failed: {exc}")
+    return settled_now
+
+
+def _reconcile_expired_tasks(limit=None):
+    if not _ensure_developer_platform_tables():
+        raise TaskRecoveryError("developer platform tables are unavailable")
+    batch_size = max(1, min(int(limit or DEVELOPER_TASK_RECONCILE_BATCH_SIZE), 200))
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT task_id
+                FROM developer_detection_tasks
+                WHERE status IN ('queued', 'running')
+                  AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at <= NOW(6)
+                ORDER BY lease_expires_at ASC
+                LIMIT %s
+                """,
+                (batch_size,),
+            )
+            task_ids = [row.get("task_id") for row in cursor.fetchall() if row.get("task_id")]
+            cursor.execute(
+                """
+                SELECT task.task_id
+                FROM developer_detection_tasks AS task
+                INNER JOIN developer_billing_reservations AS reservation
+                    ON reservation.task_id = task.task_id
+                WHERE task.status = 'success'
+                  AND reservation.status = 'reserved'
+                ORDER BY task.completed_at ASC
+                LIMIT %s
+                """,
+                (batch_size,),
+            )
+            success_task_ids = [row.get("task_id") for row in cursor.fetchall() if row.get("task_id")]
+    except Exception as exc:
+        raise TaskRecoveryError(f"failed to scan expired tasks: {exc}") from exc
+    finally:
+        if conn:
+            conn.close()
+
+    recovered = 0
+    for task_id in task_ids:
+        try:
+            if _expire_task_lease(task_id):
+                recovered += 1
+        except TaskRecoveryError as exc:
+            print(f"[DEVELOPER TASK RECOVERY ERROR] isolated expired task {task_id}: {exc}")
+    for task_id in success_task_ids:
+        try:
+            if _reconcile_success_reservation(task_id):
+                recovered += 1
+        except TaskRecoveryError as exc:
+            print(f"[DEVELOPER TASK RECOVERY ERROR] isolated successful task {task_id}: {exc}")
+    return recovered
+
+
+def _maybe_reconcile_expired_tasks(force=False):
+    global _TASK_RECONCILE_LAST_MONOTONIC
+    now = time.monotonic()
+    interval = DEVELOPER_TASK_RECONCILE_INTERVAL_SECONDS
+    if not force and now - _TASK_RECONCILE_LAST_MONOTONIC < interval:
+        return 0
+    with _TASK_RECONCILE_LOCK:
+        now = time.monotonic()
+        if not force and now - _TASK_RECONCILE_LAST_MONOTONIC < interval:
+            return 0
+        try:
+            recovered = _reconcile_expired_tasks()
+        except TaskRecoveryError as exc:
+            # This is periodic maintenance for all tenants. A stale or
+            # temporarily unreadable task must not become a dependency of an
+            # unrelated customer's request.
+            print(f"[DEVELOPER TASK RECOVERY ERROR] background reconciliation deferred: {exc}")
+            recovered = 0
+        _TASK_RECONCILE_LAST_MONOTONIC = time.monotonic()
+        return recovered
+
+
+def _task_recovery_error_response(exc):
+    print(f"[DEVELOPER TASK RECOVERY ERROR] {exc}")
+    return _error(
+        "任务恢复对账暂时不可用，请稍后重试；系统未扣除新的调用额度",
+        503,
+        "task_recovery_unavailable",
+    )
+
+
 def _reservation_payload(task_id):
     rows = excute_sql(
         """
@@ -567,11 +995,19 @@ def _stored_task_result(row):
 def _task_payload(row):
     job = admin_state.get_detection_job(row["task_id"])
     public_job = detection._public_detection_job(job) if job else None
-    status = (public_job or {}).get("status") or row.get("status") or "queued"
+    # SQL is the authoritative task state; the JSON job cache is progress-only.
+    status = row.get("status") or "queued"
     progress = int((public_job or {}).get("progress") or (100 if status in {"success", "failed", "rejected"} else 0))
-    result = (public_job or {}).get("result") or _stored_task_result(row)
-    error_message = (public_job or {}).get("error") or row.get("error_message") or ""
+    result = _stored_task_result(row) if status == "success" else None
+    error_message = row.get("error_message") or ((public_job or {}).get("error") if status in {"failed", "rejected"} else "") or ""
     task_id = row["task_id"]
+    public_result = result.get("result") if isinstance(result, dict) and result.get("status") == "success" else None
+    media_link = f"/api/openapi/v1/image-detections/{task_id}/media"
+    if isinstance(public_result, dict) and row.get("result_item_id"):
+        public_result = json.loads(json.dumps(public_result, ensure_ascii=False, default=str))
+        public_result["image_url"] = media_link
+        if "imageUrl" in public_result:
+            public_result["imageUrl"] = media_link
     return {
         "id": task_id,
         "object": "image_detection",
@@ -583,12 +1019,13 @@ def _task_payload(row):
         "createdAt": format_createtime(row.get("created_at")),
         "updatedAt": format_createtime(row.get("updated_at")),
         "completedAt": format_createtime(row.get("completed_at")),
-        "result": result.get("result") if isinstance(result, dict) and result.get("status") == "success" else None,
+        "result": public_result,
         "error": {"code": "detection_failed", "message": error_message} if status in {"failed", "rejected"} else None,
         "billing": _reservation_payload(task_id),
         "links": {
             "self": f"/api/openapi/v1/image-detections/{task_id}",
             "report": f"/api/openapi/v1/image-detections/{task_id}/report",
+            "media": media_link,
         },
     }
 
@@ -620,20 +1057,74 @@ def _token_usage(payload):
     return prompt, completion, total or prompt + completion
 
 
-def _finish_task(task_id, actor, mode, payload, status_code):
+def _claim_task_lease(task_id, lease_owner):
+    updated = excute_sql(
+        """
+        UPDATE developer_detection_tasks
+        SET status = 'running', lease_expires_at = DATE_ADD(NOW(6), INTERVAL %s SECOND)
+        WHERE task_id = %s
+          AND status = 'queued'
+          AND lease_owner = %s
+          AND lease_expires_at > NOW(6)
+        """,
+        (DEVELOPER_TASK_LEASE_SECONDS, task_id, lease_owner),
+        fetch=False,
+    )
+    if updated is None:
+        raise TaskRecoveryError(f"failed to claim task lease for {task_id}")
+    return updated == 1
+
+
+def _renew_task_lease(task_id, lease_owner):
+    updated = excute_sql(
+        """
+        UPDATE developer_detection_tasks
+        SET lease_expires_at = DATE_ADD(NOW(6), INTERVAL %s SECOND)
+        WHERE task_id = %s
+          AND status = 'running'
+          AND lease_owner = %s
+          AND lease_expires_at > NOW(6)
+        """,
+        (DEVELOPER_TASK_LEASE_SECONDS, task_id, lease_owner),
+        fetch=False,
+    )
+    if updated is None:
+        raise TaskRecoveryError(f"failed to renew task lease for {task_id}")
+    return updated == 1
+
+
+def _task_heartbeat_loop(task_id, lease_owner, stop_event, lease_lost_event):
+    while not stop_event.wait(DEVELOPER_TASK_HEARTBEAT_SECONDS):
+        try:
+            if _renew_task_lease(task_id, lease_owner):
+                continue
+            print(f"[DEVELOPER TASK RECOVERY ERROR] task {task_id} lost its execution lease")
+        except TaskRecoveryError as exc:
+            print(f"[DEVELOPER TASK RECOVERY ERROR] {exc}")
+        lease_lost_event.set()
+        return
+
+
+def _finish_task(task_id, actor, mode, payload, status_code, lease_owner=None):
     success = status_code < 400 and isinstance(payload, dict) and payload.get("status") == "success"
+    lease_condition = ""
+    lease_params = ()
+    if lease_owner:
+        lease_condition = " AND lease_owner = %s AND lease_expires_at > NOW(6)"
+        lease_params = (lease_owner,)
     if success:
         public_payload = _public_result_payload(payload, mode)
         result = (public_payload or {}).get("result") or {}
         item_id = result.get("itemid")
         persisted = excute_sql(
-            """
+            f"""
             UPDATE developer_detection_tasks
             SET status = 'success', result_item_id = %s, result_json = %s,
-                error_message = NULL, completed_at = NOW()
-            WHERE task_id = %s AND status IN ('queued', 'running')
+                error_message = NULL, completed_at = NOW(),
+                lease_owner = NULL, lease_expires_at = NULL
+            WHERE task_id = %s AND status IN ('queued', 'running'){lease_condition}
             """,
-            (item_id, json.dumps(public_payload, ensure_ascii=False, default=str), task_id),
+            (item_id, json.dumps(public_payload, ensure_ascii=False, default=str), task_id, *lease_params),
             fetch=False,
         )
         if persisted != 1:
@@ -651,34 +1142,46 @@ def _finish_task(task_id, actor, mode, payload, status_code):
                 completion_tokens=completion,
                 total_tokens=total,
             )
-        return True
+        return settled_now
 
     message = (payload or {}).get("message") if isinstance(payload, dict) else ""
     message = str(message or f"HTTP {status_code}")[:500]
-    _release_billing(task_id, message)
-    excute_sql(
-        """
-        UPDATE developer_detection_tasks
-        SET status = 'failed', error_message = %s, completed_at = NOW()
-        WHERE task_id = %s AND status IN ('queued', 'running')
-        """,
-        (message, task_id),
-        fetch=False,
-    )
-    return False
+    try:
+        return _fail_task_and_release(task_id, message, lease_owner=lease_owner)
+    except TaskRecoveryError as exc:
+        print(f"[DEVELOPER TASK RECOVERY ERROR] {exc}")
+        return False
 
 
-def _run_openapi_job(task_id, image_bytes, filename, mimetype, user_info, actor, mode):
+def _run_openapi_job(task_id, image_bytes, filename, mimetype, user_info, actor, mode, lease_owner):
+    try:
+        claimed = _claim_task_lease(task_id, lease_owner)
+    except TaskRecoveryError as exc:
+        admin_state.update_detection_job(
+            task_id,
+            {"status": "failed", "error": str(exc), "progress": 100},
+        )
+        return
+    if not claimed:
+        admin_state.update_detection_job(
+            task_id,
+            {"status": "failed", "error": "任务执行租约已失效，等待系统自动对账", "progress": 100},
+        )
+        return
+
     admin_state.update_detection_job(task_id, {
         "status": "running",
         "progress": 8 if mode == "swarm" else 38,
         "summary": "多源复核已开始" if mode == "swarm" else "主鉴伪模型正在 GPU 推理",
     })
-    excute_sql(
-        "UPDATE developer_detection_tasks SET status = 'running' WHERE task_id = %s",
-        (task_id,),
-        fetch=False,
+    heartbeat_stop = threading.Event()
+    lease_lost = threading.Event()
+    heartbeat = BACKGROUND_THREAD_CLASS(
+        target=_task_heartbeat_loop,
+        args=(task_id, lease_owner, heartbeat_stop, lease_lost),
+        daemon=True,
     )
+    heartbeat.start()
     try:
         if mode == "swarm":
             payload, status_code = detection._run_swarm_detection_payload(
@@ -698,28 +1201,75 @@ def _run_openapi_job(task_id, image_bytes, filename, mimetype, user_info, actor,
                 is_guest=False,
                 mark_guest=False,
             )
-            if status_code < 400 and payload.get("status") == "success":
+        heartbeat_stop.set()
+        heartbeat.join(timeout=DEVELOPER_TASK_HEARTBEAT_SECONDS + 1)
+        if lease_lost.is_set():
+            admin_state.update_detection_job(task_id, {
+                "status": "failed",
+                "error": "任务执行期间数据库租约丢失，结果未结算，等待系统自动对账",
+                "progress": 100,
+            })
+            return
+        finished = _finish_task(task_id, actor, mode, payload, status_code, lease_owner=lease_owner)
+        if finished:
+            admin_state.update_detection_job(task_id, {
+                "status": "success" if status_code < 400 and payload.get("status") == "success" else "failed",
+                "result": payload,
+                "error": "" if status_code < 400 else (payload or {}).get("message") or f"HTTP {status_code}",
+                "progress": 100,
+                "summary": "检测完成" if status_code < 400 else "检测未完成",
+            })
+        else:
+            rows = excute_sql(
+                "SELECT status FROM developer_detection_tasks WHERE task_id = %s LIMIT 1",
+                (task_id,),
+            ) or []
+            if rows and rows[0].get("status") == "success":
                 admin_state.update_detection_job(task_id, {
                     "status": "success",
                     "result": payload,
                     "progress": 100,
-                    "summary": "快速检测完成",
+                    "summary": "检测完成，计费对账将在下次请求自动重试",
                 })
-        if not _finish_task(task_id, actor, mode, payload, status_code):
-            admin_state.update_detection_job(task_id, {
-                "status": "failed",
-                "error": (payload or {}).get("message") or f"HTTP {status_code}",
-                "result": payload,
-                "progress": 100,
-            })
+            else:
+                admin_state.update_detection_job(task_id, {
+                    "status": "failed",
+                    "error": (payload or {}).get("message") or f"HTTP {status_code}",
+                    "result": payload,
+                    "progress": 100,
+                })
     except Exception as exc:
         message = str(exc)[:500]
-        _finish_task(task_id, actor, mode, {"status": "error", "message": message}, 500)
+        heartbeat_stop.set()
+        heartbeat.join(timeout=DEVELOPER_TASK_HEARTBEAT_SECONDS + 1)
+        _finish_task(
+            task_id,
+            actor,
+            mode,
+            {"status": "error", "message": message},
+            500,
+            lease_owner=lease_owner,
+        )
         admin_state.update_detection_job(task_id, {
             "status": "failed",
             "error": message,
             "progress": 100,
         })
+    finally:
+        heartbeat_stop.set()
+
+
+def _allow_idempotent_retry(task_id):
+    updated = excute_sql(
+        """
+        UPDATE developer_detection_tasks
+        SET idempotency_key = NULL
+        WHERE task_id = %s AND status = 'failed'
+        """,
+        (task_id,),
+        fetch=False,
+    )
+    return updated == 1
 
 
 def _require_scope(actor, scope):
@@ -755,6 +1305,10 @@ def create_image_detection():
         return scope_error
     if not _ensure_developer_platform_tables():
         return _error("开发者平台存储初始化失败", 503, "platform_unavailable")
+    try:
+        _maybe_reconcile_expired_tasks()
+    except TaskRecoveryError as exc:
+        return _task_recovery_error_response(exc)
 
     upload = request.files.get("image") or request.files.get("file")
     if not upload or not upload.filename:
@@ -780,6 +1334,10 @@ def create_image_detection():
             return _error("该 Idempotency-Key 已用于其他请求", 409, "idempotency_conflict")
         return jsonify(_task_payload(existing)), 200
 
+    daily_quota_error = _reserve_developer_daily_detection(actor)
+    if daily_quota_error:
+        return daily_quota_error
+
     user_info = {
         "Userid": actor.get("user_id"),
         "username": actor.get("username") or actor.get("phone") or "developer",
@@ -787,19 +1345,26 @@ def create_image_detection():
         "openid": actor.get("openid") or actor.get("phone") or f"developer-{actor.get('user_id')}",
     }
     experts = detection._swarm_initial_experts() if mode == "swarm" else []
-    job = admin_state.create_detection_job(
-        user_info,
-        upload.filename,
-        kind="swarm" if mode == "swarm" else "image",
-        mode=mode,
-        experts=experts,
-    )
+    try:
+        job = admin_state.create_detection_job(
+            user_info,
+            upload.filename,
+            kind="swarm" if mode == "swarm" else "image",
+            mode=mode,
+            experts=experts,
+        )
+    except Exception:
+        _release_developer_daily_detection(actor)
+        return _error("任务创建失败，请稍后重试", 503, "task_create_failed")
     task_id = job["id"]
+    lease_owner = uuid.uuid4().hex
     inserted = excute_sql(
         """
         INSERT INTO developer_detection_tasks
-            (task_id, user_id, key_id, mode, filename, request_sha256, idempotency_key, status)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, 'queued')
+            (task_id, user_id, key_id, mode, filename, request_sha256, idempotency_key,
+             status, lease_owner, lease_expires_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, 'queued', %s,
+                DATE_ADD(NOW(6), INTERVAL %s SECOND))
         """,
         (
             task_id,
@@ -809,10 +1374,13 @@ def create_image_detection():
             upload.filename[:255],
             digest,
             idempotency_key or None,
+            lease_owner,
+            DEVELOPER_TASK_LEASE_SECONDS,
         ),
         fetch=False,
     )
     if inserted is None:
+        _release_developer_daily_detection(actor)
         duplicate = _idempotent_task(actor["user_id"], idempotency_key)
         if duplicate and duplicate.get("mode") == mode and duplicate.get("request_sha256") == digest:
             return jsonify(_task_payload(duplicate)), 200
@@ -822,6 +1390,7 @@ def create_image_detection():
     try:
         _reserve_billing(actor["user_id"], actor["id"], task_id, mode)
     except BillingError as exc:
+        _release_developer_daily_detection(actor)
         excute_sql(
             "UPDATE developer_detection_tasks SET status = 'rejected', error_message = %s, completed_at = NOW() WHERE task_id = %s",
             (str(exc)[:500], task_id),
@@ -829,10 +1398,16 @@ def create_image_detection():
         )
         admin_state.update_detection_job(task_id, {"status": "failed", "error": str(exc), "progress": 100})
         return _error(str(exc), exc.status_code, exc.code)
+    except Exception:
+        _release_developer_daily_detection(actor)
+        excute_sql(
+            "UPDATE developer_detection_tasks SET status = 'failed', error_message = %s, completed_at = NOW() WHERE task_id = %s",
+            ("计费服务暂不可用", task_id),
+            fetch=False,
+        )
+        return _error("计费服务暂不可用", 503, "billing_unavailable")
 
-    thread = BACKGROUND_THREAD_CLASS(
-        target=_run_openapi_job,
-        args=(
+    job_args = (
             task_id,
             image_bytes,
             upload.filename,
@@ -840,16 +1415,47 @@ def create_image_detection():
             user_info,
             dict(actor),
             mode,
-        ),
-        daemon=True,
+            lease_owner,
     )
     try:
-        thread.start()
+        started = detection._start_background_job(_run_openapi_job, job_args)
     except Exception as exc:
         message = f"任务调度失败: {str(exc)[:420]}"
-        _finish_task(task_id, dict(actor), mode, {"status": "error", "message": message}, 503)
+        released = _finish_task(
+            task_id,
+            dict(actor),
+            mode,
+            {"status": "error", "message": message},
+            503,
+            lease_owner=lease_owner,
+        )
         admin_state.update_detection_job(task_id, {"status": "failed", "error": message, "progress": 100})
+        _release_developer_daily_detection(actor)
+        if released:
+            _allow_idempotent_retry(task_id)
         return _error("任务调度失败，请稍后重试", 503, "task_dispatch_failed")
+    if not started:
+        message = "当前检测任务较多，请稍后重试"
+        released = _finish_task(
+            task_id,
+            dict(actor),
+            mode,
+            {"status": "error", "message": message},
+            429,
+            lease_owner=lease_owner,
+        )
+        admin_state.update_detection_job(task_id, {"status": "failed", "error": message, "progress": 100})
+        _release_developer_daily_detection(actor)
+        if not released:
+            return _error(
+                "任务未启动，但额度释放尚未确认；系统将自动对账，请勿重复提交",
+                503,
+                "billing_release_pending",
+            )
+        _allow_idempotent_retry(task_id)
+        response, status = _error(message, 429, "server_busy")
+        response.headers["Retry-After"] = "5"
+        return response, status
     row = _task_row_for_user(task_id, actor["user_id"])
     return jsonify(_task_payload(row)), 202
 
@@ -859,13 +1465,25 @@ def get_image_detection(task_id):
     actor, auth_error = _developer_key_required()
     if auth_error:
         return auth_error
+    try:
+        _maybe_reconcile_expired_tasks()
+    except TaskRecoveryError as exc:
+        return _task_recovery_error_response(exc)
     row = _task_row_for_user(task_id, actor["user_id"])
     if not row:
         return _error("任务不存在", 404, "task_not_found")
+    if row.get("status") == "success":
+        try:
+            reservation_status = _reservation_status_strict(task_id)
+            if reservation_status == "reserved":
+                _reconcile_success_reservation(task_id)
+            elif reservation_status != "settled":
+                raise TaskRecoveryError(
+                    f"successful task {task_id} has invalid billing status {reservation_status or 'unknown'}"
+                )
+        except TaskRecoveryError as exc:
+            return _task_recovery_error_response(exc)
     payload = _task_payload(row)
-    if payload["status"] == "success" and payload.get("billing", {}).get("status") == "reserved":
-        _settle_billing(task_id)
-        payload = _task_payload(row)
     return jsonify(payload)
 
 
@@ -906,6 +1524,25 @@ def get_image_detection_report(task_id):
         mimetype="application/pdf",
         headers={"Content-Disposition": reporting.attachment_header(f"huijian-{task_id}.pdf")},
     )
+
+
+@openapi_blueprint.get("/image-detections/<task_id>/media")
+def get_image_detection_media(task_id):
+    actor, auth_error = _developer_key_required()
+    if auth_error:
+        return auth_error
+    row = _task_row_for_user(task_id, actor["user_id"])
+    if not row:
+        return _error("任务不存在", 404, "task_not_found")
+    scope_error = _require_scope(actor, f"image:{row.get('mode') or 'fast'}")
+    if scope_error:
+        return scope_error
+    if row.get("status") != "success" or not row.get("result_item_id"):
+        return _error("任务尚未成功完成", 409, "task_not_complete")
+    item = _owned_detection_item(actor, row["result_item_id"])
+    if not item:
+        return _error("媒体记录不存在", 404, "media_not_found")
+    return _serve_detection_media_item("image", item)
 
 
 def _developer_usage(user_id, days):
@@ -1073,6 +1710,13 @@ def _openapi_document():
                     "summary": "下载 PDF 报告",
                     "parameters": [{"name": "task_id", "in": "path", "required": True, "schema": {"type": "string"}}],
                     "responses": {"200": {"description": "PDF 报告", "content": {"application/pdf": {}}}},
+                },
+            },
+            "/image-detections/{task_id}/media": {
+                "get": {
+                    "summary": "下载任务原图",
+                    "parameters": [{"name": "task_id", "in": "path", "required": True, "schema": {"type": "string"}}],
+                    "responses": {"200": {"description": "原始图像"}, "404": {"description": "任务或媒体不存在"}},
                 },
             },
         },

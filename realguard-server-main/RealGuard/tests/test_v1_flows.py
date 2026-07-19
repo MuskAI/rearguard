@@ -62,6 +62,8 @@ def test_api_password_login_sets_session(client, monkeypatch):
     )
     monkeypatch.setattr(api, "_sync_detection_user", lambda *args, **kwargs: None)
     monkeypatch.setattr(api, "_record_terms_acceptance", lambda phone: True)
+    monkeypatch.setattr(api, "_reserve_password_login_attempt", lambda phone: None)
+    monkeypatch.setattr(api, "_clear_password_phone_attempts", lambda phone: None)
 
     response = client.post(
         "/api/login/password",
@@ -341,6 +343,7 @@ def test_remote_primary_result_is_imported_into_local_user_history(monkeypatch):
     )
     monkeypatch.setattr(detection, "get_image_info", lambda path: ("PNG", "640x480"))
     monkeypatch.setattr(detection, "get_file_size_str", lambda path: "12KB")
+    monkeypatch.setattr(detection, "_detection_database_user_id", lambda phone, openid: 42)
 
     def fake_lastid(sql, params=None):
         inserted["sql"] = " ".join(sql.split())
@@ -360,7 +363,7 @@ def test_remote_primary_result_is_imported_into_local_user_history(monkeypatch):
 
     assert itemid == 648
     assert "INSERT INTO data" in inserted["sql"]
-    assert inserted["params"][-1] is None
+    assert inserted["params"][-1] == 42
     assert api_json["data"]["data_itemid"] == 648
     assert api_json["data"]["filename"] == "local-result.png"
     assert api_json["data"]["image_url"] == "/api/media/image/648"
@@ -543,6 +546,39 @@ def test_v2_probability_conversion_rejects_unknown_verdict():
         detection._fake_percentage_from_v2({"verdict": "unknown", "confidence": 0.5})
 
 
+@pytest.mark.parametrize(
+    ("verdict", "confidence", "expected"),
+    [
+        ("real", 0.2, 20.0),
+        ("suspected_fake", 0.66, 66.0),
+        ("highly_suspected_fake", 95, 95.0),
+    ],
+)
+def test_v2_probability_conversion_preserves_ai_risk_semantics(verdict, confidence, expected):
+    assert detection._fake_percentage_from_v2({
+        "verdict": verdict,
+        "confidence": confidence,
+    }) == expected
+
+
+def test_v2_probability_conversion_prefers_explicit_aigc_probability():
+    assert detection._fake_percentage_from_v2({
+        "verdict": "suspected_fake",
+        "confidence": 0.94,
+        "riskScore": 0.94,
+        "aiProbability": 0.2,
+        "riskVector": {"aiGenerated": 0.2, "tampered": 0.94, "deepfake": 0.1},
+    }) == 20.0
+
+
+def test_v2_publishable_contract_accepts_verified_provenance_source():
+    detection._assert_v2_publishable({
+        "source": "provenance",
+        "verdict": "highly_suspected_fake",
+        "confidence": 0.99,
+    })
+
+
 def test_image_report_marks_borderline_result_for_human_review():
     html = reporting.image_report_content(
         {"itemid": 9, "fake": 66.1, "createtime": "2026-07-15 10:00:00"},
@@ -686,16 +722,65 @@ def test_fast_image_detect_exposes_parallel_visible_watermark(client, monkeypatc
     assert result["visibleWatermark"]["detected"] is True
     assert result["visibleWatermark"]["hits"][0]["confidence"] == pytest.approx(0.91)
     assert result["visibleWatermark"]["elapsedMs"] == 24
+    assert result["final_label"] == "真实图像"
+    assert result["probability"] == pytest.approx(0.21)
+    assert result["detector_probability"] == pytest.approx(0.21)
+    assert result["confidence"] == "中"
+    assert result.get("watermark_verdict_override") is None
+    assert "不单独影响 AI 生成结论" in result["visibleWatermark"]["note"]
+    assert "_remote_evidence" not in result
+
+
+def test_v1_watermark_policy_only_promotes_confirmed_ai_platform_hits():
+    result = {
+        "final_label": "真实图像",
+        "probability": 0.21,
+        "detector_probability": 0.21,
+        "confidence": "中",
+        "explanation": "主模型偏向真实。",
+    }
+    visible = {
+        "detected": True,
+        "hits": [{
+            "provider": "gemini",
+            "label": "Google Gemini",
+            "confidence": 0.91,
+            "bbox": {"x": 0.72, "y": 0.81, "w": 0.18, "h": 0.09},
+            "method": "remove_ai_watermarks_registry",
+            "decisive": True,
+            "localizationConfirmed": True,
+        }],
+    }
+
+    assert detection.watermark_verdict.apply_to_result(result, visible) is True
     assert result["final_label"] == "AI生成图像"
     assert result["probability"] == pytest.approx(0.95)
-    assert result["detector_probability"] == pytest.approx(0.21)
-    assert result["confidence"] == "高"
-    assert "决定性证据" in result["explanation"]
-    assert "可见水印（平台待确认）" in result["explanation"]
-    assert "原始 AI 风险为 21.0%" in result["explanation"]
-    assert "元数据缺失本身不作为伪造证据" in result["explanation"]
-    assert "当前置信度：高" in result["explanation"]
-    assert "_remote_evidence" not in result
+    assert result["watermark_verdict_override"]["reason"] == "known_ai_platform_visible_watermark"
+
+
+def test_v1_watermark_policy_rejects_unconfirmed_tiny_low_confidence_hit():
+    result = {
+        "final_label": "真实图像",
+        "probability": 0.21,
+        "detector_probability": 0.21,
+        "confidence": "中",
+        "explanation": "主模型偏向真实。",
+    }
+    visible = {
+        "detected": True,
+        "hits": [{
+            "provider": "gemini",
+            "confidence": 0.01,
+            "bbox": {"x": 0.8, "y": 0.8, "w": 0.001, "h": 0.001},
+            "method": "remove_ai_watermarks_registry",
+            "decisive": True,
+            "localizationConfirmed": True,
+        }],
+    }
+
+    assert detection.watermark_verdict.apply_to_result(result, visible) is False
+    assert result["final_label"] == "真实图像"
+    assert result["probability"] == pytest.approx(0.21)
 
 
 def test_visible_watermark_is_persisted_in_model_run_meta(monkeypatch):
@@ -886,6 +971,188 @@ def test_swarm_detect_async_job_returns_expert_consensus(client, monkeypatch, tm
     assert all(not expert["id"].startswith(("primary", "v2", "aliyun")) for expert in result["swarm"]["experts"])
     assert all("主路由" not in item for item in result["swarm"]["evidence"])
     assert all("风险评分" not in item for item in result["swarm"]["evidence"])
+
+
+def test_async_image_upload_rejects_file_above_application_limit(client, monkeypatch):
+    _login_session(client)
+    monkeypatch.setattr(detection, "MAX_IMAGE_UPLOAD_BYTES", 4)
+
+    response = client.post(
+        "/image_upload/detect_async",
+        data={"image": (BytesIO(b"12345"), "large.png")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 413
+    assert response.get_json()["code"] == "image_too_large"
+
+
+def test_video_upload_rejects_file_above_application_limit(client, monkeypatch):
+    _login_session(client)
+    monkeypatch.setattr(detection, "MAX_VIDEO_UPLOAD_BYTES", 4)
+
+    response = client.post(
+        "/video_upload/detect",
+        data={"video_file": (BytesIO(b"12345"), "large.mp4")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 413
+    assert response.get_json()["code"] == "video_too_large"
+
+
+def test_async_image_upload_returns_429_when_job_capacity_is_full(client, monkeypatch, tmp_path):
+    _login_session(client)
+    monkeypatch.setattr(detection.admin_state, "STATE_PATH", tmp_path / "admin_state.json")
+
+    class FullSlots:
+        @staticmethod
+        def acquire(blocking=False):
+            return False
+
+    monkeypatch.setattr(detection, "BACKGROUND_JOB_SLOTS", FullSlots())
+
+    response = client.post(
+        "/image_upload/detect_async",
+        data={"image": (BytesIO(b"small"), "sample.png")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 429
+    assert response.headers["Retry-After"] == "5"
+    assert response.get_json()["code"] == "server_busy"
+
+
+def test_sync_image_upload_uses_shared_capacity_and_releases_slot(client, monkeypatch):
+    _login_session(client)
+
+    class CountingSlots:
+        acquired = 0
+        released = 0
+
+        def acquire(self, blocking=False):
+            self.acquired += 1
+            return True
+
+        def release(self):
+            self.released += 1
+
+    slots = CountingSlots()
+    monkeypatch.setattr(detection, "BACKGROUND_JOB_SLOTS", slots)
+    monkeypatch.setattr(
+        detection,
+        "_run_image_detection_payload",
+        lambda *args, **kwargs: ({"status": "error", "message": "model unavailable"}, 503),
+    )
+
+    response = client.post(
+        "/image_upload/detect",
+        data={"image": (BytesIO(b"small"), "sample.png")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 503
+    assert slots.acquired == 1
+    assert slots.released == 1
+
+
+def test_swarm_aggregate_keeps_tamper_risk_separate_from_aigc(monkeypatch):
+    monkeypatch.setattr(detection, "_swarm_config", lambda: {
+        "minExperts": 2,
+        "consensusThreshold": 0.65,
+        "disagreementThreshold": 0.35,
+    })
+    experts = [
+        {"id": "primary", "name": "主模型", "status": "success", "score": 0.2, "weight": 0.7},
+        {"id": "aliyun_ps", "name": "篡改模型", "status": "success", "score": 0.94, "weight": 0.3},
+    ]
+    primary = {
+        "itemid": 1,
+        "final_label": "真实图像",
+        "probability": 0.2,
+        "detector_probability": 0.2,
+        "confidence": "高",
+        "all_metadata": {},
+    }
+
+    result, error = detection._swarm_aggregate(experts, primary, {})
+
+    assert error == ""
+    assert result["final_label"] == "疑似篡改图像"
+    assert result["probability"] == pytest.approx(0.94)
+    assert result["aigc_probability"] == pytest.approx(0.2)
+
+
+def test_history_summary_preserves_specialized_tamper_label(monkeypatch):
+    monkeypatch.setattr(api, "_has_detection_metadata", lambda itemid: False)
+
+    record = api._image_history_record({
+        "itemid": 73,
+        "filename": "edited-camera.jpg",
+        "fake": 94,
+        "aigc": "疑似篡改图像",
+        "clarity": "高",
+        "createtime": "2026-07-19 12:00:00",
+    })
+
+    assert record["final_label"] == "疑似篡改图像"
+    assert record["fake_prob"] == 94.0
+
+
+def test_image_pdf_uses_persisted_specialized_label_without_refusion(client, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        detection,
+        "_load_detection_record",
+        lambda table, itemid: {
+            "itemid": 73,
+            "filename": "edited-camera.jpg",
+            "fake": 94,
+            "detector_probability": 0.2,
+            "aigc": "疑似篡改图像",
+            "clarity": "高",
+            "createtime": "2026-07-19 12:00:00",
+        },
+    )
+    monkeypatch.setattr(detection, "_metadata_for_item", lambda itemid: {"Software": "Photo Editor"})
+    monkeypatch.setattr(detection, "_runtime_visible_watermark_for_item", lambda itemid: None)
+
+    def fake_pdf(item, result):
+        captured.update(result)
+        return b"%PDF-test"
+
+    monkeypatch.setattr(detection.reporting, "image_report_pdf", fake_pdf)
+
+    response = client.get("/image_upload/report?itemid=73")
+
+    assert response.status_code == 200
+    assert captured["final_label"] == "疑似篡改图像"
+    assert captured["probability"] == pytest.approx(0.94)
+    assert captured["detector_probability"] == pytest.approx(0.2)
+
+
+def test_image_history_preserves_specialized_swarm_label(client, monkeypatch):
+    _login_session(client)
+    monkeypatch.setattr(detection, "_load_detection_record", lambda *args, **kwargs: {
+        "itemid": 77,
+        "filename": "tampered.png",
+        "fake": 94.0,
+        "detector_probability": 0.2,
+        "aigc": "疑似篡改图像",
+        "clarity": "高",
+        "explantation": "篡改风险独立命中。",
+        "feedback": None,
+    })
+    monkeypatch.setattr(detection, "_metadata_for_item", lambda *_args: {})
+    monkeypatch.setattr(detection, "_backend_static_url", lambda *_args: "/api/media/image/77")
+
+    response = client.get("/image_upload/result?itemid=77")
+
+    assert response.status_code == 200
+    result = response.get_json()["result"]
+    assert result["final_label"] == "疑似篡改图像"
+    assert result["probability"] == pytest.approx(0.94)
+    assert result["detector_probability"] == pytest.approx(0.2)
 
 
 def test_swarm_defers_network_experts_until_primary_finishes(monkeypatch):

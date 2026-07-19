@@ -52,6 +52,7 @@ def test_concurrent_job_updates_do_not_drop_other_jobs(monkeypatch, tmp_path):
 def test_concurrent_model_creates_do_not_overwrite_each_other(monkeypatch, tmp_path):
     registry_path = tmp_path / "model_registry.json"
     monkeypatch.setattr(model_registry, "REGISTRY_PATH", registry_path)
+    monkeypatch.setenv("REALGUARD_MODEL_ALLOWED_ORIGINS", "https://models.example")
 
     def create(index):
         return model_registry.create_model({

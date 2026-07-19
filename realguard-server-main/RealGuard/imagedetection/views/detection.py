@@ -76,11 +76,24 @@ SWARM_V2_MAX_STAGGER_SECONDS = max(
     0.0,
     float(os.environ.get('REALGUARD_SWARM_V2_MAX_STAGGER_SECONDS', '8')),
 )
+MAX_IMAGE_UPLOAD_BYTES = max(
+    1024,
+    int(os.environ.get('REALGUARD_MAX_IMAGE_UPLOAD_BYTES', str(25 * 1024 * 1024))),
+)
+MAX_VIDEO_UPLOAD_BYTES = max(
+    1024,
+    int(os.environ.get('REALGUARD_MAX_VIDEO_UPLOAD_BYTES', str(256 * 1024 * 1024))),
+)
+BACKGROUND_JOB_CAPACITY = max(
+    1,
+    int(os.environ.get('REALGUARD_BACKGROUND_JOB_CAPACITY', '4')),
+)
 SWARM_EXPERT_EXECUTOR = ThreadPoolExecutor(
     max_workers=SWARM_PARALLEL_WORKERS,
     thread_name_prefix='swarm-expert',
 )
 BACKGROUND_THREAD_CLASS = threading.Thread
+BACKGROUND_JOB_SLOTS = threading.BoundedSemaphore(BACKGROUND_JOB_CAPACITY)
 STATIC_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'static'))
 SWARM_EXPERT_SPECS = [
     {
@@ -173,6 +186,88 @@ SWARM_EXPERT_SPECS = [
         'weight': 0.08,
     },
 ]
+
+
+def _read_image_upload(file):
+    file.stream.seek(0)
+    image_bytes = file.stream.read(MAX_IMAGE_UPLOAD_BYTES + 1)
+    if not image_bytes:
+        return None, (jsonify({'status': 'error', 'message': '请上传非空图片文件'}), 400)
+    if len(image_bytes) > MAX_IMAGE_UPLOAD_BYTES:
+        limit_mb = max(1, MAX_IMAGE_UPLOAD_BYTES // (1024 * 1024))
+        return None, (jsonify({
+            'status': 'error',
+            'code': 'image_too_large',
+            'message': f'图片不能超过 {limit_mb} MB',
+        }), 413)
+    return image_bytes, None
+
+
+def _start_background_job(target, args=()):
+    if not BACKGROUND_JOB_SLOTS.acquire(blocking=False):
+        return False
+
+    def run_with_slot():
+        try:
+            target(*args)
+        finally:
+            BACKGROUND_JOB_SLOTS.release()
+
+    try:
+        thread = BACKGROUND_THREAD_CLASS(target=run_with_slot, daemon=True)
+        thread.start()
+    except Exception:
+        BACKGROUND_JOB_SLOTS.release()
+        raise
+    return True
+
+
+def _busy_response():
+    response = jsonify({
+        'status': 'error',
+        'code': 'server_busy',
+        'message': '当前检测任务较多，请稍后重试',
+    })
+    response.headers['Retry-After'] = '5'
+    return response, 429
+
+
+def _seekable_upload_size(file_storage):
+    stream = getattr(file_storage, 'stream', None)
+    if stream is None:
+        return None
+    try:
+        position = stream.tell()
+        stream.seek(0, os.SEEK_END)
+        size = stream.tell()
+        stream.seek(position)
+        return int(size)
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+@image_upload_blueprint.before_request
+def _reject_oversized_upload_requests():
+    guarded_paths = {
+        '/image_upload/detect': (MAX_IMAGE_UPLOAD_BYTES, '图片', 'image_too_large'),
+        '/image_upload/detect_async': (MAX_IMAGE_UPLOAD_BYTES, '图片', 'image_too_large'),
+        '/image_upload/detect_swarm': (MAX_IMAGE_UPLOAD_BYTES, '图片', 'image_too_large'),
+        '/video_upload/detect': (MAX_VIDEO_UPLOAD_BYTES, '视频', 'video_too_large'),
+    }
+    upload_limit = guarded_paths.get(request.path)
+    if request.method != 'POST' or upload_limit is None:
+        return None
+    max_bytes, label, error_code = upload_limit
+    content_length = request.content_length
+    multipart_allowance = 1024 * 1024
+    if content_length is not None and content_length > max_bytes + multipart_allowance:
+        limit_mb = max(1, max_bytes // (1024 * 1024))
+        return jsonify({
+            'status': 'error',
+            'code': error_code,
+            'message': f'{label}不能超过 {limit_mb} MB',
+        }), 413
+    return None
 
 
 def _swarm_config():
@@ -280,6 +375,19 @@ def _backend_identity(user_info):
     phone = str((user_info or {}).get('phone') or '').strip()
     openid = str((user_info or {}).get('openid') or '').strip()
     return openid or phone or 'guest', phone
+
+
+def _detection_database_user_id(phone='', openid=''):
+    """Resolve an owner ID in the detection database, not the account database."""
+    phone = str(phone or '').strip()
+    openid = str(openid or '').strip()
+    if phone:
+        rows = excute_detection_sql("SELECT Userid FROM user WHERE phone = %s LIMIT 1", (phone,))
+    elif openid and not openid.startswith('guest-'):
+        rows = excute_detection_sql("SELECT Userid FROM user WHERE openid = %s LIMIT 1", (openid,))
+    else:
+        return None
+    return (rows or [{}])[0].get('Userid')
 
 
 def _detection_owner():
@@ -658,7 +766,7 @@ def _insert_local_detection_record(data, image_bytes, filename, backend_openid, 
             resolution,
             confidence,
             safe_truncate(explanation, 500),
-            None,
+            _detection_database_user_id(phone, backend_openid),
         ),
     )
     if not itemid:
@@ -730,13 +838,20 @@ def _extract_v2_visual_issues(payload):
 
 def _fake_percentage_from_v2(payload):
     verdict = str(payload.get('verdict') or '').strip().lower()
-    confidence = _to_float(payload.get('confidence'), 0.5)
+    risk_vector = payload.get('riskVector') if isinstance(payload.get('riskVector'), dict) else {}
+    raw_probability = payload.get('aiProbability')
+    if raw_probability is None:
+        raw_probability = risk_vector.get('aiGenerated')
+    if raw_probability is None:
+        raw_probability = payload.get('confidence')
+    confidence = _to_float(raw_probability, 0.5)
     if confidence > 1:
         confidence = confidence / 100.0
     confidence = max(0.0, min(1.0, confidence))
-    if verdict == 'real':
-        return round((1.0 - confidence) * 100, 1)
-    if verdict in ('suspected_fake', 'highly_suspected_fake', 'fake', 'ai', 'likely_ai_generated'):
+    # V2 confidence is the calibrated AI-risk score, including for a `real`
+    # verdict. It is not confidence in the categorical label and must never be
+    # inverted based on the verdict.
+    if verdict in ('real', 'suspected_fake', 'highly_suspected_fake', 'fake', 'ai', 'likely_ai_generated'):
         return round(confidence * 100, 1)
     raise ValueError('备用检测服务未返回明确判定')
 
@@ -744,7 +859,7 @@ def _fake_percentage_from_v2(payload):
 def _assert_v2_publishable(payload):
     source = str(payload.get('source') or '').strip().lower()
     verdict = str(payload.get('verdict') or '').strip().lower()
-    if source != 'vlm' or verdict in ('', 'unknown'):
+    if source not in ('vlm', 'provenance') or verdict in ('', 'unknown'):
         raise RuntimeError('备用检测服务未产生可发布的真实模型结论')
 
 
@@ -753,8 +868,27 @@ def _insert_v2_fallback_record(payload, image_bytes, filename, backend_openid, p
     stored_name, file_path = _save_local_upload(image_bytes, backend_openid or phone or 'guest', filename)
     img_format, resolution = get_image_info(file_path)
     file_size = (payload.get('fileMeta') or {}).get('size') or get_file_size_str(file_path)
-    fake_pct = _fake_percentage_from_v2(payload)
-    final_label = 'AI生成图像' if fake_pct >= 50 else '真实图像'
+    aigc_pct = _fake_percentage_from_v2(payload)
+    risk_vector = payload.get('riskVector') if isinstance(payload.get('riskVector'), dict) else {}
+    tamper_probability = _clamp01(risk_vector.get('tampered'), 0.0)
+    deepfake_probability = _clamp01(risk_vector.get('deepfake'), 0.0)
+    overall_probability = max(
+        _clamp01(payload.get('riskScore', payload.get('confidence')), aigc_pct / 100.0),
+        aigc_pct / 100.0,
+        tamper_probability,
+        deepfake_probability,
+    )
+    fake_pct = round(overall_probability * 100.0, 1)
+    if aigc_pct >= 50:
+        final_label = 'AI生成图像'
+    elif tamper_probability >= 0.5:
+        final_label = '疑似篡改图像'
+    elif deepfake_probability >= 0.5:
+        final_label = '疑似深伪图像'
+    elif str(payload.get('verdict') or '') != 'real':
+        final_label = '疑似风险图像'
+    else:
+        final_label = '真实图像'
     confidence_level = _conf_level_from_score(_conf_score_from_api(payload.get('confidence'), fake_pct))
     explanation = str(payload.get('explanation') or '').strip() or _to_user_explanation(final_label, confidence_level)
     visual_issues = _extract_v2_visual_issues(payload)
@@ -764,13 +898,14 @@ def _insert_v2_fallback_record(payload, image_bytes, filename, backend_openid, p
     itemid = excute_detection_sql_lastid(
         """
         INSERT INTO data
-            (createtime, filename, fake, openid, phone, aigc,
+            (createtime, filename, fake, detector_probability, openid, phone, aigc,
              file_size, img_format, resolution, clarity, explantation, Userid)
-        VALUES (NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             stored_name,
             fake_pct,
+            aigc_pct / 100.0,
             backend_openid,
             phone,
             final_label,
@@ -779,7 +914,7 @@ def _insert_v2_fallback_record(payload, image_bytes, filename, backend_openid, p
             resolution,
             confidence_level,
             safe_truncate(explanation, 500),
-            None,
+            _detection_database_user_id(phone, backend_openid),
         ),
     )
     if not itemid:
@@ -793,7 +928,7 @@ def _insert_v2_fallback_record(payload, image_bytes, filename, backend_openid, p
             'fake_percentage': fake_pct,
             'final_label': final_label,
             'confidence': confidence_level,
-            'image_url': f"/static/uploads/{backend_openid or phone or 'guest'}/image/{stored_name}",
+            'image_url': f"/api/media/image/{itemid}",
             'filename': stored_name,
             'file_size': file_size,
             'img_format': img_format,
@@ -807,6 +942,7 @@ def _insert_v2_fallback_record(payload, image_bytes, filename, backend_openid, p
                 'modelVersion': payload.get('modelVersion'),
                 'source': payload.get('source'),
                 'tokenUsage': payload.get('tokenUsage'),
+                'riskVector': payload.get('riskVector'),
             }, ensure_ascii=False),
             'meta': {
                 'file_size': file_size,
@@ -914,7 +1050,7 @@ def _insert_aliyun_record(model, aliyun_payload, image_bytes, filename, backend_
             resolution,
             confidence_level,
             safe_truncate(explanation, 500),
-            None,
+            _detection_database_user_id(phone, backend_openid),
         ),
     )
     if not itemid:
@@ -928,7 +1064,7 @@ def _insert_aliyun_record(model, aliyun_payload, image_bytes, filename, backend_
             'fake_percentage': fake_pct,
             'final_label': final_label,
             'confidence': confidence_level,
-            'image_url': f"/static/uploads/{backend_openid or phone or 'guest'}/image/{stored_name}",
+            'image_url': f"/api/media/image/{itemid}",
             'filename': stored_name,
             'file_size': file_size,
             'img_format': img_format,
@@ -1238,16 +1374,22 @@ def image_detect_for_actor(user_info, *, is_guest=False):
         return jsonify({'status': 'error', 'message': '不支持的文件格式'}), 400
 
     mimetype = file.mimetype or 'application/octet-stream'
-    file.stream.seek(0)
-    image_bytes = file.stream.read()
-    payload, status_code = _run_image_detection_payload(
-        image_bytes,
-        filename,
-        mimetype,
-        user_info,
-        is_guest=is_guest,
-        mark_guest=True,
-    )
+    image_bytes, upload_error = _read_image_upload(file)
+    if upload_error:
+        return upload_error
+    if not BACKGROUND_JOB_SLOTS.acquire(blocking=False):
+        return _busy_response()
+    try:
+        payload, status_code = _run_image_detection_payload(
+            image_bytes,
+            filename,
+            mimetype,
+            user_info,
+            is_guest=is_guest,
+            mark_guest=True,
+        )
+    finally:
+        BACKGROUND_JOB_SLOTS.release()
     return jsonify(payload), status_code
 
 
@@ -1715,15 +1857,15 @@ def _swarm_metadata_expert(primary_result):
             'confidence': '低',
             'evidence': ['图像未提供可验证的 EXIF/拍摄设备元数据。'],
             'message': '元数据缺失，保持中性',
-            'details': {'verifiedAiMetadata': False, 'aiMarkers': [], 'captureEvidence': capture},
+            'details': {'verifiedAiMetadata': False, 'editableAiMetadata': False, 'aiMarkers': [], 'captureEvidence': capture},
             'latencyMs': 0,
         }
     ai_markers = _explicit_ai_metadata_markers(metadata)
     if ai_markers:
-        score = 0.9
-        verdict = '发现生成标识'
-        confidence = '高'
-        evidence = [f'元数据明确声明生成工具：{ai_markers[0]}']
+        score = 0.5
+        verdict = '发现可编辑生成参数'
+        confidence = '低'
+        evidence = [f'可编辑元数据提到生成工具：{ai_markers[0]}；该文本未经签名验证，不影响最终风险分。']
     elif capture.get('level') == 'medium':
         score = 0.28
         verdict = '拍摄链路一致'
@@ -1757,7 +1899,8 @@ def _swarm_metadata_expert(primary_result):
         'evidence': evidence[:3],
         'message': '元数据取证完成',
         'details': {
-            'verifiedAiMetadata': bool(ai_markers),
+            'verifiedAiMetadata': False,
+            'editableAiMetadata': bool(ai_markers),
             'aiMarkers': ai_markers,
             'captureEvidence': capture,
         },
@@ -1907,7 +2050,9 @@ def _swarm_fallback_display_result(image_bytes, filename, backend_openid, phone)
         stored_name, file_path = _save_local_upload(image_bytes, backend_openid or phone or 'guest', filename)
         img_format, resolution = get_image_info(file_path)
         file_size = get_file_size_str(file_path)
-        image_url = f"/static/uploads/{backend_openid or phone or 'guest'}/image/{stored_name}"
+        # The upload directory is intentionally blocked by Nginx. A protected
+        # media URL is attached after the final history row has an item id.
+        image_url = ''
         safe_name = stored_name
     except Exception:
         img_format = ''
@@ -2005,28 +2150,47 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
     if len(successful) < min_experts:
         return None, f'Swarm 有效专家数不足：{len(successful)}/{min_experts}'
     probability_model = probability_fusion.fuse(experts)
-    score = _clamp01(probability_model.get('posterior'), 0.5)
-    scores = [_clamp01(expert.get('score'), 0.5) for expert in successful]
+    if not probability_model.get('publishable'):
+        return None, '缺少可发布的主鉴伪模型或明确 AI 来源证据'
+    risk_vector = probability_model.get('riskVector') or {}
+    generated_score = _clamp01(risk_vector.get('aiGenerated'), 0.5)
+    tamper_score = (
+        _clamp01(risk_vector.get('tampered'), 0.5)
+        if risk_vector.get('tampered') is not None else None
+    )
+    recapture_score = (
+        _clamp01(risk_vector.get('recaptured'), 0.5)
+        if risk_vector.get('recaptured') is not None else None
+    )
+    score = max(
+        [generated_score]
+        + ([tamper_score] if tamper_score is not None else [])
+        + ([recapture_score] if recapture_score is not None else [])
+    )
+    baseline_ids = set(probability_model.get('baselineExperts') or [])
+    scores = [
+        _clamp01(expert.get('score'), 0.5)
+        for expert in successful
+        if expert.get('id') in baseline_ids
+    ]
     spread = max(scores) - min(scores) if scores else 0.0
     consensus_threshold = _clamp01((config or {}).get('consensusThreshold'), 0.65)
     disagreement_threshold = _clamp01((config or {}).get('disagreementThreshold'), 0.35)
     consensus_score = max(0.0, min(1.0, 1.0 - spread))
     consensus_level = '高' if spread <= 0.18 and len(successful) >= 3 else ('中' if spread <= 0.35 else '低')
     confidence = _conf_level_from_score(score)
-    if probability_model.get('corroborated') and score >= 0.99:
+    if probability_model.get('corroborated') and generated_score >= 0.99:
         confidence = '高'
     elif spread > 0.42:
         confidence = '低'
     elif spread > 0.28 and confidence == '高':
         confidence = '中'
-    riskiest = max(successful, key=lambda expert: _clamp01(expert.get('score'), 0.0))
-    if score >= consensus_threshold:
-        if riskiest.get('id') == 'aliyun_ps':
-            final_label = '疑似篡改图像'
-        elif riskiest.get('id') == 'aliyun_recap':
-            final_label = '疑似翻拍图像'
-        else:
-            final_label = 'AI生成图像'
+    if generated_score >= consensus_threshold:
+        final_label = 'AI生成图像'
+    elif tamper_score is not None and tamper_score >= consensus_threshold:
+        final_label = '疑似篡改图像'
+    elif recapture_score is not None and recapture_score >= consensus_threshold:
+        final_label = '疑似翻拍图像'
     elif score >= 0.5:
         final_label = '疑似风险图像'
     else:
@@ -2061,10 +2225,14 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
     disagreement = spread > disagreement_threshold
     baseline_probability = _clamp01(probability_model.get('pixelBaseline'), score)
     explanation = [
-        f"Swarm 专家会诊完成：像素模型基线风险 {baseline_probability * 100:.1f}%，来源证据融合后为 {score * 100:.2f}%。",
+        f"Swarm 专家会诊完成：AIGC 模型基线风险 {baseline_probability * 100:.1f}%，来源证据融合后的生成风险为 {generated_score * 100:.2f}%。",
         f"有效像素专家 {len(probability_model.get('baselineExperts') or [])} 个，专家一致性：{consensus_level}，当前置信度：{confidence}。",
     ]
-    if probability_model.get('corroborated') and score >= 0.99:
+    if tamper_score is not None:
+        explanation.append(f"独立篡改风险为 {tamper_score * 100:.2f}%，不参与 AI 生成概率平均。")
+    if recapture_score is not None:
+        explanation.append(f"独立翻拍风险为 {recapture_score * 100:.2f}%，不参与 AI 生成概率平均。")
+    if probability_model.get('corroborated') and generated_score >= 0.99:
         explanation.append("已知 AI 水印与独立元数据/完整性证据相互印证，因此进入 99% 以上高置信区间。")
     if disagreement:
         explanation.append("部分专家意见存在分歧，建议结合原始来源或人工复核。")
@@ -2077,6 +2245,9 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
         'final_label': final_label,
         'probability': round(score, 4),
         'detector_probability': round(detector_probability, 4),
+        'aigc_probability': round(generated_score, 4),
+        'tamper_probability': None if tamper_score is None else round(tamper_score, 4),
+        'recapture_probability': None if recapture_score is None else round(recapture_score, 4),
         'probabilityModel': probability_model,
         'confidence': confidence,
         'explanation': "\n".join(explanation),
@@ -2086,6 +2257,7 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
             'effectiveExperts': len(successful),
             'totalExperts': len(experts),
             'score': round(score, 4),
+            'riskVector': probability_model.get('riskVector'),
             'probabilityModel': probability_model,
             'consensusLevel': consensus_level,
             'disagreement': disagreement,
@@ -2095,6 +2267,10 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
         'swarm': {
             'enabled': True,
             'score': round(score, 4),
+            'riskVector': probability_model.get('riskVector'),
+            'generatedScore': round(generated_score, 4),
+            'tamperScore': None if tamper_score is None else round(tamper_score, 4),
+            'recaptureScore': None if recapture_score is None else round(recapture_score, 4),
             'finalLabel': final_label,
             'confidence': confidence,
             'consensusLevel': consensus_level,
@@ -2380,18 +2556,20 @@ def image_detect_async():
     if not allowed_file(file.filename):
         return jsonify({'status': 'error', 'message': '不支持的文件格式'}), 400
     mimetype = file.mimetype or 'application/octet-stream'
-    file.stream.seek(0)
-    image_bytes = file.stream.read()
-    if not image_bytes:
-        return jsonify({'status': 'error', 'message': '请上传非空图片文件'}), 400
+    image_bytes, upload_error = _read_image_upload(file)
+    if upload_error:
+        return upload_error
     job = admin_state.create_detection_job(user_info, file.filename, kind='image')
-    _mark_guest_detection_used(is_guest)
-    thread = BACKGROUND_THREAD_CLASS(
-        target=_run_async_image_job,
-        args=(job['id'], image_bytes, file.filename, mimetype, dict(user_info or {}), is_guest),
-        daemon=True,
+    started = _start_background_job(
+        _run_async_image_job,
+        (job['id'], image_bytes, file.filename, mimetype, dict(user_info or {}), is_guest),
     )
-    thread.start()
+    if not started:
+        admin_state.update_detection_job(job['id'], {
+            'status': 'failed', 'error': '服务器繁忙，任务未进入队列', 'progress': 100,
+        })
+        return _busy_response()
+    _mark_guest_detection_used(is_guest)
     return jsonify({'status': 'success', 'job': _public_detection_job(job)}), 202
 
 
@@ -2414,19 +2592,21 @@ def image_detect_swarm():
     if not allowed_file(file.filename):
         return jsonify({'status': 'error', 'message': '不支持的文件格式'}), 400
     mimetype = file.mimetype or 'application/octet-stream'
-    file.stream.seek(0)
-    image_bytes = file.stream.read()
-    if not image_bytes:
-        return jsonify({'status': 'error', 'message': '请上传非空图片文件'}), 400
+    image_bytes, upload_error = _read_image_upload(file)
+    if upload_error:
+        return upload_error
     experts = _swarm_initial_experts()
     job = admin_state.create_detection_job(user_info, file.filename, kind='swarm', mode='swarm', experts=experts)
-    _mark_guest_detection_used(is_guest)
-    thread = BACKGROUND_THREAD_CLASS(
-        target=_run_swarm_image_job,
-        args=(job['id'], image_bytes, file.filename, mimetype, dict(user_info or {}), is_guest),
-        daemon=True,
+    started = _start_background_job(
+        _run_swarm_image_job,
+        (job['id'], image_bytes, file.filename, mimetype, dict(user_info or {}), is_guest),
     )
-    thread.start()
+    if not started:
+        admin_state.update_detection_job(job['id'], {
+            'status': 'failed', 'error': '服务器繁忙，任务未进入队列', 'progress': 100,
+        })
+        return _busy_response()
+    _mark_guest_detection_used(is_guest)
     return jsonify({'status': 'success', 'job': _public_detection_job(job)}), 202
 
 
@@ -2506,12 +2686,11 @@ def image_result_api():
     image_url = _backend_static_url('image', item)
 
     all_metadata = _metadata_for_item(itemid)
-    fake, probability_model, metadata_probability = _fuse_fast_metadata_probability(
-        detector_probability,
-        all_metadata,
-    )
-
-    final_label = 'AI生成图像' if fake >= 0.5 else '真实图像'
+    stored_label = str(item.get('aigc') or '').strip()
+    fake = _prob01_from_percent(fake_pct)
+    probability_model = {}
+    metadata_probability = None
+    final_label = stored_label or ('AI生成图像' if fake >= 0.5 else '真实图像')
     feedback_raw = item.get('feedback')
     feedback = 1 if feedback_raw in (1, '1', '满意') else (-1 if feedback_raw in (-1, '-1', '不满意') else None)
 
@@ -2545,8 +2724,6 @@ def image_result_api():
     visible_watermark = _runtime_visible_watermark_for_item(item.get('itemid'))
     if isinstance(visible_watermark, dict):
         result['visibleWatermark'] = visible_watermark
-        if watermark_verdict.apply_to_result(result, visible_watermark):
-            result.pop('probabilityModel', None)
     return jsonify({'status': 'success', 'result': result})
 
 
@@ -2563,11 +2740,12 @@ def image_report_api():
     fake_pct = _to_float(item.get('fake', 0), 0.0)
     report_metadata = _metadata_for_item(itemid)
     detector_probability = _clamp01(item.get('detector_probability'), _prob01_from_percent(fake_pct))
-    report_probability, probability_model, metadata_probability = _fuse_fast_metadata_probability(
-        detector_probability,
-        report_metadata,
+    report_probability = _prob01_from_percent(fake_pct)
+    probability_model = {}
+    metadata_probability = None
+    report_label = str(item.get('aigc') or '').strip() or (
+        'AI生成图像' if report_probability >= 0.5 else '真实图像'
     )
-    report_label = 'AI生成图像' if report_probability >= 0.5 else '真实图像'
     result = {
         'itemid': item.get('itemid'),
         'final_label': report_label,
@@ -2594,8 +2772,6 @@ def image_report_api():
     visible_watermark = _runtime_visible_watermark_for_item(item.get('itemid'))
     if isinstance(visible_watermark, dict):
         result['visibleWatermark'] = visible_watermark
-        if watermark_verdict.apply_to_result(result, visible_watermark):
-            result.pop('probabilityModel', None)
     pdf = reporting.image_report_pdf(item, result)
     return Response(
         pdf,
@@ -2633,6 +2809,13 @@ def video_detect():
         if file and file.filename:
             if not allowed_video_file(file.filename):
                 return jsonify({'status': 'error', 'message': '不支持的视频格式'}), 400
+            upload_size = _seekable_upload_size(file)
+            if upload_size is not None and upload_size > MAX_VIDEO_UPLOAD_BYTES:
+                return jsonify({
+                    'status': 'error',
+                    'code': 'video_too_large',
+                    'message': f'视频不能超过 {max(1, MAX_VIDEO_UPLOAD_BYTES // (1024 * 1024))} MB',
+                }), 413
             safe_name = secure_filename(file.filename) or file.filename
             file.stream.seek(0)
             files = {'video_file': (safe_name, file.stream, file.mimetype or 'application/octet-stream')}

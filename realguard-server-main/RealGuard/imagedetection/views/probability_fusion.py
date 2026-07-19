@@ -5,9 +5,12 @@ import math
 from typing import Any, Iterable
 
 
-MODEL_VERSION = "huijian-evidence-lr-v1"
+MODEL_VERSION = "huijian-evidence-lr-v2-task-separated"
 CROSS_MODAL_EXPONENT = 0.75
 BASE_RATE = 0.10
+AIGC_EXPERT_IDS = frozenset({"primary", "v2", "aliyun_pro", "aliyun_full"})
+TAMPER_EXPERT_IDS = frozenset({"aliyun_ultra", "aliyun_ps"})
+RECAPTURE_EXPERT_IDS = frozenset({"aliyun_recap"})
 
 
 def _clamp(value: Any, default: float = 0.5) -> float:
@@ -34,19 +37,18 @@ def _weight(expert: dict[str, Any]) -> float:
 
 
 def baseline_probability(experts: Iterable[dict[str, Any]]) -> tuple[float, list[str]]:
-    """Pool only statistical/image experts; absence of metadata is neutral."""
+    """Pool only experts that estimate AI generation probability."""
     candidates = [
         expert for expert in experts
         if expert.get("status") == "success"
         and expert.get("score") is not None
-        and expert.get("id") != "metadata"
-        and expert.get("provenance_kind") not in {"c2pa", "watermark", "wam"}
+        and (
+            expert.get("id") in AIGC_EXPERT_IDS
+            or expert.get("task") == "aigc_generation"
+        )
     ]
     if not candidates:
-        candidates = [
-            expert for expert in experts
-            if expert.get("status") == "success" and expert.get("score") is not None
-        ]
+        return 0.5, []
     total_weight = sum(_weight(expert) for expert in candidates)
     if total_weight <= 0:
         total_weight = float(len(candidates) or 1)
@@ -55,6 +57,26 @@ def baseline_probability(experts: Iterable[dict[str, Any]]) -> tuple[float, list
         weights = [_weight(expert) for expert in candidates]
     score = sum(_clamp(expert.get("score")) * weight for expert, weight in zip(candidates, weights)) / total_weight
     return round(score, 6), [str(expert.get("id") or "unknown") for expert in candidates]
+
+
+def _task_probability(experts: Iterable[dict[str, Any]], expert_ids: frozenset[str]) -> float | None:
+    candidates = [
+        expert for expert in experts
+        if expert.get("status") == "success"
+        and expert.get("score") is not None
+        and expert.get("id") in expert_ids
+    ]
+    if not candidates:
+        return None
+    total_weight = sum(_weight(expert) for expert in candidates)
+    weights = [_weight(expert) for expert in candidates]
+    if total_weight <= 0:
+        weights = [1.0 for _ in candidates]
+        total_weight = float(len(candidates))
+    return round(
+        sum(_clamp(expert.get("score")) * weight for expert, weight in zip(candidates, weights)) / total_weight,
+        4,
+    )
 
 
 def _precheck_model(experts: Iterable[dict[str, Any]]) -> dict[str, Any] | None:
@@ -82,21 +104,6 @@ def _local_factors(experts: Iterable[dict[str, Any]], occupied_groups: set[str])
                 "source": "swarm_watermark",
                 "likelihoodRatio": 120.0,
                 "effectiveLikelihoodRatio": 120.0,
-                "direction": "fake",
-            })
-        elif (
-            expert_id == "metadata"
-            and score >= 0.85
-            and details.get("verifiedAiMetadata") is True
-            and "origin_declaration" not in occupied_groups
-        ):
-            factors.append({
-                "kind": "ai_generation_metadata",
-                "label": "元数据中的生成工具标识",
-                "group": "origin_declaration",
-                "source": "swarm_metadata",
-                "likelihoodRatio": 80.0,
-                "effectiveLikelihoodRatio": 80.0,
                 "direction": "fake",
             })
         elif expert_id == "metadata" and details.get("verifiedAiMetadata") is not True:
@@ -164,6 +171,7 @@ def fuse(experts: list[dict[str, Any]]) -> dict[str, Any]:
     )
     corroborated = bool(precheck.get("corroborated")) or len(fake_groups) >= 2
     conflicting = bool(fake_groups and real_groups)
+    has_aigc_baseline = bool(baseline_experts)
     adjusted_baseline = baseline
     if corroborated:
         adjusted_baseline = max(adjusted_baseline, 0.35)
@@ -173,6 +181,8 @@ def fuse(experts: list[dict[str, Any]]) -> dict[str, Any]:
     posterior = adjusted_baseline
     if abs(effective_lr - 1.0) > 0.0001:
         posterior = _probability(_odds(adjusted_baseline) * (effective_lr ** CROSS_MODAL_EXPONENT))
+    tamper_probability = _task_probability(experts, TAMPER_EXPERT_IDS)
+    recapture_probability = _task_probability(experts, RECAPTURE_EXPERT_IDS)
     return {
         "version": MODEL_VERSION,
         "method": "weighted_pixel_baseline_plus_bayesian_likelihood_ratio",
@@ -182,11 +192,17 @@ def fuse(experts: list[dict[str, Any]]) -> dict[str, Any]:
         "crossModalExponent": CROSS_MODAL_EXPONENT,
         "effectiveLikelihoodRatio": round(effective_lr, 3),
         "posterior": round(posterior, 4),
+        "publishable": has_aigc_baseline or decisive,
+        "riskVector": {
+            "aiGenerated": round(posterior, 4),
+            "tampered": tamper_probability,
+            "recaptured": recapture_probability,
+        },
         "factors": factors,
         "decisive": decisive,
         "corroborated": corroborated,
         "conflicting": conflicting,
         "calibrationStatus": "policy_prior_pending_dataset_calibration",
-        "note": "像素模型形成基线；AI 来源证据抬高风险，一致的实拍来源证据适度降低风险；同源证据已降权。",
+        "note": "AIGC 专家形成生成风险基线；篡改与翻拍风险独立呈现，不参与 AI 生成概率平均。AI 来源证据可调整生成风险，同源证据已降权。",
         "logOdds": round(math.log(_odds(posterior)), 4),
     }

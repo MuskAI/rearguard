@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import requests
 
@@ -41,6 +42,51 @@ def _truthy(value):
     if isinstance(value, bool):
         return value
     return str(value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _http_origin(value):
+    parsed = urlsplit(str(value or "").strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return ""
+    if parsed.username or parsed.password:
+        return ""
+    default_port = 80 if parsed.scheme == "http" else 443
+    try:
+        port = parsed.port or default_port
+    except ValueError:
+        return ""
+    suffix = "" if port == default_port else f":{port}"
+    return f"{parsed.scheme}://{parsed.hostname.lower()}{suffix}"
+
+
+def allowed_model_origins():
+    configured_urls = (
+        os.environ.get("REALGUARD_DETECTION_BACKEND_URL", "http://127.0.0.1:15000"),
+        os.environ.get("REALGUARD_V1_LEGACY_BACKEND_URL", "http://127.0.0.1:15000"),
+        os.environ.get("REALGUARD_V2_INTERNAL_DETECT_URL", "http://127.0.0.1:8848/api/detect"),
+        os.environ.get("REALGUARD_V2_HEALTH_URL", "http://127.0.0.1:8848/api/health"),
+    )
+    extras = tuple(
+        item.strip()
+        for item in os.environ.get("REALGUARD_MODEL_ALLOWED_ORIGINS", "").split(",")
+        if item.strip()
+    )
+    return {origin for origin in map(_http_origin, (*configured_urls, *extras)) if origin}
+
+
+def validate_model_url(value, *, allow_internal=False):
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if allow_internal and raw.startswith("internal://"):
+        return ""
+    parsed = urlsplit(raw)
+    origin = _http_origin(raw)
+    if not origin or parsed.fragment:
+        return "模型地址必须是无凭据、无片段的 HTTP(S) URL"
+    if origin not in allowed_model_origins():
+        return f"模型地址来源未获授权：{origin}"
+    return ""
 
 
 def _default_registry():
@@ -395,6 +441,12 @@ def _coerce_model_payload(payload):
         timeout = max(1, min(int(timeout), 600))
     except (TypeError, ValueError):
         timeout = 180
+    endpoint = str(payload.get("endpoint") or "").strip()
+    health_url = str(payload.get("healthUrl") or "").strip()
+    endpoint_error = validate_model_url(endpoint, allow_internal=True)
+    health_error = validate_model_url(health_url)
+    if endpoint_error or health_error:
+        return None, endpoint_error or health_error
     return {
         "id": model_id,
         "name": str(payload.get("name") or model_id).strip(),
@@ -403,8 +455,8 @@ def _coerce_model_payload(payload):
         "role": str(payload.get("role") or "candidate").strip(),
         "modality": str(payload.get("modality") or "image").strip(),
         "enabled": _truthy(payload.get("enabled", True)),
-        "endpoint": str(payload.get("endpoint") or "").strip(),
-        "healthUrl": str(payload.get("healthUrl") or "").strip(),
+        "endpoint": endpoint,
+        "healthUrl": health_url,
         "timeoutSeconds": timeout,
         "runtime": str(payload.get("runtime") or "custom-http").strip(),
         "artifactPath": str(payload.get("artifactPath") or "").strip(),
@@ -450,11 +502,11 @@ def update_model(model_id, updates):
                 candidate["id"] = model_id
                 normalized, error = _coerce_model_payload(candidate)
                 if error:
-                    return None, None
+                    return None, None, error
                 model.clear()
                 model.update(normalized)
-                return _save_registry_unlocked(registry), model
-    return None, None
+                return _save_registry_unlocked(registry), model, ""
+    return None, None, "模型不存在"
 
 
 def delete_model(model_id):
@@ -618,10 +670,18 @@ def check_model_health(model):
         "checkedAt": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     if health_url:
+        url_error = validate_model_url(health_url)
+        if url_error:
+            status["message"] = url_error
+            return status
         try:
             with requests.Session() as sess:
                 sess.trust_env = False
-                resp = sess.get(health_url, timeout=min(int(model.get("timeoutSeconds") or 10), 10))
+                resp = sess.get(
+                    health_url,
+                    timeout=min(int(model.get("timeoutSeconds") or 10), 10),
+                    allow_redirects=False,
+                )
             status["httpStatus"] = resp.status_code
             status["serviceOk"] = 200 <= resp.status_code < 300
             status["message"] = "service reachable" if status["serviceOk"] else resp.text[:120]

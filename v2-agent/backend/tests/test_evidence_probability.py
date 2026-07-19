@@ -19,10 +19,12 @@ def _known_hit(confidence=0.86):
         "label": "Google Gemini sparkle",
         "confidence": confidence,
         "decisive": True,
+        "bbox": {"x": 0.8, "y": 0.8, "w": 0.08, "h": 0.08},
+        "yoloCorroborated": True,
     }
 
 
-def test_known_watermark_plus_ai_metadata_exceeds_99_percent():
+def test_known_watermark_plus_editable_ai_metadata_is_not_false_corroboration():
     report = _report(
         isAiGenerated=True,
         aiFromMetadata=True,
@@ -30,8 +32,10 @@ def test_known_watermark_plus_ai_metadata_exceeds_99_percent():
         signals=[{"name": "metadata", "confidence": "high"}],
     )
     model = evidence_probability.build_probability_model(report, [_known_hit()])
-    assert model["posterior"] > 0.99
-    assert model["corroborated"] is True
+    watermark_only = evidence_probability.build_probability_model(_report(), [_known_hit()])
+    assert model["posterior"] > watermark_only["posterior"]
+    assert model["posterior"] < 0.99
+    assert model["decisive"] is True
 
 
 def test_known_watermark_plus_integrity_clash_exceeds_99_percent():
@@ -91,6 +95,20 @@ def test_more_independent_positive_evidence_is_monotonic():
         [_known_hit()],
     )
     assert corroborated["posterior"] > watermark_only["posterior"]
+
+
+def test_editable_metadata_alone_is_not_decisive():
+    model = evidence_probability.build_probability_model(
+        _report(
+            isAiGenerated=True,
+            aiFromMetadata=True,
+            aiSourceKind="generated",
+            signals=[{"name": "metadata", "confidence": "high"}],
+        ),
+        [],
+    )
+    assert model["decisive"] is False
+    assert model["posterior"] < 0.2
 
 
 def test_coherent_camera_metadata_reduces_pixel_risk_modestly():

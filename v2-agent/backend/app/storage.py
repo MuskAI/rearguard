@@ -1,7 +1,6 @@
 """Lightweight persistent storage for V2 history, cache, and metrics."""
 from __future__ import annotations
 
-import copy
 import json
 import os
 import sqlite3
@@ -15,6 +14,8 @@ from typing import Any
 DATA_DIR = Path(os.getenv("JIANZHEN_DATA_DIR", Path(__file__).resolve().parents[1] / "data"))
 DB_PATH = DATA_DIR / "jianzhen-v2.sqlite3"
 ANALYSIS_CACHE_VERSION = os.getenv("JIANZHEN_ANALYSIS_CACHE_VERSION", "v8-provenance-first")
+REQUEST_EVENT_RETENTION_DAYS = max(1, int(os.getenv("JIANZHEN_REQUEST_EVENT_RETENTION_DAYS", "90")))
+TOKEN_USAGE_RETENTION_DAYS = max(30, int(os.getenv("JIANZHEN_TOKEN_USAGE_RETENTION_DAYS", "730")))
 PUBLISHABLE_VERDICTS = frozenset({"real", "suspected_fake", "highly_suspected_fake"})
 PUBLISHABLE_SOURCES = frozenset({"vlm", "provenance"})
 
@@ -249,103 +250,6 @@ def put_history(
         conn.commit()
 
 
-def _visible_watermark_has_boxes(report: Any) -> bool:
-    if not isinstance(report, dict) or not report.get("detected"):
-        return False
-    for hit in report.get("hits") or []:
-        if not isinstance(hit, dict) or not isinstance(hit.get("bbox"), dict):
-            continue
-        bbox = hit["bbox"]
-        try:
-            if float(bbox.get("w", 0)) > 0 and float(bbox.get("h", 0)) > 0:
-                return True
-        except (TypeError, ValueError):
-            continue
-    return False
-
-
-def _watermark_reuse_key(row: sqlite3.Row) -> tuple[str, str] | None:
-    owner_user_id = str(row["developer_user_id"] or "")
-    sha256 = str(row["sha256"] or "")
-    if not sha256:
-        return None
-    owner_scope = f"user:{owner_user_id}" if owner_user_id else "legacy-unowned"
-    return owner_scope, sha256
-
-
-def _reuse_same_file_watermark(
-    result: dict[str, Any],
-    candidate: dict[str, Any] | None,
-) -> dict[str, Any]:
-    current = result.get("visibleWatermark")
-    if _visible_watermark_has_boxes(current) or not candidate:
-        return result
-    replacement = candidate.get("visibleWatermark")
-    if not _visible_watermark_has_boxes(replacement):
-        return result
-
-    replacement = copy.deepcopy(replacement)
-    basis = str(candidate.get("basis") or "same-user-exact-sha256")
-    replacement["reanalysis"] = {
-        "reused": True,
-        "basis": basis,
-        "sourceTaskId": candidate.get("taskId"),
-        "sourceCreatedAt": candidate.get("createdAt"),
-    }
-    audit_note = (
-        "该定位证据来自完全相同文件（SHA-256 一致）的最近一次成功扫描；"
-        "此记录为历史未归属数据，仅管理员可访问。"
-        if basis == "legacy-unowned-exact-sha256"
-        else "该定位证据来自同一账号对完全相同文件（SHA-256 一致）的最近一次成功扫描。"
-    )
-    existing_note = str(replacement.get("note") or "").strip()
-    replacement["note"] = f"{existing_note} {audit_note}".strip()
-    result["visibleWatermark"] = replacement
-    return result
-
-
-def _latest_same_file_watermark(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any] | None:
-    key = _watermark_reuse_key(row)
-    if key is None:
-        return None
-    owner_scope, sha256 = key
-    if owner_scope == "legacy-unowned":
-        candidates = conn.execute(
-            """
-            SELECT task_id, created_at, result_json
-            FROM history
-            WHERE developer_user_id IS NULL AND sha256 = ?
-            ORDER BY created_at DESC
-            """,
-            (sha256,),
-        ).fetchall()
-    else:
-        candidates = conn.execute(
-            """
-            SELECT task_id, created_at, result_json
-            FROM history
-            WHERE developer_user_id = ? AND sha256 = ?
-            ORDER BY created_at DESC
-            """,
-            (owner_scope.removeprefix("user:"), sha256),
-        ).fetchall()
-    for candidate_row in candidates:
-        candidate_result = json.loads(candidate_row["result_json"])
-        visible = candidate_result.get("visibleWatermark")
-        if _visible_watermark_has_boxes(visible):
-            return {
-                "taskId": candidate_row["task_id"],
-                "createdAt": candidate_row["created_at"],
-                "visibleWatermark": visible,
-                "basis": (
-                    "legacy-unowned-exact-sha256"
-                    if owner_scope == "legacy-unowned"
-                    else "same-user-exact-sha256"
-                ),
-            }
-    return None
-
-
 def _history_summary_from_row(
     row: sqlite3.Row,
     result: dict[str, Any] | None = None,
@@ -394,7 +298,7 @@ def _ensure_result_file_meta(result: dict[str, Any], row: sqlite3.Row) -> None:
         "type": file_type,
         "size": str(size),
         "resolution": meta.get("resolution") or result.get("resolution") or row["resolution"],
-        "sha256": meta.get("sha256") or result.get("sha256"),
+        "sha256": meta.get("sha256") or result.get("sha256") or row["sha256"],
         "thumbnail": meta.get("thumbnail") or row["thumbnail"],
         "preview": meta.get("preview") or result.get("preview"),
     }
@@ -512,29 +416,7 @@ def list_history(
             """,
             ownership_params,
         ).fetchall()
-    parsed_rows = [(row, json.loads(row["result_json"])) for row in rows]
-    watermark_candidates: dict[tuple[str, str], dict[str, Any]] = {}
-    for row, result in parsed_rows:
-        key = _watermark_reuse_key(row)
-        visible = result.get("visibleWatermark")
-        if key is not None and key not in watermark_candidates and _visible_watermark_has_boxes(visible):
-            watermark_candidates[key] = {
-                "taskId": row["task_id"],
-                "createdAt": row["created_at"],
-                "visibleWatermark": visible,
-                "basis": (
-                    "legacy-unowned-exact-sha256"
-                    if key[0] == "legacy-unowned"
-                    else "same-user-exact-sha256"
-                ),
-            }
-    items = [
-        _history_summary_from_row(
-            row,
-            _reuse_same_file_watermark(result, watermark_candidates.get(_watermark_reuse_key(row))),
-        )
-        for row, result in parsed_rows
-    ]
+    items = [_history_summary_from_row(row) for row in rows]
     normalized_query = (query or "").strip().lower()
     query_filtered = []
     for item in items:
@@ -591,11 +473,9 @@ def get_history(item_id: str) -> dict[str, Any] | None:
             """,
             (item_id, item_id),
         ).fetchone()
-        watermark_candidate = _latest_same_file_watermark(conn, row) if row else None
     if not row:
         return None
     result = json.loads(row["result_json"])
-    _reuse_same_file_watermark(result, watermark_candidate)
     result["_developerUserId"] = row["developer_user_id"]
     result["_developerKeyId"] = row["developer_key_id"]
     _ensure_result_file_meta(result, row)
@@ -610,15 +490,41 @@ def delete_history(item_id: str) -> dict[str, Any] | None:
     item = get_history(item_id)
     if not item:
         return None
+    task_id = item["taskId"]
+    report_id = item["reportId"]
+    file_meta = item.get("fileMeta") or {}
+    sha256 = str(file_meta.get("sha256") or "")
+    file_type = str(file_meta.get("type") or "")
     with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         conn.execute(
             "DELETE FROM history_artifacts WHERE task_id = ?",
-            (item["taskId"],),
+            (task_id,),
         )
         conn.execute(
             "DELETE FROM history WHERE task_id = ? OR report_id = ?",
-            (item["taskId"], item["reportId"]),
+            (task_id, report_id),
         )
+        # Usage rows are retained for billing/audit totals but no longer point
+        # back to deleted content or a downloadable report.
+        conn.execute(
+            """
+            UPDATE token_usage_events
+            SET task_id = NULL, report_id = NULL
+            WHERE task_id = ? OR report_id = ?
+            """,
+            (task_id, report_id),
+        )
+        if sha256 and file_type:
+            remaining = conn.execute(
+                "SELECT 1 FROM history WHERE sha256 = ? AND file_type = ? LIMIT 1",
+                (sha256, file_type),
+            ).fetchone()
+            if not remaining:
+                conn.execute(
+                    "DELETE FROM analysis_cache WHERE sha256 = ? AND file_type = ?",
+                    (sha256, file_type),
+                )
         conn.commit()
     return item
 
@@ -630,24 +536,20 @@ def put_history_artifacts(
     provenance: dict[str, Any] | None = None,
 ) -> None:
     with _connect() as conn:
-        row = conn.execute(
-            "SELECT forensics_json, provenance_json FROM history_artifacts WHERE task_id = ?",
-            (task_id,),
-        ).fetchone()
-        current_forensics = json.loads(row["forensics_json"]) if row and row["forensics_json"] else None
-        current_provenance = json.loads(row["provenance_json"]) if row and row["provenance_json"] else None
-        merged_forensics = forensics if forensics is not None else current_forensics
-        merged_provenance = provenance if provenance is not None else current_provenance
         conn.execute(
             """
-            INSERT OR REPLACE INTO history_artifacts
+            INSERT INTO history_artifacts
                 (task_id, forensics_json, provenance_json, updated_at)
             VALUES (?, ?, ?, ?)
+            ON CONFLICT(task_id) DO UPDATE SET
+                forensics_json = COALESCE(excluded.forensics_json, history_artifacts.forensics_json),
+                provenance_json = COALESCE(excluded.provenance_json, history_artifacts.provenance_json),
+                updated_at = excluded.updated_at
             """,
             (
                 task_id,
-                None if merged_forensics is None else json.dumps(merged_forensics, ensure_ascii=False),
-                None if merged_provenance is None else json.dumps(merged_provenance, ensure_ascii=False),
+                None if forensics is None else json.dumps(forensics, ensure_ascii=False),
+                None if provenance is None else json.dumps(provenance, ensure_ascii=False),
                 now_iso(),
             ),
         )
@@ -715,6 +617,29 @@ def record_event(
             ),
         )
         conn.commit()
+
+
+def prune_telemetry() -> dict[str, int]:
+    request_cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=REQUEST_EVENT_RETENTION_DAYS)
+    ).isoformat()
+    token_cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=TOKEN_USAGE_RETENTION_DAYS)
+    ).isoformat()
+    with _connect() as conn:
+        request_cursor = conn.execute(
+            "DELETE FROM request_events WHERE created_at < ?",
+            (request_cutoff,),
+        )
+        token_cursor = conn.execute(
+            "DELETE FROM token_usage_events WHERE created_at < ?",
+            (token_cutoff,),
+        )
+        conn.commit()
+        return {
+            "requestEvents": max(int(request_cursor.rowcount or 0), 0),
+            "tokenUsageEvents": max(int(token_cursor.rowcount or 0), 0),
+        }
 
 
 def _safe_int(value: Any) -> int:
@@ -886,7 +811,6 @@ def record_token_usage(
         total_tokens = prompt_tokens + completion_tokens
     developer_user_id = str((actor or {}).get("userId") or "") or None
     developer_key_id = str((actor or {}).get("keyId") or "") or None
-
     with _connect() as conn:
         conn.execute(
             """

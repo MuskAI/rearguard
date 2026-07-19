@@ -21,6 +21,7 @@ DEFAULT_STATE_PATH = Path(
 ) / "realguard" / "admin_state.json"
 STATE_PATH = Path(os.environ.get("REALGUARD_ADMIN_STATE_PATH", str(DEFAULT_STATE_PATH)))
 _STATE_THREAD_LOCK = threading.RLock()
+_API_KEY_QUOTA_TABLES_READY = False
 
 
 def _default_state():
@@ -271,6 +272,12 @@ def _db_state_enabled():
     return str(os.environ.get("REALGUARD_ADMIN_STATE_DB", "auto")).strip().lower() not in ("0", "false", "off", "json")
 
 
+def _db_state_required():
+    return str(os.environ.get("REALGUARD_ADMIN_STATE_DB", "auto")).strip().lower() in (
+        "1", "true", "on", "db", "required",
+    )
+
+
 def _system_sql(sql, params=None, fetch=True):
     if not _db_state_enabled():
         return None
@@ -280,6 +287,225 @@ def _system_sql(sql, params=None, fetch=True):
     except Exception as exc:
         print(f"[ADMIN STATE DB ERROR] {exc}")
         return None
+
+
+def ensure_api_key_quota_storage():
+    """Create legacy key quota tables and account-authoritative quota tables."""
+    global _API_KEY_QUOTA_TABLES_READY
+    if _API_KEY_QUOTA_TABLES_READY:
+        return True
+    quota_result = _system_sql(
+        """
+        CREATE TABLE IF NOT EXISTS developer_api_key_quotas (
+          key_id BIGINT NOT NULL,
+          daily_limit INT NULL,
+          rate_limit_per_minute INT NULL,
+          scopes VARCHAR(255) NULL,
+          notes TEXT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (key_id),
+          CONSTRAINT fk_developer_api_key_quotas_key
+            FOREIGN KEY (key_id) REFERENCES developer_api_keys(id)
+            ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        fetch=False,
+    )
+    usage_result = _system_sql(
+        """
+        CREATE TABLE IF NOT EXISTS developer_api_key_quota_usage (
+          key_id BIGINT NOT NULL,
+          day_bucket DATE NOT NULL,
+          daily_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
+          minute_bucket DATETIME NOT NULL,
+          minute_count INT UNSIGNED NOT NULL DEFAULT 0,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (key_id),
+          CONSTRAINT fk_developer_api_key_quota_usage_key
+            FOREIGN KEY (key_id) REFERENCES developer_api_keys(id)
+            ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        fetch=False,
+    )
+    account_quota_result = _system_sql(
+        """
+        CREATE TABLE IF NOT EXISTS developer_api_account_quotas (
+          user_id INT NOT NULL,
+          daily_limit INT NULL,
+          rate_limit_per_minute INT NULL,
+          scopes VARCHAR(255) NULL,
+          notes TEXT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (user_id),
+          CONSTRAINT fk_developer_api_account_quotas_user
+            FOREIGN KEY (user_id) REFERENCES `user`(Userid)
+            ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        fetch=False,
+    )
+    account_usage_result = _system_sql(
+        """
+        CREATE TABLE IF NOT EXISTS developer_api_account_quota_usage (
+          user_id INT NOT NULL,
+          day_bucket DATE NOT NULL,
+          daily_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
+          minute_bucket DATETIME NOT NULL,
+          minute_count INT UNSIGNED NOT NULL DEFAULT 0,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (user_id),
+          CONSTRAINT fk_developer_api_account_quota_usage_user
+            FOREIGN KEY (user_id) REFERENCES `user`(Userid)
+            ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        fetch=False,
+    )
+    _API_KEY_QUOTA_TABLES_READY = all(
+        result is not None
+        for result in (quota_result, usage_result, account_quota_result, account_usage_result)
+    )
+    return _API_KEY_QUOTA_TABLES_READY
+
+
+def _quota_payload(value=None):
+    value = value if isinstance(value, dict) else {}
+
+    def optional_nonnegative_int(field):
+        raw = value.get(field)
+        if raw in (None, ""):
+            return None
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            return None
+
+    return {
+        "dailyLimit": optional_nonnegative_int("dailyLimit"),
+        "rateLimitPerMinute": optional_nonnegative_int("rateLimitPerMinute"),
+        "scopes": str(value.get("scopes") or "").strip(),
+        "notes": str(value.get("notes") or "").strip(),
+    }
+
+
+def _quota_from_row(row):
+    return _quota_payload({
+        "dailyLimit": row.get("daily_limit"),
+        "rateLimitPerMinute": row.get("rate_limit_per_minute"),
+        "scopes": row.get("scopes"),
+        "notes": row.get("notes"),
+    })
+
+
+def _write_api_key_quota_db(key_id, quota, *, insert_only=False):
+    if not ensure_api_key_quota_storage():
+        return False
+    quota = _quota_payload(quota)
+    update_clause = "key_id = VALUES(key_id)" if insert_only else """
+        daily_limit = VALUES(daily_limit),
+        rate_limit_per_minute = VALUES(rate_limit_per_minute),
+        scopes = VALUES(scopes),
+        notes = VALUES(notes)
+    """
+    result = _system_sql(
+        f"""
+        INSERT INTO developer_api_key_quotas
+            (key_id, daily_limit, rate_limit_per_minute, scopes, notes)
+        SELECT %s, %s, %s, %s, %s
+        FROM developer_api_keys
+        WHERE id = %s
+        ON DUPLICATE KEY UPDATE {update_clause}
+        """,
+        (
+            int(key_id),
+            quota["dailyLimit"],
+            quota["rateLimitPerMinute"],
+            quota["scopes"],
+            quota["notes"],
+            int(key_id),
+        ),
+        fetch=False,
+    )
+    return result is not None
+
+
+def _api_key_user_id(key_id):
+    rows = _system_sql(
+        "SELECT user_id FROM developer_api_keys WHERE id = %s LIMIT 1",
+        (int(key_id),),
+    )
+    if not rows:
+        return None
+    try:
+        return int(rows[0].get("user_id"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _write_api_account_quota_db(user_id, quota, *, insert_only=False):
+    if not ensure_api_key_quota_storage():
+        return False
+    quota = _quota_payload(quota)
+    update_clause = "user_id = VALUES(user_id)" if insert_only else """
+        daily_limit = VALUES(daily_limit),
+        rate_limit_per_minute = VALUES(rate_limit_per_minute),
+        scopes = VALUES(scopes),
+        notes = VALUES(notes)
+    """
+    result = _system_sql(
+        f"""
+        INSERT INTO developer_api_account_quotas
+            (user_id, daily_limit, rate_limit_per_minute, scopes, notes)
+        SELECT %s, %s, %s, %s, %s
+        FROM `user`
+        WHERE Userid = %s
+        ON DUPLICATE KEY UPDATE {update_clause}
+        """,
+        (
+            int(user_id),
+            quota["dailyLimit"],
+            quota["rateLimitPerMinute"],
+            quota["scopes"],
+            quota["notes"],
+            int(user_id),
+        ),
+        fetch=False,
+    )
+    return result is not None
+
+
+def _migrate_key_quotas_to_accounts():
+    """Import the strictest legacy key limit once, without replacing account policy."""
+    result = _system_sql(
+        """
+        INSERT IGNORE INTO developer_api_account_quotas
+            (user_id, daily_limit, rate_limit_per_minute, scopes, notes)
+        SELECT k.user_id, MIN(q.daily_limit), MIN(q.rate_limit_per_minute),
+               MAX(q.scopes), MAX(q.notes)
+        FROM developer_api_key_quotas q
+        JOIN developer_api_keys k ON k.id = q.key_id
+        GROUP BY k.user_id
+        """,
+        fetch=False,
+    )
+    return result is not None
+
+
+def sync_api_key_quotas_to_db():
+    """Import legacy JSON quotas without overwriting DB-authoritative values."""
+    if not ensure_api_key_quota_storage():
+        return False
+    quotas = load_state().get("apiKeyQuotas", {})
+    for key_id, quota in quotas.items():
+        try:
+            if not _write_api_key_quota_db(int(key_id), quota, insert_only=True):
+                return False
+        except (TypeError, ValueError):
+            continue
+    return _migrate_key_quotas_to_accounts()
 
 
 def _json_dumps(value):
@@ -598,19 +824,99 @@ def list_detection_jobs(limit=100):
 
 
 def get_api_key_quota(key_id):
+    default = _quota_payload()
+    if ensure_api_key_quota_storage():
+        user_id = _api_key_user_id(key_id)
+        if user_id is None:
+            quotas = load_state().get("apiKeyQuotas", {})
+            return _quota_payload(quotas.get(str(key_id)))
+        rows = _system_sql(
+            """
+            SELECT daily_limit, rate_limit_per_minute, scopes, notes
+            FROM developer_api_account_quotas
+            WHERE user_id = %s
+            LIMIT 1
+            """,
+            (user_id,),
+        )
+        if rows is None:
+            quotas = load_state().get("apiKeyQuotas", {})
+            return _quota_payload(quotas.get(str(key_id)))
+        if rows:
+            return _quota_from_row(rows[0])
+
+        legacy_rows = _system_sql(
+            """
+            SELECT daily_limit, rate_limit_per_minute, scopes, notes
+            FROM developer_api_key_quotas
+            WHERE key_id = %s
+            LIMIT 1
+            """,
+            (int(key_id),),
+        )
+        legacy = _quota_from_row(legacy_rows[0]) if legacy_rows else None
+        if legacy is None:
+            legacy = load_state().get("apiKeyQuotas", {}).get(str(key_id))
+        if legacy is not None and _write_api_account_quota_db(user_id, legacy, insert_only=True):
+            rows = _system_sql(
+                """
+                SELECT daily_limit, rate_limit_per_minute, scopes, notes
+                FROM developer_api_account_quotas
+                WHERE user_id = %s
+                LIMIT 1
+                """,
+                (user_id,),
+            )
+            if rows is None:
+                return _quota_payload(legacy)
+            if rows:
+                return _quota_from_row(rows[0])
+        return default
+
     quotas = load_state().get("apiKeyQuotas", {})
-    return quotas.get(str(key_id), {"dailyLimit": None, "rateLimitPerMinute": None, "scopes": ""})
+    return _quota_payload(quotas.get(str(key_id)))
 
 
 def set_api_key_quota(key_id, quota):
+    existing = get_api_key_quota(key_id)
+    db_authoritative = _API_KEY_QUOTA_TABLES_READY or _db_state_required()
+    user_id = _api_key_user_id(key_id) if db_authoritative else None
+    if db_authoritative:
+        if user_id is None:
+            return None
+        rows = _system_sql(
+            """
+            SELECT daily_limit, rate_limit_per_minute, scopes, notes
+            FROM developer_api_account_quotas
+            WHERE user_id = %s
+            LIMIT 1
+            """,
+            (user_id,),
+        )
+        if rows is None:
+            return None
+        if rows:
+            existing = _quota_from_row(rows[0])
+    merged = dict(existing)
+    for field in ("dailyLimit", "rateLimitPerMinute", "scopes", "notes"):
+        if field in quota:
+            merged[field] = quota.get(field)
+    merged = _quota_payload(merged)
+    if user_id is None:
+        user_id = _api_key_user_id(key_id)
+    persisted_to_db = bool(user_id is not None and _write_api_account_quota_db(user_id, merged))
+    if not persisted_to_db and (_API_KEY_QUOTA_TABLES_READY or _db_state_required()):
+        return None
+
     def mutate(state):
         quotas = state.setdefault("apiKeyQuotas", {})
         key = str(key_id)
-        existing = quotas.get(key, {})
-        for field in ("dailyLimit", "rateLimitPerMinute", "scopes", "notes"):
-            if field in quota:
-                existing[field] = quota.get(field)
-        quotas[key] = existing
-        return deepcopy(existing)
+        quotas[key] = deepcopy(merged)
+        return deepcopy(merged)
 
-    return _update_state(mutate)
+    try:
+        return _update_state(mutate)
+    except Exception:
+        if persisted_to_db:
+            return merged
+        raise

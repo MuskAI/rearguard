@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import type { AgentOutcome } from "../agentTypes";
 import type { CaptureEvidence, ForensicReport, ProbabilityModel, ProvenanceReport, SynthIDResult, VisibleWatermarkResult } from "../api";
-import { buildEvidenceExplanation, hasLocalizedWatermark } from "../evidenceExplanation";
+import { buildEvidenceExplanation, hasDecisiveAiWatermark } from "../evidenceExplanation";
 
 type ResultTab = "summary" | "evidence" | "file";
 type ForensicsPreviewState = "idle" | "running" | "complete" | "skipped";
@@ -33,6 +33,8 @@ interface Props {
   forensicsPreviewState: ForensicsPreviewState;
   provenanceBusy: boolean;
   downloadBusy: boolean;
+  actionError?: string;
+  onRetryAction?: () => void;
   onForensics: () => void;
   onProvenance: () => void;
   onDownload: () => void;
@@ -42,6 +44,7 @@ interface VerdictView {
   label: string;
   description: string;
   risk: number;
+  riskLabel: string;
   tone: "real" | "warn" | "fake";
   confidence: string;
 }
@@ -59,13 +62,14 @@ function riskTone(risk: number): VerdictView["tone"] {
 function verdictFor(outcome: AgentOutcome): VerdictView {
   if (outcome.kind === "image") {
     const raw = Number(outcome.result.probability || 0);
-    const localizedWatermark = hasLocalizedWatermark(outcome.result.visibleWatermark);
+    const localizedWatermark = hasDecisiveAiWatermark(outcome.result.visibleWatermark);
     const risk = Math.max(clamp01(raw > 1 ? raw / 100 : raw), localizedWatermark ? 0.95 : 0);
     const tone = localizedWatermark ? "fake" : outcome.result.final_label.includes("真实") ? "real" : riskTone(risk);
     return {
       label: localizedWatermark ? "AI生成图像" : outcome.result.final_label || (tone === "real" ? "更倾向真实" : "存在生成风险"),
       description: tone === "real" ? "本次多源分析未发现足以支持 AI 生成的强证据。" : "检测到需要关注的生成或编辑线索，建议结合原始来源复核。",
       risk,
+      riskLabel: outcome.result.swarm?.enabled ? "综合异常风险" : "AI 生成风险",
       tone,
       confidence: outcome.result.confidence || "未标注",
     };
@@ -77,18 +81,45 @@ function verdictFor(outcome: AgentOutcome): VerdictView {
       label: outcome.result.final_label || (tone === "real" ? "更倾向真实" : "存在合成风险"),
       description: tone === "real" ? "抽帧与时序分析未发现明确的合成证据。" : "视频中存在需要人工复核的合成线索。",
       risk,
+      riskLabel: "合成风险",
       tone,
       confidence: outcome.result.confidence || "未标注",
     };
   }
-  const localizedWatermark = hasLocalizedWatermark(outcome.result.visibleWatermark);
-  const risk = Math.max(clamp01(Number(outcome.result.confidence || 0)), localizedWatermark ? 0.95 : 0);
-  const tone = localizedWatermark ? "fake" : outcome.result.verdict === "real" ? "real" : outcome.result.verdict === "highly_suspected_fake" ? "fake" : "warn";
+  const localizedWatermark = hasDecisiveAiWatermark(outcome.result.visibleWatermark);
+  const vector = outcome.result.riskVector;
+  const aiRisk = clamp01(Number(outcome.result.aiProbability ?? vector?.aiGenerated ?? outcome.result.confidence ?? 0));
+  const tamperRisk = clamp01(Number(vector?.tampered ?? 0));
+  const deepfakeRisk = clamp01(Number(vector?.deepfake ?? 0));
+  const risk = Math.max(
+    clamp01(Number(outcome.result.riskScore ?? outcome.result.confidence ?? 0)),
+    aiRisk,
+    tamperRisk,
+    deepfakeRisk,
+    localizedWatermark ? 0.95 : 0,
+  );
+  const specializedRisk = Math.max(tamperRisk, deepfakeRisk);
+  const hasSpecializedRisk = specializedRisk >= Math.max(aiRisk, 0.62);
+  const tone = localizedWatermark
+    ? "fake"
+    : hasSpecializedRisk
+      ? riskTone(specializedRisk)
+      : outcome.result.verdict === "real"
+        ? "real"
+        : outcome.result.verdict === "highly_suspected_fake"
+          ? "fake"
+          : "warn";
   const labels = { real: "更倾向真实", suspected_fake: "疑似 AI 生成", highly_suspected_fake: "高度疑似 AI 生成", unknown: "需要人工复核" };
+  let label = labels[outcome.result.verdict];
+  if (!localizedWatermark && tamperRisk >= Math.max(aiRisk, deepfakeRisk, 0.62)) label = "疑似篡改图像";
+  else if (!localizedWatermark && deepfakeRisk >= Math.max(aiRisk, tamperRisk, 0.62)) label = "疑似人脸深伪";
   return {
-    label: localizedWatermark ? labels.highly_suspected_fake : labels[outcome.result.verdict],
+    label: localizedWatermark ? labels.highly_suspected_fake : label,
     description: outcome.result.explanation || "请结合证据维度与原始来源进行判断。",
     risk,
+    riskLabel: tamperRisk >= Math.max(aiRisk, deepfakeRisk, 0.62) || deepfakeRisk >= Math.max(aiRisk, tamperRisk, 0.62)
+      ? "综合异常风险"
+      : "AI 生成风险",
     tone,
     confidence: outcome.result.source === "vlm"
       ? "模型分析完成"
@@ -299,7 +330,7 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
       : hasPlatformHit
         ? `已确认 ${platformHits.length} 处 AI 平台水印${confirmedHits.length > 0 ? `，其中 ${confirmedHits.length} 处通过 YOLO 区域复核` : ""}${genericHits.length > 0 ? `；另有 ${genericHits.length} 处可见水印的平台归属待确认` : ""}。`
         : detected
-          ? "已定位到可见水印但尚不能确认平台归属；有效定位框按当前规则作为高置信度伪造证据。"
+          ? "已定位到可见水印但尚不能确认平台归属；定位框仅作为上下文线索，不会单独改变鉴伪结论。"
           : "平台注册表与 YOLO 可见水印检测均未发现水印。";
   return (
     <section className="result-band watermark-band">
@@ -309,7 +340,7 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
       </div>
       <div className={`watermark-status ${hasPlatformHit ? "is-detected" : detected ? "is-possible" : report.supported ? "is-clear" : "is-unavailable"}`}>
         <span>{hasPlatformHit ? `已知平台 ${platformHits.length}` : detected ? `可见水印 ${genericHits.length}` : report.supported ? "未检出" : "暂不可用"}</span>
-        <strong>{hasPlatformHit ? `${providerLabels} · 平台规则确认` : detected ? `${reusedFromSameFile ? "同一文件复核补充 · " : ""}有效定位框，参与高风险直判` : "已完成平台规则与通用水印扫描"}</strong>
+        <strong>{hasPlatformHit ? `${providerLabels} · 平台规则确认` : detected ? `${reusedFromSameFile ? "同一文件复核补充 · " : ""}通用水印线索，不单独判假` : "已完成平台规则与通用水印扫描"}</strong>
         {elapsed > 0 ? <time>{elapsed} ms</time> : null}
       </div>
       {report.supported && (
@@ -346,7 +377,7 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
                       <small>
                         {platformProviders.has(hit.provider)
                           ? `remove-ai-watermarks 平台匹配${hit.localizationConfirmed ? " · YOLO 区域复核" : hit.decisive ? " · 来源强证据" : " · 待交叉验证"}`
-                          : "YOLO 可见水印定位 · 有效框参与高风险直判"}
+                          : "YOLO 可见水印定位 · 仅作上下文线索"}
                       </small>
                       <i><em style={{ width: `${clamp01(hit.confidence) * 100}%` }} /></i>
                     </div>
@@ -435,9 +466,9 @@ function ProbabilitySection({ model }: { model?: ProbabilityModel }) {
     <section className="result-band probability-band">
       <div className="section-title">
         <Gauge size={18} />
-        <div><h3>最终概率依据</h3><p>像素模型形成基线，独立来源证据通过似然比更新风险。</p></div>
+        <div><h3>综合风险依据</h3><p>像素模型形成风险基线，独立来源证据通过规则化证据权重更新结果。</p></div>
       </div>
-      <div className="probability-flow" aria-label={`风险从 ${Math.round(baseline * 100)}% 更新到 ${Math.round(posterior * 100)}%`}>
+      <div className="probability-flow" aria-label={`策略风险分从 ${Math.round(baseline * 100)} 更新到 ${Math.round(posterior * 100)}`}>
         <div>
           <span>{model.pixelBaseline != null ? "像素基线" : "基础风险"}</span>
           <strong>{(baseline * 100).toFixed(1)}%</strong>
@@ -467,7 +498,7 @@ function ProbabilitySection({ model }: { model?: ProbabilityModel }) {
       </div>
       <div className="probability-note">
         <Info size={15} />
-        <p>{model.conflicting ? "当前同时存在支持实拍与支持生成的证据，系统按证据强度融合并标记冲突。" : "该数值表示自动化伪造风险，不等同于司法鉴定置信度；普通 Logo 与缺失元数据不参与抬分。"}</p>
+        <p>{model.conflicting ? "当前同时存在支持实拍与支持生成的证据，系统按证据强度融合并标记冲突。" : "该数值是尚待数据集校准的自动化策略风险分，不是统计概率或司法鉴定置信度；普通 Logo 与缺失元数据不参与抬分。"}</p>
       </div>
     </section>
   );
@@ -512,7 +543,7 @@ export default function AgentResult(props: Props) {
       : props.outcome.result.dimensions.map((item) => `${item.label}：${item.result}`);
 
   return (
-    <article className={`agent-result tone-${verdict.tone}`}>
+    <article className={`agent-result tone-${verdict.tone}`} aria-labelledby="detection-result-title">
       <header className="result-hero">
         <div className="result-preview">
           {props.outcome.kind === "video" && preview ? (
@@ -525,28 +556,37 @@ export default function AgentResult(props: Props) {
         </div>
         <div className="result-verdict">
           <div className="verdict-kicker"><ShieldCheck size={16} /> 小鉴综合判断</div>
-          <h2>{verdict.label}</h2>
+          <h2 id="detection-result-title">{verdict.label}</h2>
           <p>{verdict.description}</p>
           <div className="verdict-meta">
-            <span><Gauge size={15} /> AI 风险评分 <strong>{Math.round(verdict.risk * 100)}%</strong></span>
+            <span><Gauge size={15} /> {verdict.riskLabel} <strong>{Math.round(verdict.risk * 100)}%</strong></span>
             <span><BadgeCheck size={15} /> 置信说明 <strong>{verdict.confidence}</strong></span>
           </div>
         </div>
-        <div className="risk-meter" aria-label={`AI 风险评分 ${Math.round(verdict.risk * 100)}%`}>
+        <div className="risk-meter" aria-label={`${verdict.riskLabel} ${Math.round(verdict.risk * 100)}%`}>
           <div className="risk-meter-value">{Math.round(verdict.risk * 100)}<small>%</small></div>
-          <span>AI 风险</span>
+          <span>{verdict.riskLabel}</span>
           <div className="risk-meter-track"><i style={{ width: `${Math.round(verdict.risk * 100)}%` }} /></div>
         </div>
       </header>
 
-      <nav className="result-tabs" aria-label="检测结果视图">
-        <button type="button" className={tab === "summary" ? "active" : ""} onClick={() => setTab("summary")}><ShieldCheck size={16} /> 结论</button>
-        <button type="button" className={tab === "evidence" ? "active" : ""} onClick={() => setTab("evidence")}><Layers3 size={16} /> 证据</button>
-        <button type="button" className={tab === "file" ? "active" : ""} onClick={() => setTab("file")}><FileSearch size={16} /> 文件信息</button>
+      <nav className="result-tabs" aria-label="检测结果视图" role="tablist" onKeyDown={(event) => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        const tabs = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+        const current = tabs.indexOf(document.activeElement as HTMLButtonElement);
+        if (current < 0) return;
+        event.preventDefault();
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+        tabs[next]?.focus();
+        tabs[next]?.click();
+      }}>
+        <button id="result-tab-summary" role="tab" aria-selected={tab === "summary"} aria-controls="result-panel-summary" tabIndex={tab === "summary" ? 0 : -1} type="button" className={tab === "summary" ? "active" : ""} onClick={() => setTab("summary")}><ShieldCheck size={16} /> 结论</button>
+        <button id="result-tab-evidence" role="tab" aria-selected={tab === "evidence"} aria-controls="result-panel-evidence" tabIndex={tab === "evidence" ? 0 : -1} type="button" className={tab === "evidence" ? "active" : ""} onClick={() => setTab("evidence")}><Layers3 size={16} /> 证据</button>
+        <button id="result-tab-file" role="tab" aria-selected={tab === "file"} aria-controls="result-panel-file" tabIndex={tab === "file" ? 0 : -1} type="button" className={tab === "file" ? "active" : ""} onClick={() => setTab("file")}><FileSearch size={16} /> 文件信息</button>
       </nav>
 
       {tab === "summary" && (
-        <div className="result-tab-panel">
+        <div className="result-tab-panel" id="result-panel-summary" role="tabpanel" aria-labelledby="result-tab-summary" tabIndex={0}>
           <section className="result-band">
             <div className="section-title"><Sparkles size={18} /><div><h3>为什么这样判断</h3><p>已按水印、主模型、视觉复核与文件来源证据排序。</p></div></div>
             <div className="result-explanation result-rationale" role="list">
@@ -586,13 +626,19 @@ export default function AgentResult(props: Props) {
               {provenance ? "重新验证内容凭证" : "验证内容凭证"}
             </button>
           </div>
+          {props.actionError && (
+            <div className="result-action-error" role="alert">
+              <AlertTriangle size={16} /><span>{props.actionError}</span>
+              {props.onRetryAction && <button type="button" onClick={props.onRetryAction}>重试此操作</button>}
+            </div>
+          )}
           <ForensicsSection report={forensics} busy={props.forensicsBusy} previewState={props.forensicsPreviewState} />
           <ProvenanceSection report={provenance} />
         </div>
       )}
 
       {tab === "evidence" && (
-        <div className="result-tab-panel">
+        <div className="result-tab-panel" id="result-panel-evidence" role="tabpanel" aria-labelledby="result-tab-evidence" tabIndex={0}>
           <section className="result-band">
             <div className="section-title"><Layers3 size={18} /><div><h3>证据摘要</h3><p>证据条目用于解释模型判断，不应脱离原始文件单独使用。</p></div></div>
             <EvidenceList items={evidenceItems} />
@@ -633,7 +679,7 @@ export default function AgentResult(props: Props) {
       )}
 
       {tab === "file" && (
-        <div className="result-tab-panel">
+        <div className="result-tab-panel" id="result-panel-file" role="tabpanel" aria-labelledby="result-tab-file" tabIndex={0}>
           <section className="result-band">
             <div className="section-title"><FileSearch size={18} /><div><h3>原始文件信息</h3><p>文件名与基础属性只用于本次任务和个人历史归档。</p></div></div>
             <dl className="fact-grid">

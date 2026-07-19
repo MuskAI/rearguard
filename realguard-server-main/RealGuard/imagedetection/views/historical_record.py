@@ -50,7 +50,7 @@ def history_photo():
     if result:
         for item in result:
             fake_pct = round(float(item.get('fake', 0) or 0), 1)
-            final_label = 'AI生成图像' if fake_pct >= 50 else '真实图像'
+            final_label = str(item.get('aigc') or '').strip() or ('AI生成图像' if fake_pct >= 50 else '真实图像')
             records.append({
                 "itemid": item['itemid'],
                 "filename": item['filename'],

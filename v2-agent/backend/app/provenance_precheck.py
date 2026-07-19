@@ -204,20 +204,20 @@ def _local_source_decision(report: dict[str, Any]) -> tuple[dict[str, Any], dict
         else "generated"
     )
     validation_state = str(report.get("validationState") or "").lower()
+    c2pa_trusted = validation_state in {"valid", "trusted"}
 
     if report.get("isAiGenerated") is True:
-        invalid = validation_state == "invalid"
         enhanced = source_kind == "enhanced"
         decision = {
-            "shortCircuit": not invalid,
-            "modelRequired": invalid,
-            "verdict": None if invalid else "suspected_fake" if enhanced else "highly_suspected_fake",
-            "confidence": 0.0 if invalid else 0.94 if enhanced else 0.99,
-            "reason": "no_decisive_ai_provenance" if invalid else "c2pa_ai_enhanced" if enhanced else "c2pa_ai_generated",
-            "evidenceKinds": ["c2pa", "integrity_clash"] if invalid else ["c2pa"],
+            "shortCircuit": c2pa_trusted,
+            "modelRequired": not c2pa_trusted,
+            "verdict": None if not c2pa_trusted else "suspected_fake" if enhanced else "highly_suspected_fake",
+            "confidence": 0.0 if not c2pa_trusted else 0.94 if enhanced else 0.99,
+            "reason": "untrusted_ai_provenance" if not c2pa_trusted else "c2pa_ai_enhanced" if enhanced else "c2pa_ai_generated",
+            "evidenceKinds": ["c2pa", "integrity_clash"] if not c2pa_trusted else ["c2pa"],
             "summary": (
-                "C2PA 包含 AI 来源声明，但签名校验未通过；该冲突将与像素模型及其他水印证据联合计算。"
-                if invalid
+                "C2PA 包含 AI 来源声明，但凭证未处于可信校验状态；该线索仅作上下文并继续运行像素模型。"
+                if not c2pa_trusted
                 else "C2PA 内容凭证声明该文件包含 AI 生成或合成内容，已直接形成结论。"
             ),
         }
@@ -225,6 +225,7 @@ def _local_source_decision(report: dict[str, Any]) -> tuple[dict[str, Any], dict
             "aiFromMetadata": True,
             "isAiGenerated": True,
             "aiSourceKind": source_kind,
+            "c2paTrusted": c2pa_trusted,
             "platform": report.get("generator"),
             "signals": [
                 {
@@ -233,7 +234,7 @@ def _local_source_decision(report: dict[str, Any]) -> tuple[dict[str, Any], dict
                     "detail": report.get("generator") or "AI digitalSourceType",
                 }
             ],
-            "integrityClashes": ["c2pa_signature_invalid"] if invalid else [],
+            "integrityClashes": [f"c2pa_not_trusted:{validation_state or 'unknown'}"] if not c2pa_trusted else [],
         }
         return decision, compact
 
@@ -245,6 +246,7 @@ def _local_source_decision(report: dict[str, Any]) -> tuple[dict[str, Any], dict
             "aiFromMetadata": True,
             "isAiGenerated": True,
             "aiSourceKind": "generated",
+            "c2paTrusted": False,
             "platform": "、".join(tools) or None,
             "signals": [
                 {
@@ -257,13 +259,13 @@ def _local_source_decision(report: dict[str, Any]) -> tuple[dict[str, Any], dict
         }
         return (
             {
-                "shortCircuit": True,
-                "modelRequired": False,
-                "verdict": "highly_suspected_fake",
-                "confidence": 0.96,
-                "reason": "ai_metadata",
+                "shortCircuit": False,
+                "modelRequired": True,
+                "verdict": None,
+                "confidence": 0.0,
+                "reason": "ai_metadata_context",
                 "evidenceKinds": ["metadata"],
-                "summary": "原始文件包含高可信 AI 生成元数据或生成参数，已直接形成结论。",
+                "summary": "文件包含可编辑的 AI 生成元数据或参数；该线索仅作上下文并继续运行像素模型。",
             },
             compact,
         )
@@ -403,6 +405,7 @@ def _reconcile_probability(
         if report.get("isAiGenerated") is not True and compact.get("isAiGenerated") is True:
             report["isAiGenerated"] = True
         report["aiSourceKind"] = report.get("aiSourceKind") or compact.get("aiSourceKind")
+        report["c2paTrusted"] = bool(report.get("c2paTrusted") or compact.get("c2paTrusted"))
         report["platform"] = report.get("platform") or compact.get("platform")
         report["signals"] = [*(report.get("signals") or []), *(compact.get("signals") or [])]
         report["integrityClashes"] = list(dict.fromkeys([
@@ -659,6 +662,8 @@ def _visible_result(
                 "modelRevision": engine_version,
                 "decisive": bool(hit.get("decisive")),
                 "evidenceRole": "provenance",
+                "localizationConfirmed": bool(hit.get("yoloCorroborated")),
+                "localizationConfidence": round(float(hit.get("yoloConfidence") or 0.0), 3),
             }
             for hit in hits[:8]
         ],

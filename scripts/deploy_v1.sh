@@ -16,9 +16,8 @@ Optional environment variables:
                 Default: 15001
   DRY_RUN=1     Print commands without executing them
 
-This script verifies V1, builds the frontend, uploads the backend package,
-frontend dist assets, the pinned ip2region database and nginx site config,
-restarts services, then runs health checks.
+This script verifies V1, builds the frontend, uploads a complete release,
+activates hardened systemd/nginx configuration, and runs health checks.
 EOF
 }
 
@@ -34,21 +33,35 @@ BACKEND_DIR="$ROOT_DIR/realguard-server-main/RealGuard"
 FRONTEND_DIR="$ROOT_DIR/realguard-server-main/frontend"
 NGINX_CONFIG="$ROOT_DIR/realguard-server-main/deploy/nginx-realguard-frontend.conf"
 HTTPS_NGINX_CONFIG="$ROOT_DIR/deploy/nginx/realguard.conf"
-COMMIT_SHA="$(latest_commit_for_paths realguard-server-main/RealGuard realguard-server-main/frontend realguard-server-main/deploy/nginx-realguard-frontend.conf deploy/nginx/realguard.conf scripts/deploy_v1.sh scripts/deploy_common.sh)"
+NGINX_SNIPPETS_DIR="$ROOT_DIR/deploy/nginx/snippets"
+WEB_SERVICE_UNIT="$ROOT_DIR/deploy/systemd/realguard-backend.service"
+DETECTOR_SERVICE_UNIT="$ROOT_DIR/deploy/systemd/realguard-detector-backend.service"
+ACTIVATE_SCRIPT="$ROOT_DIR/scripts/remote/activate_v1.sh"
+COMMIT_SHA="$(latest_commit_for_paths \
+  realguard-server-main/RealGuard \
+  realguard-server-main/frontend \
+  realguard-server-main/deploy/nginx-realguard-frontend.conf \
+  deploy/nginx \
+  deploy/systemd \
+  scripts/deploy_v1.sh \
+  scripts/remote/activate_v1.sh \
+  scripts/deploy_common.sh)"
 DETECTOR_PORT="${REALGUARD_DETECTOR_PORT:-15001}"
 IP2REGION_XDB_URL="https://raw.githubusercontent.com/lionsoul2014/ip2region/cd40e3a1d532d645697999d646cf0e10481cef33/data/ip2region_v4.xdb"
 IP2REGION_XDB_SHA256="6307a9696f5711f84bcb8b25f07894de68a64a0ed4a1cc7e990562dd3084f210"
 TMP_DIR="$(mktemp -d)"
 ARCHIVE_PATH="$TMP_DIR/realguard-v1-backend.tgz"
 FRONTEND_ARCHIVE_PATH="$TMP_DIR/realguard-v1-frontend.tgz"
+NGINX_SNIPPETS_ARCHIVE_PATH="$TMP_DIR/realguard-nginx-snippets.tgz"
 MARKER_PATH="$TMP_DIR/realguard-v1.DEPLOYED_COMMIT"
-IP2REGION_XDB_PATH="$TMP_DIR/ip2region_v4.xdb"
+IP2REGION_XDB_PATH="$TMP_DIR/ip2region-v4.xdb"
 REMOTE="$(remote_target)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
-log_step 1 "Verify V1 backend"
+log_step 1 "Verify V1 backend and deployment scripts"
 run_local "$BACKEND_DIR/.venv-test/bin/python" -m compileall "$BACKEND_DIR/imagedetection"
 run_local "$BACKEND_DIR/.venv-test/bin/python" -m py_compile "$BACKEND_DIR/detector_backend.py"
+run_local bash -n "$ACTIVATE_SCRIPT"
 (
   cd "$BACKEND_DIR"
   run_local .venv-test/bin/python -m pytest tests
@@ -60,9 +73,10 @@ log_step 2 "Build V1 frontend"
   run_local npm run build
 )
 
-log_step 3 "Package V1 backend and pin IP geography data"
+log_step 3 "Package V1 release and pin IP geography data"
 run_tar_create "$BACKEND_DIR" "$ARCHIVE_PATH" run.py detector_backend.py requirements.txt imagedetection
 run_tar_create "$FRONTEND_DIR/dist" "$FRONTEND_ARCHIVE_PATH" .
+run_tar_create "$NGINX_SNIPPETS_DIR" "$NGINX_SNIPPETS_ARCHIVE_PATH" .
 write_commit_marker "$MARKER_PATH" "$COMMIT_SHA"
 run_local curl -fsSL "$IP2REGION_XDB_URL" -o "$IP2REGION_XDB_PATH"
 if [[ "$DRY_RUN" != "1" ]]; then
@@ -72,41 +86,19 @@ fi
 log_step 4 "Upload V1 release"
 run_scp "$ARCHIVE_PATH" "$REMOTE:/tmp/realguard-v1-backend.tgz"
 run_scp "$FRONTEND_ARCHIVE_PATH" "$REMOTE:/tmp/realguard-v1-frontend.tgz"
+run_scp "$NGINX_SNIPPETS_ARCHIVE_PATH" "$REMOTE:/tmp/realguard-nginx-snippets.tgz"
 run_scp "$MARKER_PATH" "$REMOTE:/tmp/realguard-v1.DEPLOYED_COMMIT"
 run_scp "$IP2REGION_XDB_PATH" "$REMOTE:/tmp/realguard-ip2region-v4.xdb"
 run_scp "$NGINX_CONFIG" "$REMOTE:/tmp/realguard-frontend.nginx.conf"
 run_scp "$HTTPS_NGINX_CONFIG" "$REMOTE:/tmp/realguard-https.nginx.conf"
+run_scp "$WEB_SERVICE_UNIT" "$REMOTE:/tmp/realguard-backend.service"
+run_scp "$DETECTOR_SERVICE_UNIT" "$REMOTE:/tmp/realguard-detector-backend.service"
+run_scp "$ACTIVATE_SCRIPT" "$REMOTE:/tmp/realguard-activate-v1.sh"
 
 log_step 5 "Activate V1 release"
-run_remote "printf '%s  %s\n' '$IP2REGION_XDB_SHA256' /tmp/realguard-ip2region-v4.xdb | sha256sum -c - && sudo install -d -m 755 -o ubuntu -g ubuntu /opt/realguard-data && sudo install -m 644 /tmp/realguard-ip2region-v4.xdb /opt/realguard-data/ip2region_v4.xdb && sudo tar -xzf /tmp/realguard-v1-backend.tgz -C /opt/realguard-server/RealGuard && sudo install -m 644 /tmp/realguard-v1.DEPLOYED_COMMIT /opt/realguard-server/DEPLOYED_COMMIT && sudo mkdir -p /opt/realguard-server/RealGuard/imagedetection/static/uploads/aliyun-probes && sudo chown -R ubuntu:ubuntu /opt/realguard-server/RealGuard/imagedetection/static/uploads && sudo -u ubuntu /opt/realguard-server/.venv/bin/python -m pip install --no-cache-dir --quiet --upgrade -r /opt/realguard-server/RealGuard/requirements.txt && sudo -u ubuntu /opt/realguard-server/.venv/bin/python -m pip install --no-cache-dir --quiet --no-deps --upgrade 'invisible-watermark>=0.2.0' && (sudo systemctl cat realguard-backend.service | sed -n 's/^Environment=//p' | tr ' ' '\n' | grep -E '^REALGUARD_(DETECTION_)?DB_' | sudo tee /etc/realguard/detector-db.env >/dev/null || true) && sudo chmod 600 /etc/realguard/detector-db.env && sudo tee /etc/systemd/system/realguard-detector-backend.service >/dev/null <<'UNIT'
-[Unit]
-Description=RealGuard V1 Detector Backend
-After=network.target mysql.service jianzhen-v2-backend.service
-Requires=mysql.service
-
-[Service]
-Type=simple
-User=ubuntu
-WorkingDirectory=/opt/realguard-server/RealGuard
-Environment=REALGUARD_DETECTOR_HOST=127.0.0.1
-Environment=REALGUARD_DETECTOR_PORT=$DETECTOR_PORT
-EnvironmentFile=-/etc/realguard/realguard-backend.env
-EnvironmentFile=-/etc/realguard/detector-db.env
-EnvironmentFile=-/etc/realguard/agent.env
-ExecStart=/opt/realguard-server/.venv/bin/python /opt/realguard-server/RealGuard/detector_backend.py
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-sudo mkdir -p /etc/systemd/system/realguard-backend.service.d && sudo tee /etc/systemd/system/realguard-backend.service.d/40-detector-backend-url.conf >/dev/null <<'UNIT'
-[Service]
-Environment=REALGUARD_DETECTION_BACKEND_URL=http://127.0.0.1:$DETECTOR_PORT
-UNIT
-sudo bash -lc 'set -a; [ ! -f /etc/realguard/realguard-backend.env ] || . /etc/realguard/realguard-backend.env; [ ! -f /etc/realguard/detector-db.env ] || . /etc/realguard/detector-db.env; set +a; cd /opt/realguard-server/RealGuard && /opt/realguard-server/.venv/bin/python -m flask --app run:app admin-db-upgrade && /opt/realguard-server/.venv/bin/python -m flask --app run:app developer-db-upgrade' && sudo systemctl daemon-reload && sudo systemctl enable realguard-detector-backend.service >/dev/null && sudo systemctl restart realguard-detector-backend.service && sudo systemctl restart realguard-backend.service && sudo rm -rf /var/www/realguard-frontend.next && sudo mkdir -p /var/www/realguard-frontend.next && sudo tar -xzf /tmp/realguard-v1-frontend.tgz -C /var/www/realguard-frontend.next && sudo chown -R root:root /var/www/realguard-frontend.next && sudo rm -rf /var/www/realguard-frontend.previous && sudo mv /var/www/realguard-frontend /var/www/realguard-frontend.previous && sudo mv /var/www/realguard-frontend.next /var/www/realguard-frontend && sudo rm -rf /var/www/realguard-frontend.previous && sudo install -m 644 /tmp/realguard-frontend.nginx.conf /etc/nginx/sites-enabled/realguard-frontend && sudo install -m 644 /tmp/realguard-https.nginx.conf /etc/nginx/conf.d/myapp.conf && sudo nginx -t && sudo systemctl reload nginx && rm -f /tmp/realguard-v1-backend.tgz /tmp/realguard-v1-frontend.tgz /tmp/realguard-v1.DEPLOYED_COMMIT /tmp/realguard-ip2region-v4.xdb /tmp/realguard-frontend.nginx.conf /tmp/realguard-https.nginx.conf && health_ready=0 && for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do if curl -fsS http://127.0.0.1:$DETECTOR_PORT/health >/dev/null && curl -fsS http://127.0.0.1:5000/api/history/image-detections >/dev/null; then health_ready=1; break; fi; sleep 1; done && test \"\$health_ready\" = \"1\" && systemctl is-active realguard-detector-backend.service && systemctl is-active realguard-backend.service && test -r /opt/realguard-data/ip2region_v4.xdb && curl -fsS http://127.0.0.1:$DETECTOR_PORT/health >/dev/null && curl -fsS http://127.0.0.1:5000/api/history/image-detections >/dev/null && curl -fsS -o /dev/null http://127.0.0.1/ && curl -fsS http://127.0.0.1/admin/login | grep -q '慧鉴 AI 管理员认证' && admin_register_code=\$(curl -sS -o /tmp/realguard-admin-register.html -w '%{http_code}' http://127.0.0.1/admin/register) && test \"\$admin_register_code\" = \"403\" && ! grep -q '注册管理员' /tmp/realguard-admin-register.html && big_screen_code=\$(curl -sS -o /tmp/realguard-big-screen.json -w '%{http_code}' http://127.0.0.1/api/admin/big-screen) && test \"\$big_screen_code\" = \"401\" && cat /opt/realguard-server/DEPLOYED_COMMIT"
+run_remote "IP2REGION_XDB_SHA256='$IP2REGION_XDB_SHA256' REALGUARD_DETECTOR_PORT='$DETECTOR_PORT' bash /tmp/realguard-activate-v1.sh"
 
 log_step 6 "Repair detection history ownership"
-run_remote "sudo bash -lc 'set -a; [ ! -f /etc/realguard/realguard-backend.env ] || . /etc/realguard/realguard-backend.env; [ ! -f /etc/realguard/detector-db.env ] || . /etc/realguard/detector-db.env; set +a; cd /opt/realguard-server/RealGuard && /opt/realguard-server/.venv/bin/python -m flask --app run:app repair-detection-owners'"
+run_remote "sudo bash -lc 'set -a; [ ! -f /etc/realguard/session.env ] || . /etc/realguard/session.env; [ ! -f /etc/realguard/realguard-backend.env ] || . /etc/realguard/realguard-backend.env; [ ! -f /etc/realguard/detector-db.env ] || . /etc/realguard/detector-db.env; set +a; cd /opt/realguard-server/RealGuard && /opt/realguard-server/.venv/bin/python -m flask --app run:app repair-detection-owners'"
 
 printf '\nV1 deployed from commit %s to %s\n' "$COMMIT_SHA" "$REMOTE"

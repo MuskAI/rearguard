@@ -384,6 +384,10 @@ video {
   padding: 0 2px 12px;
 }
 
+.history-entry-row {
+  position: relative;
+}
+
 .history-entry {
   position: relative;
   width: 100%;
@@ -393,12 +397,51 @@ video {
   align-items: center;
   gap: 9px;
   margin-bottom: 4px;
-  padding: 8px 8px;
+  padding: 8px 34px 8px 8px;
   text-align: left;
   color: var(--ink);
   background: transparent;
   border: 1px solid transparent;
   border-radius: 7px;
+}
+
+.history-delete-button {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  right: 7px;
+  width: 27px;
+  height: 27px;
+  display: grid;
+  place-items: center;
+  color: #788b91;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  transform: translateY(-50%);
+  opacity: 0;
+}
+
+.history-entry-row:hover .history-delete-button,
+.history-entry-row:focus-within .history-delete-button {
+  opacity: 1;
+}
+
+.history-delete-button:hover,
+.history-delete-button:focus-visible {
+  color: #b43d35;
+  background: #fff0ee;
+}
+
+.history-delete-button:disabled {
+  cursor: wait;
+  opacity: 0.45;
+}
+
+@media (hover: none) {
+  .history-delete-button {
+    opacity: 0.72;
+  }
 }
 
 .history-entry:hover {
@@ -885,7 +928,7 @@ video {
   align-items: center;
   gap: 7px;
   color: var(--ink-strong);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 760;
 }
 
@@ -899,7 +942,51 @@ video {
 
 .upload-stage-topline small {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 11px;
+}
+
+.guest-upload-consent {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 9px 10px;
+  text-align: left;
+  color: var(--muted-strong);
+  background: #f7f9f9;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.guest-upload-consent.has-error {
+  background: var(--coral-soft);
+  border-color: #e8afa2;
+}
+
+.guest-upload-consent input {
+  width: 16px;
+  height: 16px;
+  margin: 1px 0 0;
+  accent-color: var(--primary);
+}
+
+.guest-upload-consent a {
+  color: var(--blue);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.guest-consent-warning {
+  width: 100%;
+  margin: 5px 0 0;
+  text-align: left;
+  color: #8b4438;
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .upload-stage-core {
@@ -1006,18 +1093,18 @@ video {
 
 .capability-strip strong {
   color: var(--ink);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .capability-strip small {
   color: var(--muted);
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .upload-limits {
   margin-top: 13px;
   color: #73888f;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .trust-notes {
@@ -1032,7 +1119,7 @@ video {
   background: transparent;
   border-top: 1px solid var(--border-strong);
   border-bottom: 1px solid var(--border-strong);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .trust-notes span {
@@ -1055,6 +1142,14 @@ video {
 
 .result-anchor {
   scroll-margin-top: 14px;
+}
+
+.result-anchor:focus-visible,
+.topbar-title h1:focus-visible,
+#official-home-title:focus-visible,
+.developer-topbar h1:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 4px;
 }
 
 .user-file-message {
@@ -1305,6 +1400,23 @@ video {
   font-size: 8px;
 }
 
+.cancel-analysis-button {
+  min-height: 34px;
+  margin-top: 12px;
+  padding: 0 12px;
+  color: var(--muted-strong);
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.cancel-analysis-button:hover {
+  color: var(--coral);
+  border-color: #e1aea3;
+}
+
 .progress-experts span i {
   width: 6px;
   height: 6px;
@@ -1331,7 +1443,52 @@ video {
   align-items: center;
   gap: 6px;
   color: #84601d;
-  font-size: 9px;
+  font-size: 11px;
+}
+
+.fallback-choice {
+  width: min(720px, 92%);
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 11px;
+  padding: 15px;
+  background: #fff9eb;
+  border: 1px solid #e6cf99;
+  border-radius: 8px;
+}
+
+.fallback-choice > span {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  color: #8a651d;
+  background: #fff;
+  border: 1px solid #ead9ad;
+  border-radius: 7px;
+}
+
+.fallback-choice strong {
+  color: #684d19;
+  font-size: 13px;
+}
+
+.fallback-choice p {
+  margin: 4px 0 12px;
+  color: #725d31;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.fallback-choice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fallback-choice-actions button {
+  min-height: 38px;
+  padding: 0 13px;
 }
 
 .agent-error-message {
@@ -1357,13 +1514,13 @@ video {
 
 .agent-error-message strong {
   color: #72392f;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .agent-error-message p {
   margin: 3px 0 2px;
   color: #855347;
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.65;
 }
 
@@ -1987,6 +2144,27 @@ video {
 .result-actions button {
   min-height: 40px;
   font-size: 11px;
+}
+
+.result-action-error {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  margin: -7px 0 16px;
+  padding: 10px 12px;
+  color: #7c453a;
+  background: var(--coral-soft);
+  border: 1px solid #f1c9c0;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+.result-action-error button {
+  color: var(--primary-strong);
+  background: transparent;
+  border: 0;
+  font-weight: 700;
 }
 
 .evidence-empty {
@@ -3112,7 +3290,13 @@ video {
   }
 
   .service-pill {
-    display: none;
+    width: 34px;
+    display: inline-flex;
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+    overflow: hidden;
+    font-size: 0;
   }
 
   .agent-workspace {
@@ -3304,7 +3488,7 @@ video {
     flex-direction: column;
     align-items: flex-start;
     gap: 3px;
-    font-size: 7px;
+    font-size: 10px;
   }
 
   .progress-stages span::after {
@@ -3344,15 +3528,11 @@ video {
   }
 
   .result-verdict > p {
-    display: -webkit-box;
-    overflow: hidden;
-    font-size: 9px;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 3;
+    font-size: 12px;
   }
 
   .verdict-meta span:nth-child(2) {
-    display: none;
+    display: inline-flex;
   }
 
   .result-tabs {
@@ -3362,7 +3542,7 @@ video {
   .result-tabs button {
     min-width: 0;
     flex: 1;
-    font-size: 10px;
+    font-size: 12px;
   }
 
   .result-tab-panel {
@@ -3464,7 +3644,7 @@ video {
   }
 
   .result-explanation {
-    font-size: 10px;
+    font-size: 12px;
   }
 
   .result-rationale > div {
@@ -4638,7 +4818,13 @@ video {
   }
 
   .official-service-state {
-    display: none;
+    width: 34px;
+    display: inline-flex;
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+    overflow: hidden;
+    font-size: 0;
   }
 
   .official-hero-copy {

@@ -51,15 +51,40 @@ export function hasLocalizedWatermark(report?: VisibleWatermarkResult): boolean 
   return localizedWatermarkHits(report).length > 0;
 }
 
+const DECISIVE_WATERMARK_PROVIDERS = new Set(["gemini", "doubao", "jimeng", "jimeng_pill", "samsung"]);
+const WATERMARK_MIN_CONFIDENCE: Record<string, number> = { gemini: 0.72, doubao: 0.8, jimeng: 0.8, jimeng_pill: 0.8, samsung: 0.8 };
+
+export function decisiveWatermarkHits(report?: VisibleWatermarkResult): VisibleWatermarkHit[] {
+  return localizedWatermarkHits(report).filter((hit) => (
+    hit.decisive === true
+    && hit.method === "remove_ai_watermarks_registry"
+    && DECISIVE_WATERMARK_PROVIDERS.has(hit.provider)
+    && clamp01(hit.confidence) >= (WATERMARK_MIN_CONFIDENCE[hit.provider] ?? 1)
+    && clamp01(hit.bbox?.w) * clamp01(hit.bbox?.h) >= 0.0001
+    && hit.localizationConfirmed === true
+  ));
+}
+
+export function hasDecisiveAiWatermark(report?: VisibleWatermarkResult): boolean {
+  return decisiveWatermarkHits(report).length > 0;
+}
+
 function watermarkPoint(report?: VisibleWatermarkResult): ExplanationPoint {
-  const hits = localizedWatermarkHits(report);
+  const hits = decisiveWatermarkHits(report);
   if (hits.length > 0) {
     const names = Array.from(new Set(hits.map((hit) => hit.label || PROVIDER_LABELS[hit.provider] || "通用可见水印")));
     const topConfidence = Math.max(...hits.map((hit) => clamp01(hit.confidence)));
     return {
       label: "决定性证据",
       decisive: true,
-      text: `定位到 ${hits.length} 处有效可见水印区域（${names.join("、")}，最高置信度 ${percent(topConfidence)}）。按当前规则，有效定位框属于直接伪造证据，综合 AI 风险不低于 ${percent(MIN_WATERMARK_RISK)}。`,
+      text: `定位到 ${hits.length} 处已确认的 AI 平台水印区域（${names.join("、")}，最高置信度 ${percent(topConfidence)}）。该平台来源证据使综合 AI 风险不低于 ${percent(MIN_WATERMARK_RISK)}。`,
+    };
+  }
+  const genericHits = localizedWatermarkHits(report);
+  if (genericHits.length > 0) {
+    return {
+      label: "可见标记",
+      text: `定位到 ${genericHits.length} 处平台待确认的可见水印区域；该结果可能是 Logo、台标或版权标记，仅作定位线索，不单独影响 AI 生成结论。`,
     };
   }
   if (!report) {
@@ -96,7 +121,7 @@ function captureEvidencePoint(report?: CaptureEvidence): ExplanationPoint {
 function imageExplanation(outcome: Extract<AgentOutcome, { kind: "image" }>, risk: number, verdictLabel: string): ExplanationPoint[] {
   const result = outcome.result;
   const report = result.visibleWatermark;
-  const watermarkHit = hasLocalizedWatermark(report);
+  const watermarkHit = hasDecisiveAiWatermark(report);
   const rawModelRisk = clamp01(result.detector_probability ?? result.probability);
   const points: ExplanationPoint[] = [
     watermarkPoint(report),
@@ -124,7 +149,7 @@ function imageExplanation(outcome: Extract<AgentOutcome, { kind: "image" }>, ris
     label: "综合结论",
     decisive: watermarkHit,
     text: watermarkHit
-      ? `本次由有效水印定位证据主导，判定为 AI 生成图像；综合风险 ${percent(Math.max(risk, MIN_WATERMARK_RISK))}，当前置信度高。`
+      ? `本次由已确认的 AI 平台水印来源证据主导，判定为 AI 生成图像；综合风险 ${percent(Math.max(risk, MIN_WATERMARK_RISK))}，当前置信度高。`
       : `综合现有证据，结论为“${verdictLabel}”，自动化风险 ${percent(risk)}；仍建议结合原始来源复核。`,
   });
   return points;
@@ -133,9 +158,10 @@ function imageExplanation(outcome: Extract<AgentOutcome, { kind: "image" }>, ris
 function evidenceExplanation(outcome: Extract<AgentOutcome, { kind: "evidence" }>, risk: number, verdictLabel: string): ExplanationPoint[] {
   const result = outcome.result as RichDetectResult;
   const report = result.visibleWatermark;
-  const watermarkHit = hasLocalizedWatermark(report);
+  const watermarkHit = hasDecisiveAiWatermark(report);
   const modelRisk = clamp01(
     result.watermarkVerdictOverride?.modelConfidence
+      ?? result.aiProbability
       ?? result.probabilityModel?.pixelBaseline
       ?? result.probabilityModel?.adjustedBaseline
       ?? result.probabilityModel?.baseRate
@@ -164,7 +190,7 @@ function evidenceExplanation(outcome: Extract<AgentOutcome, { kind: "evidence" }
     label: "综合结论",
     decisive: watermarkHit,
     text: watermarkHit
-      ? `本次由有效水印定位证据主导，判定为高度疑似 AI 生成；综合风险 ${percent(Math.max(risk, MIN_WATERMARK_RISK))}。`
+      ? `本次由已确认的 AI 平台水印来源证据主导，判定为高度疑似 AI 生成；综合风险 ${percent(Math.max(risk, MIN_WATERMARK_RISK))}。`
       : `综合现有证据，结论为“${verdictLabel}”，自动化风险 ${percent(risk)}；仍建议结合原始来源复核。`,
   });
   return points;

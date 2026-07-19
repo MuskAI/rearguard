@@ -89,15 +89,43 @@ def test_high_metadata_score_without_verified_generator_is_neutral():
     assert result["factors"] == []
 
 
-def test_verified_generator_metadata_increases_risk():
+def test_editable_generator_metadata_is_probability_neutral():
     experts = [
         _expert("primary", 0.28),
         _expert(
             "metadata",
             0.9,
-            details={"verifiedAiMetadata": True, "aiMarkers": ["PNG:Parameters = Stable Diffusion"]},
+            details={"verifiedAiMetadata": False, "editableAiMetadata": True, "aiMarkers": ["PNG:Parameters = Stable Diffusion"]},
         ),
     ]
     result = probability_fusion.fuse(experts)
-    assert result["posterior"] > 0.9
-    assert result["factors"][0]["kind"] == "ai_generation_metadata"
+    assert result["posterior"] == 0.28
+    assert result["factors"] == []
+
+
+def test_tamper_and_recapture_scores_do_not_raise_ai_generation_probability():
+    experts = [
+        _expert("primary", 0.2, weight=0.7),
+        _expert("aliyun_ps", 0.94, weight=0.2),
+        _expert("aliyun_recap", 0.88, weight=0.1),
+    ]
+
+    result = probability_fusion.fuse(experts)
+
+    assert result["posterior"] == 0.2
+    assert result["baselineExperts"] == ["primary"]
+    assert result["riskVector"] == {
+        "aiGenerated": 0.2,
+        "tampered": 0.94,
+        "recaptured": 0.88,
+    }
+
+
+def test_non_aigc_experts_cannot_publish_ai_conclusion_without_source_evidence():
+    result = probability_fusion.fuse([
+        _expert("aliyun_ps", 0.94),
+        _expert("aliyun_recap", 0.88),
+    ])
+
+    assert result["baselineExperts"] == []
+    assert result["publishable"] is False

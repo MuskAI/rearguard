@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app import provenance_precheck
+from app import metadata, provenance_precheck
 
 
 def test_no_decision_does_not_build_analysis():
@@ -61,7 +61,7 @@ def test_camera_c2pa_cannot_be_forged_into_short_circuit_by_client():
     assert provenance_precheck.build_analysis(payload) is None
 
 
-def test_high_confidence_local_metadata_short_circuits_without_model():
+def test_high_confidence_local_metadata_remains_context_for_pixel_model():
     local = provenance_precheck._local_source_decision(
         {
             "metadataAiGenerated": True,
@@ -71,9 +71,20 @@ def test_high_confidence_local_metadata_short_circuits_without_model():
     )
     assert local is not None
     decision, report = local
-    assert decision["reason"] == "ai_metadata"
-    assert decision["shortCircuit"] is True
+    assert decision["reason"] == "ai_metadata_context"
+    assert decision["shortCircuit"] is False
+    assert decision["modelRequired"] is True
     assert report["aiFromMetadata"] is True
+
+
+def test_user_controlled_filename_cannot_create_ai_metadata_evidence():
+    report = metadata.analyze_ai_metadata(
+        {"file": {"name": "chatgpt_prompt_seed_12345_generated.jpg"}}
+    )
+
+    assert report["score"] == 0
+    assert report["signalCount"] == 0
+    assert report["isAiLikely"] is False
 
 
 def test_invalid_ai_c2pa_requires_pixel_model_without_corroboration():
@@ -90,6 +101,38 @@ def test_invalid_ai_c2pa_requires_pixel_model_without_corroboration():
     assert decision["verdict"] is None
     assert decision["confidence"] == 0.0
     assert decision["modelRequired"] is True
+
+
+def test_unknown_ai_c2pa_state_cannot_short_circuit_pixel_model():
+    local = provenance_precheck._local_source_decision(
+        {
+            "isAiGenerated": True,
+            "validationState": "unknown",
+            "generator": "Example AI",
+            "actions": [{"digitalSourceType": "trainedAlgorithmicMedia"}],
+        }
+    )
+    assert local is not None
+    decision, report = local
+    assert decision["shortCircuit"] is False
+    assert decision["modelRequired"] is True
+    assert report["c2paTrusted"] is False
+
+
+def test_valid_ai_c2pa_can_short_circuit_pixel_model():
+    local = provenance_precheck._local_source_decision(
+        {
+            "isAiGenerated": True,
+            "validationState": "valid",
+            "generator": "Example AI",
+            "actions": [{"digitalSourceType": "trainedAlgorithmicMedia"}],
+        }
+    )
+    assert local is not None
+    decision, report = local
+    assert decision["shortCircuit"] is True
+    assert decision["modelRequired"] is False
+    assert report["c2paTrusted"] is True
 
 
 def test_visible_scan_reduces_large_png_and_keeps_dimensions_bounded(tmp_path):

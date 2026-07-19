@@ -88,7 +88,7 @@ export default function OfficialHome({ authReady, health, user, onEnterWorkspace
           <div className="official-hero-inner">
             <div className="official-hero-copy">
               <p className="official-eyebrow"><Sparkles size={16} /> 数字内容鉴伪智能体</p>
-              <h1 id="official-home-title"><span>慧鉴AI</span>让判断有证据可循</h1>
+              <h1 id="official-home-title" tabIndex={-1}><span>慧鉴AI</span>让判断有证据可循</h1>
               <p className="official-hero-description">
                 汇集模型判断、来源核验与内容证据，给出可理解、可追溯的辅助结论。
               </p>

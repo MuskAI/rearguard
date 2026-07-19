@@ -186,7 +186,7 @@ def _build_report(
         title=f"慧鉴AI {title} {report_id}",
         author="慧鉴AI",
     )
-    is_fake = "AI" in final_label or "伪造" in final_label or "风险" in final_label
+    is_fake = any(token in final_label for token in ("AI", "伪造", "风险", "篡改", "翻拍", "深伪"))
     needs_review = "复核" in final_label or confidence == "低"
     verdict_color = AMBER if needs_review else RED if is_fake else TEAL
     story: list[Any] = [
@@ -195,7 +195,7 @@ def _build_report(
         Spacer(1, 4 * mm),
     ]
     verdict_table = Table(
-        [[_p(final_label, styles["verdict"]), _p(f"AI 风险 {probability:.1f}% · 置信度 {_text(confidence)}", styles["verdict"])]],
+        [[_p(final_label, styles["verdict"]), _p(f"{'AI 生成风险' if 'AI生成' in final_label else '综合异常风险'} {probability:.1f}% · 置信度 {_text(confidence)}", styles["verdict"])]],
         colWidths=[82 * mm, 90 * mm],
     )
     verdict_table.setStyle(TableStyle([
@@ -274,10 +274,11 @@ def image_report_pdf(item: dict[str, Any], result: dict[str, Any]) -> bytes:
     probability = float(result.get("probability", 0) or 0) * 100
     confidence = _text(result.get("confidence"), "")
     requires_review = 35 < probability < 75 or confidence == "低"
-    final_label = "需人工复核" if requires_review else _text(
+    base_label = _text(
         result.get("final_label"),
         "AI生成图像" if float(item.get("fake", 0) or 0) >= 50 else "真实图像",
     )
+    final_label = f"{base_label}（需人工复核）" if requires_review and base_label != "需人工复核" else base_label
     issues = "；".join(str(value) for value in (result.get("visual_issues") or []) if str(value).strip())
     return _build_report(
         report_id=f"IMG-{item.get('itemid')}",

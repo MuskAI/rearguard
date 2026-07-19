@@ -44,6 +44,17 @@ def test_camera_chain_is_structured_and_privacy_safe():
     assert "2026-06-12T10:21:33+08:00" not in rendered
 
 
+def test_metadata_payload_redacts_precise_capture_identifiers():
+    redacted = metadata.redact_sensitive_metadata(_camera_metadata())
+    rendered = json.dumps(redacted, ensure_ascii=False)
+
+    assert "private-serial-8899" not in rendered
+    assert "30.111111" not in rendered
+    assert "120.222222" not in rendered
+    assert "2026-06-12T10:21:33+08:00" not in rendered
+    assert rendered.count(metadata.REDACTED_METADATA_VALUE) >= 5
+
+
 def test_future_timestamp_and_ai_marker_create_conflict():
     metadata = _camera_metadata()
     metadata["exif"]["EXIF:DateTimeOriginal"] = "2036-01-01T00:00:00+08:00"

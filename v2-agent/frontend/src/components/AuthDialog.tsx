@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { Check, KeyRound, LoaderCircle, MessageSquareText, Smartphone, UserRound, X } from "lucide-react";
 import {
   AccountUser,
@@ -30,15 +30,50 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
   const [sending, setSending] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [message, setMessage] = useState("");
+  const dialogRef = useRef<HTMLElement>(null);
+  const busyRef = useRef(busy);
+  const onCloseRef = useRef(onClose);
+  busyRef.current = busy;
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!open) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const focusTimer = window.setTimeout(() => {
+      const target = dialogRef.current?.querySelector<HTMLElement>(".auth-form input:not([disabled])")
+        || dialogRef.current?.querySelector<HTMLElement>("button:not([disabled])");
+      target?.focus();
+    }, 0);
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busy) onClose();
+      if (event.key === "Escape" && !busyRef.current) {
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ) || []).filter((element) => !element.hasAttribute("hidden"));
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [busy, onClose, open]);
+    return () => {
+      window.clearTimeout(focusTimer);
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previousOverflow;
+      previousFocus?.focus();
+    };
+  }, [open]);
 
   useEffect(() => {
     if (countdown <= 0) return;
@@ -102,19 +137,19 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
 
   return (
     <div className="dialog-layer" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !busy && onClose()}>
-      <section className="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-title">
-        <button className="icon-button dialog-close" type="button" onClick={onClose} aria-label="关闭登录窗口" title="关闭">
+      <section ref={dialogRef} className="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-title" aria-describedby="auth-description">
+        <button className="icon-button dialog-close" type="button" onClick={onClose} disabled={busy} aria-label="关闭登录窗口" title="关闭">
           <X size={18} />
         </button>
         <HuijianBrand />
         <div className="auth-heading">
           <h2 id="auth-title">{panel === "login" ? "欢迎回来" : "创建慧鉴AI账号"}</h2>
-          <p>{panel === "login" ? "登录后，任务与报告只对你本人可见。" : "注册后即可保存个人鉴伪记录。"}</p>
+          <p id="auth-description">{panel === "login" ? "登录后，任务与报告只对你本人可见。" : "注册后即可保存个人鉴伪记录。"}</p>
         </div>
 
         <div className="segmented auth-panels" role="tablist" aria-label="登录或注册">
-          <button type="button" className={panel === "login" ? "active" : ""} onClick={() => switchPanel("login")}>登录</button>
-          <button type="button" className={panel === "register" ? "active" : ""} onClick={() => switchPanel("register")}>注册</button>
+          <button type="button" role="tab" aria-selected={panel === "login"} className={panel === "login" ? "active" : ""} onClick={() => switchPanel("login")}>登录</button>
+          <button type="button" role="tab" aria-selected={panel === "register"} className={panel === "register" ? "active" : ""} onClick={() => switchPanel("register")}>注册</button>
         </div>
 
         {panel === "login" && (

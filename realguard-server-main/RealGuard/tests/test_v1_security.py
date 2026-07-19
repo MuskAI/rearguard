@@ -1,5 +1,8 @@
+from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from pathlib import Path
 import sys
+import threading
 
 import pytest
 
@@ -17,6 +20,175 @@ def client():
     app = creat_app()
     app.config.update(TESTING=True)
     return app.test_client()
+
+
+class _SmsTestDatabase:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.challenges = {}
+        self.limits = {}
+        self.connections = 0
+
+    def connect(self):
+        self.connections += 1
+        return _SmsTestConnection(self)
+
+
+class _SmsTestConnection:
+    def __init__(self, database):
+        self.database = database
+        self.active = False
+        self.snapshot = None
+
+    def begin(self):
+        self.database.lock.acquire()
+        self.active = True
+        self.snapshot = (deepcopy(self.database.challenges), deepcopy(self.database.limits))
+
+    def cursor(self):
+        return _SmsTestCursor(self)
+
+    def commit(self):
+        if self.active:
+            self.active = False
+            self.snapshot = None
+            self.database.lock.release()
+
+    def rollback(self):
+        if self.active:
+            challenges, limits = self.snapshot
+            self.database.challenges = challenges
+            self.database.limits = limits
+            self.active = False
+            self.snapshot = None
+            self.database.lock.release()
+
+    def close(self):
+        if self.active:
+            self.rollback()
+
+
+class _SmsTestCursor:
+    def __init__(self, connection):
+        self.connection = connection
+        self.result = []
+        self.rowcount = 0
+
+    @property
+    def database(self):
+        return self.connection.database
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def execute(self, sql, params=None):
+        normalized = " ".join(sql.split())
+        params = params or ()
+        self.result = []
+        self.rowcount = 0
+        if normalized.startswith("INSERT IGNORE INTO sms_send_limits"):
+            scope_key, scope_type = params
+            if scope_key not in self.database.limits:
+                self.database.limits[scope_key] = {
+                    "scope_key": scope_key,
+                    "scope_type": scope_type,
+                    "window_started_at": 0,
+                    "request_count": 0,
+                    "last_sent_at": 0,
+                }
+                self.rowcount = 1
+            return self.rowcount
+        if normalized.startswith("SELECT scope_key, scope_type"):
+            keys = set(params)
+            self.result = [
+                deepcopy(row)
+                for key, row in sorted(self.database.limits.items())
+                if key in keys
+            ]
+            self.rowcount = len(self.result)
+            return self.rowcount
+        if normalized.startswith("UPDATE sms_send_limits"):
+            if "request_count = request_count + 1" in normalized:
+                window_started_at, last_sent_at, scope_key = params
+                row = self.database.limits[scope_key]
+                row.update({
+                    "window_started_at": window_started_at,
+                    "request_count": row["request_count"] + 1,
+                    "last_sent_at": last_sent_at,
+                })
+            else:
+                window_started_at, request_count, last_sent_at, scope_key = params
+                self.database.limits[scope_key].update({
+                    "window_started_at": window_started_at,
+                    "request_count": request_count,
+                    "last_sent_at": last_sent_at,
+                })
+            self.rowcount = 1
+            return self.rowcount
+        if normalized.startswith("INSERT INTO sms_verification_challenges"):
+            scene, phone, code_hash, code_salt, expires_at, sent_at = params
+            self.database.challenges[(scene, phone)] = {
+                "code_hash": code_hash,
+                "code_salt": code_salt,
+                "expires_at": expires_at,
+                "sent_at": sent_at,
+                "failed_attempts": 0,
+                "consumed_at": None,
+            }
+            self.rowcount = 1
+            return self.rowcount
+        if normalized.startswith("SELECT code_hash, code_salt"):
+            row = self.database.challenges.get(tuple(params))
+            self.result = [deepcopy(row)] if row else []
+            self.rowcount = len(self.result)
+            return self.rowcount
+        if normalized.startswith("UPDATE sms_verification_challenges"):
+            if "SET failed_attempts" in normalized:
+                attempts, consumed_at, scene, phone = params
+                row = self.database.challenges.get((scene, phone))
+                if row and row["consumed_at"] is None:
+                    row.update({"failed_attempts": attempts, "consumed_at": consumed_at})
+                    self.rowcount = 1
+                return self.rowcount
+            if "failed_attempts < %s" in normalized:
+                consumed_at, scene, phone, max_attempts = params
+                row = self.database.challenges.get((scene, phone))
+                if row and row["consumed_at"] is None and row["failed_attempts"] < max_attempts:
+                    row["consumed_at"] = consumed_at
+                    self.rowcount = 1
+                return self.rowcount
+            consumed_at, scene, phone = params
+            row = self.database.challenges.get((scene, phone))
+            if row and row["consumed_at"] is None:
+                row["consumed_at"] = consumed_at
+                self.rowcount = 1
+            return self.rowcount
+        if normalized.startswith("DELETE FROM sms_verification_challenges"):
+            self.rowcount = int(self.database.challenges.pop(tuple(params), None) is not None)
+            return self.rowcount
+        if normalized.startswith("SELECT last_sent_at FROM sms_send_limits"):
+            row = self.database.limits.get(params[0])
+            self.result = [{"last_sent_at": row["last_sent_at"]}] if row else []
+            self.rowcount = len(self.result)
+            return self.rowcount
+        raise AssertionError(f"unexpected SMS SQL: {normalized}")
+
+    def fetchone(self):
+        return deepcopy(self.result[0]) if self.result else None
+
+    def fetchall(self):
+        return deepcopy(self.result)
+
+
+@pytest.fixture
+def sms_database(monkeypatch):
+    database = _SmsTestDatabase()
+    monkeypatch.setattr(login, "_SMS_STORAGE_READY", True)
+    monkeypatch.setattr(login, "get_db_connection", database.connect)
+    return database
 
 
 def _login_session(client, phone="13800000000"):
@@ -347,6 +519,8 @@ def test_legacy_login_clears_previous_account_state(client, monkeypatch):
     )
     monkeypatch.setattr(login, "_record_terms_acceptance", lambda phone: True)
     monkeypatch.setattr(login, "_sync_detection_user", lambda *args, **kwargs: None)
+    monkeypatch.setattr(login, "_reserve_password_login_attempt", lambda phone: None)
+    monkeypatch.setattr(login, "_clear_password_phone_attempts", lambda phone: None)
     with client.session_transaction() as sess:
         sess["user_info"] = {"Userid": 1, "phone": "13800000001"}
         sess["guest_openid"] = "guest-stale"
@@ -518,6 +692,28 @@ def test_login_password_requires_terms_acceptance(client, monkeypatch):
     assert "用户协议" in response.get_json()["message"]
 
 
+def test_login_password_returns_retry_after_when_rate_limited(client, monkeypatch):
+    monkeypatch.setattr(
+        api,
+        "_reserve_password_login_attempt",
+        lambda phone: (_ for _ in ()).throw(login.PasswordLoginRateLimitError(37)),
+    )
+    monkeypatch.setattr(
+        api,
+        "_authenticate_password_user",
+        lambda *args: pytest.fail("rate-limited request reached password verification"),
+    )
+
+    response = client.post(
+        "/api/login/password",
+        json={"phone": "13800000000", "secret": "Password123", "accepted_terms": True},
+    )
+
+    assert response.status_code == 429
+    assert response.headers["Retry-After"] == "37"
+    assert response.get_json()["code"] == "login_rate_limited"
+
+
 def test_login_sms_requires_terms_acceptance(client, monkeypatch):
     def fail_verify(scene, phone, code):
         pytest.fail("SMS verification should not run before terms acceptance")
@@ -569,14 +765,197 @@ def test_register_requires_terms_acceptance(client, monkeypatch):
     assert "用户协议" in response.get_json()["message"]
 
 
-def test_send_login_code_requires_registered_phone(client, monkeypatch):
+def test_send_login_code_does_not_enumerate_registered_phone(client, monkeypatch):
+    sent = []
     monkeypatch.setattr(login, "excute_sql", lambda sql, params=None, fetch=True: [])
-    monkeypatch.setattr(login, "_send_sms_code", lambda phone, scene: "123456")
+    monkeypatch.setattr(login, "_reserve_sms_send", lambda scene, phone, client_ip: None)
+    monkeypatch.setattr(login, "_send_sms_code", lambda phone, scene: sent.append((phone, scene)))
 
     response = client.post("/sms/send_code", json={"phone": "13800000000", "scene": "login"})
 
-    assert response.status_code == 400
-    assert "尚未注册" in response.get_json()["message"]
+    assert response.status_code == 200
+    assert response.get_json()["success"] is True
+    assert "符合当前操作条件" in response.get_json()["message"]
+    assert sent == []
+
+
+def test_sms_code_locks_after_five_wrong_attempts(sms_database):
+    login._save_sms_code("login", "13800000000", "246810", now=1000)
+
+    for attempt in range(1, login.SMS_MAX_ATTEMPTS + 1):
+        ok, message = login._verify_sms_code("login", "13800000000", "000000", now=1001 + attempt)
+        assert ok is False
+        if attempt == login.SMS_MAX_ATTEMPTS:
+            assert "错误次数过多" in message
+
+    ok, message = login._verify_sms_code("login", "13800000000", "246810", now=1010)
+
+    assert ok is False
+    assert "无效或已过期" in message
+    challenge = sms_database.challenges[("login", "13800000000")]
+    assert challenge["failed_attempts"] == login.SMS_MAX_ATTEMPTS
+    assert challenge["consumed_at"] is not None
+
+
+def test_sms_code_success_is_atomically_consumed_once(sms_database):
+    login._save_sms_code("reset", "13800000001", "135790", now=2000)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(
+            lambda _index: login._verify_sms_code(
+                "reset", "13800000001", "135790", now=2001
+            ),
+            range(8),
+        ))
+
+    assert sum(1 for ok, _message in results if ok) == 1
+    assert sms_database.connections == 9
+
+
+def test_sms_send_phone_limit_survives_cookie_change(sms_database, monkeypatch):
+    app = creat_app()
+    app.config.update(TESTING=True)
+    first_client = app.test_client()
+    second_client = app.test_client()
+    monkeypatch.setenv("SMS_PROVIDER", "mock")
+    monkeypatch.setenv("SMS_DEBUG_RETURN_CODE", "1")
+    monkeypatch.setattr(login, "SMS_IP_MIN_INTERVAL", 0)
+    monkeypatch.setattr(
+        login,
+        "excute_sql",
+        lambda sql, params=None, fetch=True: [{"Userid": 1}]
+        if "SELECT Userid FROM user" in sql else 1,
+    )
+
+    first = first_client.post(
+        "/sms/send_code",
+        json={"phone": "13800000002", "scene": "login"},
+        environ_base={"REMOTE_ADDR": "203.0.113.10"},
+    )
+    second = second_client.post(
+        "/sms/send_code",
+        json={"phone": "13800000002", "scene": "login"},
+        environ_base={"REMOTE_ADDR": "203.0.113.11"},
+    )
+
+    assert first.status_code == 200
+    assert first.get_json().get("debug_code")
+    assert second.status_code == 429
+    assert int(second.headers["Retry-After"]) > 0
+
+
+def test_sms_send_ip_limit_applies_across_phone_numbers(sms_database, monkeypatch):
+    monkeypatch.setattr(login, "SMS_IP_WINDOW_LIMIT", 1)
+    monkeypatch.setattr(login, "SMS_IP_MIN_INTERVAL", 0)
+
+    login._reserve_sms_send("login", "13800000003", "203.0.113.20", now=3000)
+    with pytest.raises(login.SmsRateLimitError):
+        login._reserve_sms_send("login", "13800000004", "203.0.113.20", now=3001)
+
+
+def test_password_login_limit_is_shared_across_connections(sms_database, monkeypatch):
+    monkeypatch.setattr(login, "PASSWORD_LOGIN_PHONE_LIMIT", 2)
+    monkeypatch.setattr(login, "PASSWORD_LOGIN_IP_LIMIT", 20)
+
+    login._reserve_password_login_attempt("13800000003", "203.0.113.20", now=3000)
+    login._reserve_password_login_attempt("13800000003", "203.0.113.21", now=3001)
+    with pytest.raises(login.PasswordLoginRateLimitError) as error:
+        login._reserve_password_login_attempt("13800000003", "203.0.113.22", now=3002)
+
+    assert error.value.retry_after == login.PASSWORD_LOGIN_WINDOW - 2
+
+
+def test_sms_send_rate_reservation_is_atomic_across_connections(sms_database, monkeypatch):
+    monkeypatch.setattr(login, "SMS_IP_MIN_INTERVAL", 0)
+
+    def reserve(_index):
+        try:
+            login._reserve_sms_send("login", "13800000006", "203.0.113.21", now=4000)
+            return True
+        except login.SmsRateLimitError:
+            return False
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        admitted = list(executor.map(reserve, range(8)))
+
+    assert admitted.count(True) == 1
+    assert sms_database.connections == 8
+
+
+def test_sms_verification_fails_closed_when_database_is_unavailable(monkeypatch):
+    monkeypatch.setattr(login, "_SMS_STORAGE_READY", True)
+    monkeypatch.setattr(
+        login,
+        "get_db_connection",
+        lambda: (_ for _ in ()).throw(RuntimeError("database offline")),
+    )
+
+    ok, message = login._verify_sms_code("login", "13800000005", "123456")
+
+    assert ok is False
+    assert "暂不可用" in message
+
+
+def test_sms_send_fails_closed_before_provider_when_database_is_unavailable(client, monkeypatch):
+    monkeypatch.setattr(login, "_SMS_STORAGE_READY", True)
+    monkeypatch.setattr(login, "excute_sql", lambda sql, params=None, fetch=True: [{"Userid": 1}])
+    monkeypatch.setattr(
+        login,
+        "get_db_connection",
+        lambda: (_ for _ in ()).throw(RuntimeError("database offline")),
+    )
+
+    def fail_send(*_args, **_kwargs):
+        pytest.fail("the SMS provider must not run without a durable rate-limit reservation")
+
+    monkeypatch.setattr(login, "_send_sms_code", fail_send)
+
+    response = client.post(
+        "/sms/send_code",
+        json={"phone": "13800000007", "scene": "login"},
+    )
+
+    assert response.status_code == 503
+    assert "暂不可用" in response.get_json()["message"]
+
+
+def test_sms_send_uses_same_public_message_for_existing_and_unknown_accounts(client, monkeypatch):
+    monkeypatch.setattr(login, "_reserve_sms_send", lambda scene, phone, client_ip: None)
+    monkeypatch.setattr(login, "_send_sms_code", lambda phone, scene: None)
+
+    def fake_execute(sql, params=None, fetch=True):
+        assert "SELECT Userid FROM user" in sql
+        return [{"Userid": 1}] if params[0] == "13800000008" else []
+
+    monkeypatch.setattr(login, "excute_sql", fake_execute)
+
+    existing = client.post(
+        "/sms/send_code",
+        json={"phone": "13800000008", "scene": "login"},
+    )
+    unknown = client.post(
+        "/sms/send_code",
+        json={"phone": "13800000009", "scene": "login"},
+    )
+
+    assert existing.status_code == unknown.status_code == 200
+    assert existing.get_json()["message"] == unknown.get_json()["message"]
+
+
+def test_sms_client_ip_only_trusts_configured_proxy():
+    app = creat_app()
+    with app.test_request_context(
+        "/sms/send_code",
+        headers={"X-Real-IP": "198.51.100.8"},
+        environ_base={"REMOTE_ADDR": "203.0.113.30"},
+    ):
+        assert login._trusted_client_ip() == "203.0.113.30"
+    with app.test_request_context(
+        "/sms/send_code",
+        headers={"X-Real-IP": "198.51.100.8"},
+        environ_base={"REMOTE_ADDR": "127.0.0.1"},
+    ):
+        assert login._trusted_client_ip() == "198.51.100.8"
 
 
 def test_legal_pages_are_public(client):
@@ -597,6 +976,7 @@ def test_register_persists_terms_metadata(client, monkeypatch):
     monkeypatch.setattr(api, "_verify_sms_code", lambda scene, phone, code: (True, ""))
     monkeypatch.setattr(api, "_ensure_user_account_columns", lambda: True)
     monkeypatch.setattr(api, "_sync_detection_user", lambda *args, **kwargs: None)
+    monkeypatch.setattr(api, "_record_terms_acceptance", lambda phone: True)
     monkeypatch.setattr(api, "TERMS_VERSION", "test-terms-v1")
 
     def fake_execute(sql, params=None, fetch=True):
@@ -638,6 +1018,7 @@ def test_reset_password_updates_hashed_secret(client, monkeypatch):
     def fake_execute(sql, params=None, fetch=True):
         normalized = " ".join(sql.split())
         if normalized.startswith("UPDATE user SET secret"):
+            updated["sql"] = normalized
             updated["params"] = params
             return 1
         raise AssertionError(f"unexpected SQL: {sql}")
@@ -652,3 +1033,207 @@ def test_reset_password_updates_hashed_secret(client, monkeypatch):
     assert response.status_code == 200
     assert updated["params"][1] == "13800000000"
     assert login._is_password_hash(updated["params"][0])
+    assert "session_version = session_version + 1" in updated["sql"]
+
+
+def test_versioned_user_session_is_revoked_when_account_version_changes(client, monkeypatch):
+    monkeypatch.setattr(login, "_ensure_user_account_columns", lambda: True)
+    monkeypatch.setattr(
+        login,
+        "excute_sql",
+        lambda *args, **kwargs: [{
+            "Userid": 7,
+            "phone": "13800000007",
+            "openid": "openid-7",
+            "session_version": 3,
+        }],
+    )
+    with client.session_transaction() as sess:
+        sess["user_info"] = {
+            "Userid": 7,
+            "username": "tester",
+            "phone": "13800000007",
+            "openid": "openid-7",
+            "session_version": 2,
+        }
+
+    response = client.get("/api/me")
+
+    assert response.status_code == 200
+    assert response.get_json()["authenticated"] is False
+    with client.session_transaction() as sess:
+        assert "user_info" not in sess
+
+
+def test_current_versioned_user_session_remains_valid(client, monkeypatch):
+    monkeypatch.setattr(login, "_ensure_user_account_columns", lambda: True)
+    monkeypatch.setattr(
+        login,
+        "excute_sql",
+        lambda *args, **kwargs: [{
+            "Userid": 7,
+            "phone": "13800000007",
+            "openid": "openid-7",
+            "session_version": 3,
+        }],
+    )
+    monkeypatch.setattr(api, "excute_detection_sql", lambda *args, **kwargs: [{"cnt": 0}])
+    with client.session_transaction() as sess:
+        sess["user_info"] = {
+            "Userid": 7,
+            "username": "tester",
+            "phone": "13800000007",
+            "openid": "openid-7",
+            "session_version": 3,
+        }
+
+    response = client.get("/api/me")
+
+    assert response.status_code == 200
+    assert response.get_json()["authenticated"] is True
+
+
+def test_profile_password_change_revokes_all_sessions_and_clears_current(client, monkeypatch):
+    statements = []
+
+    def fake_execute(sql, params=None, fetch=True):
+        normalized = " ".join(sql.split())
+        statements.append(normalized)
+        if normalized.startswith("SELECT secret FROM user"):
+            return [{"secret": login._hash_password("OldPassword1")}]
+        if normalized.startswith("UPDATE user SET secret"):
+            return 1
+        raise AssertionError(f"unexpected SQL: {normalized}")
+
+    monkeypatch.setattr(profile, "excute_sql", fake_execute)
+    _login_session(client)
+
+    response = client.post(
+        "/profile/change_password",
+        json={"old_password": "OldPassword1", "new_password": "NewPassword2"},
+    )
+
+    assert response.status_code == 200
+    assert any("session_version = session_version + 1" in sql for sql in statements)
+    with client.session_transaction() as sess:
+        assert "user_info" not in sess
+
+
+def test_owned_image_history_delete_removes_database_media_and_thumbnail(tmp_path, monkeypatch):
+    original = tmp_path / "uploads" / "13800000007" / "image" / "sample.png"
+    original.parent.mkdir(parents=True)
+    original.write_bytes(b"image")
+    thumbnail = tmp_path / "thumbnail.webp"
+    thumbnail.write_bytes(b"thumb")
+    statements = []
+
+    class Cursor:
+        rowcount = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params=None):
+            normalized = " ".join(sql.split())
+            statements.append((normalized, params))
+            if normalized.startswith("SELECT * FROM data"):
+                self._row = {
+                    "itemid": 42,
+                    "filename": "sample.png",
+                    "phone": "13800000007",
+                    "openid": "",
+                    "createtime": "2026-07-19 10:00:00",
+                }
+                self.rowcount = 1
+            elif normalized.startswith("DELETE FROM exif"):
+                self.rowcount = 1
+            elif normalized.startswith("DELETE FROM data"):
+                self.rowcount = 1
+            else:
+                raise AssertionError(f"unexpected SQL: {normalized}")
+
+        def fetchone(self):
+            return self._row
+
+    class Connection:
+        def begin(self):
+            return None
+
+        def cursor(self):
+            return Cursor()
+
+        def commit(self):
+            return None
+
+        def rollback(self):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(api, "get_detection_db_connection", Connection)
+    monkeypatch.setattr(api, "_local_detection_media_path", lambda kind, item: (tmp_path.resolve(), original.resolve()))
+    monkeypatch.setattr(api, "_thumbnail_cache_path", lambda item: thumbnail)
+
+    deleted, message, status = api._delete_owned_history_record(
+        "image",
+        42,
+        {"mode": "user", "phone": "13800000007", "openid": ""},
+    )
+
+    assert (deleted, message, status) == (True, "", 204)
+    assert not original.exists()
+    assert not thumbnail.exists()
+    assert any(sql.startswith("DELETE FROM exif") for sql, _ in statements)
+    delete_sql, delete_params = next((sql, params) for sql, params in statements if sql.startswith("DELETE FROM data"))
+    assert "phone = %s" in delete_sql
+    assert delete_params == (42, "13800000007")
+
+
+def test_history_delete_does_not_remove_foreign_record(client, monkeypatch):
+    monkeypatch.setattr(api, "_delete_owned_history_record", lambda kind, itemid, actor: (False, "记录不存在", 404))
+    _login_session(client, phone="13800000007")
+
+    response = client.delete("/api/history/image-detections/42")
+
+    assert response.status_code == 404
+    assert response.get_json()["message"] == "记录不存在"
+
+
+def test_cross_site_browser_write_is_rejected_before_history_mutation(client, monkeypatch):
+    monkeypatch.setattr(
+        api,
+        "_delete_owned_history_record",
+        lambda *args, **kwargs: pytest.fail("cross-site request reached the mutation handler"),
+    )
+    _login_session(client, phone="13800000007")
+
+    response = client.delete(
+        "/api/history/image-detections/42",
+        headers={
+            "Origin": "https://attacker.example",
+            "Sec-Fetch-Site": "cross-site",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.get_json()["message"] == "拒绝跨站请求"
+
+
+def test_same_origin_browser_write_reaches_api_handler(client, monkeypatch):
+    monkeypatch.setattr(api, "_delete_owned_history_record", lambda *args, **kwargs: (False, "记录不存在", 404))
+    _login_session(client, phone="13800000007")
+
+    response = client.delete(
+        "/api/history/image-detections/42",
+        headers={
+            "Origin": "http://localhost",
+            "Host": "localhost",
+            "Sec-Fetch-Site": "same-origin",
+        },
+    )
+
+    assert response.status_code == 404

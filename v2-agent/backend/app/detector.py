@@ -648,9 +648,22 @@ def _normalize(parsed: dict, file_type: str, source: str, model: str, token_usag
     elif verdict not in ("real", "suspected_fake", "highly_suspected_fake"):
         verdict = _verdict_from_score(confidence)
 
+    risk_vector = None
+    ai_probability = confidence
+    if file_type == "image":
+        risk_vector = {
+            "aiGenerated": round(raw_scores.get("aigc", 0.0), 4),
+            "tampered": round(raw_scores.get("tamper", 0.0), 4),
+            "deepfake": round(raw_scores.get("deepfake", 0.0), 4),
+        }
+        ai_probability = risk_vector["aiGenerated"]
+
     return {
         "verdict": verdict,
         "confidence": confidence,
+        "riskScore": confidence,
+        "aiProbability": ai_probability,
+        "riskVector": risk_vector,
         "dimensions": dimensions,
         "regions": regions,
         "explanation": str(parsed.get("explanation", "")) or "模型未提供详细依据。",

@@ -8,10 +8,13 @@ import {
   Menu,
   Plus,
   Search,
+  Trash2,
   UserRound,
   Video,
   X,
 } from "lucide-react";
+import { useEffect, useRef } from "react";
+import type { RefObject } from "react";
 import type { AccountUser } from "../api";
 import type { AgentHistoryEntry } from "../agentTypes";
 import HuijianBrand from "./HuijianBrand";
@@ -26,6 +29,8 @@ interface Props {
   mobileOpen: boolean;
   onQueryChange: (value: string) => void;
   onSelect: (entry: AgentHistoryEntry) => void;
+  onDelete: (entry: AgentHistoryEntry) => void;
+  deletingKey?: string;
   onNew: () => void;
   onLogin: () => void;
   onLogout: () => void;
@@ -42,7 +47,7 @@ function maskPhone(phone: string) {
   return phone.replace(/^(\d{3})\d{4}(\d{4})$/, "$1****$2");
 }
 
-function HistoryContent(props: Props) {
+function HistoryContent(props: Props & { closeButtonRef?: RefObject<HTMLButtonElement> }) {
   const filtered = props.entries.filter((entry) => {
     const query = props.query.trim().toLowerCase();
     if (!query) return true;
@@ -54,7 +59,7 @@ function HistoryContent(props: Props) {
       <div className="sidebar-brand-row">
         <HuijianBrand />
         {props.mobileOpen && (
-          <button type="button" className="icon-button sidebar-mobile-close" onClick={props.onCloseMobile} aria-label="关闭历史记录" title="关闭">
+          <button ref={props.closeButtonRef} type="button" className="icon-button sidebar-mobile-close" onClick={props.onCloseMobile} aria-label="关闭历史记录" title="关闭">
             <X size={18} />
           </button>
         )}
@@ -84,22 +89,33 @@ function HistoryContent(props: Props) {
             )}
             {props.message && <div className="history-empty history-error">{props.message}</div>}
             {filtered.map((entry) => (
-              <button
-                type="button"
-                key={entry.key}
-                className={`history-entry ${props.activeKey === entry.key ? "active" : ""}`}
-                onClick={() => props.onSelect(entry)}
-              >
-                <span className="history-thumb">
-                  {entry.thumbnail ? <img src={entry.thumbnail} alt="" loading="lazy" decoding="async" fetchPriority="low" /> : entryIcon(entry)}
-                </span>
-                <span className="history-entry-copy">
-                  <strong>{entry.title}</strong>
-                  <span>{entry.typeLabel} · {entry.verdictLabel}</span>
-                  <small>{entry.createdAt || "时间未知"}</small>
-                </span>
-                <ChevronRight size={15} className="history-chevron" />
-              </button>
+              <div className="history-entry-row" key={entry.key}>
+                <button
+                  type="button"
+                  className={`history-entry ${props.activeKey === entry.key ? "active" : ""}`}
+                  onClick={() => props.onSelect(entry)}
+                >
+                  <span className="history-thumb">
+                    {entry.thumbnail ? <img src={entry.thumbnail} alt="" loading="lazy" decoding="async" fetchPriority="low" /> : entryIcon(entry)}
+                  </span>
+                  <span className="history-entry-copy">
+                    <strong>{entry.title}</strong>
+                    <span>{entry.typeLabel} · {entry.verdictLabel}</span>
+                    <small>{entry.createdAt || "时间未知"}</small>
+                  </span>
+                  <ChevronRight size={15} className="history-chevron" />
+                </button>
+                <button
+                  type="button"
+                  className="history-delete-button"
+                  onClick={() => props.onDelete(entry)}
+                  disabled={props.deletingKey === entry.key}
+                  aria-label={`删除历史记录：${entry.title}`}
+                  title="删除记录"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
             ))}
           </div>
         </>
@@ -131,13 +147,59 @@ function HistoryContent(props: Props) {
 }
 
 export default function AgentHistory(props: Props) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(props.onCloseMobile);
+  onCloseRef.current = props.onCloseMobile;
+
+  useEffect(() => {
+    if (!props.mobileOpen) return;
+    openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const focusTimer = window.requestAnimationFrame(() => closeButtonRef.current?.focus());
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab" || !dialogRef.current) return;
+      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), a[href], input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )).filter((element) => !element.hasAttribute("hidden"));
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialogRef.current.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusTimer);
+      document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+      openerRef.current?.focus();
+    };
+  }, [props.mobileOpen]);
+
   return (
     <>
       <div className="sidebar-desktop"><HistoryContent {...props} /></div>
       {props.mobileOpen && (
         <div className="sidebar-mobile-layer">
           <button className="sidebar-backdrop" type="button" aria-label="关闭历史记录" onClick={props.onCloseMobile} />
-          <div className="sidebar-mobile"><HistoryContent {...props} /></div>
+          <div ref={dialogRef} className="sidebar-mobile" role="dialog" aria-modal="true" aria-label="个人任务历史" tabIndex={-1}><HistoryContent {...props} closeButtonRef={closeButtonRef} /></div>
         </div>
       )}
     </>

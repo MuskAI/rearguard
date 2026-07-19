@@ -113,6 +113,33 @@ def test_c2pa_decide_verdict_signature_failure_dominates():
     assert 0.6 <= score <= 0.9
 
 
+def test_c2pa_missing_validation_cannot_lower_camera_risk():
+    severity, issues = swarm_c2pa_expert._validation_summary({"manifests": {}})
+    score, verdict, confidence, evidence = swarm_c2pa_expert._decide_verdict(
+        generators=["Canon EOS R5"],
+        digital_source_types=["http://cv.iptc.org/newscodes/digitalsourcetype/digitalcapture"],
+        validation_severity=severity,
+        validation_issues=issues,
+    )
+
+    assert severity == "unknown"
+    assert score == 0.5
+    assert "未验证" in verdict
+    assert confidence == "低"
+    assert any("保持中性" in item for item in evidence)
+
+
+def test_c2pa_minor_human_edits_is_not_camera_capture():
+    assert swarm_c2pa_expert._summarize_source({
+        "assertions": [{
+            "label": "c2pa.actions",
+            "data": {
+                "digitalSourceType": "http://cv.iptc.org/newscodes/digitalsourcetype/minorhumanedits",
+            },
+        }],
+    }) == "unknown"
+
+
 # ----------------------------- Watermark expert ----------------------------- #
 
 def _encode_watermark(img_array, marker: bytes, method: str = "dwtDctSvd"):

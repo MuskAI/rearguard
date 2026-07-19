@@ -31,6 +31,28 @@ MAX_ISO_BMFF_BYTES = 16 * 1024 * 1024
 
 CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 TRAILING_NULLS_RE = re.compile(r"\x00+$")
+SENSITIVE_METADATA_KEYS = frozenset({
+    "bodyserialnumber",
+    "cameraserialnumber",
+    "deviceserialnumber",
+    "imageserialnumber",
+    "lensserialnumber",
+    "serialnumber",
+    "uniqueimageid",
+    "gps",
+    "gpsinfo",
+    "gpslatitude",
+    "gpslongitude",
+    "gpsaltitude",
+    "gpsposition",
+    "gpsdatestamp",
+    "gpstimestamp",
+    "makernote",
+    "makernotes",
+    "datetimeoriginal",
+    "createdate",
+})
+REDACTED_METADATA_VALUE = "[REDACTED]"
 
 
 @dataclass(frozen=True)
@@ -225,6 +247,23 @@ def _sanitize(value: Any, depth: int = 0) -> Any:
     return str(value)
 
 
+def redact_sensitive_metadata(value: Any, key: str = "", depth: int = 0) -> Any:
+    """Remove precise device, location, and capture-time identifiers before persistence."""
+    if depth > 16:
+        return "[max depth reached]"
+    normalized_key = re.sub(r"[^a-z0-9]", "", str(key).lower())
+    if any(normalized_key == sensitive or normalized_key.endswith(sensitive) for sensitive in SENSITIVE_METADATA_KEYS):
+        return REDACTED_METADATA_VALUE
+    if isinstance(value, dict):
+        return {
+            str(child_key): redact_sensitive_metadata(child, str(child_key), depth + 1)
+            for child_key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_sensitive_metadata(child, key, depth + 1) for child in value]
+    return value
+
+
 def _count_leaves(value: Any) -> int:
     if value is None:
         return 0
@@ -337,6 +376,10 @@ def analyze_ai_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         )
 
     for row in rows:
+        # Transport-controlled fields are useful for display but are not
+        # provenance. A caller can rename a real photo arbitrarily.
+        if row["path"].lower().startswith("file."):
+            continue
         value = row["value"]
         searchable = f"{row['path']}\n{value}"
         lower_path = row["path"].lower()
@@ -779,18 +822,19 @@ def inspect_metadata(data: bytes, filename: str = "", mime: str | None = None) -
             else []
         ),
     )
+    public_metadata = redact_sensitive_metadata(sanitized)
     sections = [
         {"name": name, "fieldCount": _count_leaves(value)}
-        for name, value in sanitized.items()
+        for name, value in public_metadata.items()
         if value and (not isinstance(value, dict) or value)
     ]
     embedded_sections = [section for section in sections if section["name"] not in {"file", "browser", "errors"}]
-    field_count = _count_leaves(sanitized)
+    field_count = _count_leaves(public_metadata)
 
     return {
         "hasMetadata": field_count > 0,
         "hasEmbeddedMetadata": len(embedded_sections) > 0,
-        "metadata": sanitized,
+        "metadata": public_metadata,
         "aiDetection": ai_detection,
         "captureEvidence": capture,
         "metadataSummary": {
@@ -798,7 +842,7 @@ def inspect_metadata(data: bytes, filename: str = "", mime: str | None = None) -
             "embeddedSectionCount": len(embedded_sections),
             "fieldCount": field_count,
             "sections": sections,
-            "preview": _flatten(sanitized),
+            "preview": _flatten(public_metadata),
             "errors": errors,
             "aiDetection": ai_detection,
             "captureEvidence": capture,

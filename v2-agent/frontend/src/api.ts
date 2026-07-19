@@ -161,6 +161,13 @@ export interface UnifiedForensicsOutput {
   interface_version: string;
   verdict: Verdict;
   confidence: number;
+  riskScore?: number;
+  aiProbability?: number | null;
+  riskVector?: {
+    aiGenerated: number | null;
+    tampered: number | null;
+    deepfake: number | null;
+  };
   generator_attribution: {
     status: "known_signal" | "unknown" | string;
     family: string | null;
@@ -204,6 +211,13 @@ export interface DetectResult {
   };
   verdict: Verdict;
   confidence: number;
+  riskScore?: number;
+  aiProbability?: number | null;
+  riskVector?: {
+    aiGenerated: number | null;
+    tampered: number | null;
+    deepfake: number | null;
+  };
   modelVersion: string;
   source: string;
   cacheVersion: string;
@@ -678,6 +692,14 @@ export interface ImageAgentExpert {
 export interface ImageAgentReview {
   enabled?: boolean;
   score?: number;
+  generatedScore?: number | null;
+  tamperScore?: number | null;
+  recaptureScore?: number | null;
+  riskVector?: {
+    aiGenerated?: number | null;
+    tampered?: number | null;
+    recaptured?: number | null;
+  };
   finalLabel?: string;
   confidence?: string;
   consensusLevel?: string;
@@ -830,7 +852,7 @@ export function registerAccount(payload: {
         username: payload.username,
         sms_code: payload.smsCode,
         accepted_terms: payload.acceptedTerms,
-        terms_version: "2026-06-03",
+        terms_version: "2026-07-15",
       }),
     },
     "注册失败",
@@ -920,13 +942,13 @@ export function fetchImageAgentJob(jobId: string, signal?: AbortSignal) {
   );
 }
 
-export function detectVideoWithAgent(file: File) {
+export function detectVideoWithAgent(file: File, signal?: AbortSignal) {
   const body = new FormData();
   body.append("video_file", file);
   body.append("fast_mode", "1");
   return accountJson<{ status: string; result: VideoAgentResult }>(
     "/video_upload/detect",
-    { method: "POST", body },
+    { method: "POST", body, signal },
     "视频鉴伪失败",
   );
 }
@@ -945,6 +967,19 @@ export function fetchVideoHistory(limit = 100) {
     {},
     "视频历史暂不可用",
   );
+}
+
+async function deleteAccountHistory(path: string, fallback: string): Promise<void> {
+  const res = await fetch(path, withSession({ method: "DELETE", cache: "no-store" }));
+  if (!res.ok) await parseJson<Record<string, unknown>>(res, fallback);
+}
+
+export function deleteImageHistory(itemId: number): Promise<void> {
+  return deleteAccountHistory(`/api/history/image-detections/${encodeURIComponent(String(itemId))}`, "删除图像记录失败");
+}
+
+export function deleteVideoHistory(itemId: number): Promise<void> {
+  return deleteAccountHistory(`/api/history/video-detections/${encodeURIComponent(String(itemId))}`, "删除视频记录失败");
 }
 
 export function fetchImageAgentResult(itemId: number) {
@@ -994,9 +1029,10 @@ export interface ForensicReport {
   fileMeta: { name: string; type: FileType; size: string };
 }
 
-export async function runForensics(file: File, signal?: AbortSignal): Promise<ForensicReport> {
+export async function runForensics(file: File, signal?: AbortSignal, taskId?: string): Promise<ForensicReport> {
   const fd = new FormData();
   fd.append("file", file);
+  if (taskId) fd.append("taskId", taskId);
   const res = await fetch("/v2-api/forensics", withSession({ method: "POST", body: fd, signal }));
   return parseJson(res, `取证分析失败 (${res.status})`);
 }
@@ -1050,9 +1086,10 @@ export interface ProvenanceReport {
   fileMeta: { name: string; size: string };
 }
 
-export async function runProvenance(file: File): Promise<ProvenanceReport> {
+export async function runProvenance(file: File, taskId?: string): Promise<ProvenanceReport> {
   const fd = new FormData();
   fd.append("file", file);
+  if (taskId) fd.append("taskId", taskId);
   const res = await fetch("/v2-api/provenance", withSession({ method: "POST", body: fd }));
   return parseJson(res, `内容凭证验证失败 (${res.status})`);
 }
@@ -1103,22 +1140,6 @@ export async function deleteHistory(taskId: string): Promise<void> {
   await parseJson<Record<string, string>>(res, "删除历史失败");
 }
 
-export async function persistArtifacts(
-  taskId: string,
-  extras: { forensics?: ForensicReport | null; provenance?: ProvenanceReport | null },
-): Promise<void> {
-  const res = await fetch(`/v2-api/history/${encodeURIComponent(taskId)}/artifacts`, {
-    credentials: "include",
-    method: "POST",
-    headers: withAuthHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({
-      forensics: extras.forensics ?? null,
-      provenance: extras.provenance ?? null,
-    }),
-  });
-  await parseJson<Record<string, boolean>>(res, "保存附加分析结果失败");
-}
-
 export interface Metrics {
   summary: {
     totalDetections: number;
@@ -1161,29 +1182,12 @@ export async function fetchMetrics(days = 14): Promise<Metrics> {
   return parseJson(res, "加载监控指标失败");
 }
 
-export async function downloadReport(
-  reportId: string,
-  extras?: { forensics?: ForensicReport | null; provenance?: ProvenanceReport | null },
-): Promise<string> {
+export async function downloadReport(reportId: string): Promise<string> {
   const fallbackName = `huijian-report-${reportId}.pdf`;
-  const hasExtras = Boolean(extras?.forensics || extras?.provenance);
-  const res = await fetch(
-    `/v2-api/report/${encodeURIComponent(reportId)}${hasExtras ? "/export" : "/download"}`,
-    hasExtras
-      ? {
-          credentials: "include",
-          method: "POST",
-          headers: withAuthHeaders({ "Content-Type": "application/json" }),
-          body: JSON.stringify({
-            forensics: extras?.forensics ?? null,
-            provenance: extras?.provenance ?? null,
-          }),
-        }
-      : {
-          credentials: "include",
-          headers: withAuthHeaders(),
-        },
-  );
+  const res = await fetch(`/v2-api/report/${encodeURIComponent(reportId)}/download`, {
+    credentials: "include",
+    headers: withAuthHeaders(),
+  });
   if (!res.ok) {
     await parseJson<Record<string, never>>(res, "下载报告失败");
   }
