@@ -27,6 +27,10 @@ def test_backup_script_creates_consistent_local_snapshot(tmp_path):
         fake_bin / "mysqldump",
         "#!/bin/sh\nprintf '%s\\n' \"$*\" >>\"$MYSQLDUMP_ARGS_LOG\"\nprintf '%s\\n' '-- deterministic test dump'\n",
     )
+    _write_executable(
+        fake_bin / "rclone",
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >>\"$RCLONE_ARGS_LOG\"\n",
+    )
 
     v2_db = tmp_path / "v2.sqlite3"
     traffic_db = tmp_path / "traffic.sqlite3"
@@ -45,11 +49,13 @@ def test_backup_script_creates_consistent_local_snapshot(tmp_path):
     )
     backup_root = tmp_path / "backups"
     mysqldump_args_log = tmp_path / "mysqldump-args.log"
+    rclone_args_log = tmp_path / "rclone-args.log"
     env = {
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "REALGUARD_BACKUP_ROOT": str(backup_root),
         "REALGUARD_BACKUP_RETENTION_DAYS": "14",
+        "REALGUARD_BACKUP_RCLONE_REMOTE": "archive:realguard",
         "REALGUARD_DB_USER": "backup-user",
         "REALGUARD_DB_PASSWORD": "test-only",
         "REALGUARD_DB_NAME": "system",
@@ -61,6 +67,7 @@ def test_backup_script_creates_consistent_local_snapshot(tmp_path):
         "REALGUARD_UPLOADS_DIR": str(uploads),
         "REALGUARD_EVIDENCE_SNAPSHOT_ROOT": str(evidence_manifests),
         "MYSQLDUMP_ARGS_LOG": str(mysqldump_args_log),
+        "RCLONE_ARGS_LOG": str(rclone_args_log),
         "PYTHON_BIN": sys.executable,
     }
 
@@ -88,6 +95,10 @@ def test_backup_script_creates_consistent_local_snapshot(tmp_path):
     mysqldump_calls = mysqldump_args_log.read_text(encoding="utf-8").splitlines()
     assert len(mysqldump_calls) == 2
     assert all("--no-tablespaces" in call for call in mysqldump_calls)
+    rclone_calls = rclone_args_log.read_text(encoding="utf-8").splitlines()
+    assert len(rclone_calls) == 2
+    assert rclone_calls[0].startswith("copy ") and rclone_calls[0].endswith(" --immutable")
+    assert rclone_calls[1].startswith("check ") and rclone_calls[1].endswith(" --one-way")
 
     for line in (snapshot / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
         digest, relative_path = line.split(maxsplit=1)

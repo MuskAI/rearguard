@@ -535,6 +535,7 @@ systemctl status realguard-backup.timer
 sudo systemctl start realguard-backup.service
 sudo journalctl -u realguard-backup.service -n 100 --no-pager
 sudo sh -c 'cd /var/backups/realguard/latest && sha256sum -c SHA256SUMS'
+sudo /usr/local/sbin/realguard-restore-verify /var/backups/realguard/latest
 ```
 
 本机备份不能应对整机或云盘故障。生产必须在 `/etc/realguard/backup.env`
@@ -545,9 +546,12 @@ REALGUARD_BACKUP_RETENTION_DAYS=14
 REALGUARD_BACKUP_RCLONE_REMOTE=remote-name:realguard-backups
 ```
 
-每季度应从异地副本恢复到隔离环境，验证两个 MySQL 库、两份 SQLite、
-上传原件和 `evidence-manifests.tgz` 均可读取，并抽样验签 PDF 报告；目标为
-RPO 不超过 24 小时、RTO 不超过 2 小时。
+备份脚本会在异地上传后执行 `rclone check --one-way`，校验失败则整次备份任务失败。
+每季度应先把异地快照下载到服务器上的隔离目录，再执行
+`realguard-restore-verify /path/to/snapshot`。该命令会把两份 MySQL 备份恢复到随机临时库，
+运行扩展表检查和 SQLite 完整性检查，安全解包上传原件与证据清单，写入
+`/var/backups/realguard/restore-drills/` 后自动删除临时库。目标为 RPO 不超过 24 小时、
+RTO 不超过 2 小时；还应使用抽样账号下载并验签 PDF 报告。
 
 ### MySQL 备份
 

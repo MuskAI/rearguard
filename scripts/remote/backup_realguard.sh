@@ -112,7 +112,10 @@ find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name '20??????T??????Z' \
 
 if [[ -n "$OFFSITE_REMOTE" ]]; then
   command -v rclone >/dev/null
-  rclone copy "$final" "${OFFSITE_REMOTE%/}/$hostname_safe/$timestamp" --immutable
+  offsite_destination="${OFFSITE_REMOTE%/}/$hostname_safe/$timestamp"
+  rclone copy "$final" "$offsite_destination" --immutable
+  rclone check "$final" "$offsite_destination" --one-way
+  echo "RealGuard offsite backup verified: $offsite_destination"
 else
   echo "Warning: REALGUARD_BACKUP_RCLONE_REMOTE is not configured; backup is local only." >&2
 fi

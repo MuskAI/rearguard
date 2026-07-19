@@ -53,6 +53,7 @@ rollback() {
 
 printf '%s  %s\n' "$IP2REGION_XDB_SHA256" /tmp/realguard-ip2region-v4.xdb | sha256sum -c -
 sudo install -m 700 /tmp/realguard-backup /usr/local/sbin/realguard-backup
+sudo install -m 700 /tmp/realguard-restore-verify /usr/local/sbin/realguard-restore-verify
 sudo bash -lc '
   set -euo pipefail
   set -a
@@ -305,6 +306,7 @@ rm -f \
   /tmp/realguard-detector-backend.service \
   /tmp/realguard-developer-worker.service \
   /tmp/realguard-backup \
+  /tmp/realguard-restore-verify \
   /tmp/realguard-backup.service \
   /tmp/realguard-backup.timer \
   /tmp/realguard-v1.DEPLOYED_COMMIT \

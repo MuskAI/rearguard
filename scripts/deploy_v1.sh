@@ -40,6 +40,7 @@ DEVELOPER_WORKER_SERVICE_UNIT="$ROOT_DIR/deploy/systemd/realguard-developer-work
 BACKUP_SERVICE_UNIT="$ROOT_DIR/deploy/systemd/realguard-backup.service"
 BACKUP_TIMER_UNIT="$ROOT_DIR/deploy/systemd/realguard-backup.timer"
 BACKUP_SCRIPT="$ROOT_DIR/scripts/remote/backup_realguard.sh"
+RESTORE_VERIFY_SCRIPT="$ROOT_DIR/scripts/remote/verify_restore_realguard.sh"
 ACTIVATE_SCRIPT="$ROOT_DIR/scripts/remote/activate_v1.sh"
 DEPLOY_PATHS=(
   realguard-server-main/RealGuard
@@ -49,6 +50,7 @@ DEPLOY_PATHS=(
   deploy/systemd
   scripts/deploy_v1.sh
   scripts/remote/backup_realguard.sh
+  scripts/remote/verify_restore_realguard.sh
   scripts/remote/activate_v1.sh
   scripts/deploy_common.sh
 )
@@ -72,6 +74,7 @@ run_local "$BACKEND_DIR/.venv-test/bin/python" -m compileall "$BACKEND_DIR/image
 run_local "$BACKEND_DIR/.venv-test/bin/python" -m py_compile "$BACKEND_DIR/detector_backend.py"
 run_local bash -n "$ACTIVATE_SCRIPT"
 run_local bash -n "$BACKUP_SCRIPT"
+run_local bash -n "$RESTORE_VERIFY_SCRIPT"
 (
   cd "$BACKEND_DIR"
   run_local .venv-test/bin/python -m pytest tests
@@ -107,6 +110,7 @@ run_scp "$DEVELOPER_WORKER_SERVICE_UNIT" "$REMOTE:/tmp/realguard-developer-worke
 run_scp "$BACKUP_SERVICE_UNIT" "$REMOTE:/tmp/realguard-backup.service"
 run_scp "$BACKUP_TIMER_UNIT" "$REMOTE:/tmp/realguard-backup.timer"
 run_scp "$BACKUP_SCRIPT" "$REMOTE:/tmp/realguard-backup"
+run_scp "$RESTORE_VERIFY_SCRIPT" "$REMOTE:/tmp/realguard-restore-verify"
 run_scp "$ACTIVATE_SCRIPT" "$REMOTE:/tmp/realguard-activate-v1.sh"
 
 log_step 5 "Activate V1 release"
