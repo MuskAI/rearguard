@@ -5,6 +5,7 @@ import os
 import threading
 import time
 import uuid
+import warnings
 from datetime import datetime, timedelta
 
 from PIL import Image, UnidentifiedImageError
@@ -54,6 +55,10 @@ DEVELOPER_FREE_CALLS = max(0, int(os.environ.get("REALGUARD_DEVELOPER_FREE_CALLS
 DEVELOPER_MAX_IMAGE_BYTES = max(
     1024 * 1024,
     int(os.environ.get("REALGUARD_DEVELOPER_MAX_IMAGE_BYTES", str(25 * 1024 * 1024))),
+)
+DEVELOPER_MAX_IMAGE_PIXELS = max(
+    1_000_000,
+    int(os.environ.get("REALGUARD_DEVELOPER_MAX_IMAGE_PIXELS", "24000000")),
 )
 DEVELOPER_FAST_PRICE_FEN = max(0, int(os.environ.get("REALGUARD_DEVELOPER_FAST_PRICE_FEN", "0")))
 DEVELOPER_SWARM_PRICE_FEN = max(0, int(os.environ.get("REALGUARD_DEVELOPER_SWARM_PRICE_FEN", "0")))
@@ -1282,13 +1287,27 @@ def _require_scope(actor, scope):
 
 def _validate_image(image_bytes):
     try:
-        with Image.open(io.BytesIO(image_bytes)) as image:
-            width, height = image.size
-            image.verify()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(image_bytes)) as image:
+                width, height = image.size
+                image.verify()
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning):
+        return None, {
+            "message": "图片像素数量过高，无法安全处理",
+            "status": 413,
+            "code": "image_pixels_too_large",
+        }
     except (UnidentifiedImageError, OSError, ValueError):
-        return None, "文件不是可读取的图片"
+        return None, {"message": "文件不是可读取的图片", "status": 400, "code": "invalid_image"}
     if width <= 0 or height <= 0:
-        return None, "图片尺寸无效"
+        return None, {"message": "图片尺寸无效", "status": 400, "code": "invalid_image"}
+    if width * height > DEVELOPER_MAX_IMAGE_PIXELS:
+        return None, {
+            "message": f"图片像素不能超过 {DEVELOPER_MAX_IMAGE_PIXELS}，当前为 {width}x{height}",
+            "status": 413,
+            "code": "image_pixels_too_large",
+        }
     return {"width": width, "height": height}, None
 
 
@@ -1322,7 +1341,7 @@ def create_image_detection():
         return _error("图片不能超过 25 MB", 413, "image_too_large")
     _, image_error = _validate_image(image_bytes)
     if image_error:
-        return _error(image_error, 400, "invalid_image")
+        return _error(image_error["message"], image_error["status"], image_error["code"])
 
     digest = hashlib.sha256(image_bytes).hexdigest()
     idempotency_key = request.headers.get("Idempotency-Key", "").strip()

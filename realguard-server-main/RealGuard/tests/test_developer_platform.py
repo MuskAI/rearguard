@@ -559,6 +559,23 @@ def test_idempotency_key_rejects_different_content(client, monkeypatch):
     assert response.get_json()["error"]["code"] == "idempotency_conflict"
 
 
+def test_developer_api_rejects_images_above_pixel_limit(client, monkeypatch):
+    actor = {"id": 11, "user_id": 1, "scopes": ["image:fast"], "phone": "13800000000"}
+    monkeypatch.setattr(platform, "_developer_key_required", lambda: (actor, None))
+    monkeypatch.setattr(platform, "_ensure_developer_platform_tables", lambda: True)
+    monkeypatch.setattr(platform, "_maybe_reconcile_expired_tasks", lambda: 0)
+    monkeypatch.setattr(platform, "DEVELOPER_MAX_IMAGE_PIXELS", 32)
+
+    response = client.post(
+        "/api/openapi/v1/image-detections",
+        data={"mode": "fast", "image": (BytesIO(_png_bytes()), "sample.png")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 413
+    assert response.get_json()["error"]["code"] == "image_pixels_too_large"
+
+
 def test_finish_task_settles_success_and_releases_failure(monkeypatch):
     settled = []
     terminalized = []
