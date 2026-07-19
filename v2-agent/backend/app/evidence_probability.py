@@ -170,7 +170,7 @@ def build_probability_model(report: dict[str, Any], known_hits: list[dict[str, A
 
     posterior = _probability(_odds(BASE_RATE) * effective_lr)
     decisive_kinds = {
-        "known_visible_ai_watermark", "valid_ai_c2pa", "ai_enhancement_declaration",
+        "valid_ai_c2pa", "ai_enhancement_declaration",
     }
     active_kinds = {str(item["kind"]) for item in effective_factors}
     fake_groups = {str(item["group"]) for item in effective_factors if float(item["effectiveLikelihoodRatio"]) > 1.0}
@@ -186,7 +186,7 @@ def build_probability_model(report: dict[str, Any], known_hits: list[dict[str, A
         "corroborated": len(fake_groups) >= 2,
         "conflicting": bool(fake_groups and real_groups),
         "calibrationStatus": "policy_prior_pending_dataset_calibration",
-        "note": "AI 来源证据抬高风险，一致的实拍来源证据适度降低风险；上线后仍需使用标注集校准。",
+        "note": "可见标记只作诊断归属线索；只有通过校验的内容凭证可短路模型，所有融合权重仍需使用标注集校准。",
     }
 
 

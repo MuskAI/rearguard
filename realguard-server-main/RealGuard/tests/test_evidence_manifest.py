@@ -31,14 +31,82 @@ MODEL_RUN = {
         "version": "v1-onnx-mil-2026.07",
     },
     "meta": {
+        "modelDecision": {
+            "ready": True,
+            "mode": "calibrated_verdict",
+            "calibrationId": "commercial-calibration-2026-07",
+            "manifestSha256": "b" * 64,
+            "datasetSha256": "a" * 64,
+            "modelSha256": "c" * 64,
+            "preprocessingSha256": "d" * 64,
+            "runtimeContractSha256": "e" * 64,
+            "evaluationCodeRevision": "eval-commit-abc123",
+            "expiresAt": "2099-12-31T23:59:59Z",
+            "realSamples": 800,
+            "fakeSamples": 700,
+            "observedFpr": 0.03,
+            "observedFnr": 0.08,
+            "aiThreshold": 0.61,
+            "gateReasons": [],
+        },
         "visibleWatermark": {
+            "enabled": True,
+            "supported": True,
             "detected": True,
+            "coordinateSpace": "display_normalized_v1",
+            "displaySize": {"width": 320, "height": 320},
             "confidence": 0.97,
             "provider": "server-watermark-v2",
-            "hits": [{"label": "AI watermark"}],
+            "hits": [{
+                "label": "AI watermark",
+                "bbox": {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.1},
+            }],
         },
     },
 }
+
+
+def test_legacy_watermark_without_coordinate_protocol_is_not_signed_as_supported():
+    structured = evidence_manifest._structured_visible_watermark({
+        "meta": {"visibleWatermark": {"supported": True, "detected": True, "hits": []}}
+    })
+
+    assert structured["supported"] is False
+    assert structured["coordinate_space"] == "unknown"
+
+
+def test_evidence_manifest_drops_invalid_watermark_boxes_instead_of_clamping():
+    structured = evidence_manifest._structured_visible_watermark({
+        "meta": {"visibleWatermark": {
+            "supported": True,
+            "coordinateSpace": "display_normalized_v1",
+            "displaySize": {"width": 320, "height": 320},
+            "detected": True,
+            "hits": [{
+                "provider": "gemini",
+                "confidence": 0.99,
+                "bbox": {"x": -0.2, "y": 0.8, "w": 0.3, "h": 0.3},
+                "method": "remove_ai_watermarks_registry",
+                "decisive": True,
+            }],
+        }}
+    })
+
+    assert structured["hits"] == []
+    assert structured["decisive_authorized"] is False
+
+
+def test_explicit_review_only_is_authoritative_in_signed_evidence():
+    model_run = copy.deepcopy(MODEL_RUN)
+    model_run["meta"]["decisionAuthorization"] = {
+        "status": "review_only",
+        "authority": "none",
+    }
+
+    authorization = evidence_manifest._decision_authorization(model_run, None)
+
+    assert authorization["status"] == "review_only"
+    assert authorization["authority"] == "none"
 
 
 @pytest.fixture(autouse=True)
@@ -87,10 +155,13 @@ def test_signed_manifest_contains_required_server_evidence_and_verifies(tmp_path
     assert manifest["model"]["version"] == "v1-onnx-mil-2026.07"
     assert manifest["model"]["run_id"] == "run-73"
     assert manifest["policy_version"] == evidence_manifest.DEFAULT_POLICY_VERSION
-    assert manifest["conclusion"]["label"] == "AI生成图像"
+    assert manifest["conclusion"]["label"] == "需人工复核"
+    assert manifest["conclusion"]["risk_score_percent"] is None
+    assert manifest["conclusion"]["confidence"] == "不适用"
     assert manifest["evidence_summary"]["source"] == "persisted_server_record"
     assert manifest["evidence_summary"]["signals"] == [{
         "type": "visible_watermark",
+        "supported": True,
         "detected": True,
         "confidence": 0.97,
         "provider": "server-watermark-v2",
@@ -397,7 +468,7 @@ def test_repeated_report_downloads_reuse_first_persisted_manifest_and_signature(
     assert second["manifest"] == first["manifest"]
     assert second["signature"] == first["signature"]
     assert second["manifest"]["generated_at"] == "2026-07-19T08:30:00Z"
-    assert second["manifest"]["conclusion"]["label"] == "AI生成图像"
+    assert second["manifest"]["conclusion"]["label"] == "需人工复核"
     assert second["manifest"]["model"]["version"] == "v1-onnx-mil-2026.07"
     snapshots = list(snapshot_root.glob("*.manifest.json"))
     assert len(snapshots) == 1
@@ -662,10 +733,10 @@ def test_report_ignores_unsigned_client_fields_and_renders_signed_server_snapsho
     )
     envelope = evidence_manifest.extract_envelope_from_pdf(pdf)
 
-    assert rendered["result"]["final_label"] == "AI生成图像"
-    assert rendered["result"]["probability"] == pytest.approx(0.9125)
+    assert rendered["result"]["final_label"] == "需人工复核"
+    assert rendered["result"]["probability"] is None
     assert rendered["result"]["filename"] == "stored-image.png"
-    assert "主模型与服务端取证证据一致" in rendered["result"]["explanation"]
+    assert "缺少可验证的已校准模型授权" in rendered["result"]["explanation"]
     assert "客户端声称没有风险" not in rendered["result"]["explanation"]
     assert rendered["result"]["visual_issues"] == []
     assert rendered["result"]["visibleWatermark"]["detected"] is True
@@ -688,7 +759,7 @@ def test_html_report_embeds_signed_envelope_and_not_client_verdict(tmp_path):
         snapshot_root=tmp_path / "snapshots",
     )
 
-    assert "需人工复核 · 66.1%" in html
+    assert "需人工复核 · 未发布自动风险分数" in html
     assert "签名完整性清单" in html
     assert hashlib.sha256(b"original").hexdigest() in html
     assert "v1-onnx-mil-2026.07" in html
@@ -722,6 +793,18 @@ def test_server_watermark_and_capture_metadata_are_signed_and_rendered(monkeypat
         "evidenceRole": "provenance",
         "decisive": True,
     }]
+    model_run["meta"]["inferenceAudit"] = {
+        "model": "realguardv2-int8",
+        "rawModelScore": 0.7342,
+        "publishedProbability": 0.5,
+        "finalLabel": "需人工复核",
+        "originalSize": {"width": 4096, "height": 3072},
+        "processedSize": {"width": 2048, "height": 1536},
+        "downsample": {"applied": True, "scale": 0.5},
+        "chunkCount": 12,
+        "parameters": {"chunkSize": 512, "stride": 384},
+        "runtime": {"device": "cuda", "modelSha256": "c" * 64},
+    }
     rendered = {}
 
     def fake_renderer(item, result):
@@ -751,6 +834,9 @@ def test_server_watermark_and_capture_metadata_are_signed_and_rendered(monkeypat
     assert structured["capture_evidence"]["supportsRealCapture"] is True
     assert structured["capture_evidence"]["privacy"]["gpsRedacted"] is True
     assert structured["metadata"]["present"] is True
+    assert structured["model_inference"]["rawModelScore"] == pytest.approx(0.7342)
+    assert structured["model_inference"]["downsample"]["applied"] is True
+    assert structured["model_inference"]["parameters"]["chunkSize"] == 512
     assert "private-serial-must-not-be-signed" not in evidence_manifest.canonical_json(envelope).decode("utf-8")
     assert "30.123456" not in evidence_manifest.canonical_json(envelope).decode("utf-8")
     assert rendered["result"]["visibleWatermark"] == structured["visible_watermark"]
@@ -806,6 +892,11 @@ def test_report_endpoint_returns_clear_422_when_historical_original_is_missing(m
     monkeypatch.setattr(detection, "_load_detection_record", lambda table, itemid: _item(itemid=int(itemid)))
     monkeypatch.setattr(detection, "_metadata_for_item", lambda itemid: {})
     monkeypatch.setattr(detection, "_runtime_visible_watermark_for_item", lambda itemid: None)
+    monkeypatch.setattr(
+        detection,
+        "_stored_decision_authorization_for_item",
+        lambda itemid: {"status": "verdict", "authority": "calibrated_model"},
+    )
     app = creat_app()
     app.config.update(TESTING=True)
     client = app.test_client()

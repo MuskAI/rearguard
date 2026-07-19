@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hmac
+import math
 import os
 import tempfile
 import time
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from flask import Flask, jsonify, request
+from PIL import Image, ImageOps
 
 from policy import VISIBLE_ONLY_THRESHOLDS, build_decision, visible_hit_is_decisive
 
@@ -47,7 +49,7 @@ def _authorized() -> bool:
     return bool(supplied) and hmac.compare_digest(supplied, API_TOKEN)
 
 
-def _visible_hits(path: Path) -> list[dict[str, Any]]:
+def _visible_hits(path: Path, provenance_path: Path | None = None) -> list[dict[str, Any]]:
     from remove_ai_watermarks import visible_provenance
     from remove_ai_watermarks.image_io import imread
     from remove_ai_watermarks.watermark_registry import detect_marks
@@ -56,17 +58,34 @@ def _visible_hits(path: Path) -> list[dict[str, Any]]:
     if image is None:
         return []
     height, width = image.shape[:2]
-    provenance = visible_provenance(path)
+    provenance = visible_provenance(provenance_path or path)
     hits = []
     for detection in detect_marks(image, provenance=provenance):
         if not detection.detected:
             continue
         x, y, box_width, box_height = detection.region
+        normalized = (
+            float(x) / max(width, 1),
+            float(y) / max(height, 1),
+            float(box_width) / max(width, 1),
+            float(box_height) / max(height, 1),
+        )
+        norm_x, norm_y, norm_width, norm_height = normalized
+        if (
+            not all(math.isfinite(value) for value in normalized)
+            or not 0.0 <= norm_x <= 1.0
+            or not 0.0 <= norm_y <= 1.0
+            or not 0.0 < norm_width <= 1.0
+            or not 0.0 < norm_height <= 1.0
+            or norm_x + norm_width > 1.0
+            or norm_y + norm_height > 1.0
+        ):
+            continue
         bbox = {
-            "x": round(max(0.0, min(1.0, x / max(width, 1))), 4),
-            "y": round(max(0.0, min(1.0, y / max(height, 1))), 4),
-            "w": round(max(0.0, min(1.0, box_width / max(width, 1))), 4),
-            "h": round(max(0.0, min(1.0, box_height / max(height, 1))), 4),
+            "x": round(norm_x, 4),
+            "y": round(norm_y, 4),
+            "w": round(norm_width, 4),
+            "h": round(norm_height, 4),
         }
         corroborated = detection.key in provenance
         decisive = visible_hit_is_decisive(
@@ -106,19 +125,27 @@ def _report(path: Path) -> dict[str, Any]:
     }
 
 
-def _collect_evidence(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _collect_evidence(
+    path: Path,
+    visible_path: Path | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     report_future = _PRECHECK_EXECUTOR.submit(_report, path)
-    visible_hits = _visible_hits(path)
+    visible_hits = _visible_hits(visible_path or path, provenance_path=path)
     return report_future.result(), visible_hits
 
 
 @app.get("/health")
 def health():
+    engine_version = _package_version()
+    registry_ready = engine_version != "unknown"
     return {
-        "status": "ok",
+        "status": "ok" if registry_ready and bool(API_TOKEN) else "degraded",
         "mode": "detect-only",
         "engine": "remove-ai-watermarks.identify",
-        "engineVersion": _package_version(),
+        "engineVersion": engine_version,
+        "registryReady": registry_ready,
+        "tokenReady": bool(API_TOKEN),
+        "coordinateSpace": "display_normalized_v1",
         "visibleProviders": ["gemini", "doubao", "jimeng", "jimeng_pill", "samsung"],
         "visibleOnlyThresholds": VISIBLE_ONLY_THRESHOLDS,
         "maxUploadBytes": MAX_UPLOAD_BYTES,
@@ -146,11 +173,31 @@ def precheck():
 
     started = time.perf_counter()
     try:
-        with tempfile.NamedTemporaryFile(suffix=suffix) as temporary:
+        with tempfile.NamedTemporaryFile(suffix=suffix) as temporary, tempfile.NamedTemporaryFile(
+            suffix=".png"
+        ) as normalized_temporary:
             temporary.write(data)
             temporary.flush()
             path = Path(temporary.name)
-            report, visible_hits = _collect_evidence(path)
+            with Image.open(path) as encoded_image:
+                if bool(getattr(encoded_image, "is_animated", False)) and int(
+                    getattr(encoded_image, "n_frames", 1)
+                ) > 1:
+                    return jsonify({"detail": "animated images are not supported"}), 415
+                encoded_size = {
+                    "width": int(encoded_image.width),
+                    "height": int(encoded_image.height),
+                }
+                source_orientation = int(encoded_image.getexif().get(274, 1) or 1)
+                normalized_image = ImageOps.exif_transpose(encoded_image).convert("RGB")
+                display_size = {
+                    "width": int(normalized_image.width),
+                    "height": int(normalized_image.height),
+                }
+                normalized_image.save(normalized_temporary, format="PNG")
+                normalized_temporary.flush()
+            normalized_path = Path(normalized_temporary.name)
+            report, visible_hits = _collect_evidence(path, normalized_path)
         decision = build_decision(report, visible_hits)
     except Exception as exc:
         app.logger.exception("provenance precheck failed")
@@ -164,6 +211,10 @@ def precheck():
         "decision": decision,
         "report": report,
         "visibleHits": visible_hits,
+        "coordinateSpace": "display_normalized_v1",
+        "displaySize": display_size,
+        "encodedSize": encoded_size,
+        "sourceOrientation": source_orientation,
         "parallelism": {
             "enabled": True,
             "workers": PRECHECK_BRANCH_WORKERS,

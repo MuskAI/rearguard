@@ -27,6 +27,9 @@ EXPECTED_MODEL_SHA256 = os.getenv(
 )
 API_TOKEN = os.getenv("YOLO_WATERMARK_TOKEN", "")
 DEVICE = os.getenv("YOLO_WATERMARK_DEVICE", "0" if torch.cuda.is_available() else "cpu")
+REQUIRE_CUDA = os.getenv("YOLO_WATERMARK_REQUIRE_CUDA", "true").lower() in {
+    "1", "true", "yes", "on",
+}
 INPUT_SIZE = int(os.getenv("YOLO_WATERMARK_IMAGE_SIZE", "1280"))
 CONFIDENCE = float(os.getenv("YOLO_WATERMARK_CONFIDENCE", "0.35"))
 IOU_THRESHOLD = float(os.getenv("YOLO_WATERMARK_IOU", "0.50"))
@@ -37,6 +40,9 @@ WARMUP_ENABLED = os.getenv("YOLO_WATERMARK_WARMUP", "true").lower() in {"1", "tr
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 _inference_lock = threading.Lock()
+
+if REQUIRE_CUDA and (not torch.cuda.is_available() or DEVICE.lower() == "cpu"):
+    raise RuntimeError("YOLO watermark service requires CUDA but no CUDA device is configured")
 
 if not MODEL_PATH.is_file():
     raise RuntimeError(f"YOLO watermark checkpoint not found: {MODEL_PATH}")
@@ -132,6 +138,8 @@ def health():
         "modelPath": str(MODEL_PATH),
         "device": DEVICE,
         "gpu": _gpu_name(),
+        "cudaRequired": REQUIRE_CUDA,
+        "cudaReady": bool(torch.cuda.is_available() and DEVICE.lower() != "cpu" and _gpu_name()),
         "inputSize": INPUT_SIZE,
         "confidenceThreshold": CONFIDENCE,
         "warmupEnabled": WARMUP_ENABLED,
@@ -180,6 +188,11 @@ def detect():
         "engine": "ultralytics-yolo11x",
         "model": "corzent/yolo11x_watermark_detection",
         "modelRevision": MODEL_REVISION,
+        "modelSha256": checkpoint_sha256,
+        "device": DEVICE,
+        "gpu": _gpu_name(),
+        "cudaRequired": REQUIRE_CUDA,
+        "cudaReady": bool(torch.cuda.is_available() and DEVICE.lower() != "cpu" and _gpu_name()),
         "confidenceThreshold": CONFIDENCE,
         "elapsedMs": int((time.perf_counter() - started) * 1000),
         "image": {"width": width, "height": height},

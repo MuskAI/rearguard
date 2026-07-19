@@ -168,3 +168,13 @@ def test_interrupted_web_jobs_are_failed_without_touching_completed_jobs(monkeyp
     assert interrupted["status"] == "failed"
     assert "重启中断" in interrupted["error"]
     assert admin_state.get_detection_job(completed["id"])["status"] == "success"
+
+
+def test_durable_web_jobs_survive_process_cache_reconciliation(monkeypatch, tmp_path):
+    monkeypatch.setattr(admin_state, "STATE_PATH", tmp_path / "admin-state.json")
+    queued = admin_state.create_detection_job({}, "queued.png", mode="fast")
+    legacy = admin_state.create_detection_job({}, "legacy.png", mode="fast")
+
+    assert admin_state.reconcile_interrupted_detection_jobs(preserve_ids={queued["id"]}) == 1
+    assert admin_state.get_detection_job(queued["id"])["status"] == "queued"
+    assert admin_state.get_detection_job(legacy["id"])["status"] == "failed"

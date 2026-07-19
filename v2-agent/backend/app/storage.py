@@ -10,10 +10,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from . import watermark_verdict
+
 
 DATA_DIR = Path(os.getenv("JIANZHEN_DATA_DIR", Path(__file__).resolve().parents[1] / "data"))
 DB_PATH = DATA_DIR / "jianzhen-v2.sqlite3"
-ANALYSIS_CACHE_VERSION = os.getenv("JIANZHEN_ANALYSIS_CACHE_VERSION", "v8-provenance-first")
+ANALYSIS_CACHE_VERSION = os.getenv("JIANZHEN_ANALYSIS_CACHE_VERSION", "v10-tenant-scoped")
 REQUEST_EVENT_RETENTION_DAYS = max(1, int(os.getenv("JIANZHEN_REQUEST_EVENT_RETENTION_DAYS", "90")))
 TOKEN_USAGE_RETENTION_DAYS = max(30, int(os.getenv("JIANZHEN_TOKEN_USAGE_RETENTION_DAYS", "730")))
 REPORT_SHARE_ACCESS_RETENTION_DAYS = max(
@@ -24,7 +26,7 @@ REPORT_SHARE_RETENTION_DAYS = max(
     int(os.getenv("JIANZHEN_REPORT_SHARE_RETENTION_DAYS", "730")),
 )
 PUBLISHABLE_VERDICTS = frozenset({"real", "suspected_fake", "highly_suspected_fake"})
-PUBLISHABLE_SOURCES = frozenset({"vlm", "provenance"})
+PUBLISHABLE_AUTHORITIES = frozenset({"decisive_provenance"})
 
 _INIT_LOCK = threading.Lock()
 _INITIALIZED = False
@@ -206,12 +208,28 @@ def cache_key(file_type: str, sha256: str) -> str:
     return f"{ANALYSIS_CACHE_VERSION}:{file_type}:{sha256}"
 
 
+def _is_forensics_cache(file_type: str) -> bool:
+    return str(file_type or "").startswith("image-forensics:")
+
+
 def is_publishable_analysis(analysis: Any) -> bool:
-    """Return whether an analysis may be exposed as a detection conclusion."""
-    return (
-        isinstance(analysis, dict)
-        and analysis.get("source") in PUBLISHABLE_SOURCES
-        and analysis.get("verdict") in PUBLISHABLE_VERDICTS
+    """Return whether an analysis carries an explicit fail-closed decision contract."""
+    if not isinstance(analysis, dict):
+        return False
+    status = analysis.get("decisionStatus")
+    authority = analysis.get("decisionAuthority")
+    if status == "verdict":
+        return bool(
+            authority in PUBLISHABLE_AUTHORITIES
+            and analysis.get("source") == "provenance"
+            and analysis.get("verdict") in PUBLISHABLE_VERDICTS
+            and analysis.get("reviewRequired") is False
+        )
+    return bool(
+        status == "review_only"
+        and authority == "none"
+        and analysis.get("verdict") == "unknown"
+        and analysis.get("reviewRequired") is True
     )
 
 
@@ -239,7 +257,7 @@ def get_cached_analysis(file_type: str, sha256: str, max_age_seconds: int | None
         except (TypeError, ValueError):
             return None
     analysis = json.loads(row["analysis_json"])
-    if not is_publishable_analysis(analysis):
+    if not _is_forensics_cache(file_type) and not is_publishable_analysis(analysis):
         return None
     return analysis
 
@@ -256,7 +274,7 @@ def prune_cached_analyses(file_type_prefix: str, max_age_seconds: int) -> int:
 
 
 def put_cached_analysis(file_type: str, sha256: str, analysis: dict[str, Any]) -> None:
-    if not is_publishable_analysis(analysis):
+    if not _is_forensics_cache(file_type) and not is_publishable_analysis(analysis):
         return
     with _connect() as conn:
         conn.execute(
@@ -321,16 +339,32 @@ def _history_summary_from_row(
     row: sqlite3.Row,
     result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    result = result if result is not None else json.loads(row["result_json"])
+    result = dict(result) if result is not None else json.loads(row["result_json"])
+    watermark_verdict.apply(result, result.get("visibleWatermark"))
     visible = result.get("visibleWatermark") or {}
     synthid = result.get("synthid") or {}
+    authorized_verdict = bool(
+        result.get("decisionStatus") == "verdict"
+        and result.get("decisionAuthority") in PUBLISHABLE_AUTHORITIES
+        and result.get("reviewRequired") is False
+        and result.get("verdict") in PUBLISHABLE_VERDICTS
+        and (
+            result.get("source") == "provenance"
+            or watermark_verdict.has_decisive_ai_watermark(result.get("visibleWatermark"))
+        )
+    )
+    verdict = result.get("verdict") if authorized_verdict else "unknown"
+    confidence = result.get("confidence") if authorized_verdict else None
     return {
         "taskId": row["task_id"],
         "reportId": row["report_id"],
         "name": row["file_name"],
         "type": row["file_type"],
-        "verdict": result.get("verdict"),
-        "confidence": result.get("confidence"),
+        "verdict": verdict,
+        "confidence": confidence,
+        "decisionStatus": "verdict" if authorized_verdict else "review_only",
+        "decisionAuthority": result.get("decisionAuthority") if authorized_verdict else "none",
+        "reviewRequired": not authorized_verdict,
         "createdAt": row["created_at"],
         "thumbnail": row["thumbnail"],
         "source": result.get("source"),
@@ -902,6 +936,31 @@ def _safe_int(value: Any) -> int:
         return 0
 
 
+def _authorized_metrics_result(raw: dict[str, Any]) -> dict[str, Any]:
+    """Fail closed when aggregating legacy or incompletely authorized results."""
+    result = dict(raw or {})
+    visible = result.get("visibleWatermark")
+    decisive = False
+    if isinstance(visible, dict):
+        try:
+            from .watermark_verdict import has_decisive_ai_watermark
+
+            decisive = has_decisive_ai_watermark(visible)
+        except (ImportError, TypeError, ValueError):
+            decisive = False
+    authorized = bool(
+        result.get("decisionStatus") == "verdict"
+        and result.get("decisionAuthority") == "decisive_provenance"
+        and result.get("verdict") in PUBLISHABLE_VERDICTS
+        and (result.get("source") == "provenance" or decisive)
+    )
+    if not authorized:
+        result["verdict"] = "unknown"
+        result["decisionStatus"] = "review_only"
+        result["decisionAuthority"] = "none"
+    return result
+
+
 def metrics(days: int = 14) -> dict[str, Any]:
     since = datetime.now(timezone.utc) - timedelta(days=days - 1)
     today = datetime.now(timezone.utc).date().isoformat()
@@ -945,7 +1004,7 @@ def metrics(days: int = 14) -> dict[str, Any]:
         day = row["created_at"][:10]
         by_day[day] += 1
         by_type[row["file_type"]] += 1
-        result = json.loads(row["result_json"])
+        result = _authorized_metrics_result(json.loads(row["result_json"]))
         verdict = str(result.get("verdict", "unknown"))
         source = str(result.get("source", "unknown"))
         by_verdict[verdict] += 1
@@ -996,7 +1055,7 @@ def metrics(days: int = 14) -> dict[str, Any]:
         for row in history_rows:
             if row["created_at"][:10] != day:
                 continue
-            result = json.loads(row["result_json"])
+            result = _authorized_metrics_result(json.loads(row["result_json"]))
             source = str(result.get("source", "unknown"))
             verdict = str(result.get("verdict", "unknown"))
             day_sources[source if source in day_sources else "unknown"] += 1

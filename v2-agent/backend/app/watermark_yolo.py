@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import math
 from typing import Any
 
 from . import watermark_verdict
@@ -33,15 +34,24 @@ def _bbox(value: Any) -> dict[str, float] | None:
     if not isinstance(value, dict):
         return None
     try:
-        x = _clamp01(value["x"])
-        y = _clamp01(value["y"])
-        width = min(_clamp01(value["w"]), 1.0 - x)
-        height = min(_clamp01(value["h"]), 1.0 - y)
-    except KeyError:
+        x = float(value["x"])
+        y = float(value["y"])
+        width = float(value["w"])
+        height = float(value["h"])
+    except (KeyError, TypeError, ValueError):
         return None
-    if width <= 0 or height <= 0:
+    if not all(math.isfinite(item) for item in (x, y, width, height)):
         return None
-    return {"x": x, "y": y, "w": round(width, 4), "h": round(height, 4)}
+    if (
+        x < 0.0
+        or y < 0.0
+        or width <= 0.0
+        or height <= 0.0
+        or x + width > 1.0
+        or y + height > 1.0
+    ):
+        return None
+    return {"x": round(x, 4), "y": round(y, 4), "w": round(width, 4), "h": round(height, 4)}
 
 
 def _registry_hits(precheck: dict[str, Any]) -> list[dict[str, Any]]:
@@ -63,8 +73,9 @@ def _registry_hits(precheck: dict[str, Any]) -> list[dict[str, Any]]:
             "crop": None,
             "model": REGISTRY_MODEL,
             "modelRevision": precheck.get("engineVersion"),
-            "decisive": bool(raw.get("decisive")),
-            "evidenceRole": "provenance",
+            "decisive": False,
+            "evidenceRole": "visual_attribution",
+            "registryCorroborated": bool(raw.get("corroborated")),
             "localizationConfirmed": bool(raw.get("yoloCorroborated")),
             "localizationConfidence": _clamp01(raw.get("yoloConfidence")),
             "localizationModel": raw.get("localizationModel"),
@@ -153,11 +164,16 @@ def merge(analysis: dict[str, Any], precheck: dict[str, Any] | None) -> dict[str
     merged = copy.deepcopy(analysis)
     existing = merged.get("visibleWatermark")
     existing = dict(existing) if isinstance(existing, dict) else {}
-    existing_hits = [
-        hit
-        for hit in existing.get("hits") or []
-        if isinstance(hit, dict)
-    ]
+    existing_hits = []
+    for raw in existing.get("hits") or []:
+        if not isinstance(raw, dict):
+            continue
+        hit = copy.deepcopy(raw)
+        hit["decisive"] = False
+        hit["evidenceRole"] = "untrusted_context"
+        hit["registryCorroborated"] = False
+        hit["localizationConfirmed"] = False
+        existing_hits.append(hit)
     hits = _deduplicate([*registry_hits, *generic_hits, *existing_hits])
     detected = bool(hits)
     top_pool = registry_hits or hits
@@ -167,13 +183,13 @@ def merge(analysis: dict[str, Any], precheck: dict[str, Any] | None) -> dict[str
     registry_available = precheck.get("status") == "ok" and not engine_version.startswith("local-")
     yolo_available = bool(detector.get("available")) if isinstance(detector, dict) else False
     confirmed_hits = [hit for hit in registry_hits if hit.get("localizationConfirmed") is True]
-    available = registry_available or yolo_available or bool(existing.get("supported"))
+    available = registry_available or yolo_available
 
     if generic_hits and confirmed_hits:
         yolo_note = (
             f"YOLO11x 检测到 {len(generic_hits)} 处平台待确认的可见水印，"
             f"并对 {len(confirmed_hits)} 处已知平台标记完成区域复核；"
-            "通用水印仅作定位线索，已确认的平台标记按来源证据规则参与融合。"
+            "通用水印与平台标记均仅作视觉定位和归属辅助，不单独决定真伪。"
         )
     elif generic_hits:
         yolo_note = (
@@ -191,7 +207,7 @@ def merge(analysis: dict[str, Any], precheck: dict[str, Any] | None) -> dict[str
         providers = "、".join(dict.fromkeys(str(hit.get("label") or hit.get("provider")) for hit in registry_hits))
         registry_note = (
             f"remove-ai-watermarks 识别到 {len(registry_hits)} 处已知 AI 平台标记（{providers}），"
-            "该信号按来源证据规则参与融合。"
+            "该信号仅作视觉归属辅助，不单独决定真伪。"
         )
     elif registry_available:
         registry_note = "remove-ai-watermarks 已完成已知 AI 平台标记扫描，本次未命中。"
@@ -203,13 +219,17 @@ def merge(analysis: dict[str, Any], precheck: dict[str, Any] | None) -> dict[str
     merged["visibleWatermark"] = {
         **existing,
         "enabled": True,
-        "supported": bool(existing.get("supported")) or available,
+        "supported": available,
         "detected": detected,
         "provider": top.get("provider") if top else None,
         "confidence": confidence,
+        "coordinateSpace": str(precheck.get("coordinateSpace") or ""),
+        "displaySize": dict(precheck.get("displaySize") or {}) if isinstance(precheck.get("displaySize"), dict) else {},
+        "registrySupported": registry_available,
+        "positiveEvidenceSupported": registry_available,
         "evidenceLevel": (
             "unavailable"
-            if not available and not existing.get("supported")
+            if not available
             else "strong" if registry_hits and confidence >= 0.8 else "medium" if detected else "none"
         ),
         "hits": hits,

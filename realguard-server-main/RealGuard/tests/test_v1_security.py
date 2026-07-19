@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from pathlib import Path
+import json
 import sys
 import threading
 import time
@@ -16,6 +17,322 @@ from imagedetection import creat_app  # noqa: E402
 from imagedetection.views import api, detection, login, profile, utils  # noqa: E402
 
 ACCOUNT_UUID = "11111111-1111-4111-8111-111111111111"
+
+
+def test_developer_result_is_hidden_until_billing_settles(monkeypatch):
+    record = {
+        "itemid": 42,
+        "filename": "aabbccddeeff-developer-job_0123456789abcdefabcd.png",
+    }
+    monkeypatch.setattr(
+        utils,
+        "excute_sql",
+        lambda *_args, **_kwargs: [{"task_status": "success", "billing_status": "reserved"}],
+    )
+    assert utils.detection_record_is_publishable(record) is False
+
+    monkeypatch.setattr(
+        utils,
+        "excute_sql",
+        lambda *_args, **_kwargs: [{"task_status": "success", "billing_status": "settled"}],
+    )
+    assert utils.detection_record_is_publishable(record) is True
+
+
+def test_developer_result_visibility_fails_closed_when_billing_lookup_fails(monkeypatch):
+    monkeypatch.setattr(utils, "excute_sql", lambda *_args, **_kwargs: None)
+    assert utils.detection_record_is_publishable({
+        "itemid": 42,
+        "filename": "aabbccddeeff-developer-job_0123456789abcdefabcd.jpg",
+    }) is False
+
+
+def test_explicit_developer_task_id_does_not_depend_on_stored_filename(monkeypatch):
+    captured = []
+
+    def fake_sql(_sql, params=None, **_kwargs):
+        captured.append(params)
+        return [{"task_status": "success", "billing_status": "reserved"}]
+
+    monkeypatch.setattr(utils, "excute_sql", fake_sql)
+    assert utils.detection_record_is_publishable({
+        "itemid": 43,
+        "filename": "opaque-storage-name.png",
+        "developer_task_id": "job_0123456789abcdefabcd",
+    }) is False
+    assert captured[0][0] == "job_0123456789abcdefabcd"
+
+
+def test_web_result_is_hidden_until_its_durable_task_succeeds(monkeypatch):
+    record = {
+        "itemid": 44,
+        "filename": "opaque-storage-name.png",
+        "developer_task_id": "job_0123456789abcdefabcd",
+    }
+    responses = [[], [{"status": "running"}]]
+    monkeypatch.setattr(utils, "excute_sql", lambda *_args, **_kwargs: responses.pop(0))
+    assert utils.detection_record_is_publishable(record) is False
+
+    responses = [[], [{"status": "success"}]]
+    monkeypatch.setattr(utils, "excute_sql", lambda *_args, **_kwargs: responses.pop(0))
+    assert utils.detection_record_is_publishable(record) is True
+
+
+def test_developer_key_idempotency_derives_stable_scoped_secret(monkeypatch):
+    monkeypatch.setattr(api, "DEVELOPER_IDEMPOTENCY_SECRET", "stable-idempotency-secret")
+
+    first = api._idempotent_developer_api_key(7, "create", "operation-1")
+    monkeypatch.setattr(api, "DEVELOPER_AUTH_SECRET", "rotated-internal-auth-secret")
+    replay = api._idempotent_developer_api_key(7, "create", "operation-1")
+    different_user = api._idempotent_developer_api_key(8, "create", "operation-1")
+    different_operation = api._idempotent_developer_api_key(7, "rotate:2", "operation-1")
+
+    assert first == replay
+    assert first.startswith(api.DEVELOPER_API_KEY_PREFIX)
+    assert first != different_user
+    assert first != different_operation
+
+
+def test_developer_key_idempotency_fails_closed_without_dedicated_secret(monkeypatch):
+    monkeypatch.setattr(api, "DEVELOPER_AUTH_SECRET", "configured-internal-auth-secret")
+    monkeypatch.setattr(api, "DEVELOPER_IDEMPOTENCY_SECRET", "")
+
+    assert api._idempotent_developer_api_key(7, "create", "operation-1") is None
+
+
+def test_guest_capacity_groups_rotating_ipv6_addresses_by_64(monkeypatch):
+    monkeypatch.setenv("REALGUARD_CONSENT_AUDIT_SALT", "private-test-salt")
+    addresses = iter(["2001:db8:1234:5678::1", "2001:db8:1234:5678::abcd", "2001:db8:1234:5679::1"])
+    monkeypatch.setattr(login, "_trusted_client_ip", lambda: next(addresses))
+
+    first = detection._guest_capacity_subject()
+    same_network = detection._guest_capacity_subject()
+    different_network = detection._guest_capacity_subject()
+
+    assert first == same_network
+    assert first != different_network
+
+
+def test_uncalibrated_remote_model_is_forced_to_review_only(monkeypatch):
+    from detector_backend import _apply_remote_model_decision_gate
+    import detector_backend
+
+    monkeypatch.setattr(detector_backend, "REMOTE_INFERENCE_URL", "http://model/predict")
+    payload = {
+        "probability": 0.999,
+        "detector_probability": 0.999,
+        "final_label": "AI生成图像",
+        "confidence": "高",
+    }
+    evidence = {
+        "modelDecision": {
+            "ready": False,
+            "mode": "review_only",
+            "rawModelScore": 0.999,
+        }
+    }
+
+    _apply_remote_model_decision_gate(payload, evidence)
+
+    assert payload["probability"] == 0.5
+    assert payload["detector_probability"] == 0.5
+    assert payload["final_label"] == "需人工复核"
+    assert payload["confidence"] == "低"
+    assert "不能解释为 AI 生成概率" in payload["explanation"]
+
+
+def test_missing_remote_model_decision_contract_fails_closed(monkeypatch):
+    import detector_backend
+
+    monkeypatch.setattr(detector_backend, "REMOTE_INFERENCE_URL", "http://model/predict")
+    payload = {"probability": 0.94, "detector_probability": 0.94}
+    evidence = {"visibleWatermarkPrecheck": {"status": "ok"}}
+
+    detector_backend._apply_remote_model_decision_gate(payload, evidence)
+
+    assert payload["final_label"] == "需人工复核"
+    assert evidence["modelDecision"]["gateReasons"] == ["model_decision_contract_missing"]
+
+
+def test_remote_model_contract_requires_runtime_identity_and_expiry():
+    import detector_backend
+
+    decision = {
+        "ready": True,
+        "mode": "calibrated_verdict",
+        "calibrationId": "heldout-2026-07",
+        "datasetSha256": "a" * 64,
+        "manifestSha256": "b" * 64,
+        "modelSha256": "c" * 64,
+        "preprocessingSha256": "d" * 64,
+        "runtimeContractSha256": "",
+        "evaluationCodeRevision": "eval-commit",
+        "expiresAt": "2099-12-31T23:59:59Z",
+        "realSamples": 800,
+        "fakeSamples": 800,
+        "observedFpr": 0.02,
+        "observedFnr": 0.05,
+        "aiThreshold": 0.7,
+        "gateReasons": [],
+    }
+    payload = {"probability": 0.98, "detector_probability": 0.98, "final_label": "AI生成图像"}
+    evidence = {"modelDecision": decision}
+
+    detector_backend._apply_remote_model_decision_gate(payload, evidence)
+
+    assert payload["final_label"] == "需人工复核"
+    assert payload["probability"] == 0.5
+    assert "model_decision_contract_invalid" in evidence["modelDecision"]["gateReasons"]
+
+
+def test_readiness_includes_detector_cuda_and_shared_queue_state(client, monkeypatch, tmp_path):
+    heartbeat = tmp_path / "worker.heartbeat"
+    heartbeat.write_text(json.dumps({
+        "claimHealthy": True,
+        "maintenanceHealthy": True,
+        "lastClaimCheckAt": time.time(),
+        "activeTasks": 0,
+        "capacity": 2,
+    }), encoding="ascii")
+    monkeypatch.setattr(api, "DEVELOPER_WORKER_HEARTBEAT", heartbeat)
+    monkeypatch.setattr(
+        api,
+        "excute_sql",
+        lambda sql, *_args, **_kwargs: (
+            [{"queued": 3, "running": 0, "pending": 3}]
+            if "AS queued" in sql else [{"ok": 1}]
+        ),
+    )
+    monkeypatch.setattr(api, "excute_detection_sql", lambda *_args, **_kwargs: [{"ok": 1}])
+
+    class DetectorResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "capabilityReady": True,
+                "tokenReady": True,
+                "activeProvider": "CUDAExecutionProvider",
+                "cudaDeviceId": 0,
+            }
+
+    class DetectorSession:
+        trust_env = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        @staticmethod
+        def get(*_args, **_kwargs):
+            return DetectorResponse()
+
+    monkeypatch.setattr(api.requests, "Session", DetectorSession)
+
+    response = client.get("/api/ready")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["queuePending"] == 3
+    assert payload["checks"]["detectorModel"] is True
+    assert payload["detector"]["provider"] == "CUDAExecutionProvider"
+
+
+def test_readiness_stays_ready_when_worker_is_at_capacity(client, monkeypatch, tmp_path):
+    heartbeat = tmp_path / "worker.heartbeat"
+    heartbeat.write_text(json.dumps({
+        "claimHealthy": True,
+        "maintenanceHealthy": True,
+        "lastClaimCheckAt": time.time() - 600,
+        "activeTasks": 2,
+        "capacity": 2,
+    }), encoding="ascii")
+    monkeypatch.setattr(api, "DEVELOPER_WORKER_HEARTBEAT", heartbeat)
+    monkeypatch.setattr(
+        api,
+        "excute_sql",
+        lambda sql, *_args, **_kwargs: (
+            [{"queued": 4, "running": 2, "pending": 6, "oldest_age_seconds": 90}]
+            if "AS queued" in sql else [{"ok": 1}]
+        ),
+    )
+    monkeypatch.setattr(api, "excute_detection_sql", lambda *_args, **_kwargs: [{"ok": 1}])
+
+    class DetectorResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"capabilityReady": True, "tokenReady": True}
+
+    class DetectorSession:
+        trust_env = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        @staticmethod
+        def get(*_args, **_kwargs):
+            return DetectorResponse()
+
+    monkeypatch.setattr(api.requests, "Session", DetectorSession)
+
+    response = client.get("/api/ready")
+
+    assert response.status_code == 200
+    assert response.get_json()["queueQueued"] == 4
+    assert response.get_json()["queueRunning"] == 2
+
+
+def test_readiness_fails_when_worker_claim_path_is_unhealthy(client, monkeypatch, tmp_path):
+    heartbeat = tmp_path / "worker.heartbeat"
+    heartbeat.write_text(json.dumps({
+        "claimHealthy": False,
+        "maintenanceHealthy": True,
+        "lastClaimCheckAt": time.time(),
+        "lastError": "claim:developer:OperationalError",
+    }), encoding="ascii")
+    monkeypatch.setattr(api, "DEVELOPER_WORKER_HEARTBEAT", heartbeat)
+    monkeypatch.setattr(
+        api,
+        "excute_sql",
+        lambda sql, *_args, **_kwargs: ([{"pending": 1, "oldest_age_seconds": 5}] if "pending" in sql else [{"ok": 1}]),
+    )
+    monkeypatch.setattr(api, "excute_detection_sql", lambda *_args, **_kwargs: [{"ok": 1}])
+
+    class DetectorResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"capabilityReady": True, "tokenReady": True}
+
+    class DetectorSession:
+        trust_env = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        @staticmethod
+        def get(*_args, **_kwargs):
+            return DetectorResponse()
+
+    monkeypatch.setattr(api.requests, "Session", DetectorSession)
+
+    response = client.get("/api/ready")
+
+    assert response.status_code == 503
+    assert response.get_json()["checks"]["developerWorker"] is False
+    assert response.get_json()["worker"]["lastError"].startswith("claim:")
 
 
 def test_sms_schema_initialization_is_serialized_across_threads(monkeypatch):
@@ -421,6 +738,8 @@ def test_image_result_recovers_generic_watermark_from_runtime_precheck(client, m
                 "remoteEvidence": {
                     "visibleWatermarkPrecheck": {
                         "status": "ok",
+                        "coordinateSpace": "display_normalized_v1",
+                        "displaySize": {"width": 2848, "height": 1600},
                         "elapsedMs": 1608,
                         "genericVisibleWatermark": {
                             "available": True,
@@ -459,6 +778,8 @@ def test_image_result_recovers_generic_watermark_from_runtime_precheck(client, m
 def test_public_swarm_job_recovers_generic_watermark_from_primary_precheck():
     precheck = {
         "status": "ok",
+        "coordinateSpace": "display_normalized_v1",
+        "displaySize": {"width": 2848, "height": 1600},
         "elapsedMs": 1608,
         "genericVisibleWatermark": {
             "available": True,
@@ -1181,6 +1502,40 @@ def test_current_versioned_user_session_remains_valid(client, monkeypatch):
 
     assert response.status_code == 200
     assert response.get_json()["authenticated"] is True
+
+
+def test_user_session_has_absolute_expiry_even_with_sliding_cookie(client):
+    with client.session_transaction() as sess:
+        sess["user_info"] = {
+            "Userid": 7,
+            "account_uuid": ACCOUNT_UUID,
+            "username": "tester",
+            "phone": "13800000007",
+            "openid": "openid-7",
+            "session_version": 3,
+            "auth_issued_at": int(time.time()) - login.SESSION_ABSOLUTE_MAX_AGE - 1,
+        }
+
+    response = client.get("/api/me")
+
+    assert response.status_code == 200
+    assert response.get_json()["authenticated"] is False
+    with client.session_transaction() as sess:
+        assert "user_info" not in sess
+
+
+def test_legacy_logout_rejects_get_and_accepts_post(client, monkeypatch):
+    monkeypatch.setattr(login, "validate_current_user_session", lambda **kwargs: True)
+    with client.session_transaction() as sess:
+        sess["user_info"] = {"Userid": 7}
+
+    denied = client.get("/logout")
+    response = client.post("/logout")
+
+    assert denied.status_code == 405
+    assert response.status_code == 302
+    with client.session_transaction() as sess:
+        assert "user_info" not in sess
 
 
 def test_valid_versioned_session_is_upgraded_with_immutable_uuid(client, monkeypatch):

@@ -117,7 +117,8 @@ jianzhen-v2-backend.service -> FastAPI, 127.0.0.1:8848
 ├── scripts/
 │   ├── deploy_v1.sh            # 账户与检测服务发布（沿用旧文件名）
 │   ├── deploy_v2.sh            # 统一 Agent 与证据服务发布（沿用旧文件名）
-│   ├── deploy_converge.sh      # 按需发布两个内部服务组
+│   ├── deploy_detection_service.sh # 66 GPU、双水印服务与公网隧道配置原子发布
+│   ├── deploy_converge.sh      # 按需发布 V1、V2 与 GPU 三个服务组
 │   └── check_deploy_status.sh  # 线上状态检查
 └── skills/
     ├── realguard-forensics/    # 内部取证 skill 资料
@@ -131,14 +132,14 @@ jianzhen-v2-backend.service -> FastAPI, 127.0.0.1:8848
 - Let's Encrypt 证书覆盖 `rrreal.cn` 与 `www.rrreal.cn`，由 `certbot.timer` 自动续期。
 - 首页 UI 已重做为“慧鉴AI 内容鉴伪智能体”，图像、视频、文档、取证和报告都在同一任务流中完成。
 - 对外产品名统一为“慧鉴AI”，旧服务名仅作为部署兼容标识保留。
-- 生产检测不再生成随机或模拟结论：模型不可用时返回明确错误，不写历史、不生成报告。
+- 生产检测不再生成随机或模拟结论：模型不可用时返回明确错误；主模型未通过独立校准门禁时返回“需人工复核”，不把原始 softmax 当成真假概率。
 - 首页不再展示“管理入口”按钮，普通用户入口只保留任务、历史和报告。
 - 侵权检索相关页面、接口和公开文档已移除或由 Nginx 拦截。
 - 公开 `developer/API.md` 和 public skill 文件已从前端静态目录删除。
 - 历史列表、详情、媒体、报告、工件更新和删除均执行服务端归属校验；前端切换账号时会中止旧请求并立即清空状态。
-- 账户归属以稳定 `Userid` 为主；只有旧记录的 `Userid IS NULL` 时才允许手机号回退，再只有 `Userid`、手机号都为空时才允许 openid 回退。
+- 正式账户归属统一使用不可变 `account_uuid`；正常请求不再按手机号、openid 或不同数据库的自增 ID 回退匹配。
 - 私有历史、媒体和报告响应带 `Cache-Control: private, no-store`，防止浏览器或代理跨账号复用。
-- 仍有一批旧图像记录只有 openid、没有 `Userid`/手机号，不能安全自动归属。需要确认映射关系后再手工绑定。
+- 仍有一批旧图像记录缺少 `account_uuid`，不能安全自动归属。需要确认映射关系后再手工绑定或按留存策略归档。
 
 ## 品牌与界面规范
 
@@ -146,7 +147,7 @@ jianzhen-v2-backend.service -> FastAPI, 127.0.0.1:8848
 - 品牌形象：“小鉴”，一个结合取证镜头和印章语言的可爱助手。它用于欢迎、进度和空状态，不遮挡证据图片或检测结论。
 - 主色：墨青 `#173140`、青玉 `#147D7C`、证据蓝 `#2B6FA8`；风险色使用朱砂 `#DC654F`，提醒色使用暖黄 `#B7791F`，页面底色为冷白青 `#EEF4F5`。
 - 视觉原则：工作台优先、证据优先、少装饰；圆角不超过 `8px`，交互目标至少 `44px`，不要使用大面积渐变、悬浮装饰球或卡片套卡片。
-- 结论语言：只有真实模型调用成功且返回明确判定时才展示概率。证据不足时使用“需人工复核”，元数据缺失不能单独作为伪造证据。
+- 结论语言：只有通过独立签名校准门禁的模型，或严格验证的来源凭证/平台水印，才能展示自动真假结论与概率。普通模型调用成功但未获决策授权时仍显示“需人工复核”；元数据缺失不能单独作为伪造证据。
 - 统一前端形象资源：`v2-agent/frontend/public/brand/huijian-mascot.webp`。
 
 ## 哪些东西在 GitHub 里
@@ -164,10 +165,26 @@ GitHub 仓库包含：
 关键依赖文件：
 
 - `realguard-server-main/RealGuard/requirements.txt`
+- `realguard-server-main/RealGuard/requirements.lock`（生产 Linux 精确版本快照）
 - `realguard-server-main/frontend/package-lock.json`
 - `v2-agent/backend/pyproject.toml`
 - `v2-agent/backend/uv.lock`
 - `v2-agent/frontend/package-lock.json`
+- `services/realguard-detection/runtime.lock`
+- `services/watermark-precheck/runtime.lock`
+- `services/yolo-watermark/runtime.lock`
+
+主模型自动结论还要求独立评测环境签发
+`cn.huijian.model-calibration-v2` Ed25519 校准清单。生产服务器只保存公钥，
+私钥、校准数据集和原始评测材料不进入仓库或模型服务器。
+同一公钥必须以只读、非组/全局可写文件同时安装到 66 模型服务器和公网 Web
+服务器的 `REALGUARD_V2_CALIBRATION_PUBLIC_KEY_FILE`；任一端缺失或验签失败时，
+结果会安全降级为 `review_only`。
+GPU 与 Web 的 `/etc/realguard/model-inference.env` 还必须配置同一个独立的
+`REALGUARD_MODEL_RESPONSE_HMAC_KEY`（64 位小写十六进制）及活动 key ID。
+部署器会比较两端密钥指纹和 key ID；缺失或不一致时拒绝发布，密钥本身不会
+随 HTTP 请求发送。Web 可通过 `REALGUARD_MODEL_RESPONSE_HMAC_KEYS_JSON`
+保留历史验证密钥，实现不中断的签名密钥轮换。
 
 ## 哪些东西不在 GitHub 里
 
@@ -394,11 +411,11 @@ DEPLOY_SSH_KEY=/path/to/private_key ./scripts/deploy_v1.sh
 - 前端 `dist/` 同步到 `/var/www/realguard-frontend/`
 - 安装生产 Nginx 配置并执行 `nginx -t`
 - 重启 `realguard-detector-backend.service`
-- 安装并重启 `realguard-developer-worker.service`，从持久 spool 恢复开发者检测任务
+- 安装并重启 `realguard-developer-worker.service`，从持久 spool 恢复网页与开发者检测任务，并为两个通道各保留一个执行槽位
 - 重启 `realguard-backend.service`
 - 在迁移前创建并校验完整备份
 - 执行 `identity-db-upgrade` 和 `developer-db-upgrade`，升级不可变账户归属、API Key、用量和计费表
-- 将被服务重启中断的网页任务明确标为失败，不保留永久“处理中”状态
+- 网页快速检测与 Swarm 先写入私有 spool 和数据库队列；重启后复用已落库业务结果或安全收口，不重复生成历史
 - 后端和前端均保留上一版本，全部健康检查通过后才清理回滚副本
 - 写入 `/opt/realguard-server/DEPLOYED_COMMIT`
 - 健康检查
@@ -420,6 +437,14 @@ DEPLOY_SSH_KEY=/path/to/private_key ./scripts/deploy_v2.sh
 - 通过版本目录原子切换后端和前端，健康检查失败时自动恢复上一版本
 - 写入 `/opt/jianzhen-v2/DEPLOYED_COMMIT`
 - 健康检查
+
+### 发布 66 GPU、可见水印与 YOLO 服务
+
+```bash
+DEPLOY_SSH_KEY=/path/to/public_server_key ./scripts/deploy_detection_service.sh
+```
+
+脚本会先上传完整 release，再暂停并排空公网 worker，统一切换主模型、水印、YOLO、依赖锁、隧道 unit 与 systemd 配置，并验证开机自启。发布必须通过 CUDA、签名校准状态契约、完整推理审计、YOLO revision/SHA、真实水印预检、真实主模型预测和双端 commit 可见性；任一失败会恢复上一版本并按原始服务状态恢复公网 worker。两端 15 分钟 watchdog 保留到到期并依据实际服务 commit 自动 no-op，避免发布进程中断或旧事务误回滚新版本。66 使用密码登录时，命令会在 SSH 和 `sudo` 阶段交互询问密码。
 
 ### 完整发布顺序
 
@@ -634,7 +659,10 @@ MySQL 检测历史主要在：
 新模型返回的记录通过条件更新绑定；更新为 0 行时必须再次查询确认 UUID 完全一致，
 避免读取与绑定之间的并发串号。
 
-证据服务的 SQLite 历史使用 `developer_user_id` 作为强制租户字段。列表、详情、工件、报告、分享和删除都必须先比较当前会话的 `Userid`；`developer_user_id IS NULL` 的旧访客记录不会被任意登录用户自动认领，只有管理员可修复归属。
+证据服务的 SQLite 历史同时保存审计用 `developer_user_id` 和强制租户字段
+`developer_account_uuid`。列表、详情、工件、报告、分享和删除都必须先比较当前
+会话的不可变 `account_uuid`；缺少该字段的旧访客记录不会被任意登录用户自动认领，
+只有管理员可核实并修复归属。
 
 注意：迁移后仍没有 `owner_account_uuid` 的旧记录默认对普通账号不可见。不能按相似
 手机号或 openid 自动展示，必须由管理员核实归属后再修复。
@@ -666,7 +694,8 @@ WHERE owner_account_uuid IS NULL OR owner_account_uuid = '';
 ## 已知问题和待办
 
 - 生产库当前有 699 条旧图像记录尚未绑定 `account_uuid`。它们默认对用户不可见，不能按手机号或 openid 自动猜测归属，需人工核实映射或按留存策略归档。
-- 网页端快速检测和 Swarm 复核仍由单个 Web 进程执行；重启时会明确失败，但不会像开发者 API 任务一样自动续跑。完全恢复需要将网页任务也迁移到持久任务队列。
+- 当前 66 主模型在少量已知实拍样本上存在系统性高分误判，自动真假结论已由 `model_decision_policy.py` 关闭。必须完成独立校准集的标签/预处理/FP32-INT8 对齐、FPR/FNR 和阈值验收后，才能配置校准记录并开放自动判定。
+- 网页端快速检测、Swarm 与开发者 API 已由独立持久 worker 执行。当前单机总执行并发固定为 2；扩展到多 worker 或多 GPU 前必须重新验证通道公平、租约恢复和容量报告。
 - V1 图像 PDF 已有首次固化签名清单；视频报告和 V2 深度取证报告还没有统一到同一套证据签名、密钥轮换和验签策略，不能宣称达到司法取证级。
 - Umami 监控后台不在 `deploy_v1.sh` / `deploy_v2.sh` 自动发布范围内。
 - 自动备份已提供，但异地 `rclone`、KMS/HSM 或 WORM 存储以及季度恢复演练仍需由运维配置并留档。

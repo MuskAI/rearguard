@@ -60,6 +60,7 @@ interface VerdictView {
   riskLabel: string;
   tone: "real" | "warn" | "fake";
   confidence: string;
+  reviewOnly: boolean;
 }
 
 function clamp01(value: number) {
@@ -74,6 +75,18 @@ function riskTone(risk: number): VerdictView["tone"] {
 
 function verdictFor(outcome: AgentOutcome): VerdictView {
   if (outcome.kind === "image") {
+    const reviewOnly = outcome.result.decisionStatus !== "verdict" || outcome.result.reviewRequired === true;
+    if (reviewOnly) {
+      return {
+        label: "需人工复核",
+        description: outcome.result.explanation || "自动分析已完成，但当前证据不足以发布真假结论。",
+        risk: 0,
+        riskLabel: "自动风险分数",
+        tone: "warn",
+        confidence: "不适用",
+        reviewOnly: true,
+      };
+    }
     const raw = Number(outcome.result.probability || 0);
     const localizedWatermark = hasDecisiveAiWatermark(outcome.result.visibleWatermark);
     const risk = Math.max(clamp01(raw > 1 ? raw / 100 : raw), localizedWatermark ? 0.95 : 0);
@@ -85,9 +98,21 @@ function verdictFor(outcome: AgentOutcome): VerdictView {
       riskLabel: outcome.result.swarm?.enabled ? "综合异常风险" : "AI 生成风险",
       tone,
       confidence: outcome.result.confidence || "未标注",
+      reviewOnly: false,
     };
   }
   if (outcome.kind === "video") {
+    if (outcome.result.decisionStatus !== "verdict" || outcome.result.reviewRequired === true) {
+      return {
+        label: "需人工复核",
+        description: outcome.result.explanation || "视频分析已完成，但当前模型尚未获得自动判定授权。",
+        risk: 0,
+        riskLabel: "自动风险分数",
+        tone: "warn",
+        confidence: "不适用",
+        reviewOnly: true,
+      };
+    }
     const risk = clamp01(Number(outcome.result.fake_percentage || 0) / 100);
     const tone = outcome.result.final_label.includes("真实") ? "real" : riskTone(risk);
     return {
@@ -97,6 +122,18 @@ function verdictFor(outcome: AgentOutcome): VerdictView {
       riskLabel: "合成风险",
       tone,
       confidence: outcome.result.confidence || "未标注",
+      reviewOnly: false,
+    };
+  }
+  if (outcome.result.decisionStatus !== "verdict" || outcome.result.reviewRequired === true) {
+    return {
+      label: "需人工复核",
+      description: outcome.result.explanation || "自动分析已完成，但当前证据不足以发布真假结论。",
+      risk: 0,
+      riskLabel: "自动风险分数",
+      tone: "warn",
+      confidence: "不适用",
+      reviewOnly: true,
     };
   }
   const localizedWatermark = hasDecisiveAiWatermark(outcome.result.visibleWatermark);
@@ -139,6 +176,7 @@ function verdictFor(outcome: AgentOutcome): VerdictView {
       : outcome.result.source === "provenance"
         ? "来源证据直接命中"
         : "证据有限",
+    reviewOnly: false,
   };
 }
 
@@ -314,13 +352,13 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
     {
       ...(suppliedRegistry || {}),
       id: "known_ai_registry",
-      label: "AI 平台水印识别",
+      label: "AI 平台标记匹配",
       available: Boolean(suppliedRegistry?.available ?? report.supported),
       detected: hasPlatformHit,
       count: platformHits.length,
       model: suppliedRegistry?.model || "wiltodelta/remove-ai-watermarks",
       version: suppliedRegistry?.version || platformHits[0]?.modelRevision,
-      role: "provenance",
+      role: "attribution",
     },
     {
       ...(suppliedYolo || {}),
@@ -341,7 +379,7 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
         ? "该定位证据来自完全相同文件（SHA-256 一致）的最近一次成功扫描；系统会按当前水印规则重新计算结论。"
         : "该定位证据来自同一账号对完全相同文件（SHA-256 一致）的最近一次成功扫描；系统会按当前水印规则重新计算结论。"
       : hasPlatformHit
-        ? `已确认 ${platformHits.length} 处 AI 平台水印${confirmedHits.length > 0 ? `，其中 ${confirmedHits.length} 处通过 YOLO 区域复核` : ""}${genericHits.length > 0 ? `；另有 ${genericHits.length} 处可见水印的平台归属待确认` : ""}。`
+        ? `匹配到 ${platformHits.length} 处 AI 平台标记${confirmedHits.length > 0 ? `，其中 ${confirmedHits.length} 处通过 YOLO 区域复核` : ""}${genericHits.length > 0 ? `；另有 ${genericHits.length} 处可见水印的平台归属待确认` : ""}。可见标记不单独决定真伪。`
         : detected
           ? "已定位到可见水印但尚不能确认平台归属；定位框仅作为上下文线索，不会单独改变鉴伪结论。"
           : "平台注册表与 YOLO 可见水印检测均未发现水印。";
@@ -389,7 +427,7 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
                       <strong>{hit.label || (platformProviders.has(hit.provider) ? "已知 AI 平台水印" : "可见水印（平台待确认）")}</strong>
                       <small>
                         {platformProviders.has(hit.provider)
-                          ? `remove-ai-watermarks 平台匹配${hit.localizationConfirmed ? " · YOLO 区域复核" : hit.decisive ? " · 来源强证据" : " · 待交叉验证"}`
+                          ? `remove-ai-watermarks 平台匹配${hit.localizationConfirmed ? " · YOLO 区域复核" : " · 视觉归属线索"}`
                           : "YOLO 可见水印定位 · 仅作上下文线索"}
                       </small>
                       <i><em style={{ width: `${clamp01(hit.confidence) * 100}%` }} /></i>
@@ -624,7 +662,7 @@ export default function AgentResult(props: Props) {
       : props.outcome.result.dimensions.map((item) => `${item.label}：${item.result}`);
 
   return (
-    <article className={`agent-result tone-${verdict.tone}`} aria-labelledby="detection-result-title">
+    <article className={`agent-result tone-${verdict.tone}${verdict.reviewOnly ? " is-review-only" : ""}`} aria-labelledby="detection-result-title">
       <header className="result-hero">
         <div className="result-preview">
           {props.outcome.kind === "video" && preview ? (
@@ -640,15 +678,23 @@ export default function AgentResult(props: Props) {
           <h2 id="detection-result-title">{verdict.label}</h2>
           <p>{verdict.description}</p>
           <div className="verdict-meta">
-            <span><Gauge size={15} /> {verdict.riskLabel} <strong>{Math.round(verdict.risk * 100)}%</strong></span>
-            <span><BadgeCheck size={15} /> 置信说明 <strong>{verdict.confidence}</strong></span>
+            {verdict.reviewOnly ? (
+              <span><FileSearch size={15} /> 自动结论 <strong>未发布</strong></span>
+            ) : (
+              <>
+                <span><Gauge size={15} /> {verdict.riskLabel} <strong>{Math.round(verdict.risk * 100)}%</strong></span>
+                <span><BadgeCheck size={15} /> 置信说明 <strong>{verdict.confidence}</strong></span>
+              </>
+            )}
           </div>
         </div>
-        <div className="risk-meter" aria-label={`${verdict.riskLabel} ${Math.round(verdict.risk * 100)}%`}>
-          <div className="risk-meter-value">{Math.round(verdict.risk * 100)}<small>%</small></div>
-          <span>{verdict.riskLabel}</span>
-          <div className="risk-meter-track"><i style={{ width: `${Math.round(verdict.risk * 100)}%` }} /></div>
-        </div>
+        {!verdict.reviewOnly && (
+          <div className="risk-meter" aria-label={`${verdict.riskLabel} ${Math.round(verdict.risk * 100)}%`}>
+            <div className="risk-meter-value">{Math.round(verdict.risk * 100)}<small>%</small></div>
+            <span>{verdict.riskLabel}</span>
+            <div className="risk-meter-track"><i style={{ width: `${Math.round(verdict.risk * 100)}%` }} /></div>
+          </div>
+        )}
       </header>
 
       <nav className="result-tabs" aria-label="检测结果视图" role="tablist" onKeyDown={(event) => {
@@ -679,7 +725,7 @@ export default function AgentResult(props: Props) {
               ))}
             </div>
           </section>
-          {props.outcome.kind === "image" && props.outcome.result.swarm?.enabled && (
+          {!verdict.reviewOnly && props.outcome.kind === "image" && props.outcome.result.swarm?.enabled && (
             <section className="result-band consensus-band">
               <div className="section-title"><ScanLine size={18} /><div><h3>多源复核共识</h3><p>{props.outcome.result.swarm.disagreement ? "不同证据源存在分歧，建议人工复核原始文件。" : "有效证据源的判断方向较一致。"}</p></div></div>
               <div className="consensus-line">
@@ -690,7 +736,7 @@ export default function AgentResult(props: Props) {
             </section>
           )}
           <CaptureEvidenceSection report={captureEvidence} />
-          <ProbabilitySection model={probabilityModel} />
+          {!verdict.reviewOnly && <ProbabilitySection model={probabilityModel} />}
           <SynthIDSection report={synthid} />
           <WatermarkSection report={visibleWatermark} preview={preview} />
           <div className="result-actions">
@@ -756,7 +802,7 @@ export default function AgentResult(props: Props) {
             <EvidenceList items={evidenceItems} />
           </section>
           <CaptureEvidenceSection report={captureEvidence} />
-          <ProbabilitySection model={probabilityModel} />
+          {!verdict.reviewOnly && <ProbabilitySection model={probabilityModel} />}
           <SynthIDSection report={synthid} />
           <WatermarkSection report={visibleWatermark} preview={preview} />
           {props.outcome.kind === "image" && props.outcome.result.swarm?.experts && (

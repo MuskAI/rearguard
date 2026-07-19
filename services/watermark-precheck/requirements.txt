@@ -1,3 +1,8 @@
 Flask==3.1.2
 gunicorn==23.0.0
 remove-ai-watermarks==0.15.3
+Pillow==12.3.0
+requests==2.34.2
+c2pa-python==0.36.0
+numpy==2.2.6
+opencv-python-headless==5.0.0.93

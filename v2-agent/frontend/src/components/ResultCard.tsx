@@ -36,7 +36,8 @@ function confidenceLabel(value?: string) {
   return "无";
 }
 
-function sourceLabel(source?: string) {
+function sourceLabel(source?: string, reviewRequired?: boolean) {
+  if (reviewRequired) return "自动分析已完成，等待人工复核";
   if (source === "vlm") return "已完成自动检测";
   if (source === "provenance") return "来源证据直接判定";
   if (source === "mock") return "线索不足，建议复核";
@@ -351,6 +352,7 @@ export default function ResultCard({
   const regions = Array.isArray(result.regions) ? result.regions : [];
   const topDimensions = dimensions.slice(0, 3);
   const provenanceTone = c2paStatus(provenance).tone;
+  const reviewOnly = result.decisionStatus === "review_only" || result.reviewRequired === true;
 
   async function handleDownloadReport() {
     if (reportBusy) return;
@@ -433,7 +435,7 @@ export default function ResultCard({
             <p className="mt-2 max-w-3xl text-sm leading-relaxed text-ink-500">{result.explanation}</p>
           </div>
           <div className="grid shrink-0 grid-cols-3 gap-3 sm:min-w-[360px]">
-            <MetricCell label="置信度" value={pct(result.confidence)} tone={meta.color} />
+            <MetricCell label={reviewOnly ? "结论状态" : "置信度"} value={reviewOnly ? "待复核" : pct(result.confidence)} tone={meta.color} />
             <MetricCell label="类型" value={fileLabel} />
             <MetricCell label="耗时" value={`${result.elapsedMs}ms`} />
           </div>
@@ -443,7 +445,14 @@ export default function ResultCard({
       <div className="grid gap-5 px-4 py-4 sm:px-5 lg:grid-cols-[minmax(220px,320px)_1fr]">
         <aside className="order-2 space-y-3 lg:order-1">
           <div className="rounded-lg border border-ink-700 bg-ink-900 p-3">
-            <ConfidenceRing value={result.confidence} color={meta.color} />
+            {reviewOnly ? (
+              <div className="rounded-lg border border-ink-700 bg-ink-800 px-3 py-4 text-center">
+                <div className="text-sm font-semibold text-ink-950">未发布自动真假结论</div>
+                <div className="mt-1 text-xs leading-relaxed text-ink-500">模型分数仅作为内部诊断，当前报告需要人工复核。</div>
+              </div>
+            ) : (
+              <ConfidenceRing value={result.confidence} color={meta.color} />
+            )}
             <div className="mt-3 space-y-1 text-xs text-ink-500">
               <div className="truncate">
                 <span className="text-ink-950">文件：</span>
@@ -524,8 +533,8 @@ export default function ResultCard({
             {visibleWatermark && (
               <EvidencePill
                 label="可见水印"
-                value={visibleWatermark.detected ? `${visiblePlatformPending ? "平台待确认" : visibleWatermark.provider || "未知"} · ${pct(visibleWatermark.confidence)}` : "未检出"}
-                tone={visibleWatermark.detected ? visiblePlatformPending ? "#9a6700" : "#c43d2f" : "#238f82"}
+                value={!visibleWatermark.supported ? "检测不可用" : visibleWatermark.detected ? `${visiblePlatformPending ? "平台待确认" : visibleWatermark.provider || "未知"} · ${pct(visibleWatermark.confidence)}` : "未检出"}
+                tone={!visibleWatermark.supported ? "#9a6700" : visibleWatermark.detected ? visiblePlatformPending ? "#9a6700" : "#c43d2f" : "#238f82"}
               />
             )}
             {provenancePrecheck && (
@@ -705,7 +714,7 @@ export default function ResultCard({
                   <DetailRow label="报告号">{result.reportId}</DetailRow>
                 </div>
                 <div className="rounded-lg border border-ink-700 bg-ink-800 px-3 py-2">
-                  <DetailRow label="检测状态">{sourceLabel(result.source)}</DetailRow>
+                  <DetailRow label="检测状态">{sourceLabel(result.source, reviewOnly)}</DetailRow>
                   <DetailRow label="复核记录">{result.cacheHit ? "已参考历史检测记录" : "本次新检测"}</DetailRow>
                   <DetailRow label="报告生成">已完成</DetailRow>
                   <DetailRow label="检测用时">{result.elapsedMs}ms</DetailRow>

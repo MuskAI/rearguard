@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from model_decision_contract import validate_inference_audit, validate_model_decision
+
 
 MANIFEST_SCHEMA = "cn.huijian.image-evidence-manifest"
 MANIFEST_VERSION = "1.1"
@@ -300,11 +302,26 @@ def _structured_visible_watermark(model_run: Mapping[str, Any] | None) -> dict[s
         if not isinstance(raw_hit, Mapping):
             continue
         raw_bbox = raw_hit.get("bbox") if isinstance(raw_hit.get("bbox"), Mapping) else {}
+        try:
+            bbox_values = tuple(float(raw_bbox.get(key)) for key in ("x", "y", "w", "h"))
+        except (TypeError, ValueError):
+            continue
+        x, y, width, height = bbox_values
+        if (
+            not all(math.isfinite(value) for value in bbox_values)
+            or not 0.0 <= x <= 1.0
+            or not 0.0 <= y <= 1.0
+            or not 0.0 < width <= 1.0
+            or not 0.0 < height <= 1.0
+            or x + width > 1.0
+            or y + height > 1.0
+        ):
+            continue
         bbox = {
-            "x": _clamp01(raw_bbox.get("x")),
-            "y": _clamp01(raw_bbox.get("y")),
-            "w": _clamp01(raw_bbox.get("w")),
-            "h": _clamp01(raw_bbox.get("h")),
+            "x": round(x, 4),
+            "y": round(y, 4),
+            "w": round(width, 4),
+            "h": round(height, 4),
         }
         hit = {
             "provider": _safe_evidence_text(raw_hit.get("provider"), 120),
@@ -316,19 +333,145 @@ def _structured_visible_watermark(model_run: Mapping[str, Any] | None) -> dict[s
             "model_revision": _safe_evidence_text(raw_hit.get("modelRevision"), 160),
             "evidence_role": _safe_evidence_text(raw_hit.get("evidenceRole"), 80),
             "decisive": bool(raw_hit.get("decisive")),
+            "registry_corroborated": bool(raw_hit.get("registryCorroborated")),
         }
         hits.append(hit)
         if len(hits) >= 24:
             break
+    coordinate_space = _safe_evidence_text(visible.get("coordinateSpace"), 80)
+    display_size = visible.get("displaySize") if isinstance(visible.get("displaySize"), Mapping) else {}
+    try:
+        display_width = int(display_size.get("width") or 0)
+        display_height = int(display_size.get("height") or 0)
+    except (TypeError, ValueError):
+        display_width = display_height = 0
+    coordinate_protocol_valid = (
+        coordinate_space == "display_normalized_v1"
+        and display_width > 0
+        and display_height > 0
+    )
+    positive_evidence_supported = bool(
+        coordinate_protocol_valid
+        and (
+            visible.get("positiveEvidenceSupported") is True
+            or visible.get("registrySupported") is True
+        )
+    )
+    decisive_authorized = False
+    if coordinate_protocol_valid:
+        try:
+            from .watermark_verdict import has_decisive_ai_watermark
+
+            decisive_authorized = has_decisive_ai_watermark(dict(visible))
+        except (ImportError, TypeError, ValueError):
+            decisive_authorized = False
     return {
         "enabled": bool(visible.get("enabled", True)),
-        "supported": bool(visible.get("supported", True)),
+        "supported": bool(visible.get("supported") is True and coordinate_protocol_valid),
+        "positive_evidence_supported": positive_evidence_supported,
+        "registry_supported": bool(visible.get("registrySupported") is True),
+        "generic_visible_supported": bool(visible.get("genericVisibleSupported") is True),
+        "decisive_authorized": decisive_authorized,
         "detected": bool(visible.get("detected")),
+        "coordinate_space": coordinate_space if coordinate_protocol_valid else "unknown",
+        "display_size": dict(display_size) if coordinate_protocol_valid else {},
+        "encoded_size": dict(visible.get("encodedSize") or {}),
+        "source_orientation": max(1, min(8, int(visible.get("sourceOrientation") or 1))),
         "confidence": _clamp01(visible.get("confidence")),
         "provider": _safe_evidence_text(visible.get("provider") or "server_watermark_detector", 120),
         "evidence_level": _safe_evidence_text(visible.get("evidenceLevel"), 80),
         "hits": hits,
         "note": _safe_evidence_text(visible.get("note"), 1000),
+    }
+
+
+def _decision_authorization(
+    model_run: Mapping[str, Any] | None,
+    visible_watermark: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    run = model_run if isinstance(model_run, Mapping) else {}
+    meta = run.get("meta") if isinstance(run.get("meta"), Mapping) else {}
+    model_decision = (
+        meta.get("modelDecision")
+        if isinstance(meta.get("modelDecision"), Mapping)
+        else {}
+    )
+    explicit = (
+        meta.get("decisionAuthorization")
+        if isinstance(meta.get("decisionAuthorization"), Mapping)
+        else {}
+    )
+    calibration_id = _safe_evidence_text(model_decision.get("calibrationId"), 160)
+    audit = meta.get("inferenceAudit") if isinstance(meta.get("inferenceAudit"), Mapping) else {}
+    calibrated = bool(
+        validate_model_decision(model_decision)
+        and validate_inference_audit(audit, model_decision)
+    )
+    if explicit:
+        if (
+            explicit.get("status") == "verdict"
+            and explicit.get("authority") == "decisive_provenance"
+            and isinstance(visible_watermark, Mapping)
+            and visible_watermark.get("decisive_authorized") is True
+        ):
+            return {
+                "status": "verdict",
+                "authority": "decisive_provenance",
+                "calibration_id": "",
+            }
+        if (
+            explicit.get("status") == "verdict"
+            and explicit.get("authority") == "calibrated_model"
+            and calibrated
+        ):
+            return {
+                "status": "verdict",
+                "authority": "calibrated_model",
+                "calibration_id": calibration_id,
+                "calibration_manifest_sha256": str(model_decision.get("manifestSha256") or ""),
+                "model_sha256": str(model_decision.get("modelSha256") or ""),
+                "runtime_contract_sha256": str(model_decision.get("runtimeContractSha256") or ""),
+                "inference_implementation_sha256": str(model_decision.get("inferenceImplementationSha256") or ""),
+                "decision_policy_implementation_sha256": str(model_decision.get("decisionPolicyImplementationSha256") or ""),
+                "runtime_lock_sha256": str(model_decision.get("runtimeLockSha256") or ""),
+            }
+        return {
+            "status": "review_only",
+            "authority": "none",
+            "calibration_id": calibration_id,
+            "calibration_manifest_sha256": "",
+            "model_sha256": "",
+            "runtime_contract_sha256": "",
+        }
+    if calibrated:
+        return {
+            "status": "verdict",
+            "authority": "calibrated_model",
+            "calibration_id": calibration_id,
+            "calibration_manifest_sha256": str(model_decision.get("manifestSha256") or ""),
+            "model_sha256": str(model_decision.get("modelSha256") or ""),
+            "runtime_contract_sha256": str(model_decision.get("runtimeContractSha256") or ""),
+            "inference_implementation_sha256": str(model_decision.get("inferenceImplementationSha256") or ""),
+            "decision_policy_implementation_sha256": str(model_decision.get("decisionPolicyImplementationSha256") or ""),
+            "runtime_lock_sha256": str(model_decision.get("runtimeLockSha256") or ""),
+        }
+    decisive_provenance = bool(
+        isinstance(visible_watermark, Mapping)
+        and visible_watermark.get("decisive_authorized") is True
+    )
+    if decisive_provenance:
+        return {
+            "status": "verdict",
+            "authority": "decisive_provenance",
+            "calibration_id": "",
+        }
+    return {
+        "status": "review_only",
+        "authority": "none",
+        "calibration_id": calibration_id,
+        "calibration_manifest_sha256": "",
+        "model_sha256": "",
+        "runtime_contract_sha256": "",
     }
 
 
@@ -356,11 +499,43 @@ def _metadata_evidence(metadata: Mapping[str, Any], capture: Mapping[str, Any]) 
     }
 
 
+def _model_inference_audit(model_run: Mapping[str, Any] | None) -> dict[str, Any]:
+    run = model_run if isinstance(model_run, Mapping) else {}
+    meta = run.get("meta") if isinstance(run.get("meta"), Mapping) else {}
+    audit = meta.get("inferenceAudit") if isinstance(meta.get("inferenceAudit"), Mapping) else {}
+    if not audit:
+        return {"available": False}
+    allowed = {
+        key: audit.get(key)
+        for key in (
+            "model",
+            "rawModelScore",
+            "publishedProbability",
+            "finalLabel",
+            "originalSize",
+            "processedSize",
+            "downsample",
+            "chunkCount",
+            "parameters",
+            "runtime",
+            "inputImageSha256",
+            "responseIntegrity",
+        )
+        if audit.get(key) is not None
+    }
+    try:
+        normalized = json.loads(canonical_json(allowed).decode("utf-8"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {"available": False, "invalid": True}
+    return {"available": True, **normalized}
+
+
 def _evidence_signals(visible: Mapping[str, Any] | None) -> list[dict[str, Any]]:
     if not visible:
         return []
     return [{
         "type": "visible_watermark",
+        "supported": bool(visible.get("supported")),
         "detected": bool(visible.get("detected")),
         "confidence": _clamp01(visible.get("confidence")),
         "provider": str(visible.get("provider") or "server_watermark_detector")[:120],
@@ -400,6 +575,8 @@ def build_image_manifest(
     selected_run = load_recorded_model_run(record_id) if model_run is None else model_run
     recorded_metadata = load_recorded_metadata(record_id)
     visible_watermark = _structured_visible_watermark(selected_run)
+    decision = _decision_authorization(selected_run, visible_watermark)
+    model_inference = _model_inference_audit(selected_run)
     capture = _capture_evidence(recorded_metadata)
     probability = _percent(item.get("fake"))
     raw_model_label = _stored_text(
@@ -408,10 +585,37 @@ def build_image_manifest(
         "AI生成图像" if probability >= 50 else "真实图像",
     )
     confidence = _stored_text(item, "clarity", "未记录")
+    if decision["status"] == "verdict" and decision["authority"] == "calibrated_model":
+        try:
+            audit_probability = float(model_inference.get("publishedProbability")) * 100.0
+        except (TypeError, ValueError):
+            audit_probability = float("nan")
+        audit_consistent = bool(
+            model_inference.get("available") is True
+            and model_inference.get("inputImageSha256") == source_sha256
+            and math.isfinite(audit_probability)
+            and abs(audit_probability - probability) <= 0.11
+            and model_inference.get("finalLabel") == raw_model_label
+        )
+        if not audit_consistent:
+            decision = {
+                **decision,
+                "status": "review_only",
+                "authority": "none",
+            }
     conclusion = raw_model_label
-    if 35.0 < probability < 75.0 or confidence in {"低", "较低", "未记录"}:
+    if decision["status"] == "review_only":
+        conclusion = "需人工复核"
+        probability = None
+        confidence = "不适用"
+    elif 35.0 < probability < 75.0 or confidence in {"低", "较低", "未记录"}:
         conclusion = "需人工复核"
     evidence_summary = _stored_text(item, "explantation", "服务端未留存详细证据摘要")
+    if decision["status"] == "review_only":
+        evidence_summary = (
+            "当前记录缺少可验证的已校准模型授权或决定性来源证据，"
+            "原始模型分数不作为自动真假结论。需结合原件来源和人工复核。"
+        )
     evidence_summary = evidence_summary[:_MAX_EVIDENCE_SUMMARY_LENGTH]
 
     return {
@@ -434,6 +638,15 @@ def build_image_manifest(
             "raw_model_label": raw_model_label,
             "risk_score_percent": probability,
             "confidence": confidence,
+            "decision_status": decision["status"],
+            "decision_authority": decision["authority"],
+            "calibration_id": decision["calibration_id"],
+            "calibration_manifest_sha256": decision.get("calibration_manifest_sha256", ""),
+            "model_sha256": decision.get("model_sha256", ""),
+            "runtime_contract_sha256": decision.get("runtime_contract_sha256", ""),
+            "inference_implementation_sha256": decision.get("inference_implementation_sha256", ""),
+            "decision_policy_implementation_sha256": decision.get("decision_policy_implementation_sha256", ""),
+            "runtime_lock_sha256": decision.get("runtime_lock_sha256", ""),
         },
         "evidence_summary": {
             "text": evidence_summary,
@@ -442,6 +655,7 @@ def build_image_manifest(
         },
         "structured_evidence": {
             "visible_watermark": visible_watermark,
+            "model_inference": model_inference,
             "capture_evidence": capture,
             "metadata": _metadata_evidence(recorded_metadata, capture),
             "source": "server_model_run_and_persisted_detection_record",
@@ -749,10 +963,15 @@ def _valid_manifest_shape(manifest: object) -> bool:
     if not isinstance(conclusion, Mapping) or not str(conclusion.get("label") or ""):
         return False
     risk_score = conclusion.get("risk_score_percent")
-    if isinstance(risk_score, bool) or not isinstance(risk_score, (int, float)):
-        return False
-    if not 0 <= risk_score <= 100:
-        return False
+    review_only = conclusion.get("decision_status") == "review_only"
+    if review_only:
+        if risk_score is not None or conclusion.get("confidence") != "不适用":
+            return False
+    else:
+        if isinstance(risk_score, bool) or not isinstance(risk_score, (int, float)):
+            return False
+        if not 0 <= risk_score <= 100:
+            return False
     if not isinstance(summary, Mapping) or summary.get("source") != "persisted_server_record":
         return False
     if not isinstance(summary.get("text"), str) or not isinstance(summary.get("signals"), list):
@@ -769,6 +988,21 @@ def _valid_manifest_shape(manifest: object) -> bool:
             return False
         if not isinstance(structured.get("metadata"), Mapping):
             return False
+        if conclusion.get("decision_status") == "verdict" and conclusion.get("decision_authority") == "calibrated_model":
+            audit = structured.get("model_inference")
+            try:
+                audit_probability = float(audit.get("publishedProbability")) * 100.0
+                score_matches = abs(audit_probability - float(risk_score)) <= 0.11
+            except (AttributeError, TypeError, ValueError):
+                score_matches = False
+            if not (
+                isinstance(audit, Mapping)
+                and audit.get("available") is True
+                and audit.get("inputImageSha256") == source.get("sha256")
+                and audit.get("finalLabel") == conclusion.get("label")
+                and score_matches
+            ):
+                return False
     try:
         _utc_iso(str(manifest.get("generated_at") or ""))
     except EvidenceManifestError:

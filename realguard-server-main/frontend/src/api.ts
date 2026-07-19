@@ -77,7 +77,7 @@ export function logout() {
 export function detectImage(file: File, signal?: AbortSignal) {
   const body = new FormData();
   body.append("image", file);
-  return jsonRequest<{ result: ImageDetectionResult }>("/image_upload/detect", { method: "POST", body, signal });
+  return jsonRequest<{ job: DetectionJob }>("/image_upload/detect_async", { method: "POST", body, signal });
 }
 
 export function startExpertReviewImageDetection(file: File, signal?: AbortSignal) {
@@ -122,7 +122,7 @@ export function downloadVideoReport(itemid: number) {
   triggerDownload(`/video_upload/report?itemid=${encodeURIComponent(String(itemid))}`);
 }
 
-export type HistoryFilterKey = "all" | "guest" | "metadata" | "issues" | "ai" | "real";
+export type HistoryFilterKey = "all" | "guest" | "metadata" | "issues" | "review";
 
 export interface HistoryListResponse {
   records: HistoryRecord[];
@@ -180,8 +180,12 @@ export type CaptureEvidence = {
 export type ImageDetectionResult = {
   itemid: number;
   final_label: string;
-  probability: number;
-  detector_probability?: number;
+  probability: number | null;
+  detector_probability?: number | null;
+  modelDecisionReady?: boolean;
+  reviewRequired?: boolean;
+  decisionStatus?: "verdict" | "review_only";
+  scorePublished?: boolean;
   p_visual?: number | null;
   p_metadata?: number | null;
   confidence: string;
@@ -194,6 +198,17 @@ export type ImageDetectionResult = {
   visual_issues?: string[];
   all_metadata?: Record<string, unknown>;
   capture_evidence?: CaptureEvidence;
+  evidenceCompleteness?: boolean;
+  evidenceWarnings?: string[];
+  visibleWatermark?: {
+    supported: boolean;
+    detected: boolean;
+    provider?: string | null;
+    confidence?: number;
+    evidenceLevel?: string;
+    note?: string;
+    hits?: Array<{ label?: string; confidence?: number }>;
+  };
   llm_used?: boolean;
   feedback?: 1 | -1 | null;
   swarm?: ExpertReviewResult;
@@ -245,11 +260,13 @@ export type VideoDetectionResult = {
   itemid: number;
   filename: string;
   video_url: string;
-  fake_percentage: number;
-  real_percentage: number;
+  fake_percentage: number | null;
+  real_percentage: number | null;
   final_label: string;
   confidence: string;
   explanation: string;
+  decisionStatus?: "verdict" | "review_only";
+  reviewRequired?: boolean;
   frame_count?: number;
   d3_std?: number;
   encoder?: string;

@@ -337,6 +337,7 @@
       return Number.isFinite(number) ? new Intl.NumberFormat('zh-CN').format(number) : String(value ?? '--');
     }
     function formatProbability(value){
+      if(value === null || value === undefined || value === '') return '未发布';
       const number = Number(value);
       if(!Number.isFinite(number)) return String(value ?? '-');
       return `${(number <= 1 ? number * 100 : number).toFixed(1)}%`;
@@ -635,7 +636,9 @@
       activeFilter.innerHTML=ui.filter ? `<strong>${esc(ui.filter.label)}</strong><i class="fa fa-times" aria-hidden="true"></i>` : '<strong>全部检测</strong>';
       $('recent').innerHTML = source.map((item,index) => {
         const model = item.modelRoute?.model?.id || '未记录模型';
-        const evidence = `概率 ${formatProbability(item.probability)} · 置信度 ${item.confidence ?? '-'}`;
+        const evidence = item.decisionStatus === 'verdict'
+          ? `概率 ${formatProbability(item.probability)} · 置信度 ${item.confidence ?? '-'}`
+          : '自动风险分数未发布 · 待人工复核';
         const fake=/AI|生成|fake|伪/i.test(String(item.label || ''));
         return `<button class="recent-row" type="button" data-recent-index="${index}"><strong>#${esc(item.id)}</strong><span>${esc(item.createdAt)} · ${esc(model)}<br>${esc(evidence)}</span><b class="label ${fake?'fake':''}">${esc(item.label || '-')}</b></button>`;
       }).join('') || '<div class="empty">当前筛选下暂无检测记录</div>';
@@ -863,7 +866,7 @@
     $('recent').addEventListener('click',event=>{
       const button=event.target.closest('[data-recent-index]');if(!button) return;
       const item=ui.recentItems[Number(button.dataset.recentIndex)];if(!item) return;
-      openInspector({kicker:'检测流水',title:`记录 #${item.id}`,rows:[['检测时间',item.createdAt || '-'],['检测结论',item.label || '-'],['综合风险',formatProbability(item.probability)],['置信度',item.confidence || '-'],['执行模型',item.modelRoute?.model?.id || '未记录'],['路由状态',item.modelRoute?.status || '-'],['用户反馈',item.feedback ?? '暂无']],action:{href:'/admin#detections',label:'进入检测记录'}});
+      openInspector({kicker:'检测流水',title:`记录 #${item.id}`,rows:[['检测时间',item.createdAt || '-'],['检测结论',item.label || '-'],['综合风险',item.decisionStatus==='verdict'?formatProbability(item.probability):'未发布'],['置信度',item.confidence || '-'],['执行模型',item.modelRoute?.model?.id || '未记录'],['路由状态',item.modelRoute?.status || '-'],['用户反馈',item.feedback ?? '暂无']],action:{href:'/admin#detections',label:'进入检测记录'}});
     });
     $('anomalies').addEventListener('click',event=>{
       const button=event.target.closest('[data-anomaly-index]');if(!button) return;

@@ -19,6 +19,7 @@ ftfy
 regex
 alibabacloud_green20220302
 c2pa-python>=0.6.0
+cryptography>=46,<47
 opencv-python-headless>=4.8.0
 PyWavelets>=1.4.0
 py-ip2region==3.0.4

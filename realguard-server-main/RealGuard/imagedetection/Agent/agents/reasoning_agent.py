@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+import os
 import re
 from openai import OpenAI
 from PIL import Image
@@ -36,7 +37,13 @@ class ReasoningAgent:
         model: str = "qwen-vl-plus",
         use_vision: bool = True
     ):
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
+        timeout = max(1.0, min(45.0, float(os.environ.get("REALGUARD_LLM_TIMEOUT", "20"))))
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=timeout,
+            max_retries=0,
+        )
         self.model = model
         self.use_vision = use_vision
 

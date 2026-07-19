@@ -311,14 +311,20 @@ def build_report_pdf(
     ]
 
     verdict = str(result.get("verdict") or "unknown")
+    review_only = result.get("decisionStatus") != "verdict" or result.get("reviewRequired") is True
     verdict_label = {
         "real": "更倾向真实",
         "suspected_fake": "疑似伪造",
         "highly_suspected_fake": "高度疑似伪造",
     }.get(verdict, "需要人工复核")
     verdict_color = TEAL if verdict == "real" else RED if verdict == "highly_suspected_fake" else AMBER
+    score_label = (
+        "未发布自动风险分数"
+        if review_only
+        else f"综合异常风险 {_percent(result.get('riskScore', result.get('confidence')))}"
+    )
     verdict_table = Table(
-        [[_paragraph(verdict_label, styles["verdict"]), _paragraph(f"综合异常风险 {_percent(result.get('riskScore', result.get('confidence')))}", styles["verdict"])]],
+        [[_paragraph(verdict_label, styles["verdict"]), _paragraph(score_label, styles["verdict"])]],
         colWidths=[82 * mm, 90 * mm],
     )
     verdict_table.setStyle(TableStyle([

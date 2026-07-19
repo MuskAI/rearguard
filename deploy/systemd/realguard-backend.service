@@ -26,6 +26,7 @@ PrivateTmp=true
 ProtectHome=true
 ProtectSystem=full
 ReadWritePaths=/opt/realguard-server/RealGuard /opt/realguard-data /tmp
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

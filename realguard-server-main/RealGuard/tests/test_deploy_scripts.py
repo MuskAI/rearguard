@@ -33,7 +33,7 @@ printf '%s %s\n' "$status" "$calls"
     assert "retrying" not in completed.stderr
 
 
-def test_ssh_transport_failure_is_retried():
+def test_ssh_activation_transport_failure_is_not_retried():
     completed = _run_bash(
         """
 calls=0
@@ -50,8 +50,8 @@ printf '%s %s\n' "$status" "$calls"
     )
 
     assert completed.returncode == 0
-    assert completed.stdout.strip() == "0 2"
-    assert "retrying (1/5)" in completed.stderr
+    assert completed.stdout.strip() == "255 1"
+    assert "retrying" not in completed.stderr
 
 
 def test_nginx_rate_limit_response_is_machine_readable_and_retryable():
@@ -91,3 +91,17 @@ def test_public_report_share_credentials_are_not_written_to_access_log():
         location = body.split("location ~ ^/v2-api/report/[^/]+/public$", 1)[1].split("}", 1)[0]
         assert "access_log off;" in location
         assert "realguard-public-report-headers.conf" in location
+
+
+def test_gpu_deploy_contract_checks_response_signing_key_id():
+    deploy = (ROOT / "scripts" / "deploy_detection_service.sh").read_text(encoding="utf-8")
+    gpu_activate = (
+        ROOT / "scripts" / "remote" / "activate_detection_service.sh"
+    ).read_text(encoding="utf-8")
+    public_activate = (
+        ROOT / "scripts" / "remote" / "activate_public_gpu_deploy.sh"
+    ).read_text(encoding="utf-8")
+
+    assert 'test "$public_response_key_id" = "$gpu_response_key_id"' in deploy
+    assert 'responseIntegrityKeyId") == sys.argv[4]' in gpu_activate
+    assert "REALGUARD_MODEL_RESPONSE_HMAC_KEY_ID" in public_activate

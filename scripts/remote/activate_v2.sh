@@ -92,7 +92,7 @@ sudo systemctl restart jianzhen-v2-backend.service
 
 health_ready=0
 for _ in {1..30}; do
-  if curl -fsS http://127.0.0.1:8848/api/ready >/dev/null; then
+  if curl -fsS --connect-timeout 2 --max-time 12 http://127.0.0.1:8848/api/ready >/dev/null; then
     health_ready=1
     break
   fi

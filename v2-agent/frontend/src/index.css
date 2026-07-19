@@ -1543,6 +1543,10 @@ video {
   border-bottom: 1px solid var(--border);
 }
 
+.agent-result.is-review-only .result-hero {
+  grid-template-columns: 210px minmax(0, 1fr);
+}
+
 .result-preview {
   width: 210px;
   height: 146px;
@@ -3271,6 +3275,10 @@ video {
   .result-hero {
     grid-template-columns: 180px minmax(0, 1fr) 100px;
     gap: 18px;
+  }
+
+  .agent-result.is-review-only .result-hero {
+    grid-template-columns: 180px minmax(0, 1fr);
   }
 
   .result-preview {

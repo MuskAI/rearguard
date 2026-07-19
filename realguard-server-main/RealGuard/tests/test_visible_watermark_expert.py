@@ -24,6 +24,8 @@ def test_visible_watermark_expert_localizes_without_ai_score(monkeypatch):
         assert timeout == 12.0
         return _Response({
             "status": "ok",
+            "coordinateSpace": "display_normalized_v1",
+            "displaySize": {"width": 1024, "height": 768},
             "engineVersion": "0.15.3",
             "elapsedMs": 164,
             "genericVisibleWatermark": {
@@ -75,7 +77,8 @@ def test_visible_watermark_expert_localizes_without_ai_score(monkeypatch):
         "remove_ai_watermarks_registry",
         "yolo11x_watermark_detection",
     }
-    assert result["visibleWatermark"]["hits"][0]["decisive"] is True
+    assert result["visibleWatermark"]["hits"][0]["decisive"] is False
+    assert result["visibleWatermark"]["hits"][0]["evidenceRole"] == "visual_attribution"
     assert result["visibleWatermark"]["hits"][0]["localizationConfirmed"] is True
     assert result["visibleWatermark"]["detector"]["engines"][0]["model"] == "wiltodelta/remove-ai-watermarks"
     assert result["visibleWatermark"]["detector"]["engines"][0]["version"] == "0.15.3"
@@ -90,7 +93,14 @@ def test_visible_watermark_expert_reports_clean_scan(monkeypatch):
     monkeypatch.setattr(
         expert.requests,
         "post",
-        lambda *_args, **_kwargs: _Response({"status": "ok", "elapsedMs": 88, "detections": []}),
+        lambda *_args, **_kwargs: _Response({
+            "status": "ok",
+            "coordinateSpace": "display_normalized_v1",
+            "displaySize": {"width": 800, "height": 600},
+            "elapsedMs": 88,
+            "detections": [],
+            "genericVisibleWatermark": {"available": True, "detected": False, "count": 0},
+        }),
     )
 
     result = expert.run_visible_watermark_expert(b"image", "clean.jpg", "image/jpeg")
@@ -101,6 +111,31 @@ def test_visible_watermark_expert_reports_clean_scan(monkeypatch):
     assert result["visibleWatermark"]["detected"] is False
 
 
+def test_visible_watermark_expert_rejects_missing_coordinate_protocol(monkeypatch):
+    monkeypatch.setenv("WATERMARK_PRECHECK_TOKEN", "test-token")
+    monkeypatch.setattr(
+        expert.requests,
+        "post",
+        lambda *_args, **_kwargs: _Response({
+            "status": "ok",
+            "genericVisibleWatermark": {"available": True, "detected": True, "count": 1},
+            "visibleHits": [{
+                "provider": "yolo11x_watermark",
+                "confidence": 0.9,
+                "bbox": {"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.4},
+            }],
+        }),
+    )
+
+    result = expert.run_visible_watermark_expert(b"image", "legacy.jpg", "image/jpeg")
+
+    assert result["visibleWatermark"]["supported"] is False
+    assert result["visibleWatermark"]["coordinateSpace"] == "unknown"
+    assert result["visibleWatermark"]["detected"] is False
+    assert result["visibleWatermark"]["hits"] == []
+    assert "不进入完整证据链" in result["visibleWatermark"]["note"]
+
+
 def test_visible_watermark_expert_exposes_generic_yolo_box_without_ai_score(monkeypatch):
     monkeypatch.setenv("WATERMARK_PRECHECK_TOKEN", "test-token")
     monkeypatch.setattr(
@@ -108,6 +143,8 @@ def test_visible_watermark_expert_exposes_generic_yolo_box_without_ai_score(monk
         "post",
         lambda *_args, **_kwargs: _Response({
             "status": "ok",
+            "coordinateSpace": "display_normalized_v1",
+            "displaySize": {"width": 640, "height": 480},
             "engineVersion": "0.15.3",
             "genericVisibleWatermark": {"available": True},
             "visibleHits": [{
@@ -131,6 +168,46 @@ def test_visible_watermark_expert_exposes_generic_yolo_box_without_ai_score(monk
     assert hit["evidenceRole"] == "localization"
     assert result["visibleWatermark"]["evidenceLevel"] == "medium"
     assert "不单独影响 AI 生成结论" in result["visibleWatermark"]["note"]
+
+
+def test_visible_watermark_expert_rejects_out_of_bounds_and_non_finite_boxes(monkeypatch):
+    monkeypatch.setenv("WATERMARK_PRECHECK_TOKEN", "test-token")
+    monkeypatch.setattr(
+        expert.requests,
+        "post",
+        lambda *_args, **_kwargs: _Response({
+            "status": "ok",
+            "coordinateSpace": "display_normalized_v1",
+            "displaySize": {"width": 640, "height": 480},
+            "genericVisibleWatermark": {"available": True},
+            "visibleHits": [
+                {
+                    "provider": "gemini",
+                    "confidence": 0.99,
+                    "decisive": True,
+                    "bbox": {"x": -0.1, "y": 0.2, "w": 0.3, "h": 0.4},
+                },
+                {
+                    "provider": "gemini",
+                    "confidence": 0.99,
+                    "decisive": True,
+                    "bbox": {"x": 0.9, "y": 0.2, "w": 0.3, "h": 0.4},
+                },
+                {
+                    "provider": "gemini",
+                    "confidence": 0.99,
+                    "decisive": True,
+                    "bbox": {"x": float("nan"), "y": 0.2, "w": 0.3, "h": 0.4},
+                },
+            ],
+        }),
+    )
+
+    result = expert.run_visible_watermark_expert(b"image", "invalid.jpg", "image/jpeg")
+
+    assert result["visibleWatermark"]["supported"] is True
+    assert result["visibleWatermark"]["detected"] is False
+    assert result["visibleWatermark"]["hits"] == []
 
 
 def test_visible_watermark_expert_skips_without_token(monkeypatch):

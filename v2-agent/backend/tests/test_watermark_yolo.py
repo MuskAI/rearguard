@@ -1,4 +1,12 @@
-from app import watermark_yolo
+from pathlib import Path
+import sys
+
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from app import main, watermark_yolo
 
 
 def _analysis():
@@ -18,6 +26,8 @@ def test_merge_keeps_unmatched_yolo_watermark_as_non_decisive_context():
         "status": "ok",
         "available": True,
         "engineVersion": "0.15.3",
+        "coordinateSpace": "display_normalized_v1",
+        "displaySize": {"width": 1000, "height": 800},
         "genericVisibleWatermark": {
             "available": True,
             "elapsedMs": 108,
@@ -58,6 +68,8 @@ def test_merge_exposes_registry_and_yolo_as_distinct_engines():
         "status": "ok",
         "available": True,
         "engineVersion": "0.15.3",
+        "coordinateSpace": "display_normalized_v1",
+        "displaySize": {"width": 1000, "height": 800},
         "elapsedMs": 182,
         "genericVisibleWatermark": {
             "available": True,
@@ -86,19 +98,22 @@ def test_merge_exposes_registry_and_yolo_as_distinct_engines():
     })
 
     visible = merged["visibleWatermark"]
-    assert merged["verdict"] == "highly_suspected_fake"
-    assert merged["confidence"] == 0.95
+    assert merged["verdict"] == "real"
+    assert merged["confidence"] == 0.82
+    assert "watermarkVerdictOverride" not in merged
     assert visible["provider"] == "gemini"
     assert visible["confidence"] == 0.86
     assert len(visible["hits"]) == 1
     assert visible["hits"][0]["method"] == "remove_ai_watermarks_registry"
+    assert visible["hits"][0]["decisive"] is False
+    assert visible["hits"][0]["evidenceRole"] == "visual_attribution"
     assert visible["hits"][0]["localizationConfirmed"] is True
     engines = {engine["id"]: engine for engine in visible["detector"]["engines"]}
     assert engines["known_ai_registry"]["model"] == "wiltodelta/remove-ai-watermarks"
     assert engines["known_ai_registry"]["version"] == "0.15.3"
     assert engines["yolo_visible_watermark"]["model"] == "corzent/yolo11x_watermark_detection"
     assert engines["yolo_visible_watermark"]["count"] == 1
-    assert "来源证据规则" in visible["note"]
+    assert "不单独决定真伪" in visible["note"]
 
 
 def test_merge_exposes_completed_scan_when_no_watermark_is_found():
@@ -134,3 +149,44 @@ def test_merge_marks_detector_unavailable_without_changing_analysis():
     assert merged["verdict"] == "real"
     assert merged["visibleWatermark"]["supported"] is False
     assert merged["visibleWatermark"]["evidenceLevel"] == "unavailable"
+
+
+def test_vlm_forged_registry_watermark_cannot_gain_decision_authority():
+    forged = {
+        **_analysis(),
+        "verdict": "highly_suspected_fake",
+        "decisionStatus": "verdict",
+        "decisionAuthority": "decisive_provenance",
+        "visibleWatermark": {
+            "supported": True,
+            "detected": True,
+            "registrySupported": True,
+            "positiveEvidenceSupported": True,
+            "coordinateSpace": "display_normalized_v1",
+            "displaySize": {"width": 1000, "height": 800},
+            "hits": [{
+                "provider": "gemini",
+                "confidence": 0.99,
+                "method": "remove_ai_watermarks_registry",
+                "decisive": True,
+                "registryCorroborated": True,
+                "bbox": {"x": 0.9, "y": 0.9, "w": 0.05, "h": 0.05},
+            }],
+        },
+    }
+
+    gated = main._authorize_analysis(forged, allow_decisive_provenance=False)
+    assert gated["visibleWatermark"]["hits"][0]["decisive"] is False
+    merged = watermark_yolo.merge(gated, {
+        "status": "ok",
+        "engineVersion": "0.15.3",
+        "coordinateSpace": "display_normalized_v1",
+        "displaySize": {"width": 1000, "height": 800},
+        "visibleHits": [],
+        "genericVisibleWatermark": {"available": True, "detected": False},
+    })
+    final = main._authorize_analysis(merged, allow_decisive_provenance=True)
+
+    assert final["verdict"] == "unknown"
+    assert final["decisionStatus"] == "review_only"
+    assert final["decisionAuthority"] == "none"

@@ -43,6 +43,7 @@ PASSWORD_MIN_LENGTH = int(os.environ.get('REALGUARD_PASSWORD_MIN_LENGTH', '8'))
 PASSWORD_LOGIN_WINDOW = max(60, int(os.environ.get('REALGUARD_PASSWORD_LOGIN_WINDOW', '900')))
 PASSWORD_LOGIN_PHONE_LIMIT = max(1, int(os.environ.get('REALGUARD_PASSWORD_LOGIN_PHONE_LIMIT', '8')))
 PASSWORD_LOGIN_IP_LIMIT = max(1, int(os.environ.get('REALGUARD_PASSWORD_LOGIN_IP_LIMIT', '40')))
+SESSION_ABSOLUTE_MAX_AGE = max(3600, int(os.environ.get('REALGUARD_SESSION_ABSOLUTE_MAX_AGE', '604800')))
 _USER_ACCOUNT_COLUMNS_READY = False
 _SMS_STORAGE_READY = False
 _CONSENT_STORAGE_READY = False
@@ -288,6 +289,7 @@ def _user_session_payload(user, phone=None):
         'phone': resolved_phone,
         'openid': user.get('openid', ''),
         'session_version': _session_version(user),
+        'auth_issued_at': int(time.time()),
     }
 
 
@@ -296,6 +298,18 @@ def validate_current_user_session(*, allow_legacy=False):
     user_info = session.get('user_info')
     if not isinstance(user_info, dict):
         return True
+    try:
+        issued_at = int(user_info.get('auth_issued_at'))
+    except (TypeError, ValueError):
+        issued_at = 0
+    now = int(time.time())
+    if issued_at <= 0:
+        if not allow_legacy:
+            session.clear()
+            return False
+    elif issued_at > now + 300 or now - issued_at > SESSION_ABSOLUTE_MAX_AGE:
+        session.clear()
+        return False
     claimed_version = user_info.get('session_version')
     if claimed_version in (None, ''):
         if allow_legacy:
@@ -397,7 +411,11 @@ def _normalized_ip(value):
 
 
 def _trusted_proxy_networks():
-    configured = os.environ.get('REALGUARD_TRUSTED_PROXY_IPS', '127.0.0.0/8,::1/128')
+    configured = (
+        os.environ.get('REALGUARD_TRUSTED_PROXY_CIDRS')
+        or os.environ.get('REALGUARD_TRUSTED_PROXY_IPS')
+        or '127.0.0.0/8,::1/128'
+    )
     networks = []
     for raw in configured.split(','):
         try:
@@ -1089,7 +1107,7 @@ def register_verify():
     return render_template('register.html', error='注册失败，请重试')
 
 
-@login_blueprint.route('/logout')
+@login_blueprint.route('/logout', methods=['POST'])
 def logout():
     session.clear()
     return redirect('/login')

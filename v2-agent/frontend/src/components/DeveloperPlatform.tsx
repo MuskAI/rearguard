@@ -240,7 +240,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
   const [docMode, setDocMode] = useState<"fast" | "swarm">("fast");
   const [newKeyName, setNewKeyName] = useState("生产环境");
   const [newKeyExpiry, setNewKeyExpiry] = useState("90");
-  const [newKeyScopes, setNewKeyScopes] = useState({ fast: true, swarm: true });
+  const [newKeyScopes, setNewKeyScopes] = useState({ fast: true, swarm: false, reports: false });
   const [newKeyIps, setNewKeyIps] = useState("");
   const loadGeneration = useRef(0);
   const accountIdentity = user?.account_uuid || (user ? String(user.Userid) : "");
@@ -311,7 +311,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
         scopes: [
           ...(newKeyScopes.fast ? ["image:fast"] : []),
           ...(newKeyScopes.swarm ? ["image:swarm"] : []),
-          "reports",
+          ...(newKeyScopes.reports ? ["reports"] : []),
         ],
         expiresAt: expiryFromChoice(newKeyExpiry),
         ipAllowlist: newKeyIps.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean),
@@ -450,6 +450,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
               <legend>检测权限</legend>
               <label className="developer-check-row"><input type="checkbox" checked={newKeyScopes.fast} onChange={(event) => setNewKeyScopes((value) => ({ ...value, fast: event.target.checked }))} /><span><strong>快速检测</strong><small>主模型与水印检测</small></span></label>
               <label className="developer-check-row"><input type="checkbox" checked={newKeyScopes.swarm} onChange={(event) => setNewKeyScopes((value) => ({ ...value, swarm: event.target.checked }))} /><span><strong>Swarm 检测</strong><small>多源专家交叉复核</small></span></label>
+              <label className="developer-check-row"><input type="checkbox" checked={newKeyScopes.reports} onChange={(event) => setNewKeyScopes((value) => ({ ...value, reports: event.target.checked }))} /><span><strong>报告下载</strong><small>读取该 Key 创建任务的 PDF 报告</small></span></label>
             </fieldset>
             <label><span>有效期</span><select value={newKeyExpiry} onChange={(event) => setNewKeyExpiry(event.target.value)}><option value="30">30 天</option><option value="90">90 天</option><option value="365">1 年</option><option value="never">永不过期</option></select></label>
             <label><span>IP 白名单 <small>可选，每行一个 IP 或 CIDR</small></span><textarea value={newKeyIps} onChange={(event) => setNewKeyIps(event.target.value)} rows={3} placeholder="203.0.113.10&#10;10.0.0.0/24" /></label>
@@ -538,7 +539,7 @@ function KeysPanel({ keys, busy, onCreate, onRotate, onRevoke }: { keys: Develop
       <section className="developer-section-heading"><div><p>凭据管理</p><h2>API Keys</h2><small>按环境拆分密钥，降低泄露后的影响范围。完整 Key 仅在创建或轮换时展示一次。</small></div><button type="button" className="developer-primary-action" onClick={onCreate} disabled={activeCount >= 5}><Plus size={16} /> 创建 API Key</button></section>
       <section className="developer-security-rail"><ShieldCheck size={19} /><div><strong>服务端只保存 Key 哈希</strong><span>建议设置有效期与 IP 白名单，并定期轮换生产密钥。</span></div><small>{activeCount} / 5 个 active</small></section>
       <section className="developer-table-section developer-key-table"><header><div><h3>密钥列表</h3><p>撤销后立即失效，不影响账号额度和历史账单。</p></div></header><div className="developer-table-wrap"><table><thead><tr><th>名称</th><th>Key</th><th>权限</th><th>限制</th><th>最后使用</th><th aria-label="操作" /></tr></thead><tbody>
-        {keys.length ? keys.map((key) => <tr key={`${key.id}-${key.status}`}><td><strong>{key.name}</strong><span className={`developer-key-state ${key.status}`}>{keyStatusLabel(key)}</span></td><td><code>{key.preview}</code></td><td><div className="developer-scope-list">{key.scopes.filter((scope) => scope !== "reports").map((scope) => <span key={scope}>{scope === "image:fast" ? "快速" : scope === "image:swarm" ? "Swarm" : scope}</span>)}</div></td><td><small>{key.expiresAt ? `到期 ${compactDate(key.expiresAt)}` : "永不过期"}</small><small>{key.ipAllowlist?.length ? `${key.ipAllowlist.length} 条 IP 规则` : "不限 IP"}</small></td><td>{compactDate(key.lastUsedAt)}</td><td><div className="developer-row-actions">{key.status === "active" && <><button type="button" title="轮换 Key" aria-label={`轮换 ${key.name}`} disabled={busy === key.id} onClick={() => onRotate(key)}>{busy === key.id ? <LoaderCircle className="spin" size={16} /> : <RotateCw size={16} />}</button><button type="button" className="danger" title="撤销 Key" aria-label={`撤销 ${key.name}`} disabled={busy === key.id} onClick={() => onRevoke(key)}><Trash2 size={16} /></button></>}</div></td></tr>) : <tr><td colSpan={6} className="developer-empty-cell">尚未创建 API Key</td></tr>}
+        {keys.length ? keys.map((key) => <tr key={`${key.id}-${key.status}`}><td><strong>{key.name}</strong><span className={`developer-key-state ${key.status}`}>{keyStatusLabel(key)}</span></td><td><code>{key.preview}</code></td><td><div className="developer-scope-list">{key.scopes.map((scope) => <span key={scope}>{scope === "image:fast" ? "快速" : scope === "image:swarm" ? "Swarm" : scope === "reports" ? "报告" : scope}</span>)}</div></td><td><small>{key.expiresAt ? `到期 ${compactDate(key.expiresAt)}` : "永不过期"}</small><small>{key.ipAllowlist?.length ? `${key.ipAllowlist.length} 条 IP 规则` : "不限 IP"}</small></td><td>{compactDate(key.lastUsedAt)}</td><td><div className="developer-row-actions">{key.status === "active" && <><button type="button" title="轮换 Key" aria-label={`轮换 ${key.name}`} disabled={busy === key.id} onClick={() => onRotate(key)}>{busy === key.id ? <LoaderCircle className="spin" size={16} /> : <RotateCw size={16} />}</button><button type="button" className="danger" title="撤销 Key" aria-label={`撤销 ${key.name}`} disabled={busy === key.id} onClick={() => onRevoke(key)}><Trash2 size={16} /></button></>}</div></td></tr>) : <tr><td colSpan={6} className="developer-empty-cell">尚未创建 API Key</td></tr>}
       </tbody></table></div></section>
     </div>
   );

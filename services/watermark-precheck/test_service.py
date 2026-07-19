@@ -1,8 +1,10 @@
 from pathlib import Path
+from io import BytesIO
 import sys
 import threading
 
 from flask import g, has_request_context
+from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parent
@@ -19,7 +21,8 @@ def test_report_and_visible_scan_start_in_parallel(monkeypatch):
         rendezvous.wait(timeout=2)
         return {"isAiGenerated": None}
 
-    def visible(_path):
+    def visible(_path, provenance_path=None):
+        assert provenance_path == Path("unused.png")
         assert has_request_context()
         g.visible_status = "complete"
         rendezvous.wait(timeout=2)
@@ -34,3 +37,37 @@ def test_report_and_visible_scan_start_in_parallel(monkeypatch):
 
     assert collected_report == {"isAiGenerated": None}
     assert collected_hits == []
+
+
+def test_precheck_normalizes_exif_orientation_for_all_visible_boxes(monkeypatch):
+    encoded = Image.new("RGB", (4, 2), "white")
+    exif = Image.Exif()
+    exif[274] = 6
+    payload = BytesIO()
+    encoded.save(payload, format="JPEG", exif=exif)
+    observed = {}
+
+    def collect(_original_path, visible_path=None):
+        with Image.open(visible_path) as normalized:
+            observed["size"] = normalized.size
+            observed["orientation"] = normalized.getexif().get(274)
+        return {}, []
+
+    monkeypatch.setattr(service, "API_TOKEN", "test-token")
+    monkeypatch.setattr(service, "_collect_evidence", collect)
+    monkeypatch.setattr(service, "build_decision", lambda *_args: {})
+
+    response = service.app.test_client().post(
+        "/v1/precheck",
+        headers={"Authorization": "Bearer test-token"},
+        data={"file": (BytesIO(payload.getvalue()), "oriented.jpg")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["coordinateSpace"] == "display_normalized_v1"
+    assert data["encodedSize"] == {"width": 4, "height": 2}
+    assert data["displaySize"] == {"width": 2, "height": 4}
+    assert data["sourceOrientation"] == 6
+    assert observed == {"size": (2, 4), "orientation": None}

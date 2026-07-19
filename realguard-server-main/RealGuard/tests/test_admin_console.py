@@ -195,6 +195,17 @@ def test_admin_page_renders_workspace_for_allowed_user(client, monkeypatch):
     assert "运营大屏" in html
 
 
+def test_ordinary_user_cannot_render_admin_console(client, monkeypatch):
+    monkeypatch.delenv("REALGUARD_ADMIN_USER_IDS", raising=False)
+    monkeypatch.delenv("REALGUARD_ADMIN_PHONES", raising=False)
+    _login_session(client)
+
+    response = client.get("/admin")
+
+    assert response.status_code == 403
+    assert "无后台管理权限" in response.get_json()["message"]
+
+
 def test_admin_screen_renders_interactive_operations_controls(client, monkeypatch):
     monkeypatch.setenv("REALGUARD_ADMIN_USER_IDS", "1")
     monkeypatch.setattr(admin, "_admin_account_count", lambda: 0)
@@ -602,10 +613,37 @@ def test_big_screen_recent_items_remove_user_and_file_identifiers(monkeypatch):
     assert "filename" not in queries[-1].lower()
     assert "phone" not in queries[-1].lower()
     assert item["modelRoute"]["model"]["id"] == "v1-onnx-mil"
+    assert item["decisionStatus"] == "review_only"
+    assert item["label"] == "需人工复核"
+    assert item["probability"] is None
+    assert item["confidence"] == "不适用"
     assert "private-person.jpg" not in serialized
     assert "13329825566" not in serialized
     assert "127.0.0.1" not in serialized
     assert "private-user" not in serialized
+
+
+def test_admin_authorized_detection_view_preserves_only_explicit_verdict(monkeypatch):
+    monkeypatch.setattr(admin.evidence_manifest, "_structured_visible_watermark", lambda run: None)
+    monkeypatch.setattr(
+        admin.evidence_manifest,
+        "_decision_authorization",
+        lambda run, visible: {"status": "verdict", "authority": "calibrated_model"},
+    )
+
+    view = admin._authorized_detection_view(
+        {"aigc": "AI生成图像", "fake": 82.8, "detector_probability": 0.828, "clarity": "高"},
+        {"meta": {"decisionAuthorization": {"status": "verdict"}}},
+    )
+
+    assert view == {
+        "label": "AI生成图像",
+        "probability": 82.8,
+        "detectorProbability": 0.828,
+        "confidence": "高",
+        "decisionStatus": "verdict",
+        "decisionAuthority": "calibrated_model",
+    }
 
 
 def test_admin_users_supports_search_and_limit(client, monkeypatch):

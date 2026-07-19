@@ -8,6 +8,8 @@ Type=simple
 User=ymk
 WorkingDirectory=/home/ymk/services/yolo-watermark
 EnvironmentFile=/home/ymk/services/yolo-watermark/.env
+Environment=YOLO_WATERMARK_REQUIRE_CUDA=1
+Environment=YOLO_WATERMARK_DEVICE=0
 ExecStart=/home/ymk/services/yolo-watermark/.venv/bin/gunicorn --bind 127.0.0.1:5067 --workers 2 --threads 1 --timeout 90 service:app
 Restart=always
 RestartSec=3s

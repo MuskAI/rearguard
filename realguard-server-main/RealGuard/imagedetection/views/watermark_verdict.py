@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 
@@ -35,16 +36,59 @@ def _clamp01(value: Any) -> float:
 def _localized_hits(visible: Any) -> list[dict[str, Any]]:
     if not isinstance(visible, dict) or not visible.get("detected"):
         return []
+    display_size = visible.get("displaySize") or {}
+    try:
+        display_width = int(display_size.get("width") or 0)
+        display_height = int(display_size.get("height") or 0)
+    except (TypeError, ValueError):
+        return []
+    if (
+        visible.get("coordinateSpace") != "display_normalized_v1"
+        or display_width <= 0
+        or display_height <= 0
+    ):
+        return []
+    complete_scan = visible.get("supported") is True
+    registry_positive_supported = (
+        visible.get("positiveEvidenceSupported") is True
+        or visible.get("registrySupported") is True
+    )
     localized = []
     for hit in visible.get("hits") or []:
         if not isinstance(hit, dict):
             continue
         bbox = hit.get("bbox")
-        if not isinstance(bbox, dict):
+        if not _valid_normalized_bbox(bbox):
             continue
-        if _clamp01(bbox.get("w")) > 0 and _clamp01(bbox.get("h")) > 0:
+        is_registry_hit = (
+            str(hit.get("method") or "").strip() == DECISIVE_METHOD
+            and str(hit.get("provider") or "").strip().lower() in DECISIVE_PROVIDERS
+        )
+        if complete_scan or (registry_positive_supported and is_registry_hit):
             localized.append(hit)
     return localized
+
+
+def _valid_normalized_bbox(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    try:
+        x = float(value.get("x"))
+        y = float(value.get("y"))
+        width = float(value.get("w"))
+        height = float(value.get("h"))
+    except (TypeError, ValueError):
+        return False
+    values = (x, y, width, height)
+    return bool(
+        all(math.isfinite(item) for item in values)
+        and 0.0 <= x <= 1.0
+        and 0.0 <= y <= 1.0
+        and 0.0 < width <= 1.0
+        and 0.0 < height <= 1.0
+        and x + width <= 1.0
+        and y + height <= 1.0
+    )
 
 
 def has_localized_watermark(visible: Any) -> bool:
@@ -58,14 +102,18 @@ def _decisive_hits(visible: Any) -> list[dict[str, Any]]:
         if hit.get("decisive") is True
         and (provider := str(hit.get("provider") or "").strip().lower()) in DECISIVE_PROVIDERS
         and str(hit.get("method") or "").strip() == DECISIVE_METHOD
-        and _clamp01(hit.get("confidence")) >= PROVIDER_MIN_CONFIDENCE[provider]
+        and (
+            hit.get("registryCorroborated") is True
+            or _clamp01(hit.get("confidence")) >= PROVIDER_MIN_CONFIDENCE[provider]
+        )
         and _clamp01((hit.get("bbox") or {}).get("w")) * _clamp01((hit.get("bbox") or {}).get("h")) >= MIN_LOCALIZED_AREA
-        and (hit.get("localizationConfirmed") is True or hit.get("yoloCorroborated") is True)
     ]
 
 
 def has_decisive_ai_watermark(visible: Any) -> bool:
-    return bool(_decisive_hits(visible))
+    # Visible marks remain review evidence only. They are trivially copyable
+    # and cannot independently prove that the underlying image was generated.
+    return False
 
 
 def _percent(value: Any) -> str:
@@ -92,9 +140,10 @@ def _positive_visual_issues(value: Any) -> list[str]:
 
 
 def build_explanation(result: dict[str, Any], visible: Any) -> str:
-    hits = _decisive_hits(visible)
+    hits = _localized_hits(visible)
+    existing = str(result.get("explanation") or "").strip()
     if not hits:
-        return str(result.get("explanation") or "").strip()
+        return existing
 
     provider_names = []
     for hit in hits:
@@ -102,75 +151,17 @@ def build_explanation(result: dict[str, Any], visible: Any) -> str:
         label = str(hit.get("label") or "").strip() or _PROVIDER_LABELS.get(provider) or "通用可见水印"
         if label not in provider_names:
             provider_names.append(label)
-    highest_confidence = max((_clamp01(hit.get("confidence")) for hit in hits), default=0.0)
-
-    override = result.get("watermark_verdict_override") or {}
-    raw_probability = result.get("detector_probability")
-    if raw_probability is None:
-        raw_probability = override.get("model_probability")
-    if raw_probability is None:
-        raw_probability = result.get("probability")
-    raw_probability = _clamp01(raw_probability)
-
-    lines = [
-        (
-            f"决定性证据：已知 AI 平台水印注册表定位到 {len(hits)} 处有效区域"
-            f"（{'、'.join(provider_names)}，最高置信度 {_percent(highest_confidence)}）。"
-            f"经平台类型归属确认，该标记属于直接来源证据，综合 AI 风险提升至至少 "
-            f"{round(MIN_WATERMARK_FAKE_PROBABILITY * 100)}%。"
-        ),
-        (
-            f"主模型：原始 AI 风险为 {_percent(raw_probability)}，判断{_model_tendency(raw_probability)}；"
-            "该分数保留作辅助参考，但不覆盖水印证据。"
-        ),
-    ]
-
-    visual_issues = _positive_visual_issues(result.get("visual_issues"))
-    swarm = result.get("swarm") or {}
-    if isinstance(swarm, dict) and swarm.get("enabled"):
-        effective = int(swarm.get("effectiveExperts") or 0)
-        total = int(swarm.get("totalExperts") or 0)
-        lines.append(f"多源复核：{effective}/{total} 路证据完成有效复核；其结果作为辅助证据参与解释。")
-    elif visual_issues:
-        lines.append(
-            f"视觉复核：提取到 {len(visual_issues)} 项可复核线索"
-            f"（{visual_issues[0]}）；这些线索不是本次决定性依据。"
-        )
-    elif result.get("llm_used") is False:
-        lines.append("视觉复核：本次未完成多模态视觉复核，不生成替代性视觉结论。")
-    else:
-        lines.append("视觉复核：未提取到明确异常线索，本项未参与抬高风险。")
-
-    metadata = result.get("all_metadata") or result.get("full_exif_info") or {}
-    if isinstance(metadata, dict) and metadata:
-        lines.append(f"元数据：已读取 {len(metadata)} 项，仅作辅助线索；本次不是决定性依据。")
-    else:
-        lines.append("元数据：未读取到可用元数据；元数据缺失本身不作为伪造证据。")
-    lines.append("综合结论：本次由已确认的 AI 平台水印来源证据主导，判定为 AI 生成图像；当前置信度：高。")
-    return "\n".join(lines)
+    line = (
+        f"可见标记线索：定位到 {len(hits)} 处区域"
+        f"（{'、'.join(provider_names)}）。标记可被复制或后期添加，"
+        "仅供人工核对来源，不单独决定真伪。"
+    )
+    return "\n".join(part for part in (existing, line) if part)
 
 
 def apply_to_result(result: dict[str, Any], visible: Any) -> bool:
-    if not has_decisive_ai_watermark(visible):
-        return False
-    existing_override = result.get("watermark_verdict_override") or {}
-    original_probability = result.get("detector_probability")
-    if original_probability is None:
-        original_probability = existing_override.get("model_probability")
-    if original_probability is None:
-        original_probability = result.get("probability")
-    original_probability = _clamp01(original_probability)
-    result["probability"] = round(max(original_probability, MIN_WATERMARK_FAKE_PROBABILITY), 4)
-    result["final_label"] = "AI生成图像"
-    result["confidence"] = "高"
-    result["watermark_verdict_override"] = {
-        "applied": True,
-        "reason": "known_ai_platform_visible_watermark",
-        "minimum_probability": MIN_WATERMARK_FAKE_PROBABILITY,
-        "model_probability": round(original_probability, 4),
-    }
-    result["explanation"] = build_explanation(result, visible)
-    return True
+    # Visible marks are copyable attribution clues, never verdict authority.
+    return False
 
 
 def apply_to_backend_data(data: dict[str, Any], visible: Any) -> bool:

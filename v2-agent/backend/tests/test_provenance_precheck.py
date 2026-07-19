@@ -15,10 +15,13 @@ def test_no_decision_does_not_build_analysis():
     assert provenance_precheck.build_analysis({"available": True, "decision": {"shortCircuit": False}}) is None
 
 
-def test_visible_watermark_builds_model_free_analysis():
+def test_visible_watermark_cannot_build_model_free_analysis():
     payload = {
+        "status": "ok",
         "available": True,
         "engineVersion": "0.15.3",
+        "coordinateSpace": "display_normalized_v1",
+        "displaySize": {"width": 1000, "height": 800},
         "decision": {
             "shortCircuit": True,
             "verdict": "highly_suspected_fake",
@@ -37,15 +40,52 @@ def test_visible_watermark_builds_model_free_analysis():
             }
         ],
     }
-    analysis = provenance_precheck.build_analysis(payload)
-    assert analysis is not None
-    assert analysis["source"] == "provenance"
-    assert analysis["tokenUsage"]["totalTokens"] == 0
-    assert analysis["visibleWatermark"]["provider"] == "gemini"
-    assert analysis["visibleWatermark"]["hits"][0]["method"] == "remove_ai_watermarks_registry"
-    assert analysis["visibleWatermark"]["hits"][0]["model"] == "wiltodelta/remove-ai-watermarks"
-    assert analysis["visibleWatermark"]["detector"]["engines"][0]["version"] == "0.15.3"
-    assert analysis["regions"]
+    assert provenance_precheck.build_analysis(payload) is None
+
+
+def test_remote_visual_result_reconciles_without_verdict_or_name_error():
+    result = {
+        "available": True,
+        "report": {
+            "aiFromMetadata": False,
+            "isAiGenerated": None,
+            "signals": [],
+            "integrityClashes": [],
+        },
+        "visibleHits": [{
+            "provider": "gemini",
+            "confidence": 0.95,
+            "decisive": True,
+            "bbox": {"x": 0.8, "y": 0.8, "w": 0.1, "h": 0.1},
+        }],
+    }
+
+    provenance_precheck._reconcile_probability(result, None)
+
+    assert result["decision"]["shortCircuit"] is False
+    assert result["decision"]["modelRequired"] is True
+    assert result["decision"]["reason"] == "no_decisive_ai_provenance"
+
+
+def test_visible_watermark_short_circuit_rejects_missing_coordinate_contract():
+    payload = {
+        "available": True,
+        "engineVersion": "0.15.3",
+        "decision": {
+            "shortCircuit": True,
+            "verdict": "highly_suspected_fake",
+            "confidence": 0.99,
+            "reason": "known_visible_ai_watermark",
+        },
+        "visibleHits": [{
+            "provider": "gemini",
+            "confidence": 0.99,
+            "decisive": True,
+            "bbox": {"x": 0.9, "y": 0.9, "w": 0.08, "h": 0.08},
+        }],
+    }
+
+    assert provenance_precheck.build_analysis(payload) is None
 
 
 def test_camera_c2pa_cannot_be_forged_into_short_circuit_by_client():

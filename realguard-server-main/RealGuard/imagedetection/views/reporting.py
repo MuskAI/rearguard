@@ -155,12 +155,14 @@ def _signed_image_report(
     # The rendering payload is rebuilt from signed server facts. In particular,
     # no filename, verdict, score, model version, hash, or explanation supplied in
     # the caller's result dictionary is promoted to authoritative report evidence.
+    risk_score = conclusion.get("risk_score_percent")
     authoritative_result = {
         "itemid": item.get("itemid"),
         "final_label": conclusion["label"],
-        "probability": float(conclusion["risk_score_percent"]) / 100.0,
-        "detector_probability": float(conclusion["risk_score_percent"]) / 100.0,
+        "probability": None if risk_score is None else float(risk_score) / 100.0,
+        "detector_probability": None if risk_score is None else float(risk_score) / 100.0,
         "confidence": conclusion["confidence"],
+        "decisionStatus": conclusion.get("decision_status") or "review_only",
         "explanation": human_manifest,
         "filename": item.get("filename", ""),
         "file_size": item.get("file_size", ""),
@@ -170,6 +172,10 @@ def _signed_image_report(
         "all_metadata": metadata if metadata.get("present") else {},
         "capture_evidence": capture,
         "visibleWatermark": visible_watermark,
+        "evidenceCompleteness": bool(
+            isinstance(visible_watermark, Mapping)
+            and visible_watermark.get("supported") is True
+        ),
     }
     return envelope, authoritative_result
 
@@ -217,9 +223,10 @@ def image_report_content(
         signing_key=signing_key,
         snapshot_root=snapshot_root,
     )
-    probability = round(float(result.get("probability", 0) or 0) * 100, 1)
+    review_only = result.get("decisionStatus") != "verdict"
+    probability = None if review_only else round(float(result.get("probability", 0) or 0) * 100, 1)
     confidence = _safe_text(result.get("confidence"), "")
-    requires_review = 35 < probability < 75 or confidence == "低"
+    requires_review = review_only or (probability is not None and 35 < probability < 75) or confidence == "低"
     final_label = "需人工复核" if requires_review else (
         result.get("final_label") or ("AI生成图像" if float(item.get("fake", 0) or 0) >= 50 else "真实图像")
     )
@@ -227,11 +234,18 @@ def image_report_content(
     image_url = escape(_safe_text(result.get("image_url"), ""))
     preview = f'<img class="preview" src="{image_url}" alt="{escape(_safe_text(result.get("filename")))}" />' if image_url else '<div class="preview" style="min-height:260px;"></div>'
     capture = result.get("capture_evidence") if isinstance(result.get("capture_evidence"), dict) else {}
+    visible = result.get("visibleWatermark") if isinstance(result.get("visibleWatermark"), Mapping) else None
+    if visible is None or visible.get("supported") is not True:
+        visible_summary = "检测服务不可用，本次水印证据不完整"
+    elif visible.get("detected"):
+        visible_summary = f"检出 {len(visible.get('hits') or [])} 处可复核水印线索"
+    else:
+        visible_summary = "已完成检测，本次未检出"
     capture_items = "".join(
         f"<li><strong>{escape(_safe_text(entry.get('label')))}</strong>：{escape(_safe_text(entry.get('value')))}</li>"
         for entry in (capture.get("evidence") or [])[:6]
         if isinstance(entry, dict)
-    ) or "<li>未形成可用的实拍支持证据</li>"
+    ) or "<li>未形成可用的拍摄流程元数据线索</li>"
     return _html_page(
         f"慧鉴 AI 图像鉴伪报告 {item.get('itemid')}",
         accent,
@@ -240,7 +254,7 @@ def image_report_content(
           <div class="eyebrow">Huijian AI Image Report</div>
           <h1>图像鉴伪报告</h1>
           <p>报告编号：IMG-{item.get('itemid')}。该报告用于留存图像鉴伪结论、核心元信息与简洁分析说明。</p>
-          <div class="pill">{escape(_safe_text(final_label))} · {probability}%</div>
+          <div class="pill">{escape(_safe_text(final_label))} · {"未发布自动风险分数" if review_only else f"{probability}%"}</div>
           <div class="grid" style="margin-top:18px;">
             <div>
               <div class="meta-grid">
@@ -266,11 +280,13 @@ def image_report_content(
             <tbody>
               <tr><td>视觉可疑点</td><td>{escape("；".join(result.get("visual_issues") or ["未完成视觉复核"]))}</td></tr>
               <tr><td>元数据</td><td>{escape("已提取，仅作辅助证据" if result.get("all_metadata") else "未提取到；缺失本身不代表伪造")}</td></tr>
-              <tr><td>实拍来源证据</td><td>{escape(_safe_text(capture.get("summary"), "未形成可用实拍证据"))}</td></tr>
+              <tr><td>可见水印</td><td>{escape(visible_summary)}；仅作视觉定位，不单独决定真伪</td></tr>
+              <tr><td>拍摄流程元数据</td><td>{escape(_safe_text(capture.get("summary"), "未形成可用拍摄流程线索"))}</td></tr>
             </tbody>
           </table>
-          <h2 style="margin-top:18px;">实拍证据链 · {escape(_safe_text(capture.get("levelText"), "无"))}</h2>
+          <h2 style="margin-top:18px;">拍摄流程线索 · {escape(_safe_text(capture.get("levelText"), "无"))}</h2>
           <ul>{capture_items}</ul>
+          <div class="footnote">视觉水印可以被复制或覆盖；普通 EXIF 可以被编辑。只有通过签名校验的内容凭证属于密码学来源证据。</div>
           <div class="footnote">说明：本报告仅作业务留档与人工复核辅助，不构成司法或监管最终鉴定结论。</div>
         </section>
         {_html_envelope_block(envelope)}

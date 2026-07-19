@@ -115,28 +115,34 @@ function timestamp(value: string) {
 }
 
 function imageHistoryEntry(record: ImageHistoryRecord): AgentHistoryEntry {
+  const score = record.fake_prob == null
+    ? null
+    : Math.max(0, Math.min(Number(record.fake_prob) / 100, 1));
   return {
     key: `image:${record.itemid}`,
     origin: "image",
     recordId: String(record.itemid),
     title: record.filename || `图像任务 ${record.itemid}`,
     typeLabel: "图像",
-    verdictLabel: record.final_label || (record.fake_prob >= 50 ? "疑似生成" : "更倾向真实"),
-    score: Math.max(0, Math.min(Number(record.fake_prob || 0) / 100, 1)),
+    verdictLabel: record.final_label || (score == null ? "待复核" : score >= 0.5 ? "疑似生成" : "更倾向真实"),
+    score,
     createdAt: record.createtime || "",
     thumbnail: record.thumbnail_url || record.image_url,
   };
 }
 
 function videoHistoryEntry(record: VideoHistoryRecord): AgentHistoryEntry {
+  const score = record.fake_percentage == null
+    ? null
+    : Math.max(0, Math.min(Number(record.fake_percentage) / 100, 1));
   return {
     key: `video:${record.itemid}`,
     origin: "video",
     recordId: String(record.itemid),
     title: record.filename || `视频任务 ${record.itemid}`,
     typeLabel: "视频",
-    verdictLabel: record.final_label || (record.fake_percentage >= 50 ? "疑似合成" : "更倾向真实"),
-    score: Math.max(0, Math.min(Number(record.fake_percentage || 0) / 100, 1)),
+    verdictLabel: record.final_label || (score == null ? "待复核" : score >= 0.5 ? "疑似合成" : "更倾向真实"),
+    score,
     createdAt: record.createtime || "",
   };
 }
@@ -150,7 +156,7 @@ function evidenceHistoryEntry(record: Awaited<ReturnType<typeof fetchHistory>>["
     title: record.name || "未命名任务",
     typeLabel: typeNames[record.type],
     verdictLabel: verdictLabel(record.verdict),
-    score: Number(record.confidence || 0),
+    score: record.confidence == null ? null : Number(record.confidence),
     createdAt: record.createdAt || "",
     thumbnail: record.thumbnail,
   };

@@ -11,8 +11,9 @@ watermark localization does not consume the main model's GPU queue.
 
 Images whose longest side exceeds 2048 pixels are downsampled proportionally
 before chunk generation. The response preserves `originalSize`, adds
-`processedSize` and `downsample`, and keeps visible-watermark localization on
-the untouched upload so normalized watermark boxes still map to the original.
+`processedSize` and `downsample`. Visible-watermark branches share one
+EXIF-normalized display image and return `coordinateSpace=display_normalized_v1`
+so browser overlays, registry matches, and YOLO boxes use the same coordinates.
 Uploads above 24 million source pixels are rejected before RGB decoding. A
 request that waits more than 20 seconds for a GPU slot receives HTTP 429 with
 a `Retry-After` header instead of occupying memory indefinitely.
@@ -20,6 +21,8 @@ a `Retry-After` header instead of occupying memory indefinitely.
 ## Deployment targets
 
 - `inference_onnx.py` -> `/home/ymk/RealGuard/AIGC_image_detection_system/imagedetection/Agent/tools/AIGC_Detection/inference_onnx.py`
+- `image_preprocessing.py` -> `/home/ymk/RealGuard/AIGC_image_detection_system/imagedetection/Agent/tools/AIGC_Detection/image_preprocessing.py`
+- `model_decision_policy.py` -> `/home/ymk/RealGuard/AIGC_image_detection_system/imagedetection/Agent/tools/AIGC_Detection/model_decision_policy.py`
 - `remote_inference.py` -> `/home/ymk/RealGuard/AIGC_image_detection_system/imagedetection/views/remote_inference.py`
 - `realguard-detection.service` -> `/etc/systemd/system/realguard-detection.service`
 - `realguard-detection-gpu.conf` -> `/etc/systemd/system/realguard-detection.service.d/gpu.conf`
@@ -32,14 +35,60 @@ public detector calls `/internal/model/predict` through a reverse SSH tunnel,
 while user history and metadata remain owned by the public application server.
 
 The untracked `/etc/realguard/model-inference.env` file must contain the same
-`REALGUARD_MODEL_INTERNAL_TOKEN` on both servers. On the public server it also
-defines `REALGUARD_REMOTE_INFERENCE_URL` as the tunnel-local internal endpoint.
+`REALGUARD_MODEL_INTERNAL_TOKEN` and a separate 64-hex
+`REALGUARD_MODEL_RESPONSE_HMAC_KEY` on both servers. Give the response key a
+stable `REALGUARD_MODEL_RESPONSE_HMAC_KEY_ID`; the public server may retain old
+verification keys in `REALGUARD_MODEL_RESPONSE_HMAC_KEYS_JSON`. The HMAC key is never sent
+with a request; it binds each GPU response to a fresh nonce, the uploaded image,
+and the complete response body. On the public server the file also defines
+`REALGUARD_REMOTE_INFERENCE_URL` as the tunnel-local internal endpoint.
 Database credentials belong in `/etc/realguard/detection-db.env`, owned by
 `root:root` with mode `0600`; they must never be embedded in the world-readable
 systemd unit.
+
+Rotate without downtime in this order: add the next response key to the public
+verification keyring, deploy/restart the public verifier, then switch the GPU
+active key and key ID. Remove the retired key only after the maximum response
+age has elapsed. For request-token rotation, place the old token temporarily in
+`REALGUARD_MODEL_INTERNAL_TOKEN_PREVIOUS` on the GPU, switch public clients to
+the new active token, then remove the previous token. Never leave a previous
+token configured indefinitely.
 The production service uses one Gunicorn worker with four threads. Keeping a
 single worker prevents duplicate ONNX sessions from consuming GPU memory, while
 the inference semaphore controls concurrent CUDA execution inside that worker.
+
+## Commercial decision gate
+
+The ONNX softmax is retained as `rawModelScore` for diagnostics, but is not
+published as an AI probability until an independent held-out calibration has
+passed the configured FPR/FNR gates. Without a complete calibration record the
+service returns `finalLabel=需人工复核`, `fakeProbability=0.5`, and
+`modelDecision.mode=review_only`. Confirmed AI-platform provenance can still
+form an independent decisive result.
+
+The calibration record is an Ed25519-signed JSON manifest at
+`/etc/realguard/model-calibration.json`. The server only receives the public
+key at `/etc/realguard/model-calibration-ed25519.pub`; the private signing key
+must remain in the independent evaluation environment. Both files must be
+root-owned and not writable by group or other users.
+
+The manifest uses schema `cn.huijian.model-calibration-v2` and binds all of the
+following fields under one signature:
+
+- ONNX SHA-256 and dataset SHA-256
+- the exact runtime contract returned by the protected model health endpoint,
+  including preprocessing, class mapping, chunking and Top-K aggregation
+- runtime-contract and preprocessing SHA-256 values
+- evaluation code revision, sample counts, FPR/FNR, threshold and expiry
+
+Supplying a threshold or environment variables alone never opens automatic
+verdicts. A missing, expired, tampered or runtime-mismatched manifest keeps the
+service in `review_only`. Custom chunk/Top-K parameters also require a matching
+calibration contract.
+
+`runtime.lock` records the full production Python package snapshot. Activation
+compares every package and runs `pip check` before stopping the current service.
+The watermark and YOLO services carry equivalent locks in their directories.
 
 The public detector still performs local metadata extraction before calling
 the GPU model and therefore requires ExifTool:
@@ -89,12 +138,11 @@ Set either value only after an end-to-end benchmark with production-size
 images. Starting both uploads immediately increased the main model latency in
 the current deployment.
 
-After installing both files, run:
+Deploy these files as a versioned release with compile, CUDA warmup, a real
+prediction probe, and automatic rollback:
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl restart realguard-detection.service
-sudo systemctl status realguard-detection.service --no-pager
+./scripts/deploy_detection_service.sh
 ```
 
 The startup journal must contain `CUDAExecutionProvider` before the service is

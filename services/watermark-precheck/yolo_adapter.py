@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import math
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -17,6 +18,17 @@ YOLO_URL = os.getenv("YOLO_WATERMARK_URL", "http://127.0.0.1:5067/v1/detect")
 YOLO_HEALTH_URL = os.getenv("YOLO_WATERMARK_HEALTH_URL", "http://127.0.0.1:5067/health")
 YOLO_TOKEN = os.getenv("YOLO_WATERMARK_TOKEN", "")
 YOLO_TIMEOUT_SECONDS = float(os.getenv("YOLO_WATERMARK_TIMEOUT_SECONDS", "20"))
+YOLO_REQUIRE_CUDA = os.getenv("YOLO_WATERMARK_REQUIRE_CUDA", "true").lower() in {
+    "1", "true", "yes", "on",
+}
+YOLO_EXPECTED_MODEL = "corzent/yolo11x_watermark_detection"
+YOLO_EXPECTED_REVISION = os.getenv(
+    "YOLO_WATERMARK_REVISION", "796a3b58a1121f20c5976d59314baea3db659a66"
+)
+YOLO_EXPECTED_SHA256 = os.getenv(
+    "YOLO_WATERMARK_MODEL_SHA256",
+    "6ac71b6ab8db27ec7928b5176e60a359c65e1579a5c1d58cf2f98df30cf3085e",
+)
 VISIBLE_BRANCH_WORKERS = max(
     2,
     min(16, int(os.getenv("WATERMARK_VISIBLE_BRANCH_WORKERS", "8"))),
@@ -28,6 +40,71 @@ _VISIBLE_EXECUTOR = ThreadPoolExecutor(
 _registry_visible_hits = base._visible_hits
 _base_health = base.app.view_functions["health"]
 _base_precheck = base.app.view_functions["precheck"]
+
+
+def _yolo_runtime_error(payload: dict[str, Any]) -> str:
+    if payload.get("status") != "ok":
+        return "service_not_ok"
+    if payload.get("model") != YOLO_EXPECTED_MODEL:
+        return "model_identity_mismatch"
+    if YOLO_EXPECTED_REVISION and payload.get("modelRevision") != YOLO_EXPECTED_REVISION:
+        return "model_revision_mismatch"
+    if YOLO_EXPECTED_SHA256 and payload.get("modelSha256") != YOLO_EXPECTED_SHA256:
+        return "model_checksum_mismatch"
+    if YOLO_REQUIRE_CUDA and (
+        payload.get("cudaReady") is not True
+        or str(payload.get("device") or "").lower() == "cpu"
+        or not payload.get("gpu")
+    ):
+        return "cuda_not_ready"
+    return ""
+
+
+def _valid_normalized_box(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    try:
+        x = float(value.get("x"))
+        y = float(value.get("y"))
+        width = float(value.get("w"))
+        height = float(value.get("h"))
+    except (TypeError, ValueError):
+        return False
+    return (
+        all(math.isfinite(item) for item in (x, y, width, height))
+        and 0.0 <= x <= 1.0
+        and 0.0 <= y <= 1.0
+        and 0.0 < width <= 1.0
+        and 0.0 < height <= 1.0
+        and x + width <= 1.0
+        and y + height <= 1.0
+    )
+
+
+def _yolo_detection_error(payload: dict[str, Any]) -> str:
+    runtime_error = _yolo_runtime_error(payload)
+    if runtime_error:
+        return runtime_error
+    image = payload.get("image")
+    detections = payload.get("detections")
+    if not isinstance(image, dict) or not isinstance(detections, list):
+        return "response_schema_invalid"
+    try:
+        if int(image.get("width") or 0) <= 0 or int(image.get("height") or 0) <= 0:
+            return "image_dimensions_invalid"
+    except (TypeError, ValueError):
+        return "image_dimensions_invalid"
+    for detection in detections:
+        if not isinstance(detection, dict) or not _valid_normalized_box(detection.get("bbox")):
+            return "detection_box_invalid"
+    if bool(payload.get("detected")) != bool(detections):
+        return "detection_count_inconsistent"
+    try:
+        if int(payload.get("count")) != len(detections):
+            return "detection_count_inconsistent"
+    except (TypeError, ValueError):
+        return "detection_count_inconsistent"
+    return ""
 
 
 def _bbox_metrics(first: dict[str, Any], second: dict[str, Any]) -> tuple[float, float]:
@@ -123,6 +200,9 @@ def _generic_yolo_hits(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]
         )
     response.raise_for_status()
     payload = response.json()
+    detection_error = _yolo_detection_error(payload)
+    if detection_error:
+        raise ValueError(detection_error)
     candidates = [
         {
             "provider": "yolo11x_watermark",
@@ -153,14 +233,20 @@ def _generic_yolo_hits(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]
     }
 
 
-def _timed_registry_hits(path: Path) -> tuple[list[dict[str, Any]], int]:
+def _timed_registry_hits(
+    path: Path,
+    provenance_path: Path | None = None,
+) -> tuple[list[dict[str, Any]], int]:
     started = time.perf_counter()
-    hits = _registry_visible_hits(path)
+    hits = _registry_visible_hits(path, provenance_path=provenance_path)
     return hits, int((time.perf_counter() - started) * 1000)
 
 
-def _visible_hits_with_yolo(path: Path) -> list[dict[str, Any]]:
-    registry_future = _VISIBLE_EXECUTOR.submit(_timed_registry_hits, path)
+def _visible_hits_with_yolo(
+    path: Path,
+    provenance_path: Path | None = None,
+) -> list[dict[str, Any]]:
+    registry_future = _VISIBLE_EXECUTOR.submit(_timed_registry_hits, path, provenance_path)
     yolo_future = _VISIBLE_EXECUTOR.submit(_generic_yolo_hits, path)
     registry_hits, registry_elapsed_ms = registry_future.result()
     try:
@@ -215,12 +301,17 @@ def health_with_yolo():
         response = requests.get(YOLO_HEALTH_URL, timeout=(1, 4))
         response.raise_for_status()
         yolo.update(response.json())
-        yolo["available"] = True
+        runtime_error = _yolo_runtime_error(yolo)
+        yolo["available"] = not runtime_error
+        if runtime_error:
+            yolo["validationError"] = runtime_error
         yolo["mode"] = "visible_watermark_detection_with_platform_attribution"
     except (requests.RequestException, ValueError, TypeError) as exc:
         yolo["error"] = type(exc).__name__
     payload["genericVisibleWatermark"] = yolo
     payload["visibleBranchWorkers"] = VISIBLE_BRANCH_WORKERS
+    if not yolo.get("available") or payload.get("status") != "ok":
+        payload["status"] = "degraded"
     return payload
 
 

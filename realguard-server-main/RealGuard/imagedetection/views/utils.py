@@ -60,6 +60,60 @@ def normalize_account_uuid(value):
         return ''
 
 
+def detection_record_is_publishable(record):
+    """Hide developer API results until their billing reservation is settled."""
+    item = record or {}
+    filename = os.path.basename(str(item.get('filename') or ''))
+    stem = os.path.splitext(filename)[0]
+    task_suffix = str(item.get('developer_task_id') or '').strip()
+    if not task_suffix:
+        marker = 'developer-job_'
+        marker_index = stem.find(marker)
+        if marker_index < 0:
+            return True
+        storage_prefix = stem[:marker_index]
+        if storage_prefix:
+            if len(storage_prefix) != 13 or storage_prefix[-1] != '-':
+                return True
+            if any(char not in '0123456789abcdef' for char in storage_prefix[:12].lower()):
+                return True
+        task_suffix = stem[marker_index + len('developer-'):]
+    if len(task_suffix) != 24 or not task_suffix.startswith('job_'):
+        return True
+    if any(char not in '0123456789abcdef' for char in task_suffix[4:].lower()):
+        return True
+    itemid = item.get('itemid')
+    if itemid in (None, ''):
+        return False
+    rows = excute_sql(
+        """
+        SELECT task.status AS task_status, reservation.status AS billing_status
+        FROM developer_detection_tasks AS task
+        LEFT JOIN developer_billing_reservations AS reservation
+          ON reservation.task_id = task.task_id
+        WHERE task.task_id = %s
+          AND (task.effect_item_id = %s OR task.result_item_id = %s)
+        LIMIT 1
+        """,
+        (task_suffix, itemid, itemid),
+    )
+    if rows:
+        return (
+            rows[0].get('task_status') == 'success'
+            and rows[0].get('billing_status') == 'settled'
+        )
+    web_rows = excute_sql(
+        """
+        SELECT status
+        FROM web_detection_tasks
+        WHERE job_id = %s AND effect_item_id = %s
+        LIMIT 1
+        """,
+        (task_suffix, itemid),
+    )
+    return bool(web_rows and web_rows[0].get('status') == 'success')
+
+
 def detection_owner_where(phone='', openid='', *, account_uuid='', require_account_uuid=False):
     """Build a tenant filter from identities verified by the account database.
 
@@ -122,6 +176,15 @@ def apply_account_identity_schema():
                     cursor.execute(
                         f"ALTER TABLE `{table}` ADD KEY `{index_name}` (`owner_account_uuid`, `createtime`)"
                     )
+            if not _column_exists(cursor, 'data', 'developer_task_id'):
+                cursor.execute(
+                    "ALTER TABLE `data` ADD COLUMN `developer_task_id` VARCHAR(64) NULL "
+                    "COMMENT '开发者任务结算可见性标识' AFTER `owner_account_uuid`"
+                )
+            if not _index_exists(cursor, 'data', 'idx_data_developer_task'):
+                cursor.execute(
+                    "ALTER TABLE `data` ADD KEY `idx_data_developer_task` (`developer_task_id`)"
+                )
         detection_conn.commit()
 
         account_conn.begin()
@@ -175,6 +238,8 @@ def apply_account_identity_schema():
                     raise RuntimeError(f'image_detection.{table} 缺少 owner_account_uuid')
                 if not _index_exists(cursor, table, f'idx_{table}_owner_uuid_ct'):
                     raise RuntimeError(f'image_detection.{table} 缺少属主索引')
+            if not _column_exists(cursor, 'data', 'developer_task_id'):
+                raise RuntimeError('image_detection.data 缺少 developer_task_id')
         detection_conn.commit()
         return changes
     except Exception:

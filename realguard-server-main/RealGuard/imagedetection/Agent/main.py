@@ -56,10 +56,7 @@ class _AIGCAgentSystem:
         self.collector = EvidenceCollector(strict=self.strict_pipeline)
 
     def run(self, image_path: str) -> dict:
-        print(f"\n{'='*60}")
-        print("  AIGC 检测系统（证据融合 + 可选视觉大模型）")
-        print(f"  图像路径: {image_path}")
-        print(f"{'='*60}")
+        print("[AIGC DETECTION] pipeline started")
 
         print("\n========== Step 1: 取证工具（元数据 + 检测器）==========")
         evidence = self.collector.collect(image_path)
@@ -152,13 +149,7 @@ class _AIGCAgentSystem:
         print("-" * 50)
         print(r["explanation"])
         print("-" * 50)
-        print(f"\n【4】完整元数据: {r['metadata_count']} 个字段")
-        if r["all_metadata"]:
-            print(json.dumps(r["all_metadata"], ensure_ascii=False, indent=2)[:4000])
-            if len(json.dumps(r["all_metadata"])) > 4000:
-                print("  ... (truncated)")
-        else:
-            print("  （未提取到元数据）")
+        print(f"\n【4】元数据字段数: {r['metadata_count']}（内容不写入运行日志）")
         print(f"\n{'='*60}\n")
 
 

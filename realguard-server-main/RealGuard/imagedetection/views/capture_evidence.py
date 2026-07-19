@@ -256,24 +256,24 @@ def analyze_capture_evidence(
         level = "conflict"
         supports_real = False
         title = "拍摄元数据存在冲突"
-        summary = "读取到拍摄字段，但其中存在生成声明、时间或参数冲突，不能作为实拍支持证据。"
+        summary = "读取到拍摄流程字段，但其中存在生成声明、时间或参数冲突，不能确认图片来源。"
         likelihood_ratio = 1.0
     elif has_device and complete_parameters and bool(captured_at) and points >= 5.0:
         level = "medium"
         supports_real = True
-        title = "发现一致的相机拍摄链路"
-        summary = "设备、拍摄参数与原始时间相互支持，可作为真实拍摄的中等强度辅助证据。"
+        title = "拍摄流程元数据较一致"
+        summary = "设备、拍摄参数与原始时间相互一致，可作为相机工作流的辅助线索，但不能单独证明图片真实。"
         likelihood_ratio = 0.65
     elif has_device and (bool(captured_at) or bool(parameters)) and points >= 2.4:
         level = "weak"
         supports_real = True
-        title = "发现部分拍摄链路线索"
-        summary = "读取到部分设备或拍摄参数，但链路不完整，仅提供弱支持。"
+        title = "发现部分拍摄流程线索"
+        summary = "读取到部分设备或拍摄参数，但信息不完整且可以被编辑，仅作弱辅助线索。"
         likelihood_ratio = 0.84
     else:
         level = "none"
         supports_real = False
-        title = "未形成可用的实拍证据"
+        title = "未形成可用的拍摄流程线索"
         summary = "没有读取到足够完整且相互一致的相机拍摄字段；元数据缺失保持中性。"
         likelihood_ratio = 1.0
 

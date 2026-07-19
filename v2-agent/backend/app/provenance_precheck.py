@@ -16,6 +16,7 @@ from PIL import Image, ImageOps
 
 from . import evidence_probability
 from . import provenance as provenance_reader
+from . import watermark_verdict
 
 
 BASE_URL = os.getenv("JIANZHEN_PROVENANCE_PRECHECK_URL", "").strip().rstrip("/")
@@ -27,12 +28,8 @@ VISIBLE_SCAN_MAX_SIDE = int(os.getenv("JIANZHEN_PROVENANCE_PRECHECK_SCAN_MAX_SID
 VISIBLE_SCAN_QUALITY = int(os.getenv("JIANZHEN_PROVENANCE_PRECHECK_SCAN_QUALITY", "94"))
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 ALLOWED_REASONS = {
-    "known_visible_ai_watermark",
-    "corroborated_ai_provenance",
-    "watermark_metadata_conflict",
     "c2pa_ai_generated",
     "c2pa_ai_enhanced",
-    "ai_metadata",
 }
 KNOWN_VISIBLE_PROVIDERS = frozenset({"gemini", "doubao", "jimeng", "jimeng_pill", "samsung"})
 YOLO_PROVIDER = "yolo11x_watermark"
@@ -352,18 +349,7 @@ def _decision_from_probability_model(
         }
 
     confidence = float(probability_model.get("posterior") or 0.0)
-    has_known = "known_visible_ai_watermark" in kinds
-    has_clash = "metadata_integrity_clash" in kinds
-    has_declaration = bool(kinds.intersection({
-        "valid_ai_c2pa", "ai_enhancement_declaration", "ai_generation_metadata", "unverified_ai_declaration",
-    }))
-    if has_known and has_clash:
-        reason = "watermark_metadata_conflict"
-        summary = f"已知 AI 平台水印与来源完整性冲突相互印证，证据融合风险概率为 {confidence * 100:.2f}%。"
-    elif has_known and has_declaration:
-        reason = "corroborated_ai_provenance"
-        summary = f"已知 AI 平台水印与 AI 来源声明相互印证，证据融合风险概率为 {confidence * 100:.2f}%。"
-    elif "valid_ai_c2pa" in kinds:
+    if "valid_ai_c2pa" in kinds:
         reason = "c2pa_ai_generated"
         summary = f"通过校验的内容凭证声明该文件为 AI 生成，证据融合风险概率为 {confidence * 100:.2f}%。"
     elif "ai_enhancement_declaration" in kinds:
@@ -373,10 +359,17 @@ def _decision_from_probability_model(
         reason = "ai_metadata"
         summary = f"文件包含明确的 AI 生成元数据或参数，证据融合风险概率为 {confidence * 100:.2f}%。"
     else:
-        reason = "known_visible_ai_watermark"
-        providers = "、".join(dict.fromkeys(str(hit.get("label") or hit.get("provider")) for hit in known_hits))
-        summary = f"检测到已知 AI 平台可见标记（{providers}），证据融合风险概率为 {confidence * 100:.2f}%。"
-    enhanced_only = report.get("aiSourceKind") == "enhanced" and not has_known
+        return {
+            "shortCircuit": False,
+            "modelRequired": True,
+            "verdict": None,
+            "confidence": 0.0,
+            "reason": "no_decisive_ai_provenance",
+            "evidenceKinds": evidence_kinds,
+            "summary": "可见标记与可编辑元数据仅作为人工复核线索，继续调用图像检测模型。",
+            "probabilityModel": probability_model,
+        }
+    enhanced_only = report.get("aiSourceKind") == "enhanced"
     return {
         "shortCircuit": True,
         "modelRequired": False,
@@ -412,13 +405,11 @@ def _reconcile_probability(
             *(report.get("integrityClashes") or []),
             *(compact.get("integrityClashes") or []),
         ]))
-    known_hits = [
-        hit for hit in result.get("visibleHits") or []
-        if isinstance(hit, dict) and hit.get("decisive") is True
-    ]
-    probability_model = evidence_probability.build_probability_model(report, known_hits)
+    # Remote visual attribution is deliberately non-decisive. Only locally
+    # verified provenance from the original bytes may short-circuit a model.
+    probability_model = evidence_probability.build_probability_model(report, [])
     result["report"] = report
-    result["decision"] = _decision_from_probability_model(probability_model, report, known_hits)
+    result["decision"] = _decision_from_probability_model(probability_model, report, [])
 
 
 def _local_result(
@@ -636,6 +627,9 @@ def _visible_result(
     *,
     engine_version: str = "unknown",
     elapsed_ms: int = 0,
+    coordinate_space: str = "",
+    display_size: dict[str, Any] | None = None,
+    registry_supported: bool = False,
 ) -> dict[str, Any] | None:
     if not hits:
         return None
@@ -648,6 +642,10 @@ def _visible_result(
         "provider": top.get("provider"),
         "confidence": round(confidence, 3),
         "evidenceLevel": "strong" if confidence >= 0.8 else "medium",
+        "coordinateSpace": coordinate_space,
+        "displaySize": dict(display_size or {}),
+        "registrySupported": registry_supported,
+        "positiveEvidenceSupported": registry_supported,
         "hits": [
             {
                 "provider": hit.get("provider") or "unknown",
@@ -660,8 +658,9 @@ def _visible_result(
                 "crop": None,
                 "model": "wiltodelta/remove-ai-watermarks",
                 "modelRevision": engine_version,
-                "decisive": bool(hit.get("decisive")),
-                "evidenceRole": "provenance",
+                "decisive": False,
+                "evidenceRole": "visual_attribution",
+                "registryCorroborated": bool(hit.get("corroborated")),
                 "localizationConfirmed": bool(hit.get("yoloCorroborated")),
                 "localizationConfidence": round(float(hit.get("yoloConfidence") or 0.0), 3),
             }
@@ -707,11 +706,7 @@ def build_analysis(precheck: dict[str, Any]) -> dict[str, Any] | None:
         return None
 
     report = precheck.get("report") or {}
-    hits = [
-        hit
-        for hit in precheck.get("visibleHits") or []
-        if isinstance(hit, dict) and hit.get("decisive") is True
-    ]
+    hits: list[dict[str, Any]] = []
     dimensions: list[dict[str, Any]] = []
     if hits:
         top = max(float(hit.get("confidence") or 0.0) for hit in hits)
@@ -754,7 +749,20 @@ def build_analysis(precheck: dict[str, Any]) -> dict[str, Any] | None:
         hits,
         engine_version=engine_version,
         elapsed_ms=int(precheck.get("elapsedMs") or 0),
+        coordinate_space=str(precheck.get("coordinateSpace") or ""),
+        display_size=(precheck.get("displaySize") if isinstance(precheck.get("displaySize"), dict) else {}),
+        registry_supported=bool(
+            precheck.get("status") == "ok" and not engine_version.startswith("local-")
+        ),
     )
+    if reason in {
+        "known_visible_ai_watermark",
+        "corroborated_ai_provenance",
+        "watermark_metadata_conflict",
+    }:
+        return None
+    if reason in {"c2pa_ai_generated", "c2pa_ai_enhanced"} and report.get("c2paTrusted") is not True:
+        return None
     engine_label = (
         engine_version
         if engine_version.startswith("local-")
@@ -768,6 +776,9 @@ def build_analysis(precheck: dict[str, Any]) -> dict[str, Any] | None:
         "explanation": explanation,
         "modelVersion": f"provenance-gate/{engine_label}",
         "source": "provenance",
+        "decisionStatus": "verdict",
+        "decisionAuthority": "decisive_provenance",
+        "reviewRequired": False,
         "tokenUsage": {"promptTokens": 0, "completionTokens": 0, "totalTokens": 0},
         "provenancePrecheck": precheck,
         "probabilityModel": decision.get("probabilityModel"),

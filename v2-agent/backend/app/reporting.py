@@ -321,7 +321,12 @@ def download_filename(result: dict) -> str:
 
 
 def build_report_html(result: dict, *, forensics: dict | None = None, provenance: dict | None = None) -> str:
-    meta = VERDICT_META.get(result.get("verdict"), {"label": "未知结论", "color": "#4d423a"})
+    review_only = result.get("decisionStatus") != "verdict" or result.get("reviewRequired") is True
+    meta = (
+        {"label": "需人工复核", "color": "#b7791f"}
+        if review_only
+        else VERDICT_META.get(result.get("verdict"), {"label": "未知结论", "color": "#4d423a"})
+    )
     file_meta = result.get("fileMeta", {}) or {}
     preview = file_meta.get("preview") or file_meta.get("thumbnail") or ""
     preview_html = (
@@ -530,7 +535,7 @@ def build_report_html(result: dict, *, forensics: dict | None = None, provenance
       <div class="eyebrow">Jianzhen Report</div>
       <h1>慧鉴 AI 数字内容鉴伪报告</h1>
       <p>报告号 {report_id}，任务号 {task_id}。本报告用于留存检测结果、主要证据维度与辅助取证说明。</p>
-      <div class="pill">{meta["label"]} · 置信度 {_fmt_percent(result.get("confidence"))}</div>
+      <div class="pill">{meta["label"]} · {"未发布自动风险分数" if review_only else f"置信度 {_fmt_percent(result.get('confidence'))}"}</div>
       <div class="hero-grid">
         <div>
           <div class="meta-grid">

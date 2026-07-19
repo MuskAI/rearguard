@@ -22,7 +22,13 @@ import requests
 from flask import Blueprint, Response, g, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from imagedetection.views import admin_state, aliyun_green, model_registry, traffic_geo
+from imagedetection.views import (
+    admin_state,
+    aliyun_green,
+    evidence_manifest,
+    model_registry,
+    traffic_geo,
+)
 from imagedetection.views.utils import (
     detection_owner_where,
     excute_detection_sql,
@@ -1534,14 +1540,25 @@ def _hourly_detection_series(hours=24):
 def _label_distribution():
     rows = excute_detection_sql(
         """
-        SELECT COALESCE(NULLIF(aigc, ''), '未标注') AS label, COUNT(*) AS count
+        SELECT itemid, aigc
         FROM data
-        GROUP BY label
-        ORDER BY count DESC
-        LIMIT 8
+        ORDER BY itemid DESC
+        LIMIT 1000
         """
     ) or []
-    return [{"label": row.get("label"), "count": int(row.get("count") or 0)} for row in rows]
+    route_runs = admin_state.model_runs_by_itemids([row.get("itemid") for row in rows])
+    counts = {}
+    for row in rows:
+        view = _authorized_detection_view(
+            row,
+            route_runs.get(str(row.get("itemid"))),
+        )
+        label = view["label"]
+        counts[label] = counts.get(label, 0) + 1
+    return [
+        {"label": label, "count": count}
+        for label, count in sorted(counts.items(), key=lambda item: item[1], reverse=True)[:8]
+    ]
 
 
 def _feedback_distribution():
@@ -1579,6 +1596,24 @@ def _screen_model_run(run):
     }
 
 
+def _authorized_detection_view(row, model_run):
+    """Normalize every admin surface to the signed decision authorization."""
+    try:
+        visible = evidence_manifest._structured_visible_watermark(model_run)
+        decision = evidence_manifest._decision_authorization(model_run, visible)
+    except Exception:
+        decision = {"status": "review_only", "authority": "none"}
+    authorized = decision.get("status") == "verdict"
+    return {
+        "label": (row.get("aigc") or "待判定") if authorized else "需人工复核",
+        "probability": row.get("fake") if authorized else None,
+        "detectorProbability": row.get("detector_probability") if authorized else None,
+        "confidence": row.get("clarity") if authorized else "不适用",
+        "decisionStatus": "verdict" if authorized else "review_only",
+        "decisionAuthority": decision.get("authority") if authorized else "none",
+    }
+
+
 def _recent_detection_items(limit=12):
     select_clause = _screen_detection_select_clause()
     rows = excute_detection_sql(
@@ -1591,18 +1626,18 @@ def _recent_detection_items(limit=12):
         (limit,),
     ) or []
     route_runs = admin_state.model_runs_by_itemids([row.get("itemid") for row in rows])
-    return [
-        {
+    items = []
+    for row in rows:
+        run = route_runs.get(str(row.get("itemid")))
+        view = _authorized_detection_view(row, run)
+        items.append({
             "id": row.get("itemid"),
             "createdAt": format_createtime(row.get("createtime")),
-            "label": row.get("aigc"),
-            "probability": row.get("fake"),
-            "confidence": row.get("clarity"),
             "feedback": row.get("feedback"),
-            "modelRoute": _screen_model_run(route_runs.get(str(row.get("itemid")))),
-        }
-        for row in rows
-    ]
+            "modelRoute": _screen_model_run(run),
+            **view,
+        })
+    return items
 
 
 def _route_distribution(limit=6):
@@ -2015,15 +2050,17 @@ def _service_health():
 
 @admin_blueprint.route("/admin")
 def admin_console():
-    user = _current_user()
-    admin_user = _current_admin_user()
-    if not admin_user and not user:
+    active_user, permission_error = _admin_required("view")
+    if permission_error:
+        if permission_error[1] == 401:
+            return redirect(url_for("admin_blueprint.admin_login"))
+        return permission_error
+    if not active_user:
         return redirect(url_for("admin_blueprint.admin_login"))
-    active_user = admin_user or _legacy_admin_payload(user) or user
     role = _normalize_admin_role((active_user.get("role") if isinstance(active_user, dict) else "") or "admin")
     return render_template(
         "admin.html",
-        admin_allowed=bool(admin_user or _is_legacy_admin(user)),
+        admin_allowed=True,
         admin_user=active_user,
         admin_role_label=ADMIN_ROLE_LABELS.get(role, role),
         admin_permissions=_admin_permissions(role),
@@ -2581,13 +2618,13 @@ def admin_user_detail(user_id):
                 "createdAt": format_createtime(item.get("createtime")),
                 "filename": item.get("filename"),
                 "phone": item.get("phone") if include_pii else _mask_phone(item.get("phone")),
-                "label": item.get("aigc"),
-                "probability": item.get("fake"),
-                "detectorProbability": item.get("detector_probability"),
-                "confidence": item.get("clarity"),
                 "feedback": item.get("feedback"),
                 "modelRoute": _model_run_for_admin(
                     route_runs.get(str(item.get("itemid"))), actor, "user.read_pii"
+                ),
+                **_authorized_detection_view(
+                    item,
+                    route_runs.get(str(item.get("itemid"))),
                 ),
             }
             for item in detection_rows
@@ -2681,17 +2718,15 @@ def admin_detections():
     include_pii = _has_admin_permission(actor, "detection.read_pii")
     items = []
     for row in rows:
+        run = route_runs.get(str(row.get("itemid")))
         items.append({
             "id": row.get("itemid"),
             "createdAt": format_createtime(row.get("createtime")),
             "filename": row.get("filename"),
             "phone": row.get("phone") if include_pii else _mask_phone(row.get("phone")),
-            "label": row.get("aigc"),
-            "probability": row.get("fake"),
-            "detectorProbability": row.get("detector_probability"),
-            "confidence": row.get("clarity"),
             "feedback": row.get("feedback"),
-            "modelRoute": _model_run_for_admin(route_runs.get(str(row.get("itemid"))), actor),
+            "modelRoute": _model_run_for_admin(run, actor),
+            **_authorized_detection_view(row, run),
         })
     items, page = _page_payload(items, limit)
     return jsonify({"status": "success", "detections": items, "page": page})
@@ -2727,6 +2762,7 @@ def admin_detection_detail(itemid):
         except Exception:
             metadata = {}
     route_runs = admin_state.model_runs_by_itemids([itemid])
+    run = route_runs.get(str(itemid))
     include_pii = _has_admin_permission(actor, "detection.read_pii")
     item = {
         "id": row.get("itemid"),
@@ -2735,14 +2771,11 @@ def admin_detection_detail(itemid):
         "createdAt": format_createtime(row.get("createtime")),
         "filename": row.get("filename"),
         "phone": row.get("phone") if include_pii else _mask_phone(row.get("phone")),
-        "label": row.get("aigc"),
-        "probability": row.get("fake"),
-        "detectorProbability": row.get("detector_probability"),
-        "confidence": row.get("clarity"),
         "feedback": row.get("feedback"),
         "explanation": row.get("explantation") or "",
         "metadata": metadata if include_pii else _redact_metadata(metadata),
-        "modelRoute": _model_run_for_admin(route_runs.get(str(itemid)), actor),
+        "modelRoute": _model_run_for_admin(run, actor),
+        **_authorized_detection_view(row, run),
     }
     _audit(actor, "detection.detail.read", str(itemid), meta={"piiIncluded": include_pii})
     return jsonify({"status": "success", "detection": item})
@@ -2767,24 +2800,26 @@ def admin_detections_export():
     route_runs = admin_state.model_runs_by_itemids([row.get("itemid") for row in rows])
     include_pii = _has_admin_permission(actor, "detection.read_pii")
     _audit(actor, "detections.export", "detections", meta={"count": len(rows), "piiIncluded": include_pii})
+    export_rows = []
+    for row in rows:
+        run = route_runs.get(str(row.get("itemid")))
+        view = _authorized_detection_view(row, run)
+        export_rows.append([
+            row.get("itemid"),
+            format_createtime(row.get("createtime")),
+            row.get("phone") if include_pii else _mask_phone(row.get("phone")),
+            row.get("filename"),
+            view["label"],
+            view["probability"],
+            view["detectorProbability"],
+            view["confidence"],
+            row.get("feedback"),
+            (run or {}).get("model", {}).get("id", ""),
+        ])
     return _csv_response(
         "realguard-detections.csv",
         ["ID", "Created At", "Phone", "Filename", "Label", "Probability", "Detector Probability", "Confidence", "Feedback", "Model Route"],
-        [
-            [
-                row.get("itemid"),
-                format_createtime(row.get("createtime")),
-                row.get("phone") if include_pii else _mask_phone(row.get("phone")),
-                row.get("filename"),
-                row.get("aigc"),
-                row.get("fake"),
-                row.get("detector_probability"),
-                row.get("clarity"),
-                row.get("feedback"),
-                (route_runs.get(str(row.get("itemid"))) or {}).get("model", {}).get("id", ""),
-            ]
-            for row in rows
-        ],
+        export_rows,
     )
 
 

@@ -2,7 +2,22 @@ from __future__ import annotations
 
 from typing import Any
 
-from PIL import Image
+from PIL import Image, ImageOps
+
+
+def normalize_orientation(image: Image.Image) -> tuple[Image.Image, dict[str, Any]]:
+    encoded_size = image.size
+    try:
+        orientation = int(image.getexif().get(274, 1) or 1)
+    except (AttributeError, TypeError, ValueError):
+        orientation = 1
+    normalized = ImageOps.exif_transpose(image)
+    return normalized, {
+        "exifOrientation": orientation,
+        "orientationApplied": orientation not in {0, 1},
+        "encodedSize": {"width": int(encoded_size[0]), "height": int(encoded_size[1])},
+        "displaySize": {"width": int(normalized.size[0]), "height": int(normalized.size[1])},
+    }
 
 
 def fit_within(width: int, height: int, max_side: int) -> tuple[int, int]:

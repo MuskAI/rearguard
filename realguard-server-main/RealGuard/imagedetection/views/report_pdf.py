@@ -170,6 +170,7 @@ def _build_report(
     metadata: list[tuple[str, Any]],
     explanation: Any,
     summary_rows: list[list[Any]],
+    decision_status: str = "verdict",
     visible: dict[str, Any] | None = None,
     capture: dict[str, Any] | None = None,
 ) -> bytes:
@@ -194,8 +195,13 @@ def _build_report(
         _p(f"报告编号 {report_id}", styles["subtitle"]),
         Spacer(1, 4 * mm),
     ]
+    score_summary = (
+        "未发布自动风险分数 · 待人工复核"
+        if decision_status != "verdict"
+        else f"{'AI 生成风险' if 'AI生成' in final_label else '综合异常风险'} {probability:.1f}% · 置信度 {_text(confidence)}"
+    )
     verdict_table = Table(
-        [[_p(final_label, styles["verdict"]), _p(f"{'AI 生成风险' if 'AI生成' in final_label else '综合异常风险'} {probability:.1f}% · 置信度 {_text(confidence)}", styles["verdict"])]],
+        [[_p(final_label, styles["verdict"]), _p(score_summary, styles["verdict"])]],
         colWidths=[82 * mm, 90 * mm],
     )
     verdict_table.setStyle(TableStyle([
@@ -215,14 +221,15 @@ def _build_report(
     ])
 
     if capture:
-        story.append(_p("实拍来源证据", styles["section"]))
+        signed_camera_capture = "signed_camera_capture" in (capture.get("groups") or [])
+        story.append(_p("拍摄流程元数据线索", styles["section"]))
         story.append(_meta_table([
-            ("证据等级", capture.get("levelText")),
-            ("链路评分", _percent(capture.get("score"), fraction=True)),
-            ("支持实拍", "是" if capture.get("supportsRealCapture") else "否"),
+            ("线索等级", capture.get("levelText")),
+            ("线索一致性", _percent(capture.get("score"), fraction=True)),
+            ("密码学来源验证", "已验证相机凭证" if signed_camera_capture else "未验证"),
             ("分析版本", capture.get("version")),
         ], styles))
-        story.extend([Spacer(1, 2 * mm), _p(capture.get("summary"), styles["body"], "未形成可用实拍证据。")])
+        story.extend([Spacer(1, 2 * mm), _p(capture.get("summary"), styles["body"], "未形成可用拍摄流程线索。")])
         capture_rows = [["证据项", "脱敏结果", "强度"]]
         for item in (capture.get("evidence") or [])[:8]:
             capture_rows.append([
@@ -238,25 +245,33 @@ def _build_report(
             story.extend([Spacer(1, 1.5 * mm), _p(note, styles["small"])])
 
     if visible:
-        story.append(_p("可见水印证据", styles["section"]))
+        story.append(_p("可见水印定位线索", styles["section"]))
         story.append(_meta_table([
             ("检测状态", "检出" if visible.get("detected") else "未检出"),
             ("最高置信度", _percent(visible.get("confidence"), fraction=True)),
             ("识别来源", visible.get("provider")),
             ("定位数量", len(visible.get("hits") or [])),
+            ("判定权限", "仅作视觉定位，不单独决定真伪"),
         ], styles))
-        rows = [["序号", "水印类型", "置信度", "位置"]]
+        rows = [["序号", "线索类型", "置信度", "归属状态", "位置"]]
         for index, hit in enumerate((visible.get("hits") or [])[:12], start=1):
             bbox = hit.get("bbox") or {}
+            attributed = (
+                hit.get("evidenceRole") == "visual_attribution"
+                or hit.get("method") == "remove_ai_watermarks_registry"
+            )
+            evidence_role = "平台标记归属" if attributed else "通用视觉定位"
             rows.append([
                 str(index),
-                _text(hit.get("label") or hit.get("provider")),
+                evidence_role,
                 _percent(hit.get("confidence"), fraction=True),
+                _text(hit.get("label") or hit.get("provider")) if attributed else "未作来源确认",
                 f"x {_percent(bbox.get('x'), fraction=True)} · y {_percent(bbox.get('y'), fraction=True)}",
             ])
         if len(rows) > 1:
-            story.extend([Spacer(1, 2 * mm), _table(rows, [14 * mm, 62 * mm, 28 * mm, 68 * mm])])
+            story.extend([Spacer(1, 2 * mm), _table(rows, [12 * mm, 38 * mm, 24 * mm, 44 * mm, 54 * mm])])
         story.extend([Spacer(1, 2 * mm), _p(visible.get("note"), styles["small"], "-")])
+        story.extend([Spacer(1, 1.5 * mm), _p("视觉水印可以被复制、覆盖或二次传播；只有通过签名校验的内容凭证才属于密码学来源证据。", styles["small"])])
 
     story.append(_p("检测摘要", styles["section"]))
     story.append(_table(summary_rows, [42 * mm, 100 * mm, 30 * mm]))
@@ -271,14 +286,18 @@ def _build_report(
 
 
 def image_report_pdf(item: dict[str, Any], result: dict[str, Any]) -> bytes:
-    probability = float(result.get("probability", 0) or 0) * 100
-    confidence = _text(result.get("confidence"), "")
-    requires_review = 35 < probability < 75 or confidence == "低"
+    decision_status = str(result.get("decisionStatus") or "review_only")
+    review_only = decision_status != "verdict"
+    probability = 0.0 if review_only else float(result.get("probability", 0) or 0) * 100
+    confidence = "不适用" if review_only else _text(result.get("confidence"), "")
+    requires_review = review_only or 35 < probability < 75 or confidence == "低"
     base_label = _text(
         result.get("final_label"),
         "AI生成图像" if float(item.get("fake", 0) or 0) >= 50 else "真实图像",
     )
-    final_label = f"{base_label}（需人工复核）" if requires_review and base_label != "需人工复核" else base_label
+    final_label = "需人工复核" if review_only else (
+        f"{base_label}（需人工复核）" if requires_review and base_label != "需人工复核" else base_label
+    )
     issues = "；".join(str(value) for value in (result.get("visual_issues") or []) if str(value).strip())
     return _build_report(
         report_id=f"IMG-{item.get('itemid')}",
@@ -299,18 +318,18 @@ def image_report_pdf(item: dict[str, Any], result: dict[str, Any]) -> bytes:
             ["字段", "内容", "状态"],
             ["视觉可疑点", issues or "未提取到明确视觉可疑点", "已完成"],
             ["元数据", "已提取，仅作辅助证据" if result.get("all_metadata") else "未提取到；缺失本身不代表伪造", "辅助"],
-            ["实拍来源证据", (result.get("capture_evidence") or {}).get("summary") or "未形成可用实拍证据", (result.get("capture_evidence") or {}).get("levelText") or "无"],
+            ["拍摄流程元数据", (result.get("capture_evidence") or {}).get("summary") or "未形成可用拍摄流程线索", (result.get("capture_evidence") or {}).get("levelText") or "无"],
         ],
+        decision_status=decision_status,
         visible=result.get("visibleWatermark") if isinstance(result.get("visibleWatermark"), dict) else None,
         capture=result.get("capture_evidence") if isinstance(result.get("capture_evidence"), dict) else None,
     )
 
 
 def video_report_pdf(item: dict[str, Any], result: dict[str, Any]) -> bytes:
-    probability = float(result.get("fake_percentage", 0) or 0)
-    confidence = _text(result.get("confidence"), "")
-    requires_review = 35 < probability < 75 or confidence == "低"
-    final_label = "需人工复核" if requires_review else _text(result.get("final_label"), "视频检测结果")
+    probability = 0.0
+    confidence = "不适用"
+    final_label = "需人工复核"
     meta = result.get("meta") or {}
     return _build_report(
         report_id=f"VID-{item.get('itemid')}",
@@ -329,8 +348,9 @@ def video_report_pdf(item: dict[str, Any], result: dict[str, Any]) -> bytes:
         explanation=result.get("explanation"),
         summary_rows=[
             ["字段", "内容", "值"],
-            ["AI 概率", "综合伪造概率", f"{probability:.1f}%"],
-            ["真实概率", "综合真实概率", f"{float(result.get('real_percentage', 0) or 0):.1f}%"],
+            ["自动风险分数", "视频校准契约尚未完成", "未发布"],
+            ["结论权限", "当前结果仅供人工复核", "review_only"],
             ["分析帧数", "返回的分析帧计数", _text(result.get("frame_count"))],
         ],
+        decision_status="review_only",
     )

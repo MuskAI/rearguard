@@ -145,7 +145,7 @@ export interface UnifiedForensicsRegion {
   w: number;
   h: number;
   label: string;
-  confidence: number;
+  confidence: number | null;
   frame?: number;
 }
 
@@ -220,6 +220,9 @@ export interface DetectResult {
   };
   modelVersion: string;
   source: string;
+  decisionStatus?: "verdict" | "review_only";
+  decisionAuthority?: "decisive_provenance" | "none" | string;
+  reviewRequired?: boolean;
   cacheVersion: string;
   cacheHit?: boolean;
   elapsedMs: number;
@@ -228,6 +231,8 @@ export interface DetectResult {
   explanation: string;
   synthid?: SynthIDResult;
   visibleWatermark?: VisibleWatermarkResult;
+  evidenceCompleteness?: boolean;
+  evidenceWarnings?: string[];
   captureEvidence?: CaptureEvidence;
   probabilityModel?: ProbabilityModel;
   provenancePrecheck?: ProvenancePrecheckResult;
@@ -721,6 +726,10 @@ export interface ImageAgentResult {
   p_visual?: number | null;
   p_metadata?: number | null;
   confidence: string;
+  decisionStatus?: "verdict" | "review_only";
+  decisionAuthority?: "calibrated_model" | "decisive_provenance" | "none" | string;
+  reviewRequired?: boolean;
+  modelDecisionReady?: boolean | null;
   explanation: string;
   image_url: string;
   filename: string;
@@ -735,6 +744,8 @@ export interface ImageAgentResult {
   probabilityModel?: ProbabilityModel;
   synthid?: SynthIDResult;
   visibleWatermark?: VisibleWatermarkResult;
+  evidenceCompleteness?: boolean;
+  evidenceWarnings?: string[];
   capture_evidence?: CaptureEvidence;
 }
 
@@ -759,11 +770,14 @@ export interface VideoAgentResult {
   itemid: number;
   filename: string;
   video_url: string;
-  fake_percentage: number;
-  real_percentage: number;
+  fake_percentage: number | null;
+  real_percentage: number | null;
   final_label: string;
   confidence: string;
   confidence_score?: number;
+  decisionStatus?: "verdict" | "review_only";
+  decisionAuthority?: string;
+  reviewRequired?: boolean;
   explanation: string;
   frame_count?: number;
   d3_std?: number;
@@ -776,8 +790,8 @@ export interface ImageHistoryRecord {
   filename: string;
   image_url: string;
   thumbnail_url?: string;
-  real_prob: number;
-  fake_prob: number;
+  real_prob: number | null;
+  fake_prob: number | null;
   final_label: string;
   confidence: string;
   createtime: string;
@@ -788,8 +802,8 @@ export interface VideoHistoryRecord {
   itemid: number;
   filename: string;
   video_url: string;
-  real_percentage: number;
-  fake_percentage: number;
+  real_percentage: number | null;
+  fake_percentage: number | null;
   final_label: string;
   confidence: string;
   createtime: string;
@@ -1272,7 +1286,7 @@ export const VERDICT_META: Record<Verdict, { label: string; color: string; ring:
   real: { label: "真实", color: "#3fb6a8", ring: "verdict-real" },
   suspected_fake: { label: "疑似伪造", color: "#d99a2b", ring: "verdict-warn" },
   highly_suspected_fake: { label: "高度疑似伪造", color: "#d8412f", ring: "verdict-fake" },
-  unknown: { label: "未知判定", color: "#7c8aa5", ring: "verdict-unknown" },
+  unknown: { label: "需要人工复核", color: "#7c8aa5", ring: "verdict-unknown" },
 };
 
 export const TYPE_LABEL: Record<FileType, string> = {

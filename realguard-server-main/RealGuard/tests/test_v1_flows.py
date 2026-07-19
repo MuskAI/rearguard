@@ -1,10 +1,12 @@
 from io import BytesIO
 from pathlib import Path
+import base64
 import json
 import sys
 import threading
 
 import pytest
+from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,7 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from imagedetection import creat_app  # noqa: E402
-from imagedetection.views import api, detection, evidence_manifest, reporting  # noqa: E402
+from imagedetection.views import api, detection, evidence_manifest, historical_record, reporting  # noqa: E402
 import detector_backend  # noqa: E402
 
 ACCOUNT_UUID = "11111111-1111-4111-8111-111111111111"
@@ -20,6 +22,34 @@ OWNER_WHERE = "owner_account_uuid = %s"
 GUEST_OWNER_WHERE = "Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s"
 IMAGE_HISTORY_QUERY = f"SELECT * FROM data WHERE {OWNER_WHERE} ORDER BY {api.HISTORY_ORDER_BY}"
 VIDEO_HISTORY_QUERY = f"SELECT * FROM video_data WHERE {OWNER_WHERE} ORDER BY {api.HISTORY_ORDER_BY}"
+VALID_PNG_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+)
+CALIBRATED_MODEL_DECISION = {
+    "ready": True,
+    "mode": "calibrated_verdict",
+    "calibrationId": "calibration-2026-07",
+    "manifestSha256": "b" * 64,
+    "datasetSha256": "a" * 64,
+    "modelSha256": "c" * 64,
+    "preprocessingSha256": "d" * 64,
+    "runtimeContractSha256": "e" * 64,
+    "evaluationCodeRevision": "eval-commit-abc123",
+    "expiresAt": "2099-12-31T23:59:59Z",
+    "realSamples": 800,
+    "fakeSamples": 700,
+    "observedFpr": 0.03,
+    "observedFnr": 0.08,
+    "aiThreshold": 0.61,
+    "gateReasons": [],
+}
+
+
+def _animated_gif_bytes():
+    output = BytesIO()
+    frames = [Image.new("RGB", (2, 2), color) for color in ("white", "black")]
+    frames[0].save(output, format="GIF", save_all=True, append_images=frames[1:], duration=100, loop=0)
+    return output.getvalue()
 
 
 class _FakeResponse:
@@ -31,6 +61,16 @@ class _FakeResponse:
 
     def json(self):
         return self._payload
+
+
+class _FailedResponse(_FakeResponse):
+    def __init__(self, payload, status_code, headers=None):
+        super().__init__(payload)
+        self.status_code = status_code
+        self.headers = headers or {}
+
+    def raise_for_status(self):
+        raise detection.requests.HTTPError(f"HTTP {self.status_code}", response=self)
 
 
 @pytest.fixture
@@ -59,6 +99,25 @@ def _login_session(client, phone="13800000000"):
             "phone": phone,
             "openid": "openid-1",
         }
+
+
+def _run_fast_payload(client, *, is_guest=False):
+    user_info = {
+        "Userid": None if is_guest else 1,
+        "account_uuid": "" if is_guest else ACCOUNT_UUID,
+        "username": "访客" if is_guest else "tester",
+        "phone": "" if is_guest else "13800000000",
+        "openid": "guest-test" if is_guest else "openid-1",
+    }
+    with client.application.test_request_context("/image_upload/detect", method="POST"):
+        return detection._run_image_detection_payload(
+            VALID_PNG_BYTES,
+            "demo.png",
+            "image/png",
+            user_info,
+            is_guest=is_guest,
+            mark_guest=False,
+        )
 
 
 def test_api_password_login_sets_session(client, monkeypatch):
@@ -286,7 +345,7 @@ def test_developer_v1_detect_is_retired_after_key_validation(client, monkeypatch
     response = client.post(
         "/api/developer/v1/detect",
         headers={"X-RealGuard-Key": "rg_sk_test"},
-        data={"file": (BytesIO(b"fake-image"), "demo.png")},
+        data={"file": (BytesIO(VALID_PNG_BYTES), "demo.png")},
         content_type="multipart/form-data",
     )
 
@@ -294,55 +353,30 @@ def test_developer_v1_detect_is_retired_after_key_validation(client, monkeypatch
     assert response.get_json()["migration"] == "/api/developer/openapi.json"
 
 
-def test_guest_image_detect_returns_rewritten_url_and_then_blocks(client, monkeypatch):
-    monkeypatch.setattr(
-        detection.model_registry,
-        "get_routing",
-        lambda: {"imagePrimary": "v1", "fallbackEnabled": False},
-    )
-    monkeypatch.setattr(
-        detection.model_registry,
-        "get_model",
-        lambda model_id: {"id": "v1", "enabled": True, "endpoint": detection.IMAGE_DETECT_API, "timeoutSeconds": 180},
-    )
-    monkeypatch.setattr(detection, "_metadata_for_item", lambda itemid: {})
-    monkeypatch.setattr(detection, "_ensure_local_primary_record", lambda *args, **kwargs: 11)
+def test_legacy_guest_image_detect_uses_durable_queue_and_then_blocks(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(detection.admin_state, "STATE_PATH", tmp_path / "admin_state.json")
+    queued = []
     monkeypatch.setattr(
         detection,
-        "_backend_post",
-        lambda url, **kwargs: _FakeResponse(
-            {
-                "code": 200,
-                "data": {
-                    "data_itemid": 11,
-                    "fake_percentage": 64.0,
-                    "final_label": "AI生成图像",
-                    "confidence": "高",
-                    "image_url": "http://10.1.20.66:5000/static/uploads/guest/image/demo.png",
-                    "filename": "demo.png",
-                    "file_size": "12KB",
-                    "img_format": "png",
-                    "resolution": "256x256",
-                },
-            }
-        ),
+        "_enqueue_persistent_web_job",
+        lambda *args, **kwargs: queued.append(args) or (True, "", ""),
     )
 
     first = client.post(
         "/image_upload/detect",
-        data={"image": (BytesIO(b"fake-image"), "demo.png")},
+        data={"image": (BytesIO(VALID_PNG_BYTES), "demo.png")},
         content_type="multipart/form-data",
     )
 
-    assert first.status_code == 200
-    payload = first.get_json()
-    assert payload["result"]["image_url"] == "/api/media/image/11"
+    assert first.status_code == 202
+    assert first.get_json()["job"]["status"] == "queued"
+    assert len(queued) == 1
     with client.session_transaction() as sess:
         assert sess[detection.GUEST_DETECTION_SESSION_KEY] == 1
 
     second = client.post(
         "/image_upload/detect",
-        data={"image": (BytesIO(b"fake-image"), "demo.png")},
+        data={"image": (BytesIO(VALID_PNG_BYTES), "demo.png")},
         content_type="multipart/form-data",
     )
 
@@ -393,7 +427,7 @@ def test_remote_primary_result_is_imported_into_local_user_history(monkeypatch):
 
     assert itemid == 648
     assert "INSERT INTO data" in inserted["sql"]
-    assert inserted["params"][-2] == 42
+    assert inserted["params"][-3] == 42
     assert inserted["params"][-1] is None
     assert api_json["data"]["data_itemid"] == 648
     assert api_json["data"]["filename"] == "local-result.png"
@@ -557,17 +591,17 @@ def test_image_detect_falls_back_to_v2_when_v1_backend_is_down(client, monkeypat
 
     monkeypatch.setattr(detection, "_backend_post", fake_backend_post)
 
-    response = client.post(
-        "/image_upload/detect",
-        data={"image": (BytesIO(b"fake-image"), "demo.png")},
-        content_type="multipart/form-data",
-    )
+    payload, status_code = _run_fast_payload(client)
 
-    assert response.status_code == 200
-    payload = response.get_json()
+    assert status_code == 200
     assert payload["result"]["itemid"] == 88
-    assert payload["result"]["final_label"] == "AI生成图像"
-    assert payload["result"]["probability"] == pytest.approx(0.76)
+    assert payload["result"]["final_label"] == "需人工复核"
+    assert payload["result"]["probability"] is None
+    assert payload["result"]["detector_probability"] is None
+    assert payload["result"]["confidence"] == "不适用"
+    assert payload["result"]["scorePublished"] is False
+    assert payload["result"]["modelDecisionReady"] is False
+    assert payload["result"]["reviewRequired"] is True
     assert payload["result"]["image_url"] == "/api/media/image/88"
 
 
@@ -647,7 +681,7 @@ def test_image_report_marks_borderline_result_for_human_review(tmp_path, monkeyp
         snapshot_root=tmp_path / "snapshots",
     )
 
-    assert "需人工复核 · 66.1%" in html
+    assert "需人工复核 · 未发布自动风险分数" in html
     assert "缺失本身不代表伪造" in html
     assert reporting.image_report_filename(9) == "huijian-image-report-9.pdf"
 
@@ -705,16 +739,16 @@ def test_image_detect_can_use_aliyun_primary_and_records_backend_model(client, m
     monkeypatch.setattr(detection, "get_file_size_str", lambda path: "1KB")
     monkeypatch.setattr(detection, "excute_detection_sql_lastid", lambda sql, params=None: 123)
 
-    response = client.post(
-        "/image_upload/detect",
-        data={"image": (BytesIO(b"fake-image"), "demo.png")},
-        content_type="multipart/form-data",
-    )
+    payload, status_code = _run_fast_payload(client)
 
-    assert response.status_code == 200
-    payload = response.get_json()
+    assert status_code == 200
     assert payload["result"]["itemid"] == 123
-    assert payload["result"]["probability"] == pytest.approx(0.82)
+    assert payload["result"]["probability"] is None
+    assert payload["result"]["detector_probability"] is None
+    assert payload["result"]["confidence"] == "不适用"
+    assert payload["result"]["scorePublished"] is False
+    assert payload["result"]["final_label"] == "需人工复核"
+    assert payload["result"]["reviewRequired"] is True
     assert payload["result"]["agent_reasoning"] == ""
     runs = detection.admin_state.load_state()["modelRuns"]
     assert runs[0]["itemid"] == 123
@@ -726,6 +760,8 @@ def test_fast_image_detect_exposes_parallel_visible_watermark(client, monkeypatc
     _login_session(client)
     precheck = {
         "status": "ok",
+        "coordinateSpace": "display_normalized_v1",
+        "displaySize": {"width": 640, "height": 480},
         "elapsedMs": 24,
         "engineVersion": "test-registry",
         "genericVisibleWatermark": {
@@ -766,27 +802,180 @@ def test_fast_image_detect_exposes_parallel_visible_watermark(client, monkeypatc
     monkeypatch.setattr(detection, "_metadata_for_item", lambda itemid: {})
     monkeypatch.setattr(detection, "_record_model_run", lambda *args, **kwargs: None)
 
-    response = client.post(
-        "/image_upload/detect",
-        data={"image": (BytesIO(b"fake-image"), "demo.png")},
-        content_type="multipart/form-data",
-    )
+    payload, status_code = _run_fast_payload(client)
 
-    assert response.status_code == 200
-    result = response.get_json()["result"]
+    assert status_code == 200
+    result = payload["result"]
     assert result["visibleWatermark"]["detected"] is True
     assert result["visibleWatermark"]["hits"][0]["confidence"] == pytest.approx(0.91)
     assert result["visibleWatermark"]["elapsedMs"] == 24
-    assert result["final_label"] == "真实图像"
-    assert result["probability"] == pytest.approx(0.21)
-    assert result["detector_probability"] == pytest.approx(0.21)
-    assert result["confidence"] == "中"
+    assert result["final_label"] == "需人工复核"
+    assert result["probability"] is None
+    assert result["detector_probability"] is None
+    assert result["confidence"] == "不适用"
+    assert result["scorePublished"] is False
+    assert result["reviewRequired"] is True
     assert result.get("watermark_verdict_override") is None
     assert "不单独影响 AI 生成结论" in result["visibleWatermark"]["note"]
     assert "_remote_evidence" not in result
 
 
-def test_v1_watermark_policy_only_promotes_confirmed_ai_platform_hits():
+def test_fast_image_detect_marks_failed_watermark_evidence_as_incomplete(client, monkeypatch):
+    _login_session(client)
+    monkeypatch.setattr(detection, "_primary_image_endpoint", lambda: ("http://detector.test/image", 30, ""))
+    monkeypatch.setattr(
+        detection,
+        "_backend_post",
+        lambda *args, **kwargs: _FakeResponse({
+            "code": 200,
+            "data": {
+                "data_itemid": 457,
+                "fake_percentage": 21.0,
+                "final_label": "真实图像",
+                "confidence": "中",
+                "filename": "demo.png",
+                "remote_evidence": {
+                    "visibleWatermarkPrecheck": {
+                        "status": "failed",
+                        "errorCode": "visible_watermark_unavailable",
+                        "message": "可见水印检测暂不可用，本次证据不完整。",
+                        "elapsedMs": 12000,
+                    },
+                },
+            },
+        }),
+    )
+    monkeypatch.setattr(detection, "_ensure_local_primary_record", lambda *args, **kwargs: None)
+    monkeypatch.setattr(detection, "_metadata_for_item", lambda itemid: {})
+    monkeypatch.setattr(detection, "_record_model_run", lambda *args, **kwargs: None)
+
+    payload, status_code = _run_fast_payload(client)
+
+    assert status_code == 200
+    result = payload["result"]
+    assert result["visibleWatermark"]["supported"] is False
+    assert result["visibleWatermark"]["detected"] is False
+    assert "不可用" in result["visibleWatermark"]["note"]
+    assert result["evidenceCompleteness"] is False
+    assert "不能据此判断图片未含水印" in result["evidenceWarnings"][0]
+
+
+def test_fast_image_detect_does_not_publish_uncalibrated_model_score(client, monkeypatch):
+    _login_session(client)
+    precheck = {
+        "status": "ok",
+        "coordinateSpace": "display_normalized_v1",
+        "displaySize": {"width": 640, "height": 480},
+        "genericVisibleWatermark": {
+            "available": True,
+            "detected": False,
+            "count": 0,
+        },
+        "visibleHits": [],
+    }
+    monkeypatch.setattr(detection, "_primary_image_endpoint", lambda: ("http://detector.test/image", 30, ""))
+    monkeypatch.setattr(
+        detection,
+        "_backend_post",
+        lambda *args, **kwargs: _FakeResponse({
+            "code": 200,
+            "data": {
+                "data_itemid": 458,
+                "fake_percentage": 99.9,
+                "detector_probability": 0.999,
+                "final_label": "AI生成图像",
+                "confidence": "高",
+                "explanation": "未校准模型原始输出。",
+                "filename": "demo.png",
+                "remote_evidence": {
+                    "visibleWatermarkPrecheck": precheck,
+                    "modelDecision": {
+                        "ready": False,
+                        "mode": "review_only",
+                        "rawModelScore": 0.999,
+                    },
+                },
+            },
+        }),
+    )
+    monkeypatch.setattr(detection, "_ensure_local_primary_record", lambda *args, **kwargs: 458)
+    monkeypatch.setattr(detection, "_metadata_for_item", lambda itemid: {})
+    monkeypatch.setattr(detection, "_record_model_run", lambda *args, **kwargs: None)
+
+    payload, status_code = _run_fast_payload(client)
+
+    assert status_code == 200
+    result = payload["result"]
+    assert result["final_label"] == "需人工复核"
+    assert result["probability"] is None
+    assert result["detector_probability"] is None
+    assert result["confidence"] == "不适用"
+    assert result["scorePublished"] is False
+    assert result["modelDecisionReady"] is False
+    assert result["reviewRequired"] is True
+    assert result["evidenceCompleteness"] is False
+    assert any("独立校准契约" in warning for warning in result["evidenceWarnings"])
+
+
+def test_model_decision_contract_requires_complete_calibration_evidence():
+    calibrated = dict(CALIBRATED_MODEL_DECISION)
+
+    assert detection._model_decision_is_publishable(calibrated) is False
+    assert detection._model_decision_is_publishable({**calibrated, "datasetSha256": ""}) is False
+    assert detection._model_decision_is_publishable({**calibrated, "observedFpr": 0.08}) is False
+
+
+def test_fast_detection_preserves_gpu_queue_overload_without_model_fallback(monkeypatch):
+    fallback_calls = []
+    monkeypatch.setattr(detection, "_primary_image_endpoint", lambda: ("http://detector/image", 30, ""))
+    monkeypatch.setattr(
+        detection,
+        "_backend_post",
+        lambda *args, **kwargs: _FailedResponse(
+            {"code": 429, "errorCode": "gpu_queue_full", "msg": "GPU busy"},
+            429,
+            {"Retry-After": "6"},
+        ),
+    )
+    monkeypatch.setattr(
+        detection,
+        "_detect_with_v2_fallback",
+        lambda *args, **kwargs: fallback_calls.append(True),
+    )
+
+    payload, status = detection._run_image_detection_payload(
+        VALID_PNG_BYTES,
+        "demo.png",
+        "image/png",
+        {"Userid": 1, "account_uuid": ACCOUNT_UUID, "openid": "openid-1"},
+    )
+
+    assert status == 429
+    assert payload["code"] == "gpu_queue_full"
+    assert payload["retryAfter"] == "6"
+    assert fallback_calls == []
+
+
+def test_partial_watermark_scan_cannot_claim_complete_negative_evidence():
+    visible = detection.swarm_visible_watermark_expert._visible_result({
+        "status": "ok",
+        "elapsedMs": 20,
+        "visibleHits": [],
+        "genericVisibleWatermark": {
+            "available": False,
+            "error": "ConnectionError",
+            "detected": False,
+            "count": 0,
+        },
+    })
+
+    assert visible["registrySupported"] is True
+    assert visible["genericVisibleSupported"] is False
+    assert visible["supported"] is False
+    assert visible["detected"] is False
+
+
+def test_v1_watermark_policy_keeps_confirmed_platform_marks_non_decisive():
     result = {
         "final_label": "真实图像",
         "probability": 0.21,
@@ -795,6 +984,9 @@ def test_v1_watermark_policy_only_promotes_confirmed_ai_platform_hits():
         "explanation": "主模型偏向真实。",
     }
     visible = {
+        "supported": True,
+        "coordinateSpace": "display_normalized_v1",
+        "displaySize": {"width": 1280, "height": 720},
         "detected": True,
         "hits": [{
             "provider": "gemini",
@@ -807,10 +999,76 @@ def test_v1_watermark_policy_only_promotes_confirmed_ai_platform_hits():
         }],
     }
 
-    assert detection.watermark_verdict.apply_to_result(result, visible) is True
-    assert result["final_label"] == "AI生成图像"
-    assert result["probability"] == pytest.approx(0.95)
-    assert result["watermark_verdict_override"]["reason"] == "known_ai_platform_visible_watermark"
+    assert detection.watermark_verdict.apply_to_result(result, visible) is False
+    assert result["final_label"] == "真实图像"
+    assert result["probability"] == pytest.approx(0.21)
+    assert "watermark_verdict_override" not in result
+
+
+def test_v1_registry_visual_attribution_remains_non_decisive_without_yolo():
+    result = {
+        "final_label": "真实图像",
+        "probability": 0.12,
+        "detector_probability": 0.12,
+        "confidence": "中",
+        "explanation": "主模型偏向真实。",
+    }
+    visible = {
+        "supported": False,
+        "positiveEvidenceSupported": True,
+        "registrySupported": True,
+        "genericVisibleSupported": False,
+        "coordinateSpace": "display_normalized_v1",
+        "displaySize": {"width": 1280, "height": 720},
+        "detected": True,
+        "hits": [{
+            "provider": "gemini",
+            "label": "Google Gemini",
+            "confidence": 0.91,
+            "bbox": {"x": 0.72, "y": 0.81, "w": 0.18, "h": 0.09},
+            "method": "remove_ai_watermarks_registry",
+            "decisive": True,
+            "localizationConfirmed": False,
+        }],
+    }
+
+    assert detection.watermark_verdict.apply_to_result(result, visible) is False
+    assert result["probability"] == pytest.approx(0.12)
+
+
+@pytest.mark.parametrize(
+    "bbox",
+    [
+        {"x": -0.01, "y": 0.2, "w": 0.2, "h": 0.2},
+        {"x": 0.9, "y": 0.2, "w": 0.2, "h": 0.2},
+        {"x": float("nan"), "y": 0.2, "w": 0.2, "h": 0.2},
+        {"x": 0.2, "y": 0.2, "w": float("inf"), "h": 0.2},
+    ],
+)
+def test_v1_watermark_policy_rejects_invalid_bbox_without_clamping(bbox):
+    result = {
+        "final_label": "真实图像",
+        "probability": 0.12,
+        "detector_probability": 0.12,
+        "confidence": "中",
+        "explanation": "主模型偏向真实。",
+    }
+    visible = {
+        "supported": True,
+        "coordinateSpace": "display_normalized_v1",
+        "displaySize": {"width": 1280, "height": 720},
+        "detected": True,
+        "hits": [{
+            "provider": "gemini",
+            "confidence": 0.99,
+            "bbox": bbox,
+            "method": "remove_ai_watermarks_registry",
+            "decisive": True,
+        }],
+    }
+
+    assert detection.watermark_verdict.apply_to_result(result, visible) is False
+    assert result["probability"] == pytest.approx(0.12)
 
 
 def test_v1_watermark_policy_rejects_unconfirmed_tiny_low_confidence_hit():
@@ -822,6 +1080,9 @@ def test_v1_watermark_policy_rejects_unconfirmed_tiny_low_confidence_hit():
         "explanation": "主模型偏向真实。",
     }
     visible = {
+        "supported": True,
+        "coordinateSpace": "display_normalized_v1",
+        "displaySize": {"width": 1280, "height": 720},
         "detected": True,
         "hits": [{
             "provider": "gemini",
@@ -838,10 +1099,40 @@ def test_v1_watermark_policy_rejects_unconfirmed_tiny_low_confidence_hit():
     assert result["probability"] == pytest.approx(0.21)
 
 
+def test_v1_watermark_policy_rejects_decisive_hit_with_invalid_coordinate_protocol():
+    result = {
+        "final_label": "真实图像",
+        "probability": 0.1,
+        "detector_probability": 0.1,
+        "confidence": "高",
+        "explanation": "主模型偏向真实。",
+    }
+    visible = {
+        "supported": False,
+        "coordinateSpace": "unknown",
+        "displaySize": {},
+        "detected": True,
+        "hits": [{
+            "provider": "gemini",
+            "confidence": 0.99,
+            "bbox": {"x": 0.7, "y": 0.8, "w": 0.2, "h": 0.1},
+            "method": "remove_ai_watermarks_registry",
+            "decisive": True,
+            "localizationConfirmed": True,
+        }],
+    }
+
+    assert detection.watermark_verdict.apply_to_result(result, visible) is False
+    assert result["final_label"] == "真实图像"
+    assert result["probability"] == pytest.approx(0.1)
+
+
 def test_visible_watermark_is_persisted_in_model_run_meta(monkeypatch):
     captured = {}
     precheck = {
         "status": "ok",
+        "coordinateSpace": "display_normalized_v1",
+        "displaySize": {"width": 640, "height": 480},
         "elapsedMs": 18,
         "genericVisibleWatermark": {"available": True, "detected": False, "count": 0},
         "visibleHits": [],
@@ -945,16 +1236,6 @@ def test_swarm_detect_async_job_returns_expert_consensus(client, monkeypatch, tm
                           "confidence": "", "evidence": [], "message": "test", "latencyMs": 0},
     )
 
-    class ImmediateThread:
-        def __init__(self, target, args=(), kwargs=None, daemon=None):
-            self.target = target
-            self.args = args
-            self.kwargs = kwargs or {}
-
-        def start(self):
-            self.target(*self.args, **self.kwargs)
-
-    monkeypatch.setattr(detection, "BACKGROUND_THREAD_CLASS", ImmediateThread)
     monkeypatch.setattr(detection, "_persist_swarm_history_result", lambda *args, **kwargs: 321)
     frozen_results = []
     monkeypatch.setattr(
@@ -972,9 +1253,10 @@ def test_swarm_detect_async_job_returns_expert_consensus(client, monkeypatch, tm
         *,
         is_guest=False,
         mark_guest=True,
-        include_internal_evidence=False,
-        freeze_evidence=True,
-    ):
+            include_internal_evidence=False,
+            freeze_evidence=True,
+            source_task_id="",
+        ):
         primary_freeze_flags.append(freeze_evidence)
         return {
             "status": "success",
@@ -993,14 +1275,31 @@ def test_swarm_detect_async_job_returns_expert_consensus(client, monkeypatch, tm
                 "resolution": "320x240",
                 "all_metadata": {},
                 "feedback": None,
+                "modelDecisionReady": True,
+                "reviewRequired": False,
+                "decisionStatus": "verdict",
+                "decisionAuthority": "calibrated_model",
             },
         }, 200
 
     monkeypatch.setattr(detection, "_run_image_detection_payload", fake_primary)
 
+    def execute_persisted_job(job, image_bytes, filename, mimetype, user_info, is_guest):
+        detection._run_swarm_image_job(
+            job["id"], image_bytes, filename, mimetype, user_info, is_guest
+        )
+        return True, "", ""
+
+    monkeypatch.setattr(detection, "_enqueue_persistent_web_job", execute_persisted_job)
+    monkeypatch.setattr(
+        detection,
+        "_load_persistent_web_job",
+        lambda job_id: detection.admin_state.get_detection_job(job_id),
+    )
+
     created = client.post(
         "/image_upload/detect_swarm",
-        data={"image": (BytesIO(b"fake-image"), "demo.png")},
+        data={"image": (BytesIO(VALID_PNG_BYTES), "demo.png")},
         content_type="multipart/form-data",
     )
 
@@ -1042,6 +1341,25 @@ def test_swarm_detect_async_job_returns_expert_consensus(client, monkeypatch, tm
     assert all("风险评分" not in item for item in result["swarm"]["evidence"])
 
 
+def test_guest_swarm_detection_requires_login(client, monkeypatch):
+    queued = []
+    monkeypatch.setattr(
+        detection,
+        "_enqueue_persistent_web_job",
+        lambda *args, **kwargs: queued.append(args) or (True, "", ""),
+    )
+
+    response = client.post(
+        "/image_upload/detect_swarm",
+        data={"image": (BytesIO(VALID_PNG_BYTES), "demo.png")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 401
+    assert response.get_json()["code"] == "authentication_required"
+    assert queued == []
+
+
 def test_async_image_upload_rejects_file_above_application_limit(client, monkeypatch):
     _login_session(client)
     monkeypatch.setattr(detection, "MAX_IMAGE_UPLOAD_BYTES", 4)
@@ -1054,6 +1372,14 @@ def test_async_image_upload_rejects_file_above_application_limit(client, monkeyp
 
     assert response.status_code == 413
     assert response.get_json()["code"] == "image_too_large"
+
+
+def test_image_upload_requires_content_length_before_parsing(client):
+    with client.application.test_request_context("/image_upload/detect_async", method="POST"):
+        response, status = detection._reject_oversized_upload_requests()
+
+    assert status == 411
+    assert response.get_json()["code"] == "length_required"
 
 
 def test_video_upload_rejects_file_above_application_limit(client, monkeypatch):
@@ -1074,16 +1400,15 @@ def test_async_image_upload_returns_429_when_job_capacity_is_full(client, monkey
     _login_session(client)
     monkeypatch.setattr(detection.admin_state, "STATE_PATH", tmp_path / "admin_state.json")
 
-    class FullSlots:
-        @staticmethod
-        def acquire(blocking=False):
-            return False
-
-    monkeypatch.setattr(detection, "BACKGROUND_JOB_SLOTS", FullSlots())
+    monkeypatch.setattr(
+        detection,
+        "_enqueue_persistent_web_job",
+        lambda *args, **kwargs: (False, "server_busy", "检测队列已满，请稍后重试"),
+    )
 
     response = client.post(
         "/image_upload/detect_async",
-        data={"image": (BytesIO(b"small"), "sample.png")},
+        data={"image": (BytesIO(VALID_PNG_BYTES), "sample.png")},
         content_type="multipart/form-data",
     )
 
@@ -1092,8 +1417,9 @@ def test_async_image_upload_returns_429_when_job_capacity_is_full(client, monkey
     assert response.get_json()["code"] == "server_busy"
 
 
-def test_sync_image_upload_uses_shared_capacity_and_releases_slot(client, monkeypatch):
+def test_legacy_image_upload_alias_never_uses_process_local_slots(client, monkeypatch, tmp_path):
     _login_session(client)
+    monkeypatch.setattr(detection.admin_state, "STATE_PATH", tmp_path / "admin_state.json")
 
     class CountingSlots:
         acquired = 0
@@ -1108,21 +1434,60 @@ def test_sync_image_upload_uses_shared_capacity_and_releases_slot(client, monkey
 
     slots = CountingSlots()
     monkeypatch.setattr(detection, "BACKGROUND_JOB_SLOTS", slots)
-    monkeypatch.setattr(
-        detection,
-        "_run_image_detection_payload",
-        lambda *args, **kwargs: ({"status": "error", "message": "model unavailable"}, 503),
-    )
+    monkeypatch.setattr(detection, "_enqueue_persistent_web_job", lambda *args, **kwargs: (True, "", ""))
 
     response = client.post(
         "/image_upload/detect",
-        data={"image": (BytesIO(b"small"), "sample.png")},
+        data={"image": (BytesIO(VALID_PNG_BYTES), "sample.png")},
         content_type="multipart/form-data",
     )
 
-    assert response.status_code == 503
-    assert slots.acquired == 1
-    assert slots.released == 1
+    assert response.status_code == 202
+    assert slots.acquired == 0
+    assert slots.released == 0
+
+
+def test_image_upload_rejects_invalid_image_before_queueing(client):
+    _login_session(client)
+
+    response = client.post(
+        "/image_upload/detect_async",
+        data={"image": (BytesIO(b"not-an-image"), "sample.png")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["code"] == "invalid_image"
+
+
+def test_image_upload_rejects_animated_image_instead_of_analyzing_first_frame(client):
+    _login_session(client)
+
+    response = client.post(
+        "/image_upload/detect_async",
+        data={"image": (BytesIO(_animated_gif_bytes()), "sample.gif")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 415
+    assert response.get_json()["code"] == "unsupported_animated_image"
+
+
+def test_image_upload_rejects_pixel_bomb_before_queueing(client, monkeypatch):
+    _login_session(client)
+    monkeypatch.setattr(detection, "MAX_IMAGE_SOURCE_PIXELS", 0)
+
+    response = client.post(
+        "/image_upload/detect_async",
+        data={"image": (BytesIO(VALID_PNG_BYTES), "sample.png")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 413
+    payload = response.get_json()
+    assert payload["code"] == "image_pixel_limit_exceeded"
+    assert payload["details"]["width"] == 1
+    assert payload["details"]["height"] == 1
 
 
 def test_swarm_aggregate_keeps_tamper_risk_separate_from_aigc(monkeypatch):
@@ -1142,30 +1507,101 @@ def test_swarm_aggregate_keeps_tamper_risk_separate_from_aigc(monkeypatch):
         "detector_probability": 0.2,
         "confidence": "高",
         "all_metadata": {},
+        "modelDecisionReady": True,
+        "reviewRequired": False,
+        "decisionStatus": "verdict",
+        "decisionAuthority": "calibrated_model",
     }
 
     result, error = detection._swarm_aggregate(experts, primary, {})
 
     assert error == ""
-    assert result["final_label"] == "疑似篡改图像"
-    assert result["probability"] == pytest.approx(0.94)
+    assert result["final_label"] == "真实图像"
+    assert result["probability"] == pytest.approx(0.2)
     assert result["aigc_probability"] == pytest.approx(0.2)
+    assert result["tamper_probability"] == pytest.approx(0.94)
+    assert result["probabilityModel"]["decisionContribution"] == "diagnostic_only"
 
 
 def test_history_summary_preserves_specialized_tamper_label(monkeypatch):
     monkeypatch.setattr(api, "_has_detection_metadata", lambda itemid: False)
+    monkeypatch.setattr(evidence_manifest, "validate_model_decision", lambda _decision: True)
+    monkeypatch.setattr(evidence_manifest, "validate_inference_audit", lambda _audit, _decision: True)
 
-    record = api._image_history_record({
-        "itemid": 73,
-        "filename": "edited-camera.jpg",
-        "fake": 94,
-        "aigc": "疑似篡改图像",
-        "clarity": "高",
-        "createtime": "2026-07-19 12:00:00",
-    })
+    record = api._image_history_record(
+        {
+            "itemid": 73,
+            "filename": "edited-camera.jpg",
+            "fake": 94,
+            "aigc": "疑似篡改图像",
+            "clarity": "高",
+            "createtime": "2026-07-19 12:00:00",
+        },
+        {
+            "meta": {
+                "modelDecision": dict(CALIBRATED_MODEL_DECISION),
+            }
+        },
+    )
 
     assert record["final_label"] == "疑似篡改图像"
     assert record["fake_prob"] == 94.0
+
+
+def test_history_summary_suppresses_unverified_legacy_score(monkeypatch):
+    monkeypatch.setattr(api, "_has_detection_metadata", lambda itemid: False)
+
+    record = api._image_history_record(
+        {
+            "itemid": 74,
+            "filename": "legacy-review.jpg",
+            "fake": 50,
+            "aigc": "AI生成图像",
+            "clarity": "低",
+            "createtime": "2026-07-19 12:00:00",
+        },
+        {},
+    )
+
+    assert record["final_label"] == "需人工复核"
+    assert record["fake_prob"] is None
+    assert record["real_prob"] is None
+    assert record["confidence"] == "不适用"
+    assert record["review_required"] is True
+    assert record["decision_status"] == "review_only"
+    assert record["report_url"] == ""
+
+
+def test_legacy_history_page_suppresses_review_score_and_escapes_filename(client, monkeypatch):
+    _login_session(client)
+    monkeypatch.setattr(
+        historical_record,
+        "excute_detection_sql",
+        lambda *args, **kwargs: [{
+            "itemid": 75,
+            "filename": '<img src=x onerror="alert(1)">.jpg',
+            "fake": 50,
+            "aigc": "AI生成图像",
+            "clarity": "低",
+            "createtime": "2026-07-19 12:00:00",
+        }],
+    )
+    monkeypatch.setattr(historical_record, "detection_record_is_publishable", lambda item: True)
+    monkeypatch.setattr(historical_record.admin_state, "model_runs_by_itemids", lambda itemids: {})
+    monkeypatch.setattr(
+        historical_record.evidence_manifest,
+        "_decision_authorization",
+        lambda run, visible: {"status": "review_only"},
+    )
+
+    response = client.get("/history_photo")
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert '"fake_prob": null' in html
+    assert '"real_prob": null' in html
+    assert '"decision_status": "review_only"' in html
+    assert '<img src=x onerror="alert(1)">' not in html
 
 
 def test_image_pdf_uses_persisted_specialized_label_without_refusion(client, monkeypatch):
@@ -1185,6 +1621,11 @@ def test_image_pdf_uses_persisted_specialized_label_without_refusion(client, mon
     )
     monkeypatch.setattr(detection, "_metadata_for_item", lambda itemid: {"Software": "Photo Editor"})
     monkeypatch.setattr(detection, "_runtime_visible_watermark_for_item", lambda itemid: None)
+    monkeypatch.setattr(
+        detection,
+        "_stored_decision_authorization_for_item",
+        lambda itemid: {"status": "verdict", "authority": "calibrated_model"},
+    )
 
     def fake_pdf(item, result):
         captured.update(result)
@@ -1214,6 +1655,11 @@ def test_image_history_preserves_specialized_swarm_label(client, monkeypatch):
     })
     monkeypatch.setattr(detection, "_metadata_for_item", lambda *_args: {})
     monkeypatch.setattr(detection, "_backend_static_url", lambda *_args: "/api/media/image/77")
+    monkeypatch.setattr(
+        detection,
+        "_stored_decision_authorization_for_item",
+        lambda itemid: {"status": "verdict", "authority": "calibrated_model"},
+    )
 
     response = client.get("/image_upload/result?itemid=77")
 
@@ -1222,6 +1668,26 @@ def test_image_history_preserves_specialized_swarm_label(client, monkeypatch):
     assert result["final_label"] == "疑似篡改图像"
     assert result["probability"] == pytest.approx(0.94)
     assert result["detector_probability"] == pytest.approx(0.2)
+
+
+def test_explicit_review_only_authorization_cannot_be_overridden_by_calibrated_model(monkeypatch):
+    monkeypatch.setattr(
+        detection.admin_state,
+        "model_runs_by_itemids",
+        lambda _itemids: {
+            "73": {
+                "meta": {
+                    "decisionAuthorization": {"status": "review_only", "authority": "none"},
+                    "modelDecision": dict(CALIBRATED_MODEL_DECISION),
+                }
+            }
+        },
+    )
+    monkeypatch.setattr(detection, "_runtime_visible_watermark_for_item", lambda _itemid: None)
+
+    authorization = detection._stored_decision_authorization_for_item(73)
+
+    assert authorization == {"status": "review_only", "authority": "none"}
 
 
 def test_swarm_defers_network_experts_until_primary_finishes(monkeypatch):
@@ -1374,8 +1840,68 @@ def test_swarm_aggregate_rejects_metadata_only():
 
     result, error = detection._swarm_aggregate(experts, None, {"filename": "demo.png"})
 
-    assert result is None
-    assert "主检测与复核专家" in error
+    assert error == ""
+    assert result["final_label"] == "需人工复核"
+    assert result["decisionStatus"] == "review_only"
+
+
+def test_swarm_aggregate_returns_review_state_for_uncalibrated_primary():
+    experts = [
+        {
+            "id": "primary",
+            "status": "success",
+            "score": None,
+            "weight": 1.0,
+            "verdict": "需人工复核",
+        },
+        {
+            "id": "metadata",
+            "status": "success",
+            "score": 0.5,
+            "weight": 0.08,
+            "verdict": "无明确来源信号",
+        },
+    ]
+    primary = {
+        "filename": "demo.png",
+        "probability": 0.5,
+        "detector_probability": 0.999,
+        "modelDecisionReady": False,
+        "reviewRequired": True,
+    }
+
+    result, error = detection._swarm_aggregate(experts, primary, {})
+
+    assert error == ""
+    assert result["final_label"] == "需人工复核"
+    assert result["probability"] == 0.5
+    assert result["reviewRequired"] is True
+    assert result["swarm"]["enabled"] is True
+
+
+def test_uncalibrated_secondary_models_cannot_publish_swarm_verdict():
+    experts = [
+        {"id": "primary", "status": "success", "score": None, "weight": 1.0},
+        {"id": "v2", "status": "success", "score": 0.99, "weight": 0.6},
+        {"id": "aliyun_pro", "status": "success", "score": 0.98, "weight": 0.4},
+    ]
+    primary = {
+        "filename": "demo.png",
+        "probability": 0.5,
+        "detector_probability": 0.999,
+        "modelDecisionReady": False,
+        "reviewRequired": True,
+        "decisionStatus": "review_only",
+    }
+
+    result, error = detection._swarm_aggregate(experts, primary, {})
+
+    assert error == ""
+    assert result["final_label"] == "需人工复核"
+    assert result["probability"] == 0.5
+    assert result["detector_probability"] == 0.5
+    assert result["decisionStatus"] == "review_only"
+    assert result["decisionAuthority"] == "none"
 
 
 def test_swarm_detect_rejects_when_disabled(client, monkeypatch, tmp_path):
@@ -1425,14 +1951,10 @@ def test_image_detect_does_not_fallback_when_admin_disables_it(client, monkeypat
 
     monkeypatch.setattr(detection, "_backend_post", fake_backend_post)
 
-    response = client.post(
-        "/image_upload/detect",
-        data={"image": (BytesIO(b"fake-image"), "demo.png")},
-        content_type="multipart/form-data",
-    )
+    payload, status_code = _run_fast_payload(client)
 
-    assert response.status_code == 502
-    assert "未启用 V2 兜底" in response.get_json()["message"]
+    assert status_code == 502
+    assert "未启用 V2 兜底" in payload["message"]
 
 
 def test_image_detect_uses_detector_backend_when_web_proxy_has_no_local_artifact(client, monkeypatch):
@@ -1489,14 +2011,10 @@ def test_image_detect_uses_detector_backend_when_web_proxy_has_no_local_artifact
 
     monkeypatch.setattr(detection, "_backend_post", fake_backend_post)
 
-    response = client.post(
-        "/image_upload/detect",
-        data={"image": (BytesIO(b"fake-image"), "demo.png")},
-        content_type="multipart/form-data",
-    )
+    payload, status_code = _run_fast_payload(client)
 
-    assert response.status_code == 200
-    assert response.get_json()["result"]["itemid"] == 45
+    assert status_code == 200
+    assert payload["result"]["itemid"] == 45
 
 
 def test_detector_backend_image_endpoint_returns_v1_contract(monkeypatch):
@@ -1535,16 +2053,19 @@ def test_detector_backend_image_endpoint_returns_v1_contract(monkeypatch):
         "_consume_remote_inference_evidence",
         lambda: {"visibleWatermarkPrecheck": {"status": "ok", "visibleHits": []}},
     )
+    monkeypatch.setattr(detector_backend, "DETECTOR_INTERNAL_TOKEN", "detector-test-token")
     app = detector_backend.create_app()
     app.config.update(TESTING=True)
 
     response = app.test_client().post(
         "/image",
+        headers={"X-RealGuard-Detector-Token": "detector-test-token"},
         data={
-            "image_file": (BytesIO(b"fake-image"), "demo.png"),
+            "image_file": (BytesIO(VALID_PNG_BYTES), "demo.png"),
             "openid": "openid-1",
             "phone": "13800000000",
             "account_uuid": ACCOUNT_UUID,
+            "source_task_id": "job_0123456789abcdefabcd",
         },
         content_type="multipart/form-data",
     )
@@ -1553,13 +2074,15 @@ def test_detector_backend_image_endpoint_returns_v1_contract(monkeypatch):
     payload = response.get_json()
     assert payload["code"] == 200
     assert payload["data"]["data_itemid"] == 91
-    assert payload["data"]["fake_percentage"] == pytest.approx(16.0)
-    assert payload["data"]["final_label"] == "真实图像"
+    assert payload["data"]["fake_percentage"] == pytest.approx(50.0)
+    assert payload["data"]["final_label"] == "需人工复核"
+    assert payload["data"]["remote_evidence"]["modelDecision"]["ready"] is False
     assert payload["data"]["image_url"].endswith("/static/uploads/openid-1/image/stored-demo.png")
     assert payload["data"]["agent_reasoning"] == "native-v1"
     assert payload["data"]["remote_evidence"]["visibleWatermarkPrecheck"]["status"] == "ok"
     assert "owner_account_uuid" in inserted[0][0]
-    assert inserted[0][1][-1] == ACCOUNT_UUID
+    assert inserted[0][1][-2] == ACCOUNT_UUID
+    assert inserted[0][1][-1] == "job_0123456789abcdefabcd"
 
 
 def test_video_detect_logged_in_builds_public_media_url(client, monkeypatch):
@@ -1613,8 +2136,10 @@ def test_video_detect_logged_in_builds_public_media_url(client, monkeypatch):
 
     assert response.status_code == 200
     payload = response.get_json()["result"]
-    assert payload["final_label"] == "AI生成视频"
-    assert payload["confidence"] == "高"
+    assert payload["final_label"] == "需人工复核"
+    assert payload["confidence"] == "不适用"
+    assert payload["fake_percentage"] is None
+    assert payload["decisionStatus"] == "review_only"
     assert payload["video_url"] == "/api/media/video/21"
 
 
@@ -1642,6 +2167,11 @@ def test_guest_image_report_downloads_attachment(client, monkeypatch):
 
     monkeypatch.setattr(detection, "excute_detection_sql", fake_detection_sql)
     monkeypatch.setattr(detection.reporting, "image_report_pdf", lambda item, result: b"%PDF-test")
+    monkeypatch.setattr(
+        detection,
+        "_stored_decision_authorization_for_item",
+        lambda itemid: {"status": "verdict", "authority": "calibrated_model"},
+    )
 
     response = client.get("/image_upload/report?itemid=31")
 
@@ -1672,7 +2202,21 @@ def test_guest_history_returns_guest_image_records(client, monkeypatch):
         raise AssertionError(f"unexpected SQL: {sql}")
 
     monkeypatch.setattr(api, "excute_detection_sql", fake_detection_sql)
+    monkeypatch.setattr(evidence_manifest, "validate_model_decision", lambda _decision: True)
+    monkeypatch.setattr(evidence_manifest, "validate_inference_audit", lambda _audit, _decision: True)
     monkeypatch.setattr(api, "_has_detection_metadata", lambda itemid: itemid == 35)
+    monkeypatch.setattr(
+        api.admin_state,
+        "model_runs_by_itemids",
+        lambda itemids: {
+            str(itemid): {
+                "meta": {
+                    "modelDecision": dict(CALIBRATED_MODEL_DECISION)
+                }
+            }
+            for itemid in itemids
+        },
+    )
 
     response = client.get("/api/history/image-detections")
 
@@ -1790,7 +2334,21 @@ def test_history_detection_records_include_report_urls(client, monkeypatch):
         raise AssertionError(f"unexpected SQL: {sql}")
 
     monkeypatch.setattr(api, "excute_detection_sql", fake_detection_sql)
+    monkeypatch.setattr(evidence_manifest, "validate_model_decision", lambda _decision: True)
+    monkeypatch.setattr(evidence_manifest, "validate_inference_audit", lambda _audit, _decision: True)
     monkeypatch.setattr(api, "_has_detection_metadata", lambda itemid: itemid == 51)
+    monkeypatch.setattr(
+        api.admin_state,
+        "model_runs_by_itemids",
+        lambda itemids: {
+            str(itemid): {
+                "meta": {
+                    "modelDecision": dict(CALIBRATED_MODEL_DECISION)
+                }
+            }
+            for itemid in itemids
+        },
+    )
 
     image_response = client.get("/api/history/image-detections")
     video_response = client.get("/api/history/video-detections")
@@ -1891,7 +2449,7 @@ def test_history_endpoints_support_query_filter_and_limit(client, monkeypatch):
     monkeypatch.setattr(api, "_has_detection_metadata", lambda itemid: itemid == 101)
 
     image_response = client.get("/api/history/image-detections?filter=metadata&query=元数据&limit=1")
-    video_response = client.get("/api/history/video-detections?filter=ai&query=AI结论&limit=1")
+    video_response = client.get("/api/history/video-detections?filter=review&query=人工复核&limit=1")
 
     assert image_response.status_code == 200
     image_payload = image_response.get_json()
@@ -1901,7 +2459,7 @@ def test_history_endpoints_support_query_filter_and_limit(client, monkeypatch):
 
     assert video_response.status_code == 200
     video_payload = video_response.get_json()
-    assert video_payload["total"] == 1
+    assert video_payload["total"] == 2
     assert len(video_payload["records"]) == 1
     assert video_payload["records"][0]["itemid"] == 201
 

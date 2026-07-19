@@ -35,7 +35,7 @@ def test_known_watermark_plus_editable_ai_metadata_is_not_false_corroboration():
     watermark_only = evidence_probability.build_probability_model(_report(), [_known_hit()])
     assert model["posterior"] > watermark_only["posterior"]
     assert model["posterior"] < 0.99
-    assert model["decisive"] is True
+    assert model["decisive"] is False
 
 
 def test_known_watermark_plus_integrity_clash_exceeds_99_percent():

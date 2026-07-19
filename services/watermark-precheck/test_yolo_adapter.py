@@ -57,7 +57,7 @@ def test_unmatched_watermark_candidate_is_returned_as_non_decisive():
 def test_registry_and_yolo_branches_start_in_parallel(monkeypatch):
     rendezvous = threading.Barrier(2)
 
-    def registry(_path):
+    def registry(_path, provenance_path=None):
         rendezvous.wait(timeout=2)
         return []
 
@@ -74,3 +74,79 @@ def test_registry_and_yolo_branches_start_in_parallel(monkeypatch):
 
     assert status["branchesParallel"] is True
     assert status["registryElapsedMs"] >= 0
+
+
+def test_health_is_degraded_when_yolo_is_unavailable(monkeypatch):
+    monkeypatch.setattr(
+        yolo_adapter,
+        "_base_health",
+        lambda: {
+            "status": "ok",
+            "registryReady": True,
+            "tokenReady": True,
+            "coordinateSpace": "display_normalized_v1",
+        },
+    )
+    monkeypatch.setattr(
+        yolo_adapter.requests,
+        "get",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(yolo_adapter.requests.ConnectionError()),
+    )
+
+    payload = yolo_adapter.health_with_yolo()
+
+    assert payload["status"] == "degraded"
+    assert payload["genericVisibleWatermark"]["available"] is False
+
+
+def test_yolo_runtime_validation_rejects_cpu_fallback(monkeypatch):
+    monkeypatch.setattr(yolo_adapter, "YOLO_REQUIRE_CUDA", True)
+    payload = {
+        "status": "ok",
+        "model": yolo_adapter.YOLO_EXPECTED_MODEL,
+        "modelRevision": yolo_adapter.YOLO_EXPECTED_REVISION,
+        "modelSha256": yolo_adapter.YOLO_EXPECTED_SHA256,
+        "device": "cpu",
+        "gpu": None,
+        "cudaReady": False,
+    }
+
+    assert yolo_adapter._yolo_runtime_error(payload) == "cuda_not_ready"
+
+
+def test_yolo_runtime_validation_accepts_pinned_cuda_runtime(monkeypatch):
+    monkeypatch.setattr(yolo_adapter, "YOLO_REQUIRE_CUDA", True)
+    payload = {
+        "status": "ok",
+        "model": yolo_adapter.YOLO_EXPECTED_MODEL,
+        "modelRevision": yolo_adapter.YOLO_EXPECTED_REVISION,
+        "modelSha256": yolo_adapter.YOLO_EXPECTED_SHA256,
+        "device": "0",
+        "gpu": "NVIDIA L20",
+        "cudaReady": True,
+    }
+
+    assert yolo_adapter._yolo_runtime_error(payload) == ""
+
+
+def test_yolo_detection_validation_rejects_empty_payload():
+    assert yolo_adapter._yolo_detection_error({}) == "service_not_ok"
+
+
+def test_yolo_detection_validation_rejects_invalid_box(monkeypatch):
+    monkeypatch.setattr(yolo_adapter, "YOLO_REQUIRE_CUDA", True)
+    payload = {
+        "status": "ok",
+        "model": yolo_adapter.YOLO_EXPECTED_MODEL,
+        "modelRevision": yolo_adapter.YOLO_EXPECTED_REVISION,
+        "modelSha256": yolo_adapter.YOLO_EXPECTED_SHA256,
+        "device": "0",
+        "gpu": "NVIDIA L20",
+        "cudaReady": True,
+        "image": {"width": 640, "height": 480},
+        "detected": True,
+        "count": 1,
+        "detections": [{"bbox": {"x": 0.9, "y": 0.2, "w": 0.3, "h": 0.2}}],
+    }
+
+    assert yolo_adapter._yolo_detection_error(payload) == "detection_box_invalid"

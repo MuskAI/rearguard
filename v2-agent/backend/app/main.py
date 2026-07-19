@@ -763,7 +763,69 @@ def _token_usage_from_payload(payload: dict | None, *, cache_hit: bool = False) 
     }
 
 
+def _authorize_analysis(analysis: dict, *, allow_decisive_provenance: bool) -> dict:
+    """Normalize every public analysis through an explicit fail-closed decision gate."""
+    normalized = dict(analysis or {})
+    authority = normalized.get("decisionAuthority")
+    decisive_watermark = watermark_verdict.has_decisive_ai_watermark(
+        normalized.get("visibleWatermark")
+    )
+    trusted_provenance = bool(
+        allow_decisive_provenance
+        and normalized.get("decisionStatus") == "verdict"
+        and authority == "decisive_provenance"
+        and normalized.get("verdict") in storage.PUBLISHABLE_VERDICTS
+        and (normalized.get("source") == "provenance" or decisive_watermark)
+    )
+    if trusted_provenance:
+        normalized["reviewRequired"] = False
+        return normalized
+
+    if not allow_decisive_provenance:
+        # VLM output is untrusted text. Provenance evidence must be rebuilt by
+        # the server-side precheck before it can participate in a verdict.
+        normalized.pop("provenancePrecheck", None)
+        visible = normalized.get("visibleWatermark")
+        if isinstance(visible, dict):
+            visible = dict(visible)
+            visible["registrySupported"] = False
+            visible["positiveEvidenceSupported"] = False
+            visible["hits"] = [
+                {
+                    **hit,
+                    "decisive": False,
+                    "registryCorroborated": False,
+                    "localizationConfirmed": False,
+                    "evidenceRole": "untrusted_context",
+                }
+                for hit in visible.get("hits") or []
+                if isinstance(hit, dict)
+            ]
+            normalized["visibleWatermark"] = visible
+
+    normalized.update({
+        "verdict": "unknown",
+        "confidence": 0.0,
+        "riskScore": None,
+        "aiProbability": None,
+        "riskVector": {"aiGenerated": None, "tampered": None, "deepfake": None},
+        "dimensions": [],
+        "regions": [],
+        "decisionStatus": "review_only",
+        "decisionAuthority": "none",
+        "reviewRequired": True,
+        "watermarkVerdictOverride": None,
+        "explanation": (
+            "自动视觉分析已完成，但该模型尚未通过独立校准门禁，不能直接形成真假结论。"
+            "当前结果仅供人工复核；只有校验通过的内容凭证或签名校准模型可授权自动结论。"
+        ),
+    })
+    return normalized
+
+
 def _analysis_risk_vector(analysis: dict) -> dict[str, float | None]:
+    if analysis.get("decisionStatus") != "verdict":
+        return {"aiGenerated": None, "tampered": None, "deepfake": None}
     supplied = analysis.get("riskVector") if isinstance(analysis.get("riskVector"), dict) else {}
     dimensions = {
         str(item.get("key") or ""): item
@@ -835,6 +897,9 @@ def _build_result(
         "riskVector": risk_vector,
         "modelVersion": analysis["modelVersion"],
         "source": analysis["source"],
+        "decisionStatus": analysis["decisionStatus"],
+        "decisionAuthority": analysis["decisionAuthority"],
+        "reviewRequired": analysis["reviewRequired"],
         "cacheVersion": storage.ANALYSIS_CACHE_VERSION,
         "cacheHit": cache_hit,
         "elapsedMs": elapsed_ms,
@@ -864,7 +929,7 @@ def _strip_internal_history_fields(item: dict) -> dict:
     clean.pop("_developerAccountUuid", None)
     clean.pop("_developerKeyId", None)
     watermark_verdict.apply(clean, clean.get("visibleWatermark"))
-    return clean
+    return _authorize_analysis(clean, allow_decisive_provenance=True)
 
 
 @app.get("/api/health")
@@ -958,28 +1023,39 @@ async def _detect_with_slot(
         local_provenance_report = precheck_report.pop("_provenanceReport", None)
         precheck_analysis = provenance_precheck.build_analysis(precheck_report)
 
-    cached = None if precheck_analysis is not None else storage.get_cached_analysis(ftype, sha256)
+    cache_scope = _forensics_cache_scope(actor)
+    cache_type = f"{ftype}:tenant:{cache_scope}" if cache_scope else None
+    cached = (
+        None
+        if precheck_analysis is not None or cache_type is None
+        else storage.get_cached_analysis(cache_type, sha256)
+    )
     cache_hit = cached is not None
     if precheck_analysis is not None:
-        analysis = precheck_analysis
+        analysis = _authorize_analysis(precheck_analysis, allow_decisive_provenance=True)
     elif cached is not None:
-        analysis = cached
+        analysis = _authorize_analysis(cached, allow_decisive_provenance=True)
     else:
         if not detector.API_KEY:
             raise HTTPException(status_code=503, detail="未发现可直接判定的来源标记，且真实模型服务未配置")
         try:
             analysis = await run_in_threadpool(detector.analyze, ftype, filename, data)
         except detector.DetectionUnavailableError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+            logger.warning("detection provider unavailable: %s", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="视觉分析服务暂不可用，请稍后重试") from exc
+        if not isinstance(analysis, dict) or analysis.get("source") != "vlm":
+            raise HTTPException(status_code=503, detail="真实模型未返回可信的分析来源")
+        analysis = _authorize_analysis(analysis, allow_decisive_provenance=False)
     if not storage.is_publishable_analysis(analysis):
         raise HTTPException(status_code=503, detail="真实模型未返回可发布的明确结论")
-    if not cache_hit:
-        storage.put_cached_analysis(ftype, sha256, analysis)
+    if not cache_hit and cache_type is not None:
+        storage.put_cached_analysis(cache_type, sha256, analysis)
     if ftype == "image":
         if precheck_analysis is None:
             decision = (precheck_report or {}).get("decision") or {}
             analysis = evidence_probability.fuse_with_analysis(analysis, decision.get("probabilityModel"))
         analysis = watermark_yolo.merge(analysis, precheck_report)
+        analysis = _authorize_analysis(analysis, allow_decisive_provenance=True)
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     token_usage = _token_usage_from_payload(analysis, cache_hit=cache_hit)
     provenance_report = None

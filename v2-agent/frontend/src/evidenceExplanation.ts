@@ -1,8 +1,6 @@
 import type { AgentOutcome } from "./agentTypes";
 import type { CaptureEvidence, DetectResult, VisibleWatermarkHit, VisibleWatermarkResult } from "./api";
 
-const MIN_WATERMARK_RISK = 0.95;
-
 const PROVIDER_LABELS: Record<string, string> = {
   gemini: "Google Gemini",
   doubao: "豆包",
@@ -32,12 +30,6 @@ function percent(value: unknown): string {
   return `${(clamp01(value) * 100).toFixed(1)}%`;
 }
 
-function modelTendency(value: number): string {
-  if (value < 0.35) return "偏向真实";
-  if (value < 0.75) return "处于边界区间";
-  return "偏向 AI 生成";
-}
-
 function isLocalizedHit(hit: VisibleWatermarkHit): boolean {
   return clamp01(hit.bbox?.w) > 0 && clamp01(hit.bbox?.h) > 0;
 }
@@ -51,40 +43,25 @@ export function hasLocalizedWatermark(report?: VisibleWatermarkResult): boolean 
   return localizedWatermarkHits(report).length > 0;
 }
 
-const DECISIVE_WATERMARK_PROVIDERS = new Set(["gemini", "doubao", "jimeng", "jimeng_pill", "samsung"]);
-const WATERMARK_MIN_CONFIDENCE: Record<string, number> = { gemini: 0.72, doubao: 0.8, jimeng: 0.8, jimeng_pill: 0.8, samsung: 0.8 };
-
 export function decisiveWatermarkHits(report?: VisibleWatermarkResult): VisibleWatermarkHit[] {
-  return localizedWatermarkHits(report).filter((hit) => (
-    hit.decisive === true
-    && hit.method === "remove_ai_watermarks_registry"
-    && DECISIVE_WATERMARK_PROVIDERS.has(hit.provider)
-    && clamp01(hit.confidence) >= (WATERMARK_MIN_CONFIDENCE[hit.provider] ?? 1)
-    && clamp01(hit.bbox?.w) * clamp01(hit.bbox?.h) >= 0.0001
-    && hit.localizationConfirmed === true
-  ));
+  void report;
+  return [];
 }
 
 export function hasDecisiveAiWatermark(report?: VisibleWatermarkResult): boolean {
-  return decisiveWatermarkHits(report).length > 0;
+  void report;
+  return false;
 }
 
 function watermarkPoint(report?: VisibleWatermarkResult): ExplanationPoint {
-  const hits = decisiveWatermarkHits(report);
+  const hits = localizedWatermarkHits(report);
   if (hits.length > 0) {
-    const names = Array.from(new Set(hits.map((hit) => hit.label || PROVIDER_LABELS[hit.provider] || "通用可见水印")));
-    const topConfidence = Math.max(...hits.map((hit) => clamp01(hit.confidence)));
+    const names = Array.from(new Set(
+      hits.map((hit) => hit.label || PROVIDER_LABELS[hit.provider] || "可见标记"),
+    ));
     return {
-      label: "决定性证据",
-      decisive: true,
-      text: `定位到 ${hits.length} 处已确认的 AI 平台水印区域（${names.join("、")}，最高置信度 ${percent(topConfidence)}）。该平台来源证据使综合 AI 风险不低于 ${percent(MIN_WATERMARK_RISK)}。`,
-    };
-  }
-  const genericHits = localizedWatermarkHits(report);
-  if (genericHits.length > 0) {
-    return {
-      label: "可见标记",
-      text: `定位到 ${genericHits.length} 处平台待确认的可见水印区域；该结果可能是 Logo、台标或版权标记，仅作定位线索，不单独影响 AI 生成结论。`,
+      label: "可见标记线索",
+      text: `定位到 ${hits.length} 处可见标记区域（${names.join("、")}）。标记可被复制、覆盖或后期添加，仅供人工核对来源，不单独决定真伪，也不抬高模型风险。`,
     };
   }
   if (!report) {
@@ -110,9 +87,8 @@ function captureEvidencePoint(report?: CaptureEvidence): ExplanationPoint {
   if (report.supportsRealCapture) {
     const evidence = (report.evidence || []).map((item) => item.label).slice(0, 3).join("、");
     return {
-      label: "实拍来源证据",
-      decisive: report.level === "strong",
-      text: `${report.title}（${report.levelText || "辅助"}强度）：${report.summary}${evidence ? ` 可复核链路包括${evidence}。` : ""}该证据只用于降低伪造风险，普通 EXIF 不单独证明图片真实。`,
+      label: "拍摄流程线索",
+      text: `${report.title}（${report.levelText || "辅助"}强度）：${report.summary}${evidence ? ` 可复核字段包括${evidence}。` : ""}这些字段供人工核对拍摄链，不自动证明真实，也不直接降低模型风险。`,
     };
   }
   return { label: "实拍来源证据", text: `${report.summary} 本项保持中性，不因缺少拍摄字段抬高 AI 风险。` };
@@ -121,13 +97,14 @@ function captureEvidencePoint(report?: CaptureEvidence): ExplanationPoint {
 function imageExplanation(outcome: Extract<AgentOutcome, { kind: "image" }>, risk: number, verdictLabel: string): ExplanationPoint[] {
   const result = outcome.result;
   const report = result.visibleWatermark;
-  const watermarkHit = hasDecisiveAiWatermark(report);
-  const rawModelRisk = clamp01(result.detector_probability ?? result.probability);
+  const reviewOnly = result.decisionStatus !== "verdict" || result.reviewRequired === true;
   const points: ExplanationPoint[] = [
     watermarkPoint(report),
     {
       label: "主模型",
-      text: `原始 AI 风险为 ${percent(rawModelRisk)}，判断${modelTendency(rawModelRisk)}。${watermarkHit ? "该分数保留作辅助参考，但不覆盖水印证据。" : "该分数构成本次综合判断的主要基线。"}`,
+      text: reviewOnly
+        ? "模型分析已完成，但签名校准门禁未通过；原始审计分不作为真假概率展示，也不形成自动结论。"
+        : `签名校准门禁已通过，本次发布的 AI 生成风险为 ${percent(risk)}。`,
     },
   ];
 
@@ -136,7 +113,7 @@ function imageExplanation(outcome: Extract<AgentOutcome, { kind: "image" }>, ris
   if (visualIssues.length > 0) {
     points.push({
       label: "视觉复核",
-      text: `提取到 ${visualIssues.length} 项可复核线索（${visualIssues[0]}）；${watermarkHit ? "这些线索不是本次决定性依据。" : "已作为辅助证据参与判断。"}`,
+      text: `提取到 ${visualIssues.length} 项可复核线索（${visualIssues[0]}）；这些线索供人工核对，不独立授权真假结论。`,
     });
   } else if (result.llm_used === false) {
     points.push({ label: "视觉复核", text: "本次未完成多模态视觉复核，不生成替代性视觉结论。" });
@@ -147,10 +124,10 @@ function imageExplanation(outcome: Extract<AgentOutcome, { kind: "image" }>, ris
   points.push(captureEvidencePoint(result.capture_evidence));
   points.push({
     label: "综合结论",
-    decisive: watermarkHit,
-    text: watermarkHit
-      ? `本次由已确认的 AI 平台水印来源证据主导，判定为 AI 生成图像；综合风险 ${percent(Math.max(risk, MIN_WATERMARK_RISK))}，当前置信度高。`
-      : `综合现有证据，结论为“${verdictLabel}”，自动化风险 ${percent(risk)}；仍建议结合原始来源复核。`,
+    decisive: !reviewOnly,
+    text: reviewOnly
+      ? "当前没有通过决策授权门禁的证据，结论保持“需人工复核”；请结合原始文件、来源链与可见标记位置核对。"
+      : `综合现有已授权证据，结论为“${verdictLabel}”，发布风险 ${percent(risk)}；仍建议保留原始文件与来源记录。`,
   });
   return points;
 }
@@ -158,20 +135,16 @@ function imageExplanation(outcome: Extract<AgentOutcome, { kind: "image" }>, ris
 function evidenceExplanation(outcome: Extract<AgentOutcome, { kind: "evidence" }>, risk: number, verdictLabel: string): ExplanationPoint[] {
   const result = outcome.result as RichDetectResult;
   const report = result.visibleWatermark;
-  const watermarkHit = hasDecisiveAiWatermark(report);
-  const modelRisk = clamp01(
-    result.watermarkVerdictOverride?.modelConfidence
-      ?? result.aiProbability
-      ?? result.probabilityModel?.pixelBaseline
-      ?? result.probabilityModel?.adjustedBaseline
-      ?? result.probabilityModel?.baseRate
-      ?? result.confidence,
-  );
+  const reviewOnly = result.decisionStatus !== "verdict" || result.reviewRequired === true;
   const points: ExplanationPoint[] = [
     watermarkPoint(report),
     {
-      label: "主模型",
-      text: `原始 AI 风险为 ${percent(modelRisk)}，判断${modelTendency(modelRisk)}。${watermarkHit ? "该分数保留作辅助参考，但不覆盖水印证据。" : "该分数构成本次综合判断的主要基线。"}`,
+      label: "决策授权",
+      text: reviewOnly
+        ? "自动分析已完成，但当前模型或证据没有通过决策授权门禁；内部审计分不作为真假概率展示。"
+        : result.source === "provenance"
+          ? "内容凭证已通过服务器端来源验证，本次结论由可校验的来源链授权。"
+          : `决策门禁已通过，本次发布风险为 ${percent(risk)}。`,
     },
   ];
 
@@ -188,10 +161,10 @@ function evidenceExplanation(outcome: Extract<AgentOutcome, { kind: "evidence" }
   points.push(captureEvidencePoint(result.captureEvidence || provenance?.captureEvidence));
   points.push({
     label: "综合结论",
-    decisive: watermarkHit,
-    text: watermarkHit
-      ? `本次由已确认的 AI 平台水印来源证据主导，判定为高度疑似 AI 生成；综合风险 ${percent(Math.max(risk, MIN_WATERMARK_RISK))}。`
-      : `综合现有证据，结论为“${verdictLabel}”，自动化风险 ${percent(risk)}；仍建议结合原始来源复核。`,
+    decisive: !reviewOnly,
+    text: reviewOnly
+      ? "当前没有通过决策授权门禁的证据，结论保持“需人工复核”；元数据或水印缺失均不代表文件经过生成或篡改。"
+      : `综合现有已授权证据，结论为“${verdictLabel}”，发布风险 ${percent(risk)}；仍建议结合原始来源复核。`,
   });
   return points;
 }

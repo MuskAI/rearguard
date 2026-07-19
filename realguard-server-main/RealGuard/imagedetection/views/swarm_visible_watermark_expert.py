@@ -7,6 +7,7 @@ watermark policy after preserving the pixel model's original score.
 from __future__ import annotations
 
 import os
+import math
 import time
 from typing import Any, Dict, Optional
 
@@ -44,12 +45,30 @@ def _nonnegative_int(value: Any) -> int:
 def _normalized_bbox(value: Any) -> Optional[Dict[str, float]]:
     if not isinstance(value, dict):
         return None
-    x, y = _clamp01(value.get("x")), _clamp01(value.get("y"))
-    width = min(_clamp01(value.get("w")), 1.0 - x)
-    height = min(_clamp01(value.get("h")), 1.0 - y)
-    if width <= 0 or height <= 0:
+    try:
+        x = float(value.get("x"))
+        y = float(value.get("y"))
+        width = float(value.get("w"))
+        height = float(value.get("h"))
+    except (TypeError, ValueError):
         return None
-    return {"x": x, "y": y, "w": round(width, 4), "h": round(height, 4)}
+    values = (x, y, width, height)
+    if (
+        not all(math.isfinite(item) for item in values)
+        or not 0.0 <= x <= 1.0
+        or not 0.0 <= y <= 1.0
+        or not 0.0 < width <= 1.0
+        or not 0.0 < height <= 1.0
+        or x + width > 1.0
+        or y + height > 1.0
+    ):
+        return None
+    return {
+        "x": round(x, 4),
+        "y": round(y, 4),
+        "w": round(width, 4),
+        "h": round(height, 4),
+    }
 
 
 def _boxes_overlap(first: Dict[str, Any], second: Dict[str, Any]) -> bool:
@@ -131,6 +150,13 @@ def _unavailable(note: str) -> Dict[str, Any]:
 
 
 def _visible_result(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if payload.get("status") != "ok":
+        note = str(payload.get("message") or "").strip()
+        visible = _unavailable(
+            note or "可见水印检测暂不可用，本次未完成该必检项；不能据此判断未检出水印。"
+        )
+        visible["elapsedMs"] = _nonnegative_int(payload.get("elapsedMs"))
+        return visible
     detector = payload.get("genericVisibleWatermark")
     detector = detector if isinstance(detector, dict) else {}
     raw_detections = []
@@ -159,8 +185,9 @@ def _visible_result(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "crop": None,
                 "model": REGISTRY_MODEL,
                 "modelRevision": payload.get("engineVersion"),
-                "decisive": bool(detection.get("decisive")),
-                "evidenceRole": "provenance",
+                "decisive": False,
+                "registryCorroborated": bool(detection.get("corroborated")),
+                "evidenceRole": "visual_attribution",
                 "localizationConfirmed": bool(detection.get("yoloCorroborated")),
                 "localizationConfidence": _clamp01(detection.get("yoloConfidence")),
                 "localizationModel": detection.get("localizationModel"),
@@ -222,16 +249,39 @@ def _visible_result(payload: Dict[str, Any]) -> Dict[str, Any]:
         notes.append("YOLO11x 已完成可见水印扫描，本次未检出。")
     else:
         notes.append("YOLO11x 本次不可用，已知平台标记扫描仍可独立工作。")
+    coordinate_space = str(payload.get("coordinateSpace") or "").strip()
+    display_size = payload.get("displaySize") if isinstance(payload.get("displaySize"), dict) else {}
+    coordinate_protocol_valid = (
+        coordinate_space == "display_normalized_v1"
+        and _nonnegative_int(display_size.get("width")) > 0
+        and _nonnegative_int(display_size.get("height")) > 0
+    )
     registry_available = payload.get("status") == "ok"
     yolo_available = bool(detector.get("available"))
-    available = registry_available or yolo_available
+    # Fast detection promises both known-platform provenance scanning and
+    # generic visible-watermark localization. A partial run may still provide
+    # positive evidence, but it cannot prove that no watermark was present.
+    available = registry_available and yolo_available and coordinate_protocol_valid
+    positive_evidence_supported = registry_available and coordinate_protocol_valid
+    if not coordinate_protocol_valid:
+        notes.append("水印服务未提供受支持的显示坐标协议，本次定位框不进入完整证据链。")
+        hits = []
+        top = None
+        top_confidence = 0.0
     return {
         "enabled": True,
         "supported": available,
+        "positiveEvidenceSupported": positive_evidence_supported,
+        "registrySupported": registry_available,
+        "genericVisibleSupported": yolo_available,
+        "coordinateSpace": coordinate_space if coordinate_protocol_valid else "unknown",
+        "displaySize": display_size if coordinate_protocol_valid else {},
+        "encodedSize": payload.get("encodedSize") or {},
+        "sourceOrientation": _nonnegative_int(payload.get("sourceOrientation") or 1),
         "detected": bool(hits),
         "provider": top.get("provider") if top else None,
         "confidence": top_confidence,
-        "evidenceLevel": "strong" if registry_hits and top_confidence >= 0.8 else "medium" if hits else "none",
+        "evidenceLevel": "strong" if coordinate_protocol_valid and registry_hits and top_confidence >= 0.8 else "medium" if hits else "none",
         "hits": hits,
         "temporal": {"sampledFrames": 1, "positiveFrames": 1 if hits else 0, "moving": False},
         "note": " ".join(notes),

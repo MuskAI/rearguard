@@ -137,7 +137,7 @@
             <li class="menu-item" onclick="openModal('pwdModal')"><i class="fa fa-lock icon"></i> 修改密码 <i class="fa fa-chevron-right m-arrow"></i></li>
             <li class="menu-item" onclick="location.href='/introduce'"><i class="fa fa-info-circle icon"></i> 关于我们 <i class="fa fa-chevron-right m-arrow"></i></li>
             <li class="menu-item" onclick="openShare()"><i class="fa fa-share-alt icon"></i> 分享推荐 <i class="fa fa-chevron-right m-arrow"></i></li>
-            <li class="menu-item danger" onclick="if(confirm('确定退出登录？'))location.href='/logout'"><i class="fa fa-sign-out icon"></i> 退出登录 <i class="fa fa-chevron-right m-arrow"></i></li>
+            <li class="menu-item danger" onclick="if(confirm('确定退出登录？'))fetch('/api/logout',{method:'POST'}).finally(()=>location.href='/login')"><i class="fa fa-sign-out icon"></i> 退出登录 <i class="fa fa-chevron-right m-arrow"></i></li>
         </ul>
     </div>
 </div></main>

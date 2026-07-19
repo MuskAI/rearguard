@@ -873,7 +873,7 @@
             <button class="btn secondary" onclick="$('detectionDetail').innerHTML='';state.selectedDetection=null">关闭</button>
           </div>
           <div class="route-summary">
-            <div class="route-summary-row"><span>判定</span><strong>${esc(data.label || '-')} · ${esc(data.probability ?? '-')}</strong></div>
+            <div class="route-summary-row"><span>判定</span><strong>${esc(data.label || '-')} · ${esc(data.decisionStatus === 'verdict' ? formatProbability(data.probability) : '自动风险分数未发布')}</strong></div>
             <div class="route-summary-row"><span>后台模型</span><strong>${esc(routeModelLabel(route))}</strong></div>
             <div class="route-summary-row"><span>路由</span><strong>${esc(route.route || '-')} · ${esc(route.status || '-')}</strong></div>
             <div class="route-summary-row"><span>耗时</span><strong>${esc(route.meta?.latencyMs ?? '-')} ms</strong></div>
@@ -1002,6 +1002,7 @@
       $('detections').innerHTML = content + (state.pages.detections?.hasMore ? '<div class="load-more"><button class="btn secondary" onclick="loadDetections(true)">加载更多</button></div>' : '');
     }
     function formatProbability(value){
+      if(value === null || value === undefined || value === '') return '未发布';
       const number = Number(value);
       if(!Number.isFinite(number)) return value ?? '-';
       return number <= 1 ? `${(number * 100).toFixed(1)}%` : `${number.toFixed(1)}%`;

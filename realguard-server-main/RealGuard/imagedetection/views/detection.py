@@ -3,16 +3,22 @@ import json
 import uuid
 import io
 import copy
+import hashlib
 import ipaddress
 import requests
 import socket
 import threading
 import time
+import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from flask import Blueprint, render_template, request, session, jsonify, Response, redirect
+from PIL import Image, UnidentifiedImageError
 from werkzeug.utils import secure_filename
+
+from model_decision_contract import validate_inference_audit, validate_model_decision
 
 from imagedetection.views import (
     admin_state,
@@ -30,6 +36,7 @@ from imagedetection.views import (
 from imagedetection.views.utils import (
     claim_detection_record_owner,
     create_folder,
+    detection_record_is_publishable,
     detection_owner_where,
     excute_detection_sql,
     excute_detection_sql_lastid,
@@ -62,6 +69,7 @@ V2_INTERNAL_TOKEN = (
     or os.environ.get('JIANZHEN_ACCESS_TOKEN')
     or ''
 ).strip()
+DETECTOR_INTERNAL_TOKEN = os.environ.get('REALGUARD_DETECTOR_INTERNAL_TOKEN', '').strip()
 IMAGE_DETECT_FALLBACK = os.environ.get('REALGUARD_IMAGE_DETECT_FALLBACK', '0').strip().lower()
 VIDEO_DETECT_TIMEOUT_NORMAL = 120
 IMAGE_DETECT_TIMEOUT = 180
@@ -82,13 +90,17 @@ MAX_IMAGE_UPLOAD_BYTES = max(
     1024,
     int(os.environ.get('REALGUARD_MAX_IMAGE_UPLOAD_BYTES', str(25 * 1024 * 1024))),
 )
+MAX_IMAGE_SOURCE_PIXELS = max(
+    1,
+    int(os.environ.get('REALGUARD_MAX_IMAGE_SOURCE_PIXELS', '24000000')),
+)
 MAX_VIDEO_UPLOAD_BYTES = max(
     1024,
     int(os.environ.get('REALGUARD_MAX_VIDEO_UPLOAD_BYTES', str(256 * 1024 * 1024))),
 )
 BACKGROUND_JOB_CAPACITY = max(
     1,
-    int(os.environ.get('REALGUARD_BACKGROUND_JOB_CAPACITY', '4')),
+    int(os.environ.get('REALGUARD_BACKGROUND_JOB_CAPACITY', '2')),
 )
 SWARM_EXPERT_EXECUTOR = ThreadPoolExecutor(
     max_workers=SWARM_PARALLEL_WORKERS,
@@ -202,6 +214,43 @@ def _read_image_upload(file):
             'code': 'image_too_large',
             'message': f'图片不能超过 {limit_mb} MB',
         }), 413)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(image_bytes)) as image:
+                width, height = image.size
+                if width <= 0 or height <= 0:
+                    raise ValueError('invalid image dimensions')
+                if bool(getattr(image, 'is_animated', False)) and int(getattr(image, 'n_frames', 1)) > 1:
+                    return None, (jsonify({
+                        'status': 'error',
+                        'code': 'unsupported_animated_image',
+                        'message': '暂不支持多帧 GIF 或动态 WebP，请上传静态图片',
+                    }), 415)
+                if width * height > MAX_IMAGE_SOURCE_PIXELS:
+                    return None, (jsonify({
+                        'status': 'error',
+                        'code': 'image_pixel_limit_exceeded',
+                        'message': '图片像素尺寸过大，请先缩小后重试',
+                        'details': {
+                            'width': width,
+                            'height': height,
+                            'maxPixels': MAX_IMAGE_SOURCE_PIXELS,
+                        },
+                    }), 413)
+                image.verify()
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning):
+        return None, (jsonify({
+            'status': 'error',
+            'code': 'image_pixel_limit_exceeded',
+            'message': '图片像素尺寸过大，请先缩小后重试',
+        }), 413)
+    except (UnidentifiedImageError, OSError, ValueError):
+        return None, (jsonify({
+            'status': 'error',
+            'code': 'invalid_image',
+            'message': '无法解析图片，请上传有效的 JPG、PNG、WebP、BMP 或 GIF 文件',
+        }), 400)
     return image_bytes, None
 
 
@@ -234,6 +283,54 @@ def _busy_response():
     return response, 429
 
 
+def _guest_capacity_subject():
+    """Return a private, stable daily-capacity key that survives cookie resets."""
+    from imagedetection.views.login import _trusted_client_ip
+
+    salt = os.environ.get('REALGUARD_CONSENT_AUDIT_SALT', '').strip()
+    client_ip = _trusted_client_ip()
+    if not salt or not client_ip or client_ip == 'unknown':
+        return ''
+    try:
+        address = ipaddress.ip_address(client_ip)
+    except ValueError:
+        return ''
+    if address.version == 6:
+        client_scope = str(ipaddress.ip_network(f"{address}/64", strict=False).network_address) + '/64'
+    else:
+        client_scope = str(address)
+    material = f"guest-detection:{salt}:{client_scope}".encode('utf-8')
+    return hashlib.sha256(material).hexdigest()
+
+
+def _enqueue_persistent_web_job(job, image_bytes, filename, mimetype, user_info, is_guest):
+    from imagedetection.views import developer_platform
+
+    try:
+        guest_subject = _guest_capacity_subject() if is_guest else ''
+        developer_platform._enqueue_web_detection_task(
+            job,
+            image_bytes,
+            filename,
+            mimetype,
+            user_info,
+            is_guest,
+            guest_subject,
+        )
+    except developer_platform.QueueCapacityError as exc:
+        return False, "server_busy", str(exc) or "当前检测任务较多，请稍后重试"
+    except Exception as exc:
+        print(f"[WEB TASK QUEUE ERROR] {job.get('id')}: {exc}")
+        return False, "queue_unavailable", "检测任务暂时无法入队，请稍后重试"
+    return True, "", ""
+
+
+def _load_persistent_web_job(job_id):
+    from imagedetection.views import developer_platform
+
+    return developer_platform._persistent_web_job(job_id)
+
+
 def _seekable_upload_size(file_storage):
     stream = getattr(file_storage, 'stream', None)
     if stream is None:
@@ -262,7 +359,13 @@ def _reject_oversized_upload_requests():
     max_bytes, label, error_code = upload_limit
     content_length = request.content_length
     multipart_allowance = 1024 * 1024
-    if content_length is not None and content_length > max_bytes + multipart_allowance:
+    if content_length is None:
+        return jsonify({
+            'status': 'error',
+            'code': 'length_required',
+            'message': '上传请求必须提供 Content-Length',
+        }), 411
+    if content_length > max_bytes + multipart_allowance:
         limit_mb = max(1, max_bytes // (1024 * 1024))
         return jsonify({
             'status': 'error',
@@ -446,7 +549,11 @@ def _load_detection_record(table, itemid):
         owner_where, owner_params = _detection_owner_where(user_id, phone, openid, account_uuid)
         sql = f"SELECT * FROM {table} WHERE itemid = %s AND ({owner_where}) LIMIT 1"
         rows = excute_detection_sql(sql, (itemid, *owner_params))
-    return rows[0] if rows else None
+    if not rows:
+        return None
+    if table == 'data' and not detection_record_is_publishable(rows[0]):
+        return None
+    return rows[0]
 
 
 def _load_detection_record_for_actor(table, itemid, actor, *, is_guest=False):
@@ -548,9 +655,12 @@ def _prob01_from_percent(value):
 
 def _backend_post(url, **kwargs):
     # 服务器内部调用本机鉴伪后端时必须直连，避免被 HTTP_PROXY/HTTPS_PROXY 劫持。
+    headers = dict(kwargs.pop('headers', {}) or {})
+    if DETECTOR_INTERNAL_TOKEN and str(url).startswith(f"{DETECTION_BACKEND_BASE_URL}/"):
+        headers['X-RealGuard-Detector-Token'] = DETECTOR_INTERNAL_TOKEN
     with requests.Session() as sess:
         sess.trust_env = False
-        return sess.post(url, **kwargs)
+        return sess.post(url, headers=headers, **kwargs)
 
 
 def _truthy(value):
@@ -639,6 +749,39 @@ def _visible_watermark_from_backend_data(data):
         return None
 
 
+def _model_decision_from_backend_data(data):
+    remote_evidence = (data or {}).get('remote_evidence')
+    if not isinstance(remote_evidence, dict):
+        return None
+    decision = remote_evidence.get('modelDecision')
+    return copy.deepcopy(decision) if isinstance(decision, dict) else None
+
+
+def _model_decision_is_publishable(decision):
+    """Validate the calibration contract before allowing an automatic verdict."""
+    return validate_model_decision(decision)
+
+
+def _stored_model_decision_is_publishable(meta):
+    if not isinstance(meta, dict):
+        return False
+    decision = meta.get('modelDecision')
+    audit = meta.get('inferenceAudit')
+    return validate_model_decision(decision) and validate_inference_audit(audit, decision)
+
+
+def _backend_model_decision_is_publishable(data):
+    decision = _model_decision_from_backend_data(data)
+    remote_evidence = (data or {}).get('remote_evidence')
+    audit = (
+        remote_evidence.get('modelRun')
+        if isinstance(remote_evidence, dict)
+        and isinstance(remote_evidence.get('modelRun'), dict)
+        else None
+    )
+    return validate_model_decision(decision) and validate_inference_audit(audit, decision)
+
+
 def _stored_visible_watermark_for_item(itemid):
     target = str(itemid or '')
     if not target:
@@ -650,6 +793,45 @@ def _stored_visible_watermark_for_item(itemid):
         return None
     visible = (run.get('meta') or {}).get('visibleWatermark')
     return copy.deepcopy(visible) if isinstance(visible, dict) else None
+
+
+def _stored_decision_authorization_for_item(itemid):
+    target = str(itemid or '')
+    if not target:
+        return {'status': 'review_only', 'authority': 'none'}
+    try:
+        run = admin_state.model_runs_by_itemids([target]).get(target) or {}
+    except Exception:
+        run = {}
+    meta = run.get('meta') if isinstance(run.get('meta'), dict) else {}
+    explicit = (
+        meta.get('decisionAuthorization')
+        if isinstance(meta.get('decisionAuthorization'), dict)
+        else {}
+    )
+    model_decision = (
+        meta.get('modelDecision') if isinstance(meta.get('modelDecision'), dict) else {}
+    )
+    visible = _runtime_visible_watermark_for_item(target)
+    if explicit:
+        if (
+            explicit.get('status') == 'verdict'
+            and explicit.get('authority') == 'calibrated_model'
+            and _stored_model_decision_is_publishable(meta)
+        ):
+            return {'status': 'verdict', 'authority': 'calibrated_model'}
+        if (
+            explicit.get('status') == 'verdict'
+            and explicit.get('authority') == 'decisive_provenance'
+            and watermark_verdict.has_decisive_ai_watermark(visible)
+        ):
+            return {'status': 'verdict', 'authority': 'decisive_provenance'}
+        return {'status': 'review_only', 'authority': 'none'}
+    if _stored_model_decision_is_publishable(meta):
+        return {'status': 'verdict', 'authority': 'calibrated_model'}
+    if watermark_verdict.has_decisive_ai_watermark(visible):
+        return {'status': 'verdict', 'authority': 'decisive_provenance'}
+    return {'status': 'review_only', 'authority': 'none'}
 
 
 def _record_model_run(itemid, data, user_info):
@@ -669,6 +851,59 @@ def _record_model_run(itemid, data, user_info):
         visible_watermark = _visible_watermark_from_backend_data(data)
         if isinstance(visible_watermark, dict):
             meta['visibleWatermark'] = visible_watermark
+        model_decision = _model_decision_from_backend_data(data)
+        if isinstance(model_decision, dict):
+            meta['modelDecision'] = {
+                'ready': _model_decision_is_publishable(model_decision),
+                'mode': str(model_decision.get('mode') or '')[:64],
+                'calibrationId': str(model_decision.get('calibrationId') or '')[:160],
+                'manifestSha256': str(model_decision.get('manifestSha256') or '')[:64],
+                'datasetSha256': str(model_decision.get('datasetSha256') or '')[:64],
+                'modelSha256': str(model_decision.get('modelSha256') or '')[:64],
+                'preprocessingSha256': str(model_decision.get('preprocessingSha256') or '')[:64],
+                'runtimeContractSha256': str(model_decision.get('runtimeContractSha256') or '')[:64],
+                'inferenceImplementationSha256': str(model_decision.get('inferenceImplementationSha256') or '')[:64],
+                'decisionPolicyImplementationSha256': str(model_decision.get('decisionPolicyImplementationSha256') or '')[:64],
+                'runtimeLockSha256': str(model_decision.get('runtimeLockSha256') or '')[:64],
+                'probabilityCalibration': copy.deepcopy(model_decision.get('probabilityCalibration')),
+                'calibrationManifest': copy.deepcopy(model_decision.get('calibrationManifest')),
+                'evaluationCodeRevision': str(model_decision.get('evaluationCodeRevision') or '')[:160],
+                'expiresAt': str(model_decision.get('expiresAt') or '')[:64],
+                'realSamples': int(model_decision.get('realSamples') or 0),
+                'fakeSamples': int(model_decision.get('fakeSamples') or 0),
+                'observedFpr': model_decision.get('observedFpr'),
+                'observedFnr': model_decision.get('observedFnr'),
+                'aiThreshold': model_decision.get('aiThreshold'),
+                'rawModelScore': model_decision.get('rawModelScore'),
+                'publishedProbability': model_decision.get('publishedProbability'),
+                'gateReasons': [
+                    str(reason)[:240]
+                    for reason in (model_decision.get('gateReasons') or [])[:12]
+                ],
+            }
+        remote_evidence = (data or {}).get('remote_evidence')
+        model_run = (
+            remote_evidence.get('modelRun')
+            if isinstance(remote_evidence, dict)
+            and isinstance(remote_evidence.get('modelRun'), dict)
+            else {}
+        )
+        if model_run:
+            meta['inferenceAudit'] = {
+                'model': str(model_run.get('model') or '')[:160],
+                'rawModelScore': model_run.get('rawModelScore'),
+                'publishedProbability': model_run.get('fakeProbability'),
+                'fakeProbability': model_run.get('fakeProbability'),
+                'finalLabel': str(model_run.get('finalLabel') or '')[:64],
+                'originalSize': copy.deepcopy(model_run.get('originalSize')),
+                'processedSize': copy.deepcopy(model_run.get('processedSize')),
+                'downsample': copy.deepcopy(model_run.get('downsample')),
+                'chunkCount': model_run.get('chunkCount'),
+                'parameters': copy.deepcopy(model_run.get('parameters')),
+                'runtime': copy.deepcopy(model_run.get('runtime')),
+                'inputImageSha256': str(model_run.get('inputImageSha256') or '')[:64],
+                'responseIntegrity': copy.deepcopy(model_run.get('responseIntegrity')),
+            }
         admin_state.append_model_run(
             itemid,
             model,
@@ -679,6 +914,35 @@ def _record_model_run(itemid, data, user_info):
         )
     except Exception as exc:
         print(f"[MODEL RUN LOG ERROR] {exc}")
+
+
+def _record_final_decision_run(itemid, result, user_info, *, route='swarm'):
+    """Append the final decision authorization used by reports and history."""
+    if not itemid or not isinstance(result, dict):
+        return
+    try:
+        previous = admin_state.model_runs_by_itemids([str(itemid)]).get(str(itemid)) or {}
+        model = copy.deepcopy(previous.get('model') or {'id': 'swarm-evidence-policy'})
+        meta = copy.deepcopy(previous.get('meta') or {})
+        visible = result.get('visibleWatermark')
+        if isinstance(visible, dict):
+            meta['visibleWatermark'] = copy.deepcopy(visible)
+        meta['decisionAuthorization'] = {
+            'status': (
+                'verdict' if result.get('decisionStatus') == 'verdict' else 'review_only'
+            ),
+            'authority': str(result.get('decisionAuthority') or 'none')[:64],
+        }
+        admin_state.append_model_run(
+            itemid,
+            model,
+            route=route,
+            status='success',
+            actor=user_info,
+            meta=meta,
+        )
+    except Exception as exc:
+        print(f"[FINAL DECISION RUN LOG ERROR] {exc}")
 
 
 def _persist_and_freeze_completed_image_result(itemid, result, *, actor=None, is_guest=False):
@@ -776,7 +1040,11 @@ def _save_local_upload(image_bytes, folder, filename):
     safe_name = secure_filename(filename) or f"{uuid.uuid4().hex}.png"
     stored_name = f"{uuid.uuid4().hex[:12]}-{safe_name}"
     file_path = os.path.join(upload_dir, stored_name)
-    with open(file_path, 'wb') as out:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, 'O_NOFOLLOW'):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(file_path, flags, 0o600)
+    with os.fdopen(fd, 'wb') as out:
         out.write(image_bytes)
     return stored_name, file_path
 
@@ -857,7 +1125,15 @@ def _materialize_primary_source(record, data, image_bytes, filename, backend_ope
     })
 
 
-def _insert_local_detection_record(data, image_bytes, filename, backend_openid, phone, user_info):
+def _insert_local_detection_record(
+    data,
+    image_bytes,
+    filename,
+    backend_openid,
+    phone,
+    user_info,
+    source_task_id='',
+):
     stored_name, file_path = _save_local_upload(
         image_bytes,
         backend_openid or phone or 'guest',
@@ -884,8 +1160,9 @@ def _insert_local_detection_record(data, image_bytes, filename, backend_openid, 
         """
         INSERT INTO data
             (createtime, filename, fake, detector_probability, openid, phone, aigc,
-             file_size, img_format, resolution, clarity, explantation, Userid, owner_account_uuid)
-        VALUES (NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             file_size, img_format, resolution, clarity, explantation, Userid,
+             owner_account_uuid, developer_task_id)
+        VALUES (NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             stored_name,
@@ -901,6 +1178,7 @@ def _insert_local_detection_record(data, image_bytes, filename, backend_openid, 
             safe_truncate(explanation, 500),
             _detection_database_user_id(phone, backend_openid),
             _account_uuid(user_info) or None,
+            str(source_task_id or '').strip() or None,
         ),
     )
     if not itemid:
@@ -917,7 +1195,15 @@ def _insert_local_detection_record(data, image_bytes, filename, backend_openid, 
     return itemid
 
 
-def _ensure_local_primary_record(api_json, image_bytes, filename, backend_openid, phone, user_info):
+def _ensure_local_primary_record(
+    api_json,
+    image_bytes,
+    filename,
+    backend_openid,
+    phone,
+    user_info,
+    source_task_id='',
+):
     data = (api_json or {}).get('data') or {}
     remote_itemid = data.get('data_itemid')
     remote_filename = str(data.get('filename') or '').strip()
@@ -926,6 +1212,21 @@ def _ensure_local_primary_record(api_json, image_bytes, filename, backend_openid
     if _record_matches_detection_actor(local_record, remote_filename, backend_openid, phone, account_uuid):
         if account_uuid and not claim_detection_record_owner('data', remote_itemid, account_uuid):
             raise RuntimeError('检测结果不可验证为当前账号所有')
+        if source_task_id:
+            owner_where, owner_params = _detection_owner_where(
+                user_info.get('Userid'), phone, backend_openid, account_uuid
+            )
+            linked = excute_detection_sql(
+                f"""
+                UPDATE data SET developer_task_id = %s
+                WHERE itemid = %s AND ({owner_where})
+                  AND (developer_task_id IS NULL OR developer_task_id = %s)
+                """,
+                (source_task_id, remote_itemid, *owner_params, source_task_id),
+                fetch=False,
+            )
+            if linked != 1:
+                raise RuntimeError('检测结果任务幂等标识写入失败')
         _materialize_primary_source(
             local_record,
             data,
@@ -962,6 +1263,7 @@ def _ensure_local_primary_record(api_json, image_bytes, filename, backend_openid
         backend_openid,
         phone,
         user_info,
+        source_task_id,
     )
 
 
@@ -1334,10 +1636,9 @@ def video_result_page():
 
 @image_upload_blueprint.route('/image_upload/detect', methods=['POST'])
 def image_detect():
-    user_info, is_guest, auth_error = _detection_actor()
-    if auth_error:
-        return auth_error
-    return image_detect_for_actor(user_info, is_guest=is_guest)
+    # Compatibility alias: every public image submission must pass through the
+    # durable queue, server-side guest allowance, and shared GPU admission.
+    return image_detect_async()
 
 
 def _run_image_detection_payload(
@@ -1350,6 +1651,7 @@ def _run_image_detection_payload(
     mark_guest=True,
     include_internal_evidence=False,
     freeze_evidence=True,
+    source_task_id='',
 ):
     backend_openid, phone = _backend_identity(user_info)
     safe_name = secure_filename(filename) or filename
@@ -1407,6 +1709,7 @@ def _run_image_detection_payload(
                     'openid': backend_openid,
                     'phone': phone,
                     'account_uuid': _account_uuid(user_info),
+                    'source_task_id': str(source_task_id or '').strip(),
                 },
                 timeout=primary_timeout,
             )
@@ -1414,6 +1717,21 @@ def _run_image_detection_payload(
             api_json = api_resp.json()
             api_json.setdefault('data', {}).update(_route_data(primary_model, 'primary'))
         except requests.RequestException as e:
+            upstream = getattr(e, 'response', None)
+            upstream_status = int(getattr(upstream, 'status_code', 0) or 0)
+            if upstream_status in {413, 415, 429}:
+                try:
+                    upstream_payload = upstream.json()
+                except (TypeError, ValueError):
+                    upstream_payload = {}
+                return {
+                    'status': 'error',
+                    'code': upstream_payload.get('errorCode') or (
+                        'gpu_queue_full' if upstream_status == 429 else 'upstream_rejected'
+                    ),
+                    'message': upstream_payload.get('msg') or str(e),
+                    'retryAfter': str(upstream.headers.get('Retry-After') or '') if upstream is not None else '',
+                }, upstream_status
             try:
                 api_json = _detect_with_v2_fallback(image_bytes, safe_name, mimetype, backend_openid, phone, user_info)
             except Exception as fallback_error:
@@ -1441,6 +1759,8 @@ def _run_image_detection_payload(
     try:
         data = api_json.get('data') or {}
         visible_watermark = _visible_watermark_from_backend_data(data)
+        model_decision = _model_decision_from_backend_data(data)
+        model_decision_ready = _backend_model_decision_is_publishable(data)
         if isinstance(visible_watermark, dict):
             watermark_verdict.apply_to_backend_data(data, visible_watermark)
         data_itemid = _ensure_local_primary_record(
@@ -1450,6 +1770,7 @@ def _run_image_detection_payload(
             backend_openid,
             phone,
             user_info,
+            source_task_id,
         )
         fake_pct = _to_float(data.get('fake_percentage', 0), 0.0)
         probability = _prob01_from_percent(fake_pct)
@@ -1460,12 +1781,31 @@ def _run_image_detection_payload(
         if not metadata and isinstance(data.get('full_exif_info'), dict):
             metadata = data.get('full_exif_info') or {}
         capture = _capture_evidence_for_metadata(metadata)
-        probability, probability_model, metadata_probability = _fuse_fast_metadata_probability(
-            probability,
-            metadata,
-        )
-        if probability_model.get('factors'):
-            final_label = 'AI生成图像' if probability >= 0.5 else '真实图像'
+        if not model_decision_ready:
+            probability = 0.5
+            detector_probability = 0.5
+            probability_model = {
+                'version': 'review-only-model-gate-v1',
+                'publishable': False,
+                'factors': [],
+                'calibrationStatus': 'independent_calibration_required',
+            }
+            metadata_probability = _clamp01(
+                _swarm_metadata_expert({'all_metadata': metadata}).get('score'), 0.5
+            )
+            final_label = '需人工复核'
+            confidence = '低'
+        else:
+            _diagnostic_probability, probability_model, metadata_probability = _fuse_fast_metadata_probability(
+                probability,
+                metadata,
+            )
+            probability_model = dict(probability_model or {})
+            probability_model['publishable'] = False
+            probability_model['decisionContribution'] = 'diagnostic_only'
+            probability_model['note'] = (
+                '元数据融合尚未单独校准，仅作并列诊断；公开分数和标签保持签名主模型输出。'
+            )
         explanation = data.get('explanation') or data.get('explantation') or _to_user_explanation(
             final_label, confidence, has_metadata=bool(metadata)
         )
@@ -1501,13 +1841,43 @@ def _run_image_detection_payload(
             'capture_evidence': capture,
             'feedback': None,
         }
+        result['modelDecisionReady'] = model_decision_ready
+        result['reviewRequired'] = not model_decision_ready
+        result['decisionStatus'] = 'verdict' if model_decision_ready else 'review_only'
+        result['decisionAuthority'] = 'calibrated_model' if model_decision_ready else 'none'
+        watermark_complete = bool(
+            isinstance(visible_watermark, dict)
+            and visible_watermark.get('supported') is True
+        )
+        evidence_warnings = []
+        if not watermark_complete:
+            evidence_warnings.append(
+                '可见水印检测未完成，本次证据链不完整；不能据此判断图片未含水印。'
+            )
+        if not model_decision_ready:
+            evidence_warnings.append(
+                '主鉴伪模型缺少完整且通过验证的独立校准契约，原始分数不用于自动真假结论。'
+            )
         if probability_model.get('factors'):
             result['probabilityModel'] = probability_model
+        watermark_override_applied = False
         if isinstance(visible_watermark, dict):
             result['visibleWatermark'] = visible_watermark
             if watermark_verdict.apply_to_result(result, visible_watermark):
+                watermark_override_applied = True
+                result['reviewRequired'] = False
+                result['decisionStatus'] = 'verdict'
+                result['decisionAuthority'] = 'decisive_provenance'
                 result.pop('probabilityModel', None)
+        result['evidenceCompleteness'] = bool(
+            watermark_complete and (model_decision_ready or watermark_override_applied)
+        )
+        result['evidenceWarnings'] = [
+            warning for warning in evidence_warnings
+            if not (watermark_override_applied and warning.startswith('主鉴伪模型'))
+        ]
         if freeze_evidence:
+            _record_final_decision_run(data_itemid, result, user_info, route='primary')
             result['evidenceSnapshotReady'] = _persist_and_freeze_completed_image_result(
                 data_itemid,
                 result,
@@ -1516,11 +1886,12 @@ def _run_image_detection_payload(
             )
         if include_internal_evidence and isinstance(data.get('remote_evidence'), dict):
             result['_remote_evidence'] = data.get('remote_evidence')
+        _suppress_review_only_scores(result)
         return {'status': 'success', 'result': result}, 200
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return {'status': 'error', 'message': f'检测失败: {str(e)}'}, 500
+        return {'status': 'error', 'message': '检测服务处理失败，请稍后重试'}, 500
 
 
 def image_detect_for_actor(user_info, *, is_guest=False):
@@ -1683,6 +2054,25 @@ def _public_provenance_summary(summary):
     }
 
 
+def _suppress_review_only_scores(result):
+    """Remove internal placeholders and uncalibrated scores from public output."""
+    if not isinstance(result, dict) or result.get('decisionStatus') == 'verdict':
+        return result
+    result['probability'] = None
+    result['detector_probability'] = None
+    result['p_visual'] = None
+    result['p_metadata'] = None
+    result['confidence'] = '不适用'
+    result['scorePublished'] = False
+    result.pop('probabilityModel', None)
+    swarm = result.get('swarm')
+    if isinstance(swarm, dict):
+        for field in ('score', 'generatedScore', 'tamperScore', 'recaptureScore', 'riskVector'):
+            swarm.pop(field, None)
+        swarm['scorePublished'] = False
+    return result
+
+
 def _public_swarm_result(result):
     if not isinstance(result, dict):
         return result
@@ -1697,7 +2087,7 @@ def _public_swarm_result(result):
         if 'provenanceSummary' in swarm:
             swarm['provenanceSummary'] = _public_provenance_summary(swarm.get('provenanceSummary'))
         public_result['visual_issues'] = public_evidence or public_result.get('visual_issues') or []
-    return public_result
+    return _suppress_review_only_scores(public_result)
 
 
 def _visible_watermark_from_raw_experts(experts):
@@ -1898,7 +2288,14 @@ def _first_text_line(value):
     return ''
 
 
-def _swarm_primary_expert(image_bytes, filename, mimetype, user_info, is_guest):
+def _swarm_primary_expert(
+    image_bytes,
+    filename,
+    mimetype,
+    user_info,
+    is_guest,
+    source_task_id='',
+):
     started_at = time.time()
     payload, status_code = _run_image_detection_payload(
         image_bytes,
@@ -1909,6 +2306,7 @@ def _swarm_primary_expert(image_bytes, filename, mimetype, user_info, is_guest):
         mark_guest=False,
         include_internal_evidence=True,
         freeze_evidence=False,
+        source_task_id=source_task_id,
     )
     if status_code >= 400 or payload.get('status') == 'error':
         return None, {
@@ -1924,7 +2322,11 @@ def _swarm_primary_expert(image_bytes, filename, mimetype, user_info, is_guest):
     remote_evidence = result.pop('_remote_evidence', {})
     # Metadata and visible-watermark evidence are separate Swarm experts; keep
     # the primary baseline on the raw detector score to avoid counting them twice.
-    score = _clamp01(result.get('detector_probability'), result.get('probability', 0.5))
+    decision_ready = result.get('modelDecisionReady') is not False
+    score = (
+        _clamp01(result.get('detector_probability'), result.get('probability', 0.5))
+        if decision_ready else None
+    )
     evidence = []
     if result.get('visual_issues'):
         evidence.extend([str(item) for item in (result.get('visual_issues') or [])[:2] if str(item).strip()])
@@ -1933,9 +2335,14 @@ def _swarm_primary_expert(image_bytes, filename, mimetype, user_info, is_guest):
         evidence.append(line)
     return result, {
         'status': 'success',
-        'score': round(score, 4),
-        'verdict': 'AI生成图像' if score >= 0.5 else '真实图像',
-        'confidence': result.get('confidence') or _conf_level_from_score(score),
+        'score': round(score, 4) if score is not None else None,
+        'verdict': (
+            'AI生成图像' if score is not None and score >= 0.5
+            else ('真实图像' if score is not None else '需人工复核')
+        ),
+        'confidence': result.get('confidence') or (
+            _conf_level_from_score(score) if score is not None else '低'
+        ),
         'evidence': evidence[:3] or ['主路由完成基础图像鉴伪。'],
         'message': '主路由检测完成',
         'latencyMs': int((time.time() - started_at) * 1000),
@@ -2303,15 +2710,65 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
         expert for expert in experts
         if expert.get('status') == 'success' and expert.get('score') is not None
     ]
+    primary_authorized = bool(
+        isinstance(primary_result, dict) and primary_result.get('modelDecisionReady') is True
+    )
+    primary_review_only = not primary_authorized
+    probability_model = probability_fusion.fuse(experts)
+    # The fusion policy is not covered by the signed model calibration. Its
+    # experts remain diagnostic and cannot independently authorize a verdict.
+    decisive_provenance = False
+
+    def review_only_result(reason):
+        base = dict(primary_result or fallback_result or {})
+        base.update({
+            'final_label': '需人工复核',
+            'probability': 0.5,
+            'detector_probability': 0.5,
+            'confidence': '低',
+            'modelDecisionReady': False,
+            'reviewRequired': True,
+            'decisionStatus': 'review_only',
+            'decisionAuthority': 'none',
+            'probabilityModel': probability_model,
+            'explanation': (
+                'Swarm 已完成可用证据复核，但主鉴伪模型尚未通过独立校准，'
+                f'且当前没有足以独立形成自动结论的证据（{reason}）。请进行人工复核。'
+            ),
+            'swarm': {
+                'enabled': True,
+                'score': 0.5,
+                'finalLabel': '需人工复核',
+                'confidence': '低',
+                'consensusLevel': '低',
+                'consensusScore': 0.0,
+                'disagreement': True,
+                'effectiveExperts': len(successful),
+                'totalExperts': len(experts),
+                'experts': experts,
+                'evidence': [reason],
+            },
+        })
+        return base, ''
+
     if not successful:
+        if primary_review_only:
+            return review_only_result('没有可发布的已校准模型或来源证据')
         return None, '所有专家均未返回有效结论'
     if not any(expert.get('id') != 'metadata' for expert in successful):
+        if primary_review_only:
+            return review_only_result('仅元数据专家返回有效结果')
         return None, '主检测与复核专家均未返回有效结论'
     min_experts = max(1, int((config or {}).get('minExperts') or 2))
-    if len(successful) < min_experts:
+    if len(successful) < min_experts and not decisive_provenance:
+        if primary_review_only:
+            return review_only_result(f'有效专家数 {len(successful)}/{min_experts}')
         return None, f'Swarm 有效专家数不足：{len(successful)}/{min_experts}'
-    probability_model = probability_fusion.fuse(experts)
+    if primary_review_only and not decisive_provenance:
+        return review_only_result('二级模型尚无独立校准授权，不能解除主模型复核态')
     if not probability_model.get('publishable'):
+        if primary_review_only:
+            return review_only_result('缺少已校准生成风险基线或明确 AI 来源证据')
         return None, '缺少可发布的主鉴伪模型或明确 AI 来源证据'
     risk_vector = probability_model.get('riskVector') or {}
     generated_score = _clamp01(risk_vector.get('aiGenerated'), 0.5)
@@ -2357,6 +2814,21 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
     else:
         final_label = '真实图像'
 
+    if primary_authorized:
+        signed_probability = _clamp01(
+            (primary_result or {}).get('probability'),
+            (primary_result or {}).get('detector_probability', 0.5),
+        )
+        score = signed_probability
+        generated_score = signed_probability
+        final_label = str((primary_result or {}).get('final_label') or '').strip() or (
+            'AI生成图像' if signed_probability >= 0.5 else '真实图像'
+        )
+        confidence = str((primary_result or {}).get('confidence') or confidence)
+        probability_model = dict(probability_model or {})
+        probability_model['publishable'] = False
+        probability_model['decisionContribution'] = 'diagnostic_only'
+
     provenance_summary = _swarm_provenance_summary(experts)
     capture = _capture_evidence_from_experts(experts, primary_result)
 
@@ -2386,7 +2858,7 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
     disagreement = spread > disagreement_threshold
     baseline_probability = _clamp01(probability_model.get('pixelBaseline'), score)
     explanation = [
-        f"Swarm 专家会诊完成：AIGC 模型基线风险 {baseline_probability * 100:.1f}%，来源证据融合后的生成风险为 {generated_score * 100:.2f}%。",
+        f"Swarm 专家会诊完成：签名主模型发布分数为 {generated_score * 100:.2f}%，其他专家仅作并列诊断，不改变该分数和标签。",
         f"有效像素专家 {len(probability_model.get('baselineExperts') or [])} 个，专家一致性：{consensus_level}，当前置信度：{confidence}。",
     ]
     if tamper_score is not None:
@@ -2394,7 +2866,7 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
     if recapture_score is not None:
         explanation.append(f"独立翻拍风险为 {recapture_score * 100:.2f}%，不参与 AI 生成概率平均。")
     if probability_model.get('corroborated') and generated_score >= 0.99:
-        explanation.append("已知 AI 水印与独立元数据/完整性证据相互印证，因此进入 99% 以上高置信区间。")
+        explanation.append("辅助证据与签名主模型方向一致，但不改变已发布的模型分数或标签。")
     if disagreement:
         explanation.append("部分专家意见存在分歧，建议结合原始来源或人工复核。")
     else:
@@ -2411,6 +2883,12 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
         'recapture_probability': None if recapture_score is None else round(recapture_score, 4),
         'probabilityModel': probability_model,
         'confidence': confidence,
+        'modelDecisionReady': primary_authorized,
+        'reviewRequired': False,
+        'decisionStatus': 'verdict',
+        'decisionAuthority': (
+            'calibrated_model' if primary_authorized else 'decisive_provenance'
+        ),
         'explanation': "\n".join(explanation),
         'visual_issues': evidence[:6] or ['暂未提取到明确的视觉可疑点。'],
         'agent_reasoning': json.dumps({
@@ -2447,7 +2925,15 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
     return base, ''
 
 
-def _persist_swarm_history_result(final_result, image_bytes, filename, backend_openid, phone, user_info):
+def _persist_swarm_history_result(
+    final_result,
+    image_bytes,
+    filename,
+    backend_openid,
+    phone,
+    user_info,
+    source_task_id='',
+):
     itemid = (final_result or {}).get('itemid')
     record = _local_detection_record(itemid)
     expected_filename = str((final_result or {}).get('filename') or '').strip()
@@ -2499,6 +2985,7 @@ def _persist_swarm_history_result(final_result, image_bytes, filename, backend_o
         backend_openid,
         phone,
         user_info,
+        source_task_id,
     )
     final_result.update({
         'itemid': local_itemid,
@@ -2577,6 +3064,7 @@ def _run_swarm_detection_payload(image_bytes, filename, mimetype, user_info, *, 
             mimetype,
             user_info,
             is_guest,
+            source_task_id=job_id or '',
         )
         _swarm_set_expert(experts, 'primary', **primary_update)
         primary_finished.set()
@@ -2637,6 +3125,9 @@ def _run_swarm_detection_payload(image_bytes, filename, mimetype, user_info, *, 
     if visible_expert and isinstance(visible_expert.get('visibleWatermark'), dict):
         final_result['visibleWatermark'] = visible_expert['visibleWatermark']
         if watermark_verdict.apply_to_result(final_result, visible_expert['visibleWatermark']):
+            final_result['reviewRequired'] = False
+            final_result['decisionStatus'] = 'verdict'
+            final_result['decisionAuthority'] = 'decisive_provenance'
             swarm = final_result.get('swarm') or {}
             swarm.update({
                 'score': final_result['probability'],
@@ -2651,13 +3142,16 @@ def _run_swarm_detection_payload(image_bytes, filename, mimetype, user_info, *, 
         backend_openid,
         phone,
         user_info,
+        job_id or '',
     )
+    _record_final_decision_run(itemid, final_result, user_info, route='swarm')
     final_result['evidenceSnapshotReady'] = _persist_and_freeze_completed_image_result(
         itemid,
         final_result,
         actor=user_info,
         is_guest=is_guest,
     )
+    _suppress_review_only_scores(final_result)
     payload = {'status': 'success', 'result': final_result}
     _swarm_update_job(job_id, experts, 100, 'Swarm 专家会诊完成', status='success', result=payload)
     return payload, 200
@@ -2732,15 +3226,25 @@ def image_detect_async():
     if upload_error:
         return upload_error
     job = admin_state.create_detection_job(user_info, file.filename, kind='image')
-    started = _start_background_job(
-        _run_async_image_job,
-        (job['id'], image_bytes, file.filename, mimetype, dict(user_info or {}), is_guest),
+    started, error_code, error_message = _enqueue_persistent_web_job(
+        job,
+        image_bytes,
+        file.filename,
+        mimetype,
+        dict(user_info or {}),
+        is_guest,
     )
     if not started:
         admin_state.update_detection_job(job['id'], {
-            'status': 'failed', 'error': '服务器繁忙，任务未进入队列', 'progress': 100,
+            'status': 'failed', 'error': error_message, 'progress': 100,
         })
-        return _busy_response()
+        if error_code == 'server_busy':
+            return _busy_response()
+        return jsonify({
+            'status': 'error',
+            'code': error_code,
+            'message': error_message,
+        }), 503
     _mark_guest_detection_used(is_guest)
     return jsonify({'status': 'success', 'job': _public_detection_job(job)}), 202
 
@@ -2758,6 +3262,12 @@ def image_detect_swarm():
     user_info, is_guest, auth_error = _detection_actor()
     if auth_error:
         return auth_error
+    if is_guest:
+        return jsonify({
+            'status': 'error',
+            'code': 'authentication_required',
+            'message': 'Swarm 深度检测需要登录后使用',
+        }), 401
     file = request.files.get('image') or request.files.get('file')
     if not file or file.filename == '':
         return jsonify({'status': 'error', 'message': '请上传图片文件'}), 400
@@ -2769,22 +3279,42 @@ def image_detect_swarm():
         return upload_error
     experts = _swarm_initial_experts()
     job = admin_state.create_detection_job(user_info, file.filename, kind='swarm', mode='swarm', experts=experts)
-    started = _start_background_job(
-        _run_swarm_image_job,
-        (job['id'], image_bytes, file.filename, mimetype, dict(user_info or {}), is_guest),
+    started, error_code, error_message = _enqueue_persistent_web_job(
+        job,
+        image_bytes,
+        file.filename,
+        mimetype,
+        dict(user_info or {}),
+        is_guest,
     )
     if not started:
         admin_state.update_detection_job(job['id'], {
-            'status': 'failed', 'error': '服务器繁忙，任务未进入队列', 'progress': 100,
+            'status': 'failed', 'error': error_message, 'progress': 100,
         })
-        return _busy_response()
+        if error_code == 'server_busy':
+            return _busy_response()
+        return jsonify({
+            'status': 'error',
+            'code': error_code,
+            'message': error_message,
+        }), 503
     _mark_guest_detection_used(is_guest)
     return jsonify({'status': 'success', 'job': _public_detection_job(job)}), 202
 
 
 @image_upload_blueprint.route('/image_upload/jobs/<job_id>')
 def image_detection_job(job_id):
-    job = admin_state.get_detection_job(job_id)
+    try:
+        job = _load_persistent_web_job(job_id)
+    except Exception as exc:
+        print(f"[WEB TASK QUERY ERROR] {job_id}: {exc}")
+        return jsonify({
+            'status': 'error',
+            'code': 'queue_unavailable',
+            'message': '任务状态暂时不可用，请稍后重试',
+        }), 503
+    if not job:
+        job = admin_state.get_detection_job(job_id)
     if not job:
         return jsonify({'status': 'error', 'message': '任务不存在'}), 404
     owner = job.get('actor') or {}
@@ -2867,6 +3397,15 @@ def image_result_api():
     probability_model = {}
     metadata_probability = None
     final_label = stored_label or ('AI生成图像' if fake >= 0.5 else '真实图像')
+    decision = _stored_decision_authorization_for_item(itemid)
+    legacy_calibration_unknown = (
+        decision.get('status') != 'verdict' and final_label != '需人工复核'
+    )
+    review_required = final_label == '需人工复核' or legacy_calibration_unknown
+    if review_required:
+        fake = 0.5
+        detector_probability = 0.5
+        final_label = '需人工复核'
     feedback_raw = item.get('feedback')
     feedback = 1 if feedback_raw in (1, '1', '满意') else (-1 if feedback_raw in (-1, '-1', '不满意') else None)
 
@@ -2882,8 +3421,11 @@ def image_result_api():
         'probability': fake,
         'detector_probability': detector_probability,
         'p_metadata': metadata_probability,
-        'confidence': item.get('clarity', ''),
-        'explanation': explanation,
+        'confidence': '低' if review_required else item.get('clarity', ''),
+        'explanation': (
+            '该历史记录缺少可验证的已校准模型授权或决定性来源证据，原始分数不作为自动真假结论。'
+            if legacy_calibration_unknown else explanation
+        ),
         'agent_reasoning': '',
         'visual_issues': visual_issues,
         'image_url': image_url,
@@ -2894,12 +3436,18 @@ def image_result_api():
         'all_metadata': all_metadata,
         'capture_evidence': _capture_evidence_for_metadata(all_metadata),
         'feedback': feedback,
+        'reviewRequired': review_required,
+        'modelDecisionReady': False if review_required else None,
+        'decisionStatus': 'review_only' if review_required else 'verdict',
+        'decisionAuthority': decision.get('authority') or 'none',
+        'legacyCalibrationUnknown': legacy_calibration_unknown,
     }
     if probability_model.get('factors'):
         result['probabilityModel'] = probability_model
     visible_watermark = _runtime_visible_watermark_for_item(item.get('itemid'))
     if isinstance(visible_watermark, dict):
         result['visibleWatermark'] = visible_watermark
+    _suppress_review_only_scores(result)
     return jsonify({'status': 'success', 'result': result})
 
 
@@ -2922,6 +3470,19 @@ def image_report_api():
     report_label = str(item.get('aigc') or '').strip() or (
         'AI生成图像' if report_probability >= 0.5 else '真实图像'
     )
+    report_decision = _stored_decision_authorization_for_item(itemid)
+    legacy_calibration_unknown = (
+        report_decision.get('status') != 'verdict' and report_label != '需人工复核'
+    )
+    if legacy_calibration_unknown:
+        return jsonify({
+            'status': 'error',
+            'code': 'legacy_calibration_unknown',
+            'message': '该历史记录缺少可验证的自动决策授权，请完成人工复核后再生成报告。',
+        }), 409
+    report_review_required = report_label == '需人工复核'
+    if report_review_required:
+        detector_probability = report_probability
     result = {
         'itemid': item.get('itemid'),
         'final_label': report_label,
@@ -2942,12 +3503,17 @@ def image_report_api():
         'visual_issues': _normalize_visual_issues([], final_label=report_label),
         'all_metadata': report_metadata,
         'capture_evidence': _capture_evidence_for_metadata(report_metadata),
+        'reviewRequired': report_review_required,
+        'modelDecisionReady': False if report_review_required else None,
+        'decisionStatus': 'review_only' if report_review_required else 'verdict',
+        'decisionAuthority': report_decision.get('authority') or 'none',
     }
     if probability_model.get('factors'):
         result['probabilityModel'] = probability_model
     visible_watermark = _runtime_visible_watermark_for_item(item.get('itemid'))
     if isinstance(visible_watermark, dict):
         result['visibleWatermark'] = visible_watermark
+    _suppress_review_only_scores(result)
     pdf = reporting.image_report_pdf(item, result)
     return Response(
         pdf,
@@ -3023,17 +3589,13 @@ def video_detect():
             'message': '视频检测完成，但后端未返回可验证的账号归属；结果已拒绝展示',
         }), 502
     fake_pct = _to_float(data.get('fake_percentage', 0), 0.0)
-    real_pct = _to_float(data.get('real_percentage', max(0, 100 - fake_pct)), max(0, 100 - fake_pct))
-    conf_score = _conf_score_from_api(data.get('confidence'), fake_pct)
-    final_label_raw = str(data.get('final_label', '') or '').strip().lower()
-    if final_label_raw in ('fake', 'ai', 'ai生成视频'):
-        final_label = 'AI生成视频'
-    elif final_label_raw in ('real', '真实', '真实视频'):
-        final_label = '真实视频'
-    else:
-        final_label = 'AI生成视频' if fake_pct >= 50 else '真实视频'
-    explanation = data.get('explanation', '')
-    conf_level = _conf_level_from_score(conf_score)
+    conf_score = None
+    final_label = '需人工复核'
+    explanation = (
+        '视频抽帧与时序分析已完成，但当前视频模型及聚合策略尚未通过独立签名校准，'
+        '自动真假分数不对外发布。请结合原始视频、可疑片段与人工复核形成结论。'
+    )
+    conf_level = '不适用'
     meta = data.get('meta') or {}
 
     duration = meta.get('duration', '')
@@ -3054,11 +3616,14 @@ def video_detect():
             'itemid': itemid,
             'filename': (record or {}).get('filename', ''),
             'video_url': video_file_url,
-            'fake_percentage': fake_pct,
-            'real_percentage': real_pct,
+            'fake_percentage': None,
+            'real_percentage': None,
             'final_label': final_label,
             'confidence_score': conf_score,
             'confidence': conf_level,
+            'decisionStatus': 'review_only',
+            'decisionAuthority': 'none',
+            'reviewRequired': True,
             'explanation': explanation,
             'd3_std': d3_std,
             'encoder': encoder,
@@ -3082,19 +3647,21 @@ def video_result_api():
     item = _load_detection_record('video_data', itemid)
     if not item:
         return jsonify({'status': 'error', 'message': '未找到该视频检测记录'}), 404
-    fake_pct = float(item.get('fake', 0) or 0)
     return jsonify({
         'status': 'success',
         'result': {
             'itemid': item.get('itemid'),
             'filename': item.get('filename', ''),
             'video_url': _backend_static_url('video', item),
-            'fake_percentage': fake_pct,
-            'real_percentage': max(0.0, 100.0 - fake_pct),
-            'final_label': item.get('final_label', ''),
-            'confidence_score': _conf_score_from_api(item.get('confidence'), fake_pct),
-            'confidence': item.get('confidence', ''),
-            'explanation': item.get('explanation', ''),
+            'fake_percentage': None,
+            'real_percentage': None,
+            'final_label': '需人工复核',
+            'confidence_score': None,
+            'confidence': '不适用',
+            'decisionStatus': 'review_only',
+            'decisionAuthority': 'none',
+            'reviewRequired': True,
+            'explanation': '该历史视频结果缺少独立签名校准与逐帧聚合审计，只能用于人工复核。',
             'd3_std': item.get('d3_std'),
             'encoder': item.get('encoder', ''),
             'frame_count': item.get('frame_count', 0),
@@ -3118,16 +3685,18 @@ def video_report_api():
     if not item:
         return jsonify({'status': 'error', 'message': '未找到该视频检测记录'}), 404
 
-    fake_pct = float(item.get('fake', 0) or 0)
     result = {
         'itemid': item.get('itemid'),
         'filename': item.get('filename', ''),
         'video_url': _backend_static_url('video', item),
-        'fake_percentage': fake_pct,
-        'real_percentage': max(0.0, 100.0 - fake_pct),
-        'final_label': item.get('final_label', ''),
-        'confidence': item.get('confidence', ''),
-        'explanation': item.get('explanation', ''),
+        'fake_percentage': None,
+        'real_percentage': None,
+        'final_label': '需人工复核',
+        'confidence': '不适用',
+        'decisionStatus': 'review_only',
+        'decisionAuthority': 'none',
+        'reviewRequired': True,
+        'explanation': '视频模型与逐帧聚合策略尚未通过独立签名校准，本报告不发布自动真假分数。',
         'frame_count': item.get('frame_count', 0),
         'encoder': item.get('encoder', ''),
         'meta': {

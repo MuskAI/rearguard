@@ -815,6 +815,22 @@ def get_detection_job(job_id):
     return load_state().get("detectionJobs", {}).get(str(job_id))
 
 
+def restore_detection_job(entry):
+    """Restore a durable job into the progress cache after a Web restart."""
+    if not isinstance(entry, dict) or not str(entry.get("id") or "").strip():
+        return None
+    restored = deepcopy(entry)
+    job_id = str(restored["id"])
+
+    def mutate(state):
+        jobs = state.setdefault("detectionJobs", {})
+        jobs[job_id] = restored
+        state["detectionJobs"] = dict(list(jobs.items())[-500:])
+        return deepcopy(restored)
+
+    return _update_state(mutate)
+
+
 def list_detection_jobs(limit=100):
     jobs = list(load_state().get("detectionJobs", {}).values())
     jobs.sort(key=lambda item: item.get("createdAt") or "", reverse=True)
@@ -825,14 +841,17 @@ def list_detection_jobs(limit=100):
     return jobs[:limit]
 
 
-def reconcile_interrupted_detection_jobs():
+def reconcile_interrupted_detection_jobs(preserve_ids=None):
     """Fail jobs whose in-process executor disappeared during a controlled restart."""
     now = time.strftime("%Y-%m-%d %H:%M:%S")
+    preserved = {str(job_id) for job_id in (preserve_ids or set())}
 
     def mutate(state):
         changed = 0
         jobs = state.setdefault("detectionJobs", {})
         for job_id, entry in list(jobs.items()):
+            if str(job_id) in preserved:
+                continue
             if str(entry.get("status") or "").lower() not in {"queued", "running"}:
                 continue
             entry["status"] = "failed"

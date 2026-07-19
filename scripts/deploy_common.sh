@@ -80,15 +80,20 @@ run_ssh_transport() {
     return 0
   fi
 
+  # Remote shell commands may contain migrations, pointer switches and service
+  # restarts. An SSH 255 does not prove the remote command did not run, so only
+  # retry file transfers; callers must reconcile state before another activate.
+  if [[ "$1" == "ssh" ]]; then
+    "$@"
+    return $?
+  fi
+
   local attempt status
   for attempt in 1 2 3 4 5; do
     if "$@"; then
       return 0
     else
       status=$?
-    fi
-    if [[ "$1" == "ssh" && "$status" != "255" ]]; then
-      return "$status"
     fi
     if [[ "$attempt" != "5" ]]; then
       printf 'SSH transport interrupted; retrying (%s/5)...\n' "$attempt" >&2

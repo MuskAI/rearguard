@@ -2,7 +2,9 @@ import hashlib
 import hmac
 import ipaddress
 import io
+import json
 import os
+import base64
 import secrets
 import time
 import uuid
@@ -33,6 +35,7 @@ from imagedetection.views.login import (
     _verify_sms_code,
 )
 from imagedetection.views.utils import (
+    detection_record_is_publishable,
     detection_owner_where,
     excute_detection_sql,
     excute_sql,
@@ -48,6 +51,11 @@ api_blueprint = Blueprint("api_blueprint", __name__, url_prefix="/api")
 DEVELOPER_WORKER_HEARTBEAT = Path(
     os.environ.get("REALGUARD_DEVELOPER_WORKER_HEARTBEAT", "/opt/realguard-data/developer-worker.heartbeat")
 )
+DETECTOR_READY_URL = (
+    os.environ.get("REALGUARD_DETECTION_BACKEND_URL", "http://127.0.0.1:15001").rstrip("/")
+    + "/internal/ready"
+)
+DETECTOR_INTERNAL_TOKEN = os.environ.get("REALGUARD_DETECTOR_INTERNAL_TOKEN", "").strip()
 DEVELOPER_WORKER_MAX_HEARTBEAT_AGE = max(
     10,
     int(os.environ.get("REALGUARD_DEVELOPER_WORKER_MAX_HEARTBEAT_AGE", "60")),
@@ -66,9 +74,12 @@ HISTORY_ORDER_BY = (
 )
 DEVELOPER_API_KEY_PREFIX = "rg_sk_"
 DEVELOPER_API_KEY_MAX_ACTIVE = int(os.environ.get("REALGUARD_DEVELOPER_API_KEY_MAX_ACTIVE", "5"))
-DEVELOPER_API_KEY_DEFAULT_SCOPES = "image:fast,image:swarm,reports"
+DEVELOPER_API_KEY_DEFAULT_SCOPES = "image:fast"
 DEVELOPER_API_KEY_ALLOWED_SCOPES = frozenset({"image:fast", "image:swarm", "reports"})
 DEVELOPER_AUTH_SECRET = os.environ.get("REALGUARD_DEVELOPER_AUTH_SECRET", "").strip()
+DEVELOPER_IDEMPOTENCY_SECRET = os.environ.get(
+    "REALGUARD_DEVELOPER_IDEMPOTENCY_SECRET", ""
+).strip()
 DEVELOPER_TRUSTED_PROXY_CIDRS = tuple(
     value.strip()
     for value in os.environ.get("REALGUARD_TRUSTED_PROXY_CIDRS", "127.0.0.0/8,::1/128").split(",")
@@ -168,6 +179,30 @@ def _record_terms_acceptance(phone):
 
 def _developer_key_hash(api_key):
     return hashlib.sha256(f"realguard-developer-api-key:{api_key}".encode("utf-8")).hexdigest()
+
+
+def _idempotent_developer_api_key(user_id, operation, idempotency_key):
+    if not DEVELOPER_IDEMPOTENCY_SECRET:
+        return None
+    digest = hmac.new(
+        DEVELOPER_IDEMPOTENCY_SECRET.encode("utf-8"),
+        f"developer-key:{user_id}:{operation}:{idempotency_key}".encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    encoded = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+    return f"{DEVELOPER_API_KEY_PREFIX}{encoded}"
+
+
+def _developer_operation_idempotency(user_id, operation):
+    key = request.headers.get("Idempotency-Key", "").strip()
+    if not key:
+        return None, None
+    if len(key) > 128:
+        return None, (jsonify({"status": "error", "message": "Idempotency-Key 不能超过 128 个字符"}), 400)
+    api_key = _idempotent_developer_api_key(user_id, operation, key)
+    if not api_key:
+        return None, (jsonify({"status": "error", "message": "幂等密钥服务未配置"}), 503)
+    return api_key, None
 
 
 def _developer_scopes(raw):
@@ -312,9 +347,6 @@ def _developer_key_options(payload, *, fallback_name="Default key", fallback_sco
         return None, f"不支持的权限范围: {', '.join(invalid_scopes)}"
     if not any(scope in {"image:fast", "image:swarm"} for scope in scopes):
         return None, "请至少启用快速检测或 Swarm 检测权限"
-    if "reports" not in scopes:
-        scopes.append("reports")
-
     expiry_raw = payload.get("expiresAt", payload.get("expires_at", fallback_expiry))
     expires_at, expiry_error = _normalize_developer_expiry(expiry_raw)
     if expiry_error:
@@ -368,6 +400,33 @@ def _create_developer_key_with_limit(user_id, options):
             if not cursor.fetchone():
                 conn.rollback()
                 return None, None, "开发者账号不存在"
+            api_key = options.get("_api_key_override") or f"{DEVELOPER_API_KEY_PREFIX}{secrets.token_urlsafe(32)}"
+            key_hash = _developer_key_hash(api_key)
+            if options.get("_api_key_override"):
+                cursor.execute(
+                    """
+                    SELECT id, name, key_prefix, key_last4, scopes, status, created_at, last_used_at,
+                           revoked_at, expires_at, ip_allowlist
+                    FROM developer_api_keys
+                    WHERE user_id = %s AND key_hash = %s
+                    LIMIT 1
+                    """,
+                    (user_id, key_hash),
+                )
+                existing = cursor.fetchone()
+                if existing:
+                    comparable = (
+                        str(existing.get("name") or "") == options["name"]
+                        and str(existing.get("scopes") or "") == options["scopes"]
+                        and str(existing.get("ip_allowlist") or "") == options["ip_allowlist"]
+                        and format_createtime(existing.get("expires_at"))
+                        == format_createtime(options["expires_at"])
+                    )
+                    if not comparable:
+                        conn.rollback()
+                        return None, None, "该 Idempotency-Key 已用于其他 API Key 参数"
+                    conn.commit()
+                    return api_key, existing, None
             cursor.execute(
                 "SELECT COUNT(*) AS cnt FROM developer_api_keys WHERE user_id = %s AND status = 'active'",
                 (user_id,),
@@ -377,7 +436,6 @@ def _create_developer_key_with_limit(user_id, options):
                 conn.rollback()
                 return None, None, f"最多只能保留 {DEVELOPER_API_KEY_MAX_ACTIVE} 个 active API Key"
 
-            api_key = f"{DEVELOPER_API_KEY_PREFIX}{secrets.token_urlsafe(32)}"
             cursor.execute(
                 """
                 INSERT INTO developer_api_keys
@@ -387,7 +445,7 @@ def _create_developer_key_with_limit(user_id, options):
                 (
                     user_id,
                     options["name"],
-                    _developer_key_hash(api_key),
+                    key_hash,
                     DEVELOPER_API_KEY_PREFIX,
                     api_key[-4:],
                     options["scopes"],
@@ -435,7 +493,7 @@ def _rotate_developer_key_atomic(user_id, key_id, payload):
                 """
                 SELECT id, name, scopes, status, expires_at, ip_allowlist
                 FROM developer_api_keys
-                WHERE id = %s AND user_id = %s AND status = 'active'
+                WHERE id = %s AND user_id = %s
                 LIMIT 1 FOR UPDATE
                 """,
                 (key_id, user_id),
@@ -454,7 +512,39 @@ def _rotate_developer_key_atomic(user_id, key_id, payload):
             if options_error:
                 conn.rollback()
                 return None, None, options_error, 400
-            api_key = f"{DEVELOPER_API_KEY_PREFIX}{secrets.token_urlsafe(32)}"
+            api_key = payload.get("_api_key_override") or f"{DEVELOPER_API_KEY_PREFIX}{secrets.token_urlsafe(32)}"
+            key_hash = _developer_key_hash(api_key)
+            if payload.get("_api_key_override"):
+                cursor.execute(
+                    """
+                    SELECT id, name, key_prefix, key_last4, scopes, status, created_at, last_used_at,
+                           revoked_at, expires_at, ip_allowlist
+                    FROM developer_api_keys
+                    WHERE user_id = %s AND key_hash = %s
+                    LIMIT 1
+                    """,
+                    (user_id, key_hash),
+                )
+                existing = cursor.fetchone()
+                if existing:
+                    comparable = (
+                        str(existing.get("name") or "") == options["name"]
+                        and str(existing.get("scopes") or "") == options["scopes"]
+                        and str(existing.get("ip_allowlist") or "") == options["ip_allowlist"]
+                        and format_createtime(existing.get("expires_at"))
+                        == format_createtime(options["expires_at"])
+                    )
+                    if not comparable:
+                        conn.rollback()
+                        return None, None, "该 Idempotency-Key 已用于其他轮换参数", 409
+                    if current.get("status") != "revoked":
+                        conn.rollback()
+                        return None, None, "API Key 轮换状态不一致", 409
+                    conn.commit()
+                    return api_key, existing, None, 200
+            if current.get("status") != "active":
+                conn.rollback()
+                return None, None, "API Key 不存在或已撤销", 404
             cursor.execute(
                 """
                 INSERT INTO developer_api_keys
@@ -464,7 +554,7 @@ def _rotate_developer_key_atomic(user_id, key_id, payload):
                 (
                     user_id,
                     options["name"],
-                    _developer_key_hash(api_key),
+                    key_hash,
                     DEVELOPER_API_KEY_PREFIX,
                     api_key[-4:],
                     options["scopes"],
@@ -565,6 +655,8 @@ def _ensure_developer_usage_table():
           prompt_tokens INT NOT NULL DEFAULT 0,
           completion_tokens INT NOT NULL DEFAULT 0,
           total_tokens INT NOT NULL DEFAULT 0,
+          billable TINYINT(1) NOT NULL DEFAULT 0,
+          decision_status VARCHAR(24) NOT NULL DEFAULT 'review_only',
           created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
           PRIMARY KEY (id),
           UNIQUE KEY uk_developer_usage_task (task_id),
@@ -581,6 +673,27 @@ def _ensure_developer_usage_table():
             "task_id",
             "VARCHAR(64) NULL COMMENT '可幂等恢复的开发者任务标识' AFTER id",
         )
+    if result is not None:
+        result = _ensure_column(
+            "developer_usage_events",
+            "billable",
+            "TINYINT(1) NOT NULL DEFAULT 0 AFTER total_tokens",
+        )
+    if result is not None:
+        result = _ensure_column(
+            "developer_usage_events",
+            "decision_status",
+            "VARCHAR(24) NOT NULL DEFAULT 'review_only' AFTER billable",
+        )
+    if result is not None:
+        result = excute_sql(
+            """
+            ALTER TABLE developer_usage_events
+              MODIFY billable TINYINT(1) NOT NULL DEFAULT 0,
+              MODIFY decision_status VARCHAR(24) NOT NULL DEFAULT 'review_only'
+            """,
+            fetch=False,
+        ) is not None
     if result:
         indexes = excute_sql("SHOW INDEX FROM developer_usage_events WHERE Key_name = %s", ("uk_developer_usage_task",))
         if indexes == []:
@@ -683,6 +796,29 @@ def _consume_developer_key_request(api_key):
         conn = get_db_connection()
         conn.begin()
         with conn.cursor() as cursor:
+            # Discover the owner without taking a row lock, then use the same
+            # account -> key lock order as create/rotate/revoke operations.
+            cursor.execute(
+                """
+                SELECT k.user_id
+                FROM developer_api_keys k
+                WHERE k.key_hash = %s
+                LIMIT 1
+                """,
+                (_developer_key_hash(api_key),),
+            )
+            owner = cursor.fetchone()
+            if not owner:
+                conn.rollback()
+                return None, None, None, None
+            cursor.execute(
+                "SELECT Userid FROM `user` WHERE Userid = %s FOR UPDATE",
+                (owner["user_id"],),
+            )
+            if not cursor.fetchone():
+                conn.rollback()
+                return None, "开发者账号不存在", "storage_unavailable", None
+
             cursor.execute(
                 """
                 SELECT k.id, k.user_id, k.name, k.scopes, k.status, k.expires_at,
@@ -692,11 +828,11 @@ def _consume_developer_key_request(api_key):
                 FROM developer_api_keys k
                 JOIN user u ON u.Userid = k.user_id
                 LEFT JOIN developer_api_account_quotas q ON q.user_id = k.user_id
-                WHERE k.key_hash = %s
+                WHERE k.key_hash = %s AND k.user_id = %s
                 LIMIT 1
                 FOR UPDATE
                 """,
-                (_developer_key_hash(api_key),),
+                (_developer_key_hash(api_key), owner["user_id"]),
             )
             row = cursor.fetchone()
             if not row or row.get("status") != "active":
@@ -720,55 +856,48 @@ def _consume_developer_key_request(api_key):
                 conn.rollback()
                 return None, "当前来源 IP 不在该 API Key 的白名单中", "ip_not_allowed", None
 
-            # Serialize all keys that belong to this account before touching shared counters.
-            cursor.execute(
-                "SELECT Userid FROM `user` WHERE Userid = %s FOR UPDATE",
-                (row["user_id"],),
-            )
-            if not cursor.fetchone():
-                conn.rollback()
-                return None, "开发者账号不存在", "storage_unavailable", None
+            # Read-only polling remains protected by the edge IP limiter, but
+            # must not consume the account's detection-submission rate budget.
+            if request.method not in {"GET", "HEAD", "OPTIONS"}:
+                day_bucket = now.date()
+                minute_bucket = now.replace(second=0, microsecond=0)
+                cursor.execute(
+                    """
+                    SELECT day_bucket, daily_count, minute_bucket, minute_count
+                    FROM developer_api_account_quota_usage
+                    WHERE user_id = %s
+                    FOR UPDATE
+                    """,
+                    (row["user_id"],),
+                )
+                usage = cursor.fetchone() or {}
+                daily_count = int(usage.get("daily_count") or 0) if usage.get("day_bucket") == day_bucket else 0
+                minute_count = int(usage.get("minute_count") or 0) if usage.get("minute_bucket") == minute_bucket else 0
+                minute_limit = row.get("rate_limit_per_minute")
+                if minute_limit is not None and minute_count >= int(minute_limit):
+                    conn.rollback()
+                    return row, "该账号请求过于频繁", "rate_limit_exceeded", _quota_retry_after(now)
 
-            day_bucket = now.date()
-            minute_bucket = now.replace(second=0, microsecond=0)
-            cursor.execute(
-                """
-                SELECT day_bucket, daily_count, minute_bucket, minute_count
-                FROM developer_api_account_quota_usage
-                WHERE user_id = %s
-                FOR UPDATE
-                """,
-                (row["user_id"],),
-            )
-            usage = cursor.fetchone() or {}
-            daily_count = int(usage.get("daily_count") or 0) if usage.get("day_bucket") == day_bucket else 0
-            minute_count = int(usage.get("minute_count") or 0) if usage.get("minute_bucket") == minute_bucket else 0
-            daily_limit = row.get("daily_limit")
-            minute_limit = row.get("rate_limit_per_minute")
-            if minute_limit is not None and minute_count >= int(minute_limit):
-                conn.rollback()
-                return row, "该账号请求过于频繁", "rate_limit_exceeded", _quota_retry_after(now)
-
-            cursor.execute(
-                """
-                INSERT INTO developer_api_account_quota_usage
-                    (user_id, day_bucket, daily_count, minute_bucket, minute_count)
-                VALUES (%s, %s, %s, %s, 1)
-                ON DUPLICATE KEY UPDATE
-                    day_bucket = VALUES(day_bucket),
-                    daily_count = %s,
-                    minute_bucket = VALUES(minute_bucket),
-                    minute_count = %s
-                """,
-                (
-                    row["user_id"],
-                    day_bucket,
-                    daily_count,
-                    minute_bucket,
-                    daily_count,
-                    minute_count + 1,
-                ),
-            )
+                cursor.execute(
+                    """
+                    INSERT INTO developer_api_account_quota_usage
+                        (user_id, day_bucket, daily_count, minute_bucket, minute_count)
+                    VALUES (%s, %s, %s, %s, 1)
+                    ON DUPLICATE KEY UPDATE
+                        day_bucket = VALUES(day_bucket),
+                        daily_count = %s,
+                        minute_bucket = VALUES(minute_bucket),
+                        minute_count = %s
+                    """,
+                    (
+                        row["user_id"],
+                        day_bucket,
+                        daily_count,
+                        minute_bucket,
+                        daily_count,
+                        minute_count + 1,
+                    ),
+                )
             cursor.execute(
                 """
                 UPDATE developer_api_keys
@@ -917,6 +1046,8 @@ def _record_developer_usage_event(
     completion_tokens=0,
     total_tokens=0,
     task_id=None,
+    billable=True,
+    decision_status="verdict",
 ):
     if not actor or not _ensure_developer_usage_table():
         return False
@@ -924,8 +1055,8 @@ def _record_developer_usage_event(
         """
         INSERT IGNORE INTO developer_usage_events
           (task_id, user_id, key_id, pipeline, endpoint, model_version, status_code,
-           prompt_tokens, completion_tokens, total_tokens)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+           prompt_tokens, completion_tokens, total_tokens, billable, decision_status)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             task_id,
@@ -938,6 +1069,8 @@ def _record_developer_usage_event(
             _usage_int(prompt_tokens),
             _usage_int(completion_tokens),
             _usage_int(total_tokens),
+            1 if billable else 0,
+            str(decision_status or "review_only")[:24],
         ),
         fetch=False,
     )
@@ -951,7 +1084,7 @@ def _developer_usage_from_v1(user_id, days):
     rows = excute_sql(
         """
         SELECT created_at, key_id, pipeline, endpoint, model_version, status_code,
-               prompt_tokens, completion_tokens, total_tokens
+               prompt_tokens, completion_tokens, total_tokens, billable, decision_status
         FROM developer_usage_events
         WHERE user_id = %s AND created_at >= %s
         ORDER BY created_at ASC
@@ -979,14 +1112,18 @@ def _developer_usage_from_v1(user_id, days):
         key = str(row.get("key_id") or "unknown")
 
         summary["requests"] += 1
-        summary["billableRequests"] += 1
+        is_billable = bool(
+            int(row.get("billable") or 0) == 1
+            and str(row.get("decision_status") or "review_only") == "verdict"
+        )
+        summary["billableRequests"] += 1 if is_billable else 0
         summary["promptTokens"] += prompt_tokens
         summary["completionTokens"] += completion_tokens
         summary["totalTokens"] += total_tokens
         summary["lastEventAt"] = created_text
         for bucket in (by_day[day], by_endpoint[endpoint], by_model[model], by_key[key]):
             bucket["requests"] += 1
-            bucket["billableRequests"] += 1
+            bucket["billableRequests"] += 1 if is_billable else 0
             bucket["promptTokens"] += prompt_tokens
             bucket["completionTokens"] += completion_tokens
             bucket["totalTokens"] += total_tokens
@@ -1217,21 +1354,45 @@ def _contains_history_query(fields, query):
     return any(query in str(field or "").lower() for field in fields)
 
 
-def _image_history_record(item):
+def _image_history_record(item, model_run=None):
     fake_pct = round(float(item.get("fake", 0) or 0), 1)
     issue_count = _history_visual_issue_count(item)
     stored_label = str(item.get("aigc") or "").strip()
+    try:
+        visible = evidence_manifest._structured_visible_watermark(model_run)
+        decision = evidence_manifest._decision_authorization(model_run, visible)
+    except Exception:
+        decision = {"status": "review_only", "authority": "none"}
+    stored_review = stored_label == "需人工复核"
+    legacy_calibration_unknown = decision.get("status") != "verdict" and not stored_review
+    review_required = stored_review or legacy_calibration_unknown
+    display_fake_pct = None if review_required else fake_pct
     return {
         "itemid": item.get("itemid"),
         "filename": item.get("filename", ""),
         "image_url": f"/api/media/image/{item.get('itemid')}",
         "thumbnail_url": _thumbnail_url(item),
-        "real_prob": round(100 - fake_pct, 1),
-        "fake_prob": fake_pct,
-        "final_label": stored_label or ("AI生成图像" if fake_pct >= 50 else "真实图像"),
-        "confidence": item.get("clarity", ""),
+        "real_prob": None if display_fake_pct is None else round(100 - display_fake_pct, 1),
+        "fake_prob": display_fake_pct,
+        "final_label": (
+            "需人工复核"
+            if review_required
+            else stored_label or ("AI生成图像" if fake_pct >= 50 else "真实图像")
+        ),
+        "confidence": "不适用" if review_required else item.get("clarity", ""),
         "createtime": format_createtime(item.get("createtime", "")),
-        "report_url": f"/image_upload/report?itemid={item.get('itemid')}",
+        "report_url": (
+            "" if legacy_calibration_unknown
+            else f"/image_upload/report?itemid={item.get('itemid')}"
+        ),
+        "review_required": review_required,
+        "decision_status": "review_only" if review_required else "verdict",
+        "decision_authority": decision.get("authority") or "none",
+        "legacy_calibration_unknown": legacy_calibration_unknown,
+        "report_unavailable_reason": (
+            "该历史记录缺少可验证的自动决策授权，需先完成人工复核。"
+            if legacy_calibration_unknown else ""
+        ),
         "is_guest_record": _is_guest_detection_record(item),
         "has_metadata": _has_detection_metadata(item.get("itemid")),
         "has_visual_issues": issue_count > 0,
@@ -1265,15 +1426,16 @@ def _image_history_matches_filter(record, filter_key):
 
 
 def _video_history_record(item):
-    fake_pct = round(float(item.get("fake") or item.get("fake_percentage") or 0), 1)
     return {
         "itemid": item.get("itemid"),
         "filename": item.get("filename", ""),
         "video_url": f"/api/media/video/{item.get('itemid')}",
-        "real_percentage": round(100 - fake_pct, 1),
-        "fake_percentage": fake_pct,
-        "final_label": item.get("final_label", ""),
-        "confidence": item.get("confidence") or item.get("confidence_level", ""),
+        "real_percentage": None,
+        "fake_percentage": None,
+        "final_label": "需人工复核",
+        "confidence": "不适用",
+        "decision_status": "review_only",
+        "review_required": True,
         "createtime": format_createtime(item.get("createtime", "")),
         "report_url": f"/video_upload/report?itemid={item.get('itemid')}",
         "is_guest_record": _is_guest_detection_record(item),
@@ -1287,8 +1449,7 @@ def _video_history_search_fields(record):
         record.get("confidence", ""),
         record.get("createtime", ""),
         "访客" if record.get("is_guest_record") else "",
-        "AI结论" if "AI" in str(record.get("final_label") or "") else "",
-        "真实结论" if "真实" in str(record.get("final_label") or "") else "",
+        "人工复核",
         "结论",
         "置信度",
     ]
@@ -1297,10 +1458,8 @@ def _video_history_search_fields(record):
 def _video_history_matches_filter(record, filter_key):
     if filter_key == "guest":
         return bool(record.get("is_guest_record"))
-    if filter_key == "ai":
-        return "AI" in str(record.get("final_label") or "")
-    if filter_key == "real":
-        return "真实" in str(record.get("final_label") or "")
+    if filter_key == "review":
+        return record.get("decision_status") == "review_only"
     return True
 
 
@@ -1344,19 +1503,113 @@ def ready():
     detection_db = excute_detection_sql("SELECT 1 AS ok")
     try:
         heartbeat_age = max(0.0, time.time() - DEVELOPER_WORKER_HEARTBEAT.stat().st_mtime)
-        worker_ready = heartbeat_age <= DEVELOPER_WORKER_MAX_HEARTBEAT_AGE
-    except OSError:
+        worker_health = json.loads(DEVELOPER_WORKER_HEARTBEAT.read_text(encoding="ascii"))
+        worker_ready = (
+            heartbeat_age <= DEVELOPER_WORKER_MAX_HEARTBEAT_AGE
+            and worker_health.get("claimHealthy") is True
+            and worker_health.get("maintenanceHealthy") is True
+        )
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
         heartbeat_age = None
+        worker_health = {}
+        worker_ready = False
+    detector_payload = {}
+    try:
+        with requests.Session() as sess:
+            sess.trust_env = False
+            detector_response = sess.get(
+                DETECTOR_READY_URL,
+                headers={"X-RealGuard-Detector-Token": DETECTOR_INTERNAL_TOKEN},
+                timeout=(1, 4),
+            )
+        detector_payload = detector_response.json()
+        detector_ready = (
+            detector_response.status_code == 200
+            and detector_payload.get("capabilityReady") is True
+            and detector_payload.get("tokenReady") is True
+        )
+    except (requests.RequestException, TypeError, ValueError):
+        detector_ready = False
+    queue_rows = excute_sql(
+        """
+        SELECT COALESCE(SUM(queued), 0) AS queued,
+               COALESCE(SUM(running), 0) AS running,
+               COALESCE(SUM(queued + running), 0) AS pending,
+               COALESCE(MAX(oldest_age_seconds), 0) AS oldest_age_seconds
+        FROM (
+          SELECT SUM(status IN ('preparing', 'queued')) AS queued,
+                 SUM(status = 'running') AS running,
+                 COALESCE(TIMESTAMPDIFF(
+                   SECOND,
+                   MIN(CASE WHEN status IN ('preparing', 'queued') THEN created_at END),
+                   NOW()
+                 ), 0) AS oldest_age_seconds
+          FROM developer_detection_tasks
+          WHERE status IN ('preparing', 'queued', 'running')
+          UNION ALL
+          SELECT SUM(status = 'queued') AS queued,
+                 SUM(status = 'running') AS running,
+                 COALESCE(TIMESTAMPDIFF(
+                   SECOND,
+                   MIN(CASE WHEN status = 'queued' THEN created_at END),
+                   NOW()
+                 ), 0) AS oldest_age_seconds
+          FROM web_detection_tasks
+          WHERE status IN ('queued', 'running')
+        ) AS queues
+        """
+    )
+    queue_pending = int((queue_rows or [{}])[0].get("pending") or 0) if queue_rows is not None else None
+    queue_queued = int((queue_rows or [{}])[0].get("queued") or 0) if queue_rows is not None else None
+    queue_running = int((queue_rows or [{}])[0].get("running") or 0) if queue_rows is not None else None
+    queue_oldest_age = (
+        int((queue_rows or [{}])[0].get("oldest_age_seconds") or 0)
+        if queue_rows is not None else None
+    )
+    last_claim_at = float(worker_health.get("lastClaimCheckAt") or 0)
+    active_tasks = int(worker_health.get("activeTasks") or 0)
+    worker_capacity = max(1, int(worker_health.get("capacity") or 1))
+    has_claim_capacity = active_tasks < worker_capacity
+    if queue_queued and has_claim_capacity and (
+        not last_claim_at or time.time() - last_claim_at > DEVELOPER_WORKER_MAX_HEARTBEAT_AGE
+    ):
         worker_ready = False
     checks = {
         "accountDatabase": bool(account_db),
         "detectionDatabase": bool(detection_db),
         "developerWorker": worker_ready,
+        "detectorModel": detector_ready,
+        "queueState": queue_pending is not None,
     }
+    remote_detector = (
+        detector_payload.get("remoteInference")
+        if isinstance(detector_payload.get("remoteInference"), dict)
+        else {}
+    )
     response = jsonify({
         "status": "ready" if all(checks.values()) else "not_ready",
         "checks": checks,
         "workerHeartbeatAgeSeconds": round(heartbeat_age, 2) if heartbeat_age is not None else None,
+        "queuePending": queue_pending,
+        "queueQueued": queue_queued,
+        "queueRunning": queue_running,
+        "queueOldestAgeSeconds": queue_oldest_age,
+        "worker": {
+            "claimHealthy": worker_health.get("claimHealthy") is True,
+            "maintenanceHealthy": worker_health.get("maintenanceHealthy") is True,
+            "activeTasks": active_tasks,
+            "capacity": worker_capacity,
+            "lastError": str(worker_health.get("lastError") or "")[:120],
+        },
+        "detector": {
+            "provider": remote_detector.get("activeProvider") or detector_payload.get("activeProvider"),
+            "cudaDeviceId": remote_detector.get("cudaDeviceId", detector_payload.get("cudaDeviceId")),
+            "modelRevision": remote_detector.get("modelRevision"),
+            "modelSha256": remote_detector.get("modelSha256"),
+            "deploymentCommit": remote_detector.get("deploymentCommit"),
+            "capabilityReady": detector_payload.get("capabilityReady") is True,
+            "tokenReady": detector_payload.get("tokenReady") is True,
+        },
     })
     response.status_code = 200 if all(checks.values()) else 503
     response.headers["Cache-Control"] = "no-store"
@@ -1540,9 +1793,14 @@ def create_developer_api_key():
     if options_error:
         return jsonify({"status": "error", "message": options_error}), 400
 
+    override, idempotency_error = _developer_operation_idempotency(user["Userid"], "create")
+    if idempotency_error:
+        return idempotency_error
+    if override:
+        options["_api_key_override"] = override
     api_key, row, create_error = _create_developer_key_with_limit(user["Userid"], options)
     if create_error:
-        status = 400 if create_error.startswith("最多只能") else 500
+        status = 409 if create_error.startswith("该 Idempotency-Key") else (400 if create_error.startswith("最多只能") else 500)
         return jsonify({"status": "error", "message": create_error}), status
     key_payload = _developer_key_payload(row or {})
     return jsonify({"status": "success", "apiKey": api_key, "key": key_payload})
@@ -1556,7 +1814,14 @@ def rotate_developer_api_key(key_id):
     if not _ensure_developer_api_key_table():
         return jsonify({"status": "error", "message": "API Key 存储初始化失败"}), 500
 
-    payload = request.get_json(silent=True) or {}
+    payload = dict(request.get_json(silent=True) or {})
+    override, idempotency_error = _developer_operation_idempotency(
+        user["Userid"], f"rotate:{key_id}"
+    )
+    if idempotency_error:
+        return idempotency_error
+    if override:
+        payload["_api_key_override"] = override
     api_key, row, rotate_error, status = _rotate_developer_key_atomic(user["Userid"], key_id, payload)
     if rotate_error:
         return jsonify({"status": "error", "message": rotate_error}), status
@@ -1684,9 +1949,16 @@ def image_detection_history():
             f"SELECT * FROM data WHERE {history_where} ORDER BY {HISTORY_ORDER_BY}",
             history_params,
         )
+    item_ids = [item.get("itemid") for item in (rows or []) if item.get("itemid")]
+    try:
+        model_runs = admin_state.model_runs_by_itemids(item_ids)
+    except Exception:
+        model_runs = {}
     query_records = []
     for item in rows or []:
-        record = _image_history_record(item)
+        if not detection_record_is_publishable(item):
+            continue
+        record = _image_history_record(item, model_runs.get(str(item.get("itemid"))))
         if not _contains_history_query(_image_history_search_fields(record), query):
             continue
         query_records.append(record)
@@ -1721,6 +1993,8 @@ def image_detection_thumbnail(itemid):
         return jsonify({"status": "error", "message": "未找到图片记录"}), 404
 
     item = rows[0]
+    if not detection_record_is_publishable(item):
+        return jsonify({"status": "error", "message": "未找到图片记录"}), 404
     cache_path = _thumbnail_cache_path(item)
     if cache_path.exists():
         return send_file(cache_path, mimetype="image/webp", max_age=86400, conditional=True)
@@ -1766,6 +2040,9 @@ def _serve_owned_media(kind, itemid):
             (itemid, *history_params),
         )
     if not rows:
+        return jsonify({"status": "error", "message": "媒体不存在"}), 404
+
+    if kind == "image" and not detection_record_is_publishable(rows[0]):
         return jsonify({"status": "error", "message": "媒体不存在"}), 404
 
     return _serve_detection_media_item(kind, rows[0])
@@ -1958,7 +2235,7 @@ def video_detection_history():
         return offset_error
     query = _history_query()
     filter_key = str(request.args.get("filter") or "all").strip()
-    if filter_key not in {"all", "guest", "ai", "real"}:
+    if filter_key not in {"all", "guest", "review"}:
         return jsonify({"status": "error", "message": "filter 不受支持"}), 400
 
     if actor["mode"] == "guest":
@@ -1983,8 +2260,7 @@ def video_detection_history():
     filter_counts = {
         "all": len(query_records),
         "guest": sum(1 for record in query_records if record["is_guest_record"]),
-        "ai": sum(1 for record in query_records if "AI" in str(record["final_label"] or "")),
-        "real": sum(1 for record in query_records if "真实" in str(record["final_label"] or "")),
+        "review": sum(1 for record in query_records if record.get("decision_status") == "review_only"),
     }
     records = [record for record in query_records if _video_history_matches_filter(record, filter_key)]
     return jsonify({"status": "success", "records": records[offset: offset + limit], "total": len(records), "filter_counts": filter_counts})

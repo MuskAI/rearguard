@@ -232,6 +232,42 @@ def test_forensics_cache_is_scoped_by_user_and_does_not_leak_filename(developer_
     assert same_user.json()["tokenUsage"] == {"promptTokens": 0, "completionTokens": 0, "totalTokens": 0}
 
 
+def test_detection_cache_is_scoped_by_account(developer_key_client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    calls = 0
+
+    def analyze(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return _stable_vlm_analyze(*args, **kwargs)
+
+    monkeypatch.setattr(main.detector, "analyze", analyze)
+    first = developer_key_client.post(
+        "/api/detect",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+        files={"file": ("first.txt", b"same-detection-bytes", "text/plain")},
+    )
+    other = developer_key_client.post(
+        "/api/detect",
+        headers={"X-RealGuard-Key": "rg_sk_user2"},
+        files={"file": ("other.txt", b"same-detection-bytes", "text/plain")},
+    )
+    repeated = developer_key_client.post(
+        "/api/detect",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+        files={"file": ("renamed.txt", b"same-detection-bytes", "text/plain")},
+    )
+
+    assert first.status_code == 200
+    assert other.status_code == 200
+    assert repeated.status_code == 200
+    assert first.json()["cacheHit"] is False
+    assert other.json()["cacheHit"] is False
+    assert repeated.json()["cacheHit"] is True
+    assert calls == 2
+
+
 def test_image_endpoints_reject_excessive_pixel_count(client, monkeypatch):
     import app.main as main  # noqa: WPS433
 
@@ -249,10 +285,11 @@ def test_image_endpoints_reject_excessive_pixel_count(client, monkeypatch):
 def test_analysis_cache_can_enforce_max_age(client):
     import app.storage as storage  # noqa: WPS433
 
-    storage.put_cached_analysis("ttl-test", "ttl-sha", _forensic_analysis())
+    cache_type = "image-forensics:ttl-test"
+    storage.put_cached_analysis(cache_type, "ttl-sha", _forensic_analysis())
 
-    assert storage.get_cached_analysis("ttl-test", "ttl-sha", max_age_seconds=60) is not None
-    assert storage.get_cached_analysis("ttl-test", "ttl-sha", max_age_seconds=0) is None
+    assert storage.get_cached_analysis(cache_type, "ttl-sha", max_age_seconds=60) is not None
+    assert storage.get_cached_analysis(cache_type, "ttl-sha", max_age_seconds=0) is None
 
 
 def test_v1_session_unlocks_own_v2_history_but_not_admin_metrics(client, monkeypatch):
@@ -476,10 +513,8 @@ def test_detect_rejects_declared_type_mismatch_and_unknown_extension(client, mon
         _vlm_analysis(source="mock"),
         _vlm_analysis(source="maps-only"),
         _vlm_analysis(source="unknown"),
-        _vlm_analysis(source="vlm", verdict="unknown"),
-        _vlm_analysis(source="vlm", verdict=""),
     ],
-    ids=["mock-source", "maps-only-source", "unknown-source", "unknown-verdict", "empty-verdict"],
+    ids=["mock-source", "maps-only-source", "unknown-source"],
 )
 def test_detect_rejects_non_publishable_analysis(client, monkeypatch, analysis):
     import app.main as main  # noqa: WPS433
@@ -492,12 +527,12 @@ def test_detect_rejects_non_publishable_analysis(client, monkeypatch, analysis):
     history = client.get("/api/history", headers={"X-Jianzhen-Token": "test-token"})
 
     assert response.status_code == 503
-    assert response.json()["detail"] == "真实模型未返回可发布的明确结论"
+    assert response.json()["detail"] == "真实模型未返回可信的分析来源"
     assert history.status_code == 200
     assert history.json()["total"] == 0
 
 
-def test_analysis_cache_only_accepts_publishable_vlm_results(client):
+def test_analysis_cache_only_accepts_explicit_decision_contracts(client):
     import app.storage as storage  # noqa: WPS433
 
     invalid_cases = [
@@ -511,10 +546,94 @@ def test_analysis_cache_only_accepts_publishable_vlm_results(client):
         storage.put_cached_analysis("document", sha256, analysis)
         assert storage.get_cached_analysis("document", sha256) is None
 
-    valid = _vlm_analysis(verdict="suspected_fake")
-    storage.put_cached_analysis("document", "valid-vlm", valid)
+    review_only = _vlm_analysis(verdict="unknown")
+    review_only.update({
+        "confidence": 0.0,
+        "decisionStatus": "review_only",
+        "decisionAuthority": "none",
+        "reviewRequired": True,
+    })
+    storage.put_cached_analysis("document", "review-only", review_only)
 
-    assert storage.get_cached_analysis("document", "valid-vlm") == valid
+    assert storage.get_cached_analysis("document", "review-only") == review_only
+
+
+@pytest.mark.parametrize("raw_verdict", ["real", "unknown", ""])
+def test_uncalibrated_vlm_is_published_only_as_review_required(client, monkeypatch, raw_verdict):
+    import app.main as main  # noqa: WPS433
+
+    monkeypatch.setattr(
+        main.detector,
+        "analyze",
+        lambda *_args, **_kwargs: _vlm_analysis(verdict=raw_verdict),
+    )
+
+    response = client.post(
+        "/api/detect",
+        files={"file": (f"review-{raw_verdict or 'empty'}.txt", b"review payload", "text/plain")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["verdict"] == "unknown"
+    assert response.json()["decisionStatus"] == "review_only"
+    assert response.json()["decisionAuthority"] == "none"
+    assert response.json()["reviewRequired"] is True
+    assert response.json()["aiProbability"] is None
+    assert response.json()["dimensions"] == []
+    assert response.json()["regions"] == []
+
+
+def test_vlm_payload_cannot_self_authorize_a_verdict(client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    forged = _vlm_analysis(verdict="highly_suspected_fake")
+    forged.update({
+        "decisionStatus": "verdict",
+        "decisionAuthority": "decisive_provenance",
+        "reviewRequired": False,
+    })
+    monkeypatch.setattr(main.detector, "analyze", lambda *_args, **_kwargs: forged)
+
+    response = client.post(
+        "/api/detect",
+        files={"file": ("forged.txt", b"forged model authority", "text/plain")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["verdict"] == "unknown"
+    assert response.json()["decisionStatus"] == "review_only"
+    assert response.json()["decisionAuthority"] == "none"
+
+
+def test_legacy_history_without_decision_authorization_fails_closed(client):
+    import app.storage as storage  # noqa: WPS433
+
+    detected = client.post(
+        "/api/detect",
+        files={"file": ("legacy.txt", b"legacy result", "text/plain")},
+    ).json()
+    legacy = dict(detected)
+    legacy.update({"verdict": "real", "confidence": 0.97})
+    for key in ("decisionStatus", "decisionAuthority", "reviewRequired"):
+        legacy.pop(key, None)
+    with storage._connect() as conn:
+        conn.execute(
+            "UPDATE history SET result_json = ? WHERE task_id = ?",
+            (json.dumps(legacy, ensure_ascii=False), detected["taskId"]),
+        )
+        conn.commit()
+
+    listing = client.get("/api/history", headers={"X-Jianzhen-Token": "test-token"})
+    detail = client.get(
+        f"/api/history/{detected['taskId']}",
+        headers={"X-Jianzhen-Token": "test-token"},
+    )
+
+    item = next(entry for entry in listing.json()["items"] if entry["taskId"] == detected["taskId"])
+    assert item["verdict"] == "unknown"
+    assert item["reviewRequired"] is True
+    assert detail.json()["verdict"] == "unknown"
+    assert detail.json()["decisionStatus"] == "review_only"
 
 
 def test_admin_health_requires_token_and_exposes_diagnostics(client):
@@ -553,7 +672,7 @@ def test_internal_detection_token_still_allows_model_calls(developer_key_client)
     assert response.status_code == 200
 
 
-def test_history_delete_removes_content_unlinks_usage_and_preserves_shared_cache(client):
+def test_history_delete_removes_content_unlinks_usage_and_anonymous_cache_is_disabled(client):
     import app.storage as storage  # noqa: WPS433
 
     first = client.post(
@@ -591,7 +710,7 @@ def test_history_delete_removes_content_unlinks_usage_and_preserves_shared_cache
         assert conn.execute(
             "SELECT COUNT(*) AS n FROM analysis_cache WHERE sha256 = ?",
             (first["fileMeta"]["sha256"],),
-        ).fetchone()["n"] == 1
+        ).fetchone()["n"] == 0
 
     deleted_second = client.delete(
         f"/api/history/{second['taskId']}",
@@ -629,9 +748,10 @@ def test_developer_key_required_for_detect_when_enabled(developer_key_client):
     assert "developerKeyAuthConfigured" not in health.json()
     assert "developerProtectedEndpoints" not in health.json()
     assert valid.json()["reportId"].startswith("RJ-RPT-")
-    assert valid.json()["aiProbability"] == 0.22
-    assert valid.json()["riskScore"] == valid.json()["confidence"]
-    assert valid.json()["riskVector"]["aiGenerated"] == 0.22
+    assert valid.json()["aiProbability"] is None
+    assert valid.json()["riskScore"] is None
+    assert valid.json()["riskVector"]["aiGenerated"] is None
+    assert valid.json()["decisionStatus"] == "review_only"
     unified = valid.json()["unifiedForensics"]
     assert unified["interface_version"] == "aigc-forensics-unified-v0.1"
     assert unified["verdict"] == valid.json()["verdict"]
@@ -1513,7 +1633,7 @@ def test_history_filters_and_counts_include_synthid(client, monkeypatch):
     assert synthid_items[0]["hasSynthid"] is True
 
 
-def test_history_filters_and_counts_include_verdict_breakdown(client, monkeypatch):
+def test_history_filters_fail_closed_for_uncalibrated_vlm_verdicts(client, monkeypatch):
     import app.main as main  # noqa: WPS433
 
     responses = [
@@ -1581,18 +1701,16 @@ def test_history_filters_and_counts_include_verdict_breakdown(client, monkeypatc
 
     assert listing.status_code == 200
     payload = listing.json()
-    assert payload["filterCounts"]["real"] == 1
-    assert payload["filterCounts"]["suspected"] == 1
-    assert payload["filterCounts"]["highly"] == 1
-    assert payload["filterCounts"]["unknownVerdict"] == 0
-    assert unknown.status_code == 503
-    assert len(real_only.json()["items"]) == 1
-    assert real_only.json()["items"][0]["verdict"] == "real"
-    assert len(suspected_only.json()["items"]) == 1
-    assert suspected_only.json()["items"][0]["verdict"] == "suspected_fake"
-    assert len(highly_only.json()["items"]) == 1
-    assert highly_only.json()["items"][0]["verdict"] == "highly_suspected_fake"
-    assert unknown_only.json()["items"] == []
+    assert payload["filterCounts"]["real"] == 0
+    assert payload["filterCounts"]["suspected"] == 0
+    assert payload["filterCounts"]["highly"] == 0
+    assert payload["filterCounts"]["unknownVerdict"] == 4
+    assert unknown.status_code == 200
+    assert real_only.json()["items"] == []
+    assert suspected_only.json()["items"] == []
+    assert highly_only.json()["items"] == []
+    assert len(unknown_only.json()["items"]) == 4
+    assert all(item["reviewRequired"] is True for item in unknown_only.json()["items"])
 
 
 def test_metrics_include_source_and_evidence_breakdown(client):
@@ -1625,7 +1743,7 @@ def test_metrics_include_source_and_evidence_breakdown(client):
     assert "sources" in payload["byDay"][0]
     assert "verdicts" in payload["byDay"][0]
     assert "evidence" in payload["byDay"][0]
-    assert payload["summary"]["analysisCacheVersion"] == "v8-provenance-first"
+    assert payload["summary"]["analysisCacheVersion"] == "v10-tenant-scoped"
 
 
 def test_metrics_supports_window_sizes(client):
@@ -1655,6 +1773,17 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
             "dimensions": [],
             "regions": [],
             "explanation": "真实模型命中。",
+            "modelVersion": "qwen3-vl-flash",
+            "source": "vlm",
+            "synthid": {"detected": False},
+            "visibleWatermark": {"detected": False, "provider": None},
+        },
+        {
+            "verdict": "real",
+            "confidence": 0.81,
+            "dimensions": [],
+            "regions": [],
+            "explanation": "同一匿名文件重新执行模型检测。",
             "modelVersion": "qwen3-vl-flash",
             "source": "vlm",
             "synthid": {"detected": False},
@@ -1708,9 +1837,9 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
     assert detect_b.status_code == 200
     assert detect_c.status_code == 200
     assert detect_d.status_code == 200
-    assert detect_a.json()["cacheVersion"] == "v8-provenance-first"
-    assert detect_a_cached.json()["cacheHit"] is True
-    assert detect_a_cached.json()["cacheVersion"] == "v8-provenance-first"
+    assert detect_a.json()["cacheVersion"] == "v10-tenant-scoped"
+    assert detect_a_cached.json()["cacheHit"] is False
+    assert detect_a_cached.json()["cacheVersion"] == "v10-tenant-scoped"
 
     task_a = detect_a.json()["taskId"]
     task_b = detect_b.json()["taskId"]
@@ -1724,7 +1853,7 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
         headers={"X-Jianzhen-Token": "test-token"},
     )
     by_model = client.get("/api/history?query=qwen3-vl-flash-watermark", headers={"X-Jianzhen-Token": "test-token"})
-    by_cache_version = client.get("/api/history?query=%E7%BC%93%E5%AD%98%E7%89%88%E6%9C%AC%20v8-provenance-first", headers={"X-Jianzhen-Token": "test-token"})
+    by_cache_version = client.get("/api/history?query=%E7%BC%93%E5%AD%98%E7%89%88%E6%9C%AC%20v10-tenant-scoped", headers={"X-Jianzhen-Token": "test-token"})
     by_query = client.get("/api/history?query=%E7%9C%9F%E5%AE%9E%E6%A8%A1%E5%9E%8B", headers={"X-Jianzhen-Token": "test-token"})
     by_evidence = client.get(
         "/api/history?hasWatermark=true&hasSynthid=true&query=gemini%20%E6%B0%B4%E5%8D%B0",
@@ -1757,7 +1886,7 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
 
     assert by_cache_version.status_code == 200
     assert by_cache_version.json()["total"] >= 5
-    assert {item["cacheVersion"] for item in by_cache_version.json()["items"]} == {"v8-provenance-first"}
+    assert {item["cacheVersion"] for item in by_cache_version.json()["items"]} == {"v10-tenant-scoped"}
 
     assert by_query.status_code == 200
     assert by_query.json()["total"] >= 1
@@ -1770,10 +1899,8 @@ def test_history_listing_supports_filters_query_and_limit(client, monkeypatch):
     assert evidence_item["hasSynthid"] is True
 
     assert by_cache.status_code == 200
-    assert by_cache.json()["total"] == 1
-    assert by_cache.json()["filterCounts"]["cache"] >= 1
-    assert by_cache.json()["items"][0]["reportId"] == detect_a_cached.json()["reportId"]
-    assert by_cache.json()["items"][0]["cacheHit"] is True
+    assert by_cache.json()["total"] == 0
+    assert by_cache.json()["filterCounts"]["cache"] == 0
 
     assert by_forensics.status_code == 200
     assert by_forensics.json()["total"] == 1

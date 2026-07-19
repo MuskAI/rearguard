@@ -30,7 +30,12 @@ def visible_hit_is_decisive(
     *,
     corroborated: bool,
 ) -> bool:
-    """Apply provider position and confidence gates to a visible match."""
+    """Visible marks are localizable evidence, never decision authority.
+
+    A logo or platform mark can be copied onto unrelated content. Position,
+    confidence and registry attribution improve review quality but cannot prove
+    how the underlying pixels were created.
+    """
     try:
         center_x = float(bbox["x"]) + float(bbox["w"]) / 2
         center_y = float(bbox["y"]) + float(bbox["h"]) / 2
@@ -45,21 +50,18 @@ def visible_hit_is_decisive(
         location_ok = center_x <= 0.35 and center_y <= 0.35
     else:
         return False
-    return location_ok and (corroborated or confidence >= VISIBLE_ONLY_THRESHOLDS.get(provider, 1.0))
+    _ = location_ok and (corroborated or confidence >= VISIBLE_ONLY_THRESHOLDS.get(provider, 1.0))
+    return False
 
 
 def build_decision(report: dict[str, Any], visible_hits: list[dict[str, Any]]) -> dict[str, Any]:
     """Return the model-gating decision for one provenance scan.
 
-    Only known AI-provider marks and high-confidence AI provenance can bypass
-    the model. Generic logos, camera C2PA, cloud-manifest pointers, TrustMark by
-    itself, and medium-confidence hosting hints remain non-decisive.
+    Only locally verified cryptographic AI provenance can bypass the model.
+    Visible marks, generic logos, camera C2PA, cloud-manifest pointers,
+    TrustMark by itself, and hosting hints remain non-decisive.
     """
-    known_hits = [
-        hit
-        for hit in visible_hits
-        if hit.get("provider") in KNOWN_VISIBLE_PROVIDERS and hit.get("decisive") is True
-    ]
+    known_hits: list[dict[str, Any]] = []
     source_kind = report.get("aiSourceKind")
     probability_model = build_probability_model(report, known_hits)
     factor_kinds = {str(item.get("kind") or "") for item in probability_model.get("factors") or []}
@@ -73,7 +75,10 @@ def build_decision(report: dict[str, Any], visible_hits: list[dict[str, Any]]) -
     if "metadata_integrity_clash" in factor_kinds:
         evidence_kinds.append("integrity_clash")
 
-    if probability_model.get("decisive") is not True:
+    has_authoritative_source = bool(
+        factor_kinds.intersection({"valid_ai_c2pa", "ai_enhancement_declaration"})
+    )
+    if probability_model.get("decisive") is not True or not has_authoritative_source:
         summary = "未发现足以直接判定的 AI 来源标记，继续调用图像检测模型。"
         if "metadata_integrity_clash" in factor_kinds:
             summary = "发现来源凭证或元数据完整性冲突，但单项冲突不足以证明 AI 生成，继续调用图像检测模型。"
@@ -115,9 +120,6 @@ def build_decision(report: dict[str, Any], visible_hits: list[dict[str, Any]]) -
     elif "ai_enhancement_declaration" in factor_kinds:
         reason = "c2pa_ai_enhanced"
         summary = f"内容凭证声明存在 AI 合成编辑，证据融合风险概率为 {confidence * 100:.2f}%。"
-    elif "ai_generation_metadata" in factor_kinds:
-        reason = "ai_metadata"
-        summary = f"文件包含明确的 AI 生成元数据或生成参数，证据融合风险概率为 {confidence * 100:.2f}%。"
     else:
         reason = "known_visible_ai_watermark"
         providers = "、".join(dict.fromkeys(str(hit.get("label") or hit.get("provider")) for hit in known_hits))

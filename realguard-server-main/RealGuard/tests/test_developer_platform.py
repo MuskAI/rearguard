@@ -1,6 +1,9 @@
 from concurrent.futures import ThreadPoolExecutor
 import copy
+from contextlib import nullcontext
 from io import BytesIO
+import json
+from datetime import date
 from pathlib import Path
 import threading
 import sys
@@ -32,6 +35,13 @@ def _png_bytes():
     return output.getvalue()
 
 
+def _animated_gif_bytes():
+    output = BytesIO()
+    frames = [Image.new("RGB", (2, 2), color) for color in ("white", "black")]
+    frames[0].save(output, format="GIF", save_all=True, append_images=frames[1:], duration=100, loop=0)
+    return output.getvalue()
+
+
 class _BillingStore:
     def __init__(self, free_total=5):
         self.lock = threading.RLock()
@@ -47,6 +57,9 @@ class _BillingStore:
         self.pricing = {"fast": {"unit_price_fen": 10, "enabled": 0}}
         self.reservations = {}
         self.ledger = []
+        self.task_daily_reserved = 0
+        self.task_daily_day = date(2026, 7, 19)
+        self.daily_count = 0
 
     def connection(self):
         return _BillingConnection(self)
@@ -83,6 +96,7 @@ class _BillingCursor:
     def __init__(self, store):
         self.store = store
         self.row = None
+        self.rowcount = 0
 
     def __enter__(self):
         return self
@@ -94,6 +108,7 @@ class _BillingCursor:
         normalized = " ".join(sql.split())
         params = params or ()
         self.row = None
+        self.rowcount = 0
         if normalized.startswith("SELECT task_id FROM developer_detection_tasks"):
             self.row = {"task_id": params[0]} if self.store.task_active else None
             return int(bool(self.row))
@@ -127,22 +142,69 @@ class _BillingCursor:
         if normalized.startswith("SELECT balance_fen FROM developer_accounts"):
             self.row = {"balance_fen": self.store.account["balance_fen"]}
             return 1
-        if normalized.startswith("SELECT prompt_tokens, completion_tokens, total_tokens"):
-            self.row = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        if normalized.startswith("SELECT user_id, key_id, mode, status"):
+            reservation = self.store.reservations[params[0]]
+            self.row = {
+                "user_id": reservation["user_id"],
+                "key_id": reservation["key_id"],
+                "mode": reservation["mode"],
+                "status": "success",
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "task_id": params[0],
+                "daily_quota_reserved": self.store.task_daily_reserved,
+                "daily_quota_day": self.store.task_daily_day,
+            }
             return 1
-        if "SET free_reserved = GREATEST(0, free_reserved - 1), free_used = free_used + 1" in normalized:
-            self.store.account["free_reserved"] = max(0, self.store.account["free_reserved"] - 1)
-            self.store.account["free_used"] += 1
+        if normalized.startswith("SELECT day_bucket, daily_count"):
+            self.row = {
+                "day_bucket": self.store.task_daily_day,
+                "daily_count": self.store.daily_count,
+            }
             return 1
+        if normalized.startswith("UPDATE developer_api_account_quota_usage SET daily_count"):
+            if self.store.daily_count > 0:
+                self.store.daily_count -= 1
+                self.rowcount = 1
+            return self.rowcount
+        if normalized.startswith("UPDATE developer_detection_tasks SET daily_quota_reserved = 0"):
+            if self.store.task_daily_reserved == 1:
+                self.store.task_daily_reserved = 0
+                self.rowcount = 1
+            return self.rowcount
+        if "SET free_reserved = free_reserved - 1, free_used = free_used + 1" in normalized:
+            if self.store.account["free_reserved"] >= 1:
+                self.store.account["free_reserved"] -= 1
+                self.store.account["free_used"] += 1
+                self.rowcount = 1
+            return self.rowcount
+        if normalized.startswith("UPDATE developer_accounts SET balance_reserved_fen = balance_reserved_fen -"):
+            amount = params[0]
+            if (
+                self.store.account["balance_reserved_fen"] >= amount
+                and self.store.account["balance_fen"] >= amount
+            ):
+                self.store.account["balance_reserved_fen"] -= amount
+                self.store.account["balance_fen"] -= amount
+                self.rowcount = 1
+            return self.rowcount
         if normalized.startswith("UPDATE developer_billing_reservations SET status = 'settled'"):
-            self.store.reservations[params[0]]["status"] = "settled"
-            return 1
+            if self.store.reservations[params[0]]["status"] == "reserved":
+                self.store.reservations[params[0]]["status"] = "settled"
+                self.rowcount = 1
+            return self.rowcount
         if normalized.startswith("INSERT INTO developer_billing_ledger"):
             self.store.ledger.append(params)
             return 1
         if normalized.startswith("INSERT IGNORE INTO developer_usage_events"):
-            return 1
+            self.rowcount = 1
+            return self.rowcount
         if normalized.startswith("SELECT user_id, source, amount_fen, status"):
+            row = self.store.reservations.get(params[0])
+            self.row = dict(row) if row else None
+            return int(bool(row))
+        if normalized.startswith("SELECT user_id, key_id, mode, source, amount_fen, status"):
             row = self.store.reservations.get(params[0])
             self.row = dict(row) if row else None
             return int(bool(row))
@@ -151,7 +213,8 @@ class _BillingCursor:
             return 1
         if normalized.startswith("UPDATE developer_billing_reservations SET status = 'released'"):
             self.store.reservations[params[0]]["status"] = "released"
-            return 1
+            self.rowcount = 1
+            return self.rowcount
         raise AssertionError(f"unexpected SQL: {normalized}")
 
     def fetchone(self):
@@ -349,6 +412,58 @@ def test_concurrent_free_quota_reservations_cannot_oversubscribe(monkeypatch):
     assert len(store.ledger) == 3
 
 
+def test_settlement_rejects_inconsistent_free_reservation(monkeypatch):
+    store = _BillingStore(free_total=1)
+    store.reservations["task-corrupt"] = {
+        "task_id": "task-corrupt",
+        "user_id": 1,
+        "key_id": 8,
+        "mode": "fast",
+        "source": "free",
+        "amount_fen": 0,
+        "status": "reserved",
+    }
+    monkeypatch.setattr(platform, "_ensure_developer_platform_tables", lambda: True)
+    monkeypatch.setattr(platform, "get_db_connection", store.connection)
+
+    assert platform._settle_billing("task-corrupt") is False
+    assert store.account["free_reserved"] == 0
+    assert store.account["free_used"] == 0
+    assert store.reservations["task-corrupt"]["status"] == "reserved"
+    assert store.ledger == []
+
+
+def test_review_only_release_restores_daily_quota_in_same_transaction(monkeypatch):
+    store = _BillingStore(free_total=5)
+    store.account["free_reserved"] = 1
+    store.reservations["task-review"] = {
+        "task_id": "task-review",
+        "user_id": 1,
+        "key_id": 8,
+        "mode": "fast",
+        "source": "free",
+        "amount_fen": 0,
+        "status": "reserved",
+    }
+    store.task_daily_reserved = 1
+    store.daily_count = 1
+    monkeypatch.setattr(platform, "_ensure_developer_platform_tables", lambda: True)
+    monkeypatch.setattr(platform, "get_db_connection", store.connection)
+
+    assert platform._release_billing(
+        "task-review",
+        "review only",
+        audit_entry_type="detection_review_only",
+    ) is True
+
+    assert store.reservations["task-review"]["status"] == "released"
+    assert store.account["free_reserved"] == 0
+    assert store.task_daily_reserved == 0
+    # A completed review-only request is non-billable, but still counts toward
+    # abuse-control daily request volume.
+    assert store.daily_count == 1
+
+
 def test_billing_reservation_rejects_an_expired_task_lease(monkeypatch):
     store = _BillingStore(free_total=5)
     store.task_active = False
@@ -497,7 +612,7 @@ def test_task_status_is_isolated_by_developer_account(client, monkeypatch):
             "mode": "fast",
             "filename": "owned.png",
             "status": "success",
-            "result_json": '{"status":"success","result":{"itemid":12,"final_label":"真实图像"}}',
+            "result_json": '{"status":"success","decisionStatus":"verdict","billable":true,"result":{"itemid":12,"final_label":"真实图像","decisionStatus":"verdict","billable":true}}',
             "created_at": "2026-07-17 10:00:00",
             "updated_at": "2026-07-17 10:00:02",
             "completed_at": "2026-07-17 10:00:02",
@@ -592,6 +707,46 @@ def test_developer_api_rejects_images_above_pixel_limit(client, monkeypatch):
     assert response.get_json()["error"]["code"] == "image_pixels_too_large"
 
 
+def test_developer_api_rejects_animated_images(client, monkeypatch):
+    actor = {
+        "id": 11,
+        "user_id": 1,
+        "account_uuid": "00000000-0000-4000-8000-000000000001",
+        "scopes": ["image:fast"],
+    }
+    monkeypatch.setattr(platform, "_developer_key_required", lambda: (actor, None))
+    monkeypatch.setattr(platform, "_ensure_developer_platform_tables", lambda: True)
+    monkeypatch.setattr(platform, "_maybe_reconcile_expired_tasks", lambda: 0)
+
+    response = client.post(
+        "/api/openapi/v1/image-detections",
+        data={"mode": "fast", "image": (BytesIO(_animated_gif_bytes()), "sample.gif")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 415
+    assert response.get_json()["error"]["code"] == "unsupported_animated_image"
+
+
+def test_developer_upload_requires_content_length_before_multipart_parsing(client, monkeypatch):
+    actor = {
+        "id": 11,
+        "user_id": 1,
+        "account_uuid": "00000000-0000-4000-8000-000000000001",
+        "scopes": ["image:fast"],
+    }
+    monkeypatch.setattr(platform, "_developer_key_required", lambda: (actor, None))
+
+    with client.application.test_request_context(
+        "/api/openapi/v1/image-detections",
+        method="POST",
+    ):
+        response, status = platform.create_image_detection()
+
+    assert status == 411
+    assert response.get_json()["error"]["code"] == "length_required"
+
+
 def test_finish_task_settles_success_and_releases_failure(monkeypatch):
     settled = []
     terminalized = []
@@ -612,6 +767,62 @@ def test_finish_task_settles_success_and_releases_failure(monkeypatch):
     assert settled == ["ok"]
     assert terminalized == [("bad", "model timeout", None)]
     assert len(sql) == 1
+
+
+def test_review_only_success_releases_reservation_without_charging(monkeypatch):
+    settled = []
+    released = []
+    monkeypatch.setattr(platform, "_settle_billing", lambda task_id: settled.append(task_id) or True)
+    monkeypatch.setattr(
+        platform,
+        "_release_billing",
+        lambda task_id, note, audit_entry_type=None: released.append(
+            (task_id, note, audit_entry_type)
+        ) or True,
+    )
+    monkeypatch.setattr(platform, "excute_sql", lambda *_args, **_kwargs: 1)
+
+    payload = {
+        "status": "success",
+        "result": {
+            "itemid": 7,
+            "final_label": "需人工复核",
+            "reviewRequired": True,
+            "modelDecisionReady": False,
+        },
+    }
+    assert platform._finish_task("review-task", {}, "fast", payload, 200) is True
+
+    assert settled == []
+    assert released == [
+        (
+            "review-task",
+            "检测仅形成复核态结论，不消耗调用额度",
+            "detection_review_only",
+        )
+    ]
+
+
+def test_public_result_marks_review_only_as_non_billable():
+    payload = platform._public_result_payload(
+        {
+            "status": "success",
+            "result": {
+                "itemid": 8,
+                "reviewRequired": True,
+                "modelDecisionReady": False,
+            },
+        },
+        "fast",
+    )
+
+    assert payload["decisionStatus"] == "review_only"
+    assert payload["billable"] is False
+    assert payload["result"]["decisionStatus"] == "review_only"
+    assert payload["result"]["billable"] is False
+    assert payload["result"]["probability"] is None
+    assert payload["result"]["detector_probability"] is None
+    assert payload["result"]["confidence"] == "不适用"
 
 
 def test_finish_task_reports_failed_billing_release(monkeypatch):
@@ -643,6 +854,11 @@ def test_finish_task_reports_success_with_pending_settlement(monkeypatch):
 
 def test_success_reservation_reconciliation_settles_and_restores_success_job(monkeypatch):
     updates = []
+    monkeypatch.setattr(
+        platform,
+        "_task_billing_outcome_for_id",
+        lambda *_args, **_kwargs: ("verdict", True, "settled"),
+    )
     monkeypatch.setattr(platform, "_settle_billing", lambda task_id: True)
     monkeypatch.setattr(
         platform.admin_state,
@@ -658,6 +874,11 @@ def test_success_reservation_reconciliation_settles_and_restores_success_job(mon
 
 
 def test_success_reservation_reconciliation_accepts_other_process_settlement(monkeypatch):
+    monkeypatch.setattr(
+        platform,
+        "_task_billing_outcome_for_id",
+        lambda *_args, **_kwargs: ("verdict", True, "settled"),
+    )
     monkeypatch.setattr(platform, "_settle_billing", lambda task_id: False)
     monkeypatch.setattr(platform, "_reservation_status_strict", lambda task_id: "settled")
     monkeypatch.setattr(platform.admin_state, "update_detection_job", lambda *args, **kwargs: None)
@@ -666,11 +887,97 @@ def test_success_reservation_reconciliation_accepts_other_process_settlement(mon
 
 
 def test_success_reservation_reconciliation_surfaces_still_reserved_failure(monkeypatch):
+    monkeypatch.setattr(
+        platform,
+        "_task_billing_outcome_for_id",
+        lambda *_args, **_kwargs: ("verdict", True, "settled"),
+    )
     monkeypatch.setattr(platform, "_settle_billing", lambda task_id: False)
     monkeypatch.setattr(platform, "_reservation_status_strict", lambda task_id: "reserved")
 
     with pytest.raises(platform.TaskRecoveryError, match="remains reserved"):
         platform._reconcile_success_reservation("success-task")
+
+
+def test_review_only_reconciliation_accepts_released_reservation(monkeypatch):
+    released = []
+    monkeypatch.setattr(
+        platform,
+        "_task_billing_outcome_for_id",
+        lambda *_args, **_kwargs: ("review_only", False, "released"),
+    )
+    monkeypatch.setattr(
+        platform,
+        "_release_billing",
+        lambda task_id, note, audit_entry_type=None: released.append(
+            (task_id, audit_entry_type)
+        ) or True,
+    )
+    monkeypatch.setattr(platform.admin_state, "update_detection_job", lambda *_args, **_kwargs: None)
+
+    assert platform._reconcile_success_reservation("review-task") is True
+    assert released == [("review-task", "detection_review_only")]
+
+
+def test_review_only_reconciliation_reverses_legacy_settlement(monkeypatch):
+    reversed_tasks = []
+    monkeypatch.setattr(
+        platform,
+        "_task_billing_outcome_for_id",
+        lambda *_args, **_kwargs: ("review_only", False, "released"),
+    )
+    monkeypatch.setattr(platform, "_release_billing", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(platform, "_reservation_status_strict", lambda _task_id: "settled")
+    monkeypatch.setattr(
+        platform,
+        "_reverse_settled_review_only",
+        lambda task_id: reversed_tasks.append(task_id) or True,
+    )
+    monkeypatch.setattr(platform.admin_state, "update_detection_job", lambda *_args, **_kwargs: None)
+
+    assert platform._reconcile_success_reservation("legacy-review-task") is True
+    assert reversed_tasks == ["legacy-review-task"]
+
+
+def test_success_artifacts_are_blocked_until_billing_is_settled(client, monkeypatch):
+    actor = {
+        "user_id": 7,
+        "account_uuid": "00000000-0000-4000-8000-000000000007",
+        "scopes": "image:fast,reports",
+    }
+    row = {
+        "task_id": "task-unsettled",
+        "mode": "fast",
+        "status": "success",
+        "result_item_id": 42,
+    }
+    owned_lookups = []
+    monkeypatch.setattr(platform, "_developer_key_required", lambda: (actor, None))
+    monkeypatch.setattr(platform, "_task_row_for_user", lambda *_args: row)
+    monkeypatch.setattr(platform, "_reservation_status_strict", lambda _task_id: "reserved")
+    monkeypatch.setattr(
+        platform,
+        "_reconcile_success_reservation",
+        lambda task_id, *_args: (_ for _ in ()).throw(
+            platform.TaskRecoveryError(f"successful task {task_id} billing settlement remains reserved")
+        ),
+    )
+    monkeypatch.setattr(
+        platform,
+        "_owned_detection_item",
+        lambda *args: owned_lookups.append(args),
+    )
+
+    report = client.get("/api/openapi/v1/image-detections/task-unsettled/report")
+    media = client.get("/api/openapi/v1/image-detections/task-unsettled/media")
+
+    assert report.status_code == 503
+    assert media.status_code == 503
+    assert report.headers["Retry-After"] == "5"
+    assert media.headers["Retry-After"] == "5"
+    assert report.get_json()["error"]["code"] == "task_recovery_unavailable"
+    assert media.get_json()["error"]["code"] == "task_recovery_unavailable"
+    assert owned_lookups == []
 
 
 def test_lazy_reconciliation_scans_success_with_reserved_billing(monkeypatch):
@@ -686,7 +993,11 @@ def test_lazy_reconciliation_scans_success_with_reserved_billing(monkeypatch):
 
         def execute(self, sql, params=None):
             normalized = " ".join(sql.split())
-            self.rows = [{"task_id": "success-task"}] if "task.status = 'success'" in normalized else []
+            self.rows = (
+                [{"task_id": "success-task"}]
+                if "task.status = 'success'" in normalized and "JSON_VALID(task.result_json) = 0" not in normalized
+                else []
+            )
 
         def fetchall(self):
             return list(self.rows)
@@ -752,6 +1063,38 @@ def test_database_scope_string_is_parsed_as_scopes():
     actor = {"scopes": "image:fast,reports"}
 
     assert platform._require_scope(actor, "image:fast") is None
+
+
+def test_openapi_auth_error_uses_stable_error_envelope(client, monkeypatch):
+    def denied():
+        response = platform.jsonify({
+            "status": "error",
+            "code": "rate_limit_exceeded",
+            "message": "请求过于频繁",
+        })
+        response.headers["Retry-After"] = "12"
+        return None, (response, 429)
+
+    monkeypatch.setattr(platform, "_developer_key_required", denied)
+
+    with client.application.test_request_context(
+        "/api/openapi/v1/image-detections/task-1",
+        headers={"X-Request-Id": "client-request-1"},
+    ):
+        actor, error = platform._openapi_key_required()
+
+    response, status = error
+    assert actor is None
+    assert status == 429
+    assert response.get_json() == {
+        "error": {
+            "code": "rate_limit_exceeded",
+            "message": "请求过于频繁",
+            "requestId": "client-request-1",
+        },
+    }
+    assert response.headers["Retry-After"] == "12"
+    assert response.headers["X-Request-Id"] == "client-request-1"
 
 
 def test_finish_task_never_settles_before_success_is_persisted(monkeypatch):
@@ -1083,7 +1426,7 @@ def test_duplicate_admin_account_adjustment_replays_without_mutation(client, mon
 
 def test_task_payload_rewrites_browser_only_media_link(monkeypatch):
     monkeypatch.setattr(platform.admin_state, "get_detection_job", lambda task_id: None)
-    monkeypatch.setattr(platform, "_reservation_payload", lambda task_id: None)
+    monkeypatch.setattr(platform, "_reservation_payload", lambda task_id: {"status": "settled"})
     row = {
         "task_id": "task-media",
         "mode": "fast",
@@ -1092,7 +1435,14 @@ def test_task_payload_rewrites_browser_only_media_link(monkeypatch):
         "result_item_id": 42,
         "result_json": {
             "status": "success",
-            "result": {"itemid": 42, "image_url": "/api/media/image/42"},
+            "decisionStatus": "verdict",
+            "billable": True,
+            "result": {
+                "itemid": 42,
+                "image_url": "/api/media/image/42",
+                "decisionStatus": "verdict",
+                "billable": True,
+            },
         },
     }
 
@@ -1103,12 +1453,33 @@ def test_task_payload_rewrites_browser_only_media_link(monkeypatch):
     assert payload["links"]["media"] == expected
 
 
+def test_task_payload_hides_result_while_settlement_is_pending(monkeypatch):
+    monkeypatch.setattr(platform.admin_state, "get_detection_job", lambda task_id: None)
+    monkeypatch.setattr(platform, "_reservation_payload", lambda task_id: {"status": "reserved"})
+    row = {
+        "task_id": "task-pending-settlement",
+        "mode": "fast",
+        "filename": "sample.png",
+        "status": "success",
+        "result_item_id": 42,
+        "result_json": {"status": "success", "result": {"itemid": 42}},
+    }
+
+    payload = platform._task_payload(row)
+
+    assert payload["status"] == "settlement_pending"
+    assert payload["progress"] == 99
+    assert payload["result"] is None
+    assert payload["billing"]["status"] == "reserved"
+
+
 def test_openapi_media_download_uses_api_key_owner_and_mode_scope(client, monkeypatch):
     actor = {"user_id": 7, "account_uuid": "00000000-0000-4000-8000-000000000007", "phone": "13800000007", "openid": "openid-7", "scopes": "image:fast"}
     row = {"task_id": "task-media", "mode": "fast", "status": "success", "result_item_id": 42}
     item = {"itemid": 42, "filename": "sample.png", "phone": "13800000007"}
     monkeypatch.setattr(platform, "_developer_key_required", lambda: (actor, None))
     monkeypatch.setattr(platform, "_task_row_for_user", lambda task_id, user_id, account_uuid: row)
+    monkeypatch.setattr(platform, "_task_settlement_error", lambda task_id, *_args: None)
     monkeypatch.setattr(platform, "_owned_detection_item", lambda current_actor, item_id: item)
     monkeypatch.setattr(
         platform,
@@ -1173,6 +1544,7 @@ def test_developer_request_reliably_enqueues_without_daemon_thread(client, monke
     monkeypatch.setattr(platform, "_maybe_reconcile_expired_tasks", lambda: 0)
     monkeypatch.setattr(platform, "_idempotent_task", lambda *_: None)
     monkeypatch.setattr(platform, "_queue_capacity_error", lambda *_: None)
+    monkeypatch.setattr(platform, "_queue_submission_guard", lambda *_: nullcontext())
     monkeypatch.setattr(platform, "_reserve_task_daily_quota", lambda *_: (None, None, None))
     monkeypatch.setattr(platform, "_reserve_billing", lambda *_: {"status": "reserved"})
     monkeypatch.setattr(
@@ -1284,7 +1656,7 @@ def test_worker_executes_verified_spool_and_cleans_terminal_file(monkeypatch, tm
     assert not (platform.DEVELOPER_SPOOL_ROOT / spool_name).exists()
 
 
-def test_recovery_reuses_task_tagged_business_result_without_model_call(monkeypatch):
+def test_recovery_fails_closed_when_business_result_lacks_response_journal(monkeypatch):
     account_uuid = "7b581f4f-e857-4010-9c9b-e3fe343e3f47"
     task = {
         "task_id": "job_recover",
@@ -1311,15 +1683,10 @@ def test_recovery_reuses_task_tagged_business_result_without_model_call(monkeypa
         "img_format": "PNG",
         "resolution": "8x8",
     }
-    effect_updates = []
-
     def execute(statement, params=None, fetch=True):
         normalized = " ".join(statement.split())
         if normalized.startswith("SELECT status, effect_item_id, effect_result_json"):
             return [{"status": "running", "effect_item_id": None, "effect_result_json": None}]
-        if normalized.startswith("UPDATE developer_detection_tasks SET effect_item_id"):
-            effect_updates.append(params)
-            return 1
         raise AssertionError(f"unexpected SQL: {normalized}")
 
     owner_calls = []
@@ -1339,13 +1706,9 @@ def test_recovery_reuses_task_tagged_business_result_without_model_call(monkeypa
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("model reran")),
     )
 
-    payload, status_code, recovered = platform._execute_or_recover_task(task, user_info, b"image")
+    with pytest.raises(platform.TaskRecoveryError, match="without a complete response journal"):
+        platform._execute_or_recover_task(task, user_info, b"image")
 
-    assert recovered is True
-    assert status_code == 200
-    assert payload["result"]["itemid"] == 88
-    assert payload["result"]["filename"] == "portrait.png"
-    assert effect_updates[0][0] == 88
     assert owner_calls and all(call[3] == account_uuid for call in owner_calls)
 
 
@@ -1421,6 +1784,42 @@ def test_incomplete_swarm_primary_result_is_not_mistaken_for_final_result(monkey
         platform._recover_task_effect(task, {"Userid": 9})
 
 
+def test_recovery_rejects_legacy_success_journal_without_explicit_outcome(monkeypatch):
+    task = {"task_id": "job_legacy", "mode": "fast", "filename": "source.png"}
+    journal = {
+        "status": "success",
+        "result": {"itemid": 93, "final_label": "AI生成图像"},
+    }
+    monkeypatch.setattr(
+        platform,
+        "excute_sql",
+        lambda *_args, **_kwargs: [{
+            "status": "running",
+            "effect_item_id": 93,
+            "effect_result_json": json.dumps(journal),
+        }],
+    )
+    monkeypatch.setattr(
+        platform,
+        "_task_business_rows",
+        lambda *_args, **_kwargs: [{"itemid": 93}],
+    )
+
+    with pytest.raises(platform.TaskRecoveryError, match="explicit decision outcome"):
+        platform._recover_task_effect(task, {"Userid": 9})
+
+
+def test_missing_task_outcome_fails_closed_to_review_only():
+    outcome = platform._task_billing_outcome({
+        "result_json": {
+            "status": "success",
+            "result": {"itemid": 94, "final_label": "真实图像"},
+        }
+    })
+
+    assert outcome == ("review_only", False, "released")
+
+
 def test_task_spool_lock_serializes_lease_handover(monkeypatch, tmp_path):
     monkeypatch.setattr(platform, "DEVELOPER_SPOOL_ROOT", tmp_path / "spool")
     spool_name = platform._write_task_spool("job_lock", _png_bytes())
@@ -1489,7 +1888,10 @@ def test_success_terminalization_and_billing_settlement_happen_once(monkeypatch)
     monkeypatch.setattr(platform, "excute_sql", lambda *_args, **_kwargs: next(persisted))
     monkeypatch.setattr(platform, "_settle_billing", lambda task_id: settlements.append(task_id) or True)
 
-    payload = {"status": "success", "result": {"itemid": 88}}
+    payload = {
+        "status": "success",
+        "result": {"itemid": 88, "decisionStatus": "verdict", "billable": True},
+    }
     assert platform._finish_task("task-once", {"id": 1}, "fast", payload, 200) is True
     assert platform._finish_task("task-once", {"id": 1}, "fast", payload, 200) is False
     assert settlements == ["task-once"]
@@ -1537,6 +1939,83 @@ def test_queue_capacity_applies_task_and_spool_limits(monkeypatch):
     assert "存储空间" in platform._queue_capacity_error(10)
 
 
+def test_queue_capacity_keeps_developer_and_guest_pools_separate(monkeypatch):
+    monkeypatch.setattr(platform, "DEVELOPER_TASK_MAX_PENDING", 3)
+    monkeypatch.setattr(platform, "WEB_GUEST_TASK_MAX_PENDING", 5)
+    monkeypatch.setattr(platform, "WEB_GUEST_OWNER_MAX_PENDING", 1)
+    monkeypatch.setattr(platform, "DEVELOPER_SPOOL_MAX_BYTES", 1000)
+    rows = {
+        "developer_pending": 3,
+        "web_pending": 0,
+        "owner_pending": 0,
+        "pending_bytes": 10,
+    }
+    monkeypatch.setattr(platform, "excute_sql", lambda *_args, **_kwargs: [rows])
+
+    assert "队列已满" in platform._queue_capacity_error(1, "developer")
+    assert platform._queue_capacity_error(1, "guest", "subject-a") is None
+
+    rows.update(developer_pending=0, web_pending=4, owner_pending=1)
+    assert "已有待处理任务" in platform._queue_capacity_error(1, "guest", "subject-a")
+    assert platform._queue_capacity_error(1, "developer") is None
+
+
+def test_queue_submission_guard_serializes_final_capacity_check(monkeypatch):
+    admission_lock = threading.Lock()
+    pending = {"count": 0}
+
+    class Cursor:
+        def __init__(self):
+            self.row = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def execute(self, sql, params=None):
+            if "GET_LOCK" in sql:
+                admission_lock.acquire()
+                self.row = {"acquired": 1}
+            elif "RELEASE_LOCK" in sql:
+                admission_lock.release()
+                self.row = {"released": 1}
+
+        def fetchone(self):
+            return self.row
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(platform, "get_db_connection", Connection)
+    monkeypatch.setattr(
+        platform,
+        "_queue_capacity_error",
+        lambda _size: "检测队列已满，请稍后重试" if pending["count"] >= 3 else None,
+    )
+    barrier = threading.Barrier(10)
+
+    def admit(_index):
+        barrier.wait()
+        try:
+            with platform._queue_submission_guard(1):
+                pending["count"] += 1
+            return True
+        except platform.QueueCapacityError:
+            return False
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        outcomes = list(executor.map(admit, range(10)))
+
+    assert sum(outcomes) == 3
+    assert pending["count"] == 3
+
+
 def test_worker_removes_only_unreferenced_old_spool_files(monkeypatch, tmp_path):
     monkeypatch.setattr(platform, "DEVELOPER_SPOOL_ROOT", tmp_path / "spool")
     monkeypatch.setattr(platform, "DEVELOPER_SPOOL_ORPHAN_GRACE_SECONDS", 300)
@@ -1559,3 +2038,281 @@ def test_worker_removes_only_unreferenced_old_spool_files(monkeypatch, tmp_path)
     assert referenced.exists()
     assert recent.exists()
     assert not orphan.exists()
+
+
+def test_web_task_is_spooled_before_it_becomes_runnable(monkeypatch, tmp_path):
+    monkeypatch.setattr(platform, "WEB_TASK_SPOOL_ROOT", tmp_path / "web-spool")
+    monkeypatch.setattr(platform, "_ensure_developer_platform_tables", lambda: True)
+    monkeypatch.setattr(platform, "_queue_submission_guard", lambda *_args: nullcontext())
+    inserts = []
+
+    def fake_sql(sql, params=None, fetch=True):
+        if "INSERT INTO web_detection_tasks" in " ".join(sql.split()):
+            inserts.append(params)
+            assert (platform.WEB_TASK_SPOOL_ROOT / params[5]).read_bytes() == b"image-bytes"
+            return 1
+        raise AssertionError(sql)
+
+    monkeypatch.setattr(platform, "excute_sql", fake_sql)
+    job = {
+        "id": "job_test123",
+        "mode": "fast",
+        "actor": {
+            "id": 7,
+            "account_uuid": "11111111-1111-4111-8111-111111111111",
+            "username": "tester",
+            "phone": "13800000000",
+            "openid": "openid-7",
+        },
+    }
+    user_info = {
+        "Userid": 7,
+        "account_uuid": "11111111-1111-4111-8111-111111111111",
+        "username": "tester",
+        "phone": "13800000000",
+        "openid": "openid-7",
+    }
+
+    assert platform._enqueue_web_detection_task(
+        job, b"image-bytes", "photo.png", "image/png", user_info, False
+    )
+    assert len(inserts) == 1
+    assert inserts[0][0] == "job_test123"
+    assert inserts[0][6] == len(b"image-bytes")
+
+
+def test_guest_web_task_daily_allowance_is_server_side_and_released_on_failure(monkeypatch, tmp_path):
+    monkeypatch.setattr(platform, "WEB_TASK_SPOOL_ROOT", tmp_path / "web-spool")
+    monkeypatch.setattr(platform, "_ensure_developer_platform_tables", lambda: True)
+    monkeypatch.setattr(platform, "_queue_submission_guard", lambda *_args: nullcontext())
+    calls = []
+
+    def fake_sql(sql, params=None, fetch=True):
+        normalized = " ".join(sql.split())
+        calls.append((normalized, params))
+        if normalized.startswith("SELECT COUNT(*) AS cnt FROM web_guest_daily_usage"):
+            return [{"cnt": 0}]
+        if normalized.startswith("INSERT IGNORE INTO web_guest_daily_usage"):
+            return 1
+        if normalized.startswith("INSERT INTO web_detection_tasks"):
+            return 0
+        if normalized.startswith("DELETE FROM web_guest_daily_usage"):
+            return 1
+        raise AssertionError(sql)
+
+    monkeypatch.setattr(platform, "excute_sql", fake_sql)
+    job = {
+        "id": "job_guest1",
+        "mode": "fast",
+        "actor": {"id": None, "account_uuid": "", "phone": "", "openid": "guest-1"},
+    }
+    user_info = {"Userid": None, "account_uuid": "", "phone": "", "openid": "guest-1"}
+
+    with pytest.raises(platform.TaskRecoveryError):
+        platform._enqueue_web_detection_task(
+            job, b"image-bytes", "photo.png", "image/png", user_info, True, "a" * 64
+        )
+
+    assert any(sql.startswith("DELETE FROM web_guest_daily_usage") for sql, _ in calls)
+    assert not any(platform.WEB_TASK_SPOOL_ROOT.iterdir())
+
+
+def test_guest_web_task_rejects_reused_daily_subject(monkeypatch, tmp_path):
+    monkeypatch.setattr(platform, "WEB_TASK_SPOOL_ROOT", tmp_path / "web-spool")
+    monkeypatch.setattr(platform, "_ensure_developer_platform_tables", lambda: True)
+    monkeypatch.setattr(platform, "_queue_submission_guard", lambda *_args: nullcontext())
+    monkeypatch.setattr(platform, "excute_sql", lambda *_args, **_kwargs: 0)
+    job = {
+        "id": "job_guest2",
+        "mode": "fast",
+        "actor": {"id": None, "account_uuid": "", "phone": "", "openid": "guest-2"},
+    }
+    user_info = {"Userid": None, "account_uuid": "", "phone": "", "openid": "guest-2"}
+
+    with pytest.raises(platform.QueueCapacityError, match="免费检测次数"):
+        platform._enqueue_web_detection_task(
+            job, b"image-bytes", "photo.png", "image/png", user_info, True, "b" * 64
+        )
+
+
+def test_guest_web_task_enforces_global_daily_budget(monkeypatch, tmp_path):
+    monkeypatch.setattr(platform, "WEB_TASK_SPOOL_ROOT", tmp_path / "web-spool")
+    monkeypatch.setattr(platform, "WEB_GUEST_DAILY_GLOBAL_LIMIT", 2)
+    monkeypatch.setattr(platform, "_ensure_developer_platform_tables", lambda: True)
+    monkeypatch.setattr(platform, "_queue_submission_guard", lambda *_args: nullcontext())
+    monkeypatch.setattr(
+        platform,
+        "excute_sql",
+        lambda sql, *_args, **_kwargs: (
+            [{"cnt": 2}]
+            if "COUNT(*) AS cnt FROM web_guest_daily_usage" in sql
+            else (_ for _ in ()).throw(AssertionError(sql))
+        ),
+    )
+    job = {
+        "id": "job_guest_budget",
+        "mode": "fast",
+        "actor": {"id": None, "account_uuid": "", "phone": "", "openid": "guest"},
+    }
+
+    with pytest.raises(platform.QueueCapacityError, match="总额度"):
+        platform._enqueue_web_detection_task(
+            job,
+            b"image-bytes",
+            "photo.png",
+            "image/png",
+            {"Userid": None, "account_uuid": "", "phone": "", "openid": "guest"},
+            True,
+            "c" * 64,
+        )
+
+
+def test_expired_web_task_fails_without_automatic_model_retry(monkeypatch):
+    monkeypatch.setattr(platform, "_ensure_developer_platform_tables", lambda: True)
+    updates = []
+
+    def fake_sql(sql, params=None, fetch=True):
+        normalized = " ".join(sql.split())
+        if normalized.startswith("SELECT job_id, mode, filename"):
+            return [{
+                "job_id": "job_interrupted",
+                "mode": "fast",
+                "filename": "sample.png",
+                "status": "running",
+                "request_context_json": "{}",
+            }]
+        if normalized.startswith("SELECT status, effect_item_id, effect_result_json"):
+            return [{"status": "running", "effect_item_id": None, "effect_result_json": None}]
+        if normalized.startswith("UPDATE web_detection_tasks SET status = 'failed'"):
+            updates.append(params)
+            return 1
+        raise AssertionError(sql)
+
+    cache_updates = []
+    monkeypatch.setattr(platform, "excute_sql", fake_sql)
+    monkeypatch.setattr(
+        platform.admin_state,
+        "update_detection_job",
+        lambda job_id, payload: cache_updates.append((job_id, payload)),
+    )
+
+    assert platform._reconcile_web_tasks() == 1
+    assert "未自动重复推理" in updates[0][0]
+    assert cache_updates[0][1]["status"] == "failed"
+
+
+def test_expired_web_task_recovers_persisted_business_result(monkeypatch):
+    monkeypatch.setattr(platform, "_ensure_developer_platform_tables", lambda: True)
+    task = {
+        "job_id": "job_0123456789abcdefabcd",
+        "mode": "fast",
+        "filename": "sample.png",
+        "status": "running",
+        "request_context_json": "context",
+    }
+    payload = {"status": "success", "result": {"itemid": 91, "filename": "sample.png"}}
+    monkeypatch.setattr(
+        platform,
+        "_load_web_request_context",
+        lambda _row: ({}, {"Userid": 7, "account_uuid": "owner"}, False),
+    )
+    monkeypatch.setattr(platform, "_recover_web_task_effect", lambda *_args: payload)
+    updates = []
+
+    def fake_sql(sql, params=None, fetch=True):
+        normalized = " ".join(sql.split())
+        if normalized.startswith("SELECT job_id, mode, filename"):
+            return [task]
+        if normalized.startswith("UPDATE web_detection_tasks SET status = 'success'"):
+            updates.append(params)
+            return 1
+        raise AssertionError(sql)
+
+    cache_updates = []
+    monkeypatch.setattr(platform, "excute_sql", fake_sql)
+    monkeypatch.setattr(
+        platform.admin_state,
+        "update_detection_job",
+        lambda job_id, value: cache_updates.append((job_id, value)),
+    )
+
+    assert platform._reconcile_web_tasks() == 1
+    assert json.loads(updates[0][0]) == payload
+    assert cache_updates[0][1]["status"] == "success"
+    assert "持久化结果恢复" in cache_updates[0][1]["summary"]
+
+
+def test_web_recovery_rejects_primary_row_without_final_response_journal(monkeypatch):
+    task = {"job_id": "job_0123456789abcdefabcd", "mode": "fast"}
+    user_info = {"Userid": 7, "account_uuid": "00000000-0000-4000-8000-000000000007"}
+    monkeypatch.setattr(
+        platform,
+        "excute_sql",
+        lambda *_args, **_kwargs: [{
+            "status": "running",
+            "effect_item_id": None,
+            "effect_result_json": None,
+        }],
+    )
+    monkeypatch.setattr(
+        platform,
+        "_web_task_business_rows",
+        lambda *_args, **_kwargs: [{"itemid": 91, "explantation": "raw model result"}],
+    )
+
+    with pytest.raises(platform.TaskRecoveryError, match="without a finalized response journal"):
+        platform._recover_web_task_effect(task, user_info)
+
+
+def test_web_recovery_normalizes_legacy_journal_to_review_only(monkeypatch):
+    task = {"job_id": "job_0123456789abcdefabcd", "mode": "fast"}
+    user_info = {"Userid": 7, "account_uuid": "00000000-0000-4000-8000-000000000007"}
+    legacy = {"status": "success", "result": {"itemid": 91, "probability": 0.93}}
+    monkeypatch.setattr(
+        platform,
+        "excute_sql",
+        lambda *_args, **_kwargs: [{
+            "status": "running",
+            "effect_item_id": 91,
+            "effect_result_json": json.dumps(legacy),
+        }],
+    )
+    monkeypatch.setattr(
+        platform,
+        "_web_task_business_rows",
+        lambda *_args, **_kwargs: [{"itemid": 91, "explantation": "legacy model result"}],
+    )
+
+    recovered = platform._recover_web_task_effect(task, user_info)
+
+    assert recovered["decisionStatus"] == "review_only"
+    assert recovered["billable"] is False
+    assert recovered["result"]["decisionStatus"] == "review_only"
+
+
+def test_explicit_gpu_overload_is_deferred_without_releasing_reservation(monkeypatch):
+    updates = []
+
+    def fake_sql(sql, params=None, fetch=True):
+        updates.append((" ".join(sql.split()), params))
+        return 1
+
+    monkeypatch.setattr(platform, "excute_sql", fake_sql)
+    task = {"task_id": "job_retry", "lease_owner": "worker-lease"}
+
+    assert platform._defer_developer_task_after_overload(task, {"retryAfter": "7"}) is True
+    assert "SET status = 'queued'" in updates[0][0]
+    assert updates[0][1][0] == 7
+
+
+def test_web_gpu_overload_is_deferred_only_below_attempt_limit(monkeypatch):
+    captured = []
+    monkeypatch.setattr(
+        platform,
+        "excute_sql",
+        lambda sql, params=None, fetch=True: captured.append((sql, params)) or 1,
+    )
+    task = {"job_id": "job_retry", "lease_owner": "web-lease"}
+
+    assert platform._defer_web_task_after_overload(task, {"retryAfter": "4"}) is True
+    assert captured[0][1] == (4, "job_retry", "web-lease", platform.WEB_TASK_MAX_ATTEMPTS)

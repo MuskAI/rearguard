@@ -35,6 +35,7 @@ class _SharedQuotaDb:
         }
         self.usage = None
         self.connections = 0
+        self.query_order = []
 
     def connect(self):
         self.connections += 1
@@ -54,12 +55,16 @@ class _QuotaCursor:
 
     def execute(self, sql, params=None):
         normalized = " ".join(sql.split())
+        self.connection.db.query_order.append(normalized)
+        if normalized.startswith("SELECT k.user_id FROM developer_api_keys"):
+            self.result = {"user_id": self.connection.db.key["user_id"]}
+            return 1
         if normalized.startswith("SELECT k.id, k.user_id"):
-            self.connection.acquire_key_lock()
             self.result = deepcopy(self.connection.db.key)
             self.result["quota_now"] = self.connection.db.now
             return 1
         if normalized.startswith("SELECT Userid FROM `user`"):
+            self.connection.acquire_key_lock()
             self.result = {"Userid": self.connection.db.key["user_id"]}
             return 1
         if normalized.startswith("SELECT u.Userid, q.daily_limit"):
@@ -196,6 +201,26 @@ def test_daily_limit_is_atomic_across_independent_connections(app, monkeypatch):
     assert db.connections == 16
 
 
+def test_key_consumption_locks_account_before_key(app, monkeypatch):
+    db = _SharedQuotaDb(daily_limit=3)
+    _install_quota_db(monkeypatch, db)
+
+    actor, error, error_code, _ = _consume(app)
+
+    assert actor["id"] == 7
+    assert error is None
+    assert error_code is None
+    account_lock = next(
+        index for index, query in enumerate(db.query_order)
+        if query.startswith("SELECT Userid FROM `user`")
+    )
+    key_lock = next(
+        index for index, query in enumerate(db.query_order)
+        if query.startswith("SELECT k.id, k.user_id")
+    )
+    assert account_lock < key_lock
+
+
 def test_rate_limit_returns_429_retry_after_and_resets_next_minute(app, monkeypatch):
     db = _SharedQuotaDb(daily_limit=10, minute_limit=1)
     _install_quota_db(monkeypatch, db)
@@ -213,6 +238,24 @@ def test_rate_limit_returns_429_retry_after_and_resets_next_minute(app, monkeypa
     reset = client.post("/api/developer/v1/detect", headers={"X-RealGuard-Key": "rg_sk_test"})
     assert reset.status_code == 410
     assert db.usage["daily_count"] == 0
+    assert db.usage["minute_count"] == 1
+
+
+def test_read_only_polling_does_not_consume_submission_rate_limit(app, monkeypatch):
+    db = _SharedQuotaDb(daily_limit=10, minute_limit=1)
+    _install_quota_db(monkeypatch, db)
+
+    first_poll = _consume(app, method="GET")
+    second_poll = _consume(app, method="GET")
+    first_submit = _consume(app, method="POST")
+    poll_after_submit = _consume(app, method="GET")
+    limited_submit = _consume(app, method="POST")
+
+    assert first_poll[2] is None
+    assert second_poll[2] is None
+    assert first_submit[2] is None
+    assert poll_after_submit[2] is None
+    assert limited_submit[2] == "rate_limit_exceeded"
     assert db.usage["minute_count"] == 1
 
 
@@ -250,7 +293,7 @@ def test_rotated_key_shares_account_daily_limit(app, monkeypatch):
     assert db.usage["daily_count"] == 1
 
 
-def test_polling_and_report_skip_daily_but_consume_minute_quota(app, monkeypatch):
+def test_polling_and_report_do_not_consume_detection_quotas(app, monkeypatch):
     db = _SharedQuotaDb(daily_limit=1, minute_limit=3)
     _install_quota_db(monkeypatch, db)
 
@@ -260,16 +303,13 @@ def test_polling_and_report_skip_daily_but_consume_minute_quota(app, monkeypatch
     assert _consume(app, path="/api/openapi/v1/image-detections/task-1", method="GET")[2] is None
     assert _consume(app, path="/api/openapi/v1/image-detections/task-1/report", method="GET")[2] is None
     assert db.usage["daily_count"] == 1
-    assert db.usage["minute_count"] == 3
+    assert db.usage["minute_count"] == 1
 
     actor, error = _require_key(app, path="/api/openapi/v1/image-detections/task-1")
-    response, status_code = error
-    assert actor is None
-    assert status_code == 429
-    assert response.get_json()["code"] == "rate_limit_exceeded"
-    assert 1 <= int(response.headers["Retry-After"]) <= 60
+    assert actor["id"] == 7
+    assert error is None
     assert db.usage["daily_count"] == 1
-    assert db.usage["minute_count"] == 3
+    assert db.usage["minute_count"] == 1
 
 
 @pytest.mark.parametrize(

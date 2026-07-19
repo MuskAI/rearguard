@@ -82,6 +82,7 @@
                 <button class="filter-btn active" onclick="filterRecords('all',this)">全部</button>
                 <button class="filter-btn" onclick="filterRecords('fake',this)"><i class="fa fa-times-circle"></i> AI生成</button>
                 <button class="filter-btn" onclick="filterRecords('real',this)"><i class="fa fa-check-circle"></i> 真实</button>
+                <button class="filter-btn" onclick="filterRecords('review',this)"><i class="fa fa-question-circle"></i> 待复核</button>
             </div>
         </div>
         <div class="card">
@@ -112,11 +113,7 @@
     t.addEventListener('click',function(){var d=b.hasAttribute('data-theme');setTheme(!d);localStorage.setItem('theme',d?'light':'dark');});
     window.addEventListener('scroll',function(){document.querySelector('.nav').style.boxShadow=window.scrollY>50?'var(--shadow-md)':'none';});
 
-    var allRecords=[
-        {% for r in records %}
-        {itemid:{{ r.itemid }},filename:"{{ r.filename }}",image_url:"{{ r.image_url }}",real_prob:{{ r.real_prob }},fake_prob:{{ r.fake_prob }},aigc:"{{ r.aigc|default('') }}",confidence:"{{ r.confidence|default('') }}",createtime:"{{ r.createtime }}"}{% if not loop.last %},{% endif %}
-        {% endfor %}
-    ];
+    var allRecords={{ records|tojson }};
 
     if(allRecords.length===0)return;
 
@@ -130,10 +127,17 @@
         document.querySelectorAll('.filter-btn').forEach(function(b){b.classList.remove('active');});
         btn.classList.add('active');
         if(type==='all')filtered=allRecords.slice();
-        else if(type==='fake')filtered=allRecords.filter(function(r){return r.fake_prob>50;});
-        else filtered=allRecords.filter(function(r){return r.fake_prob<=50;});
+        else if(type==='review')filtered=allRecords.filter(function(r){return r.decision_status==='review_only';});
+        else if(type==='fake')filtered=allRecords.filter(function(r){return r.decision_status==='verdict'&&r.fake_prob>50;});
+        else filtered=allRecords.filter(function(r){return r.decision_status==='verdict'&&r.fake_prob<=50;});
         currentPage=1;renderPage();
     };
+
+    function escapeHtml(value){
+        return String(value==null?'':value).replace(/[&<>"']/g,function(char){
+            return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char];
+        });
+    }
 
     function renderPage(){
         var total=filtered.length;
@@ -145,20 +149,25 @@
         if(items.length===0){grid.innerHTML='<div style="grid-column:1/-1;text-align:center;padding:3rem;color:var(--text-muted)"><i class="fa fa-filter" style="font-size:2rem;display:block;margin-bottom:.5rem"></i>无匹配记录</div>';pagWrap.innerHTML='';return;}
 
         items.forEach(function(r){
-            var isFake=r.fake_prob>50;
+            var isReview=r.decision_status==='review_only'||r.fake_prob==null;
+            var isFake=!isReview&&r.fake_prob>50;
+            var badgeLabel=isReview?'待复核':(isFake?'AI生成':'真实');
+            var scoreLabel=isReview?'未发布':r.fake_prob.toFixed(1)+'%';
+            var scoreColor=isReview?'var(--text-muted)':(isFake?'var(--danger)':'var(--success)');
+            var safeFilename=escapeHtml(r.filename);
             var card=document.createElement('div');card.className='h-card';
             card.onclick=function(){window.location.href='/image_result?itemid='+r.itemid;};
             card.innerHTML=
                 '<div class="h-thumb">'+
-                    '<img src="'+r.image_url+'" alt="'+r.filename+'" onerror="this.style.display=\'none\'">'+
-                    '<span class="h-badge '+(isFake?'fake':'real')+'">'+(isFake?'AI生成':'真实')+'</span>'+
+                    '<img src="'+escapeHtml(r.image_url)+'" alt="'+safeFilename+'" onerror="this.style.display=\'none\'">'+
+                    '<span class="h-badge '+(isFake?'fake':'real')+'">'+badgeLabel+'</span>'+
                     '<div class="h-overlay"><span><i class="fa fa-eye"></i> 查看详情</span></div>'+
                 '</div>'+
                 '<div class="h-body">'+
-                    '<div class="h-name" title="'+r.filename+'">'+r.filename+'</div>'+
-                    '<div class="h-prob"><span>AI概率</span><span class="val" style="color:'+(isFake?'var(--danger)':'var(--success)')+'">'+r.fake_prob.toFixed(1)+'%</span></div>'+
-                    '<div class="h-bar"><div class="h-bar-fill '+(isFake?'red':'green')+'" style="width:'+r.fake_prob+'%"></div></div>'+
-                    '<div class="h-meta"><span class="h-time"><i class="fa fa-clock-o"></i> '+r.createtime+'</span>'+(r.confidence?'<span class="h-conf">'+r.confidence+'</span>':'')+'</div>'+
+                    '<div class="h-name" title="'+safeFilename+'">'+safeFilename+'</div>'+
+                    '<div class="h-prob"><span>自动风险分数</span><span class="val" style="color:'+scoreColor+'">'+scoreLabel+'</span></div>'+
+                    '<div class="h-bar"><div class="h-bar-fill '+(isFake?'red':'green')+'" style="width:'+(isReview?0:r.fake_prob)+'%"></div></div>'+
+                    '<div class="h-meta"><span class="h-time"><i class="fa fa-clock-o"></i> '+escapeHtml(r.createtime)+'</span>'+(r.confidence?'<span class="h-conf">'+escapeHtml(r.confidence)+'</span>':'')+'</div>'+
                 '</div>';
             grid.appendChild(card);
         });

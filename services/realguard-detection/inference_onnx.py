@@ -1,7 +1,10 @@
+import hashlib
+import json
 import math
 import os
 import threading
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
@@ -12,9 +15,11 @@ from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 
 try:
-    from .image_preprocessing import downsample_for_analysis
+    from .image_preprocessing import downsample_for_analysis, normalize_orientation
+    from .model_decision_policy import model_decision_policy
 except ImportError:  # Standalone deployment keeps both files in one directory.
-    from image_preprocessing import downsample_for_analysis
+    from image_preprocessing import downsample_for_analysis, normalize_orientation
+    from model_decision_policy import model_decision_policy
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -36,12 +41,25 @@ MAX_ANALYSIS_SIDE = max(256, int(os.environ.get("REALGUARD_V2_MAX_ANALYSIS_SIDE"
 DEVICE = os.environ.get("REALGUARD_V2_DEVICE", "cuda").strip().lower()
 CUDA_DEVICE_ID = int(os.environ.get("REALGUARD_V2_CUDA_DEVICE_ID", "0"))
 REQUIRE_CUDA = _env_bool("REALGUARD_V2_REQUIRE_CUDA", False)
+REQUIRE_MODEL_IDENTITY = _env_bool(
+    "REALGUARD_V2_REQUIRE_MODEL_IDENTITY", REQUIRE_CUDA
+)
+MODEL_REVISION = os.environ.get("REALGUARD_V2_MODEL_REVISION", "").strip()
+EXPECTED_MODEL_SHA256 = os.environ.get("REALGUARD_V2_MODEL_SHA256", "").strip().lower()
+RUNTIME_LOCK_PATH = os.environ.get(
+    "REALGUARD_V2_RUNTIME_LOCK_PATH",
+    "/home/ymk/realguard-detection-releases/current/model/runtime.lock",
+).strip()
 EAGER_LOAD = _env_bool("REALGUARD_V2_EAGER_LOAD", False)
 WARMUP_ON_INIT = _env_bool("REALGUARD_V2_WARMUP", True)
 WARMUP_VIEWS = max(1, int(os.environ.get("REALGUARD_V2_WARMUP_VIEWS", "26")))
 MAX_CONCURRENT_INFERENCES = max(
     1,
     int(os.environ.get("REALGUARD_V2_MAX_CONCURRENT_INFERENCES", "1")),
+)
+DEPLOYMENT_COMMIT_PATH = os.environ.get(
+    "REALGUARD_DEPLOYMENT_COMMIT_PATH",
+    "/home/ymk/realguard-detection-releases/current/DEPLOYED_COMMIT",
 )
 INFERENCE_QUEUE_TIMEOUT_SECONDS = max(
     0.1,
@@ -61,6 +79,11 @@ class InferenceBusyError(RuntimeError):
 class ImagePixelsTooLargeError(ValueError):
     pass
 
+
+class UnsupportedAnimatedImageError(ValueError):
+    pass
+
+
 session = None
 input_name = None
 preprocess_transform = None
@@ -71,6 +94,71 @@ _model_state: Dict[str, Any] = {
 }
 _init_lock = threading.Lock()
 _inference_slots = threading.BoundedSemaphore(MAX_CONCURRENT_INFERENCES)
+
+
+def _sha256_file(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _deployment_commit() -> str | None:
+    try:
+        value = Path(DEPLOYMENT_COMMIT_PATH).read_text(encoding="ascii").strip().lower()
+    except OSError:
+        return None
+    return value if 7 <= len(value) <= 40 and all(char in "0123456789abcdef" for char in value) else None
+
+
+def _runtime_decision_contract(
+    model_sha256: str | None,
+    *,
+    max_tiles: int | None = None,
+    top_k: int | None = None,
+    chunk_size: int | None = None,
+) -> Dict[str, Any]:
+    selected_max_tiles = int(max_tiles or MAX_TILES)
+    side_tiles = max(1, int(round(math.sqrt(float(selected_max_tiles)))))
+    derived_chunk_size = 256 * side_tiles
+    preprocessing_impl = os.path.join(os.path.dirname(__file__), "image_preprocessing.py")
+    decision_policy_impl = os.path.join(os.path.dirname(__file__), "model_decision_policy.py")
+    preprocessing = {
+        "schema": "cn.huijian.image-preprocessing-v1",
+        "implementationSha256": _sha256_file(preprocessing_impl),
+        "orientation": "PIL.ImageOps.exif_transpose",
+        "colorMode": "RGB",
+        "resize": {"size": TILE_SIZE, "interpolation": "bicubic"},
+        "centerCrop": TILE_SIZE,
+        "normalizeMean": [0.48145466, 0.4578275, 0.40821073],
+        "normalizeStd": [0.26862954, 0.26130258, 0.27577711],
+    }
+    return {
+        "schema": "cn.huijian.runtime-inference-contract-v1",
+        "modelSha256": str(model_sha256 or "").strip().lower(),
+        "inferenceImplementationSha256": _sha256_file(__file__),
+        "decisionPolicyImplementationSha256": _sha256_file(decision_policy_impl),
+        "runtimeLockSha256": _sha256_file(RUNTIME_LOCK_PATH),
+        "classMapping": {"0": "real", "1": "fake"},
+        "preprocessing": preprocessing,
+        "inferenceParameters": {
+            "tileSize": TILE_SIZE,
+            "requestedMaxTiles": selected_max_tiles,
+            "requestedTopK": int(top_k or TOP_K),
+            "requestedChunkSize": int(chunk_size or derived_chunk_size),
+            "maxAnalysisSide": MAX_ANALYSIS_SIDE,
+            "maxSourcePixels": MAX_SOURCE_PIXELS,
+            "maxChunks": MAX_CHUNKS,
+            "aggregation": "top_k_mean_fusion_probability",
+            "outputMapping": {
+                "level1Logits": 0,
+                "level2Logits": 1,
+                "fusionLogits": 2,
+                "fakeClassIndex": 1,
+            },
+        },
+    }
 
 
 def _provider_specs():
@@ -137,6 +225,18 @@ def initialize_model(warmup=None) -> Dict[str, Any]:
             return get_model_status()
         if not os.path.isfile(ONNX_PATH):
             raise FileNotFoundError(f"RealGuard v2 ONNX artifact not found: {ONNX_PATH}")
+        actual_model_sha256 = _sha256_file(ONNX_PATH)
+        if REQUIRE_MODEL_IDENTITY and (
+            not MODEL_REVISION or len(EXPECTED_MODEL_SHA256) != 64
+        ):
+            raise RuntimeError(
+                "RealGuard v2 model identity is required but revision/SHA-256 is missing"
+            )
+        if EXPECTED_MODEL_SHA256 and actual_model_sha256 != EXPECTED_MODEL_SHA256:
+            raise RuntimeError(
+                "RealGuard v2 ONNX SHA-256 mismatch: "
+                f"{actual_model_sha256} != {EXPECTED_MODEL_SHA256}"
+            )
 
         should_warmup = WARMUP_ON_INIT if warmup is None else bool(warmup)
         providers = _provider_specs()
@@ -185,6 +285,8 @@ def initialize_model(warmup=None) -> Dict[str, Any]:
             "warmupViews": WARMUP_VIEWS if should_warmup else 0,
             "maxConcurrentInferences": MAX_CONCURRENT_INFERENCES,
             "maxAnalysisSide": MAX_ANALYSIS_SIDE,
+            "modelRevision": MODEL_REVISION or "unversioned",
+            "modelSha256": actual_model_sha256,
         }
         print(
             "  [模型加载] RealGuard v2 ONNX 已常驻 "
@@ -195,7 +297,26 @@ def initialize_model(warmup=None) -> Dict[str, Any]:
 
 
 def get_model_status() -> Dict[str, Any]:
-    return dict(_model_state)
+    runtime_contract = _runtime_decision_contract(_model_state.get("modelSha256"))
+    runtime_contract_sha256 = hashlib.sha256(
+        json.dumps(
+            runtime_contract,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        **_model_state,
+        "deploymentCommit": _deployment_commit(),
+        "runtimeDecisionContract": runtime_contract,
+        "runtimeDecisionContractSha256": runtime_contract_sha256,
+        "modelDecisionPolicy": model_decision_policy(
+            model_sha256=_model_state.get("modelSha256"),
+            runtime_contract=runtime_contract,
+        ),
+    }
 
 
 def _lazy_init():
@@ -253,8 +374,12 @@ def _prepare_analysis_chunks(img_path, chunk_size, max_tiles):
             raise ImagePixelsTooLargeError(
                 f"image pixels exceed limit {MAX_SOURCE_PIXELS}: {width}x{height}"
             )
-        image = source_image.convert("RGB")
+        if bool(getattr(source_image, "is_animated", False)) and int(getattr(source_image, "n_frames", 1)) > 1:
+            raise UnsupportedAnimatedImageError("animated images are not supported; upload a static frame")
+        normalized, orientation_meta = normalize_orientation(source_image)
+        image = normalized.convert("RGB")
     image, resize_meta = downsample_for_analysis(image, MAX_ANALYSIS_SIDE)
+    resize_meta["orientation"] = orientation_meta
     requested_max_tiles = int(max_tiles or MAX_TILES)
     derived_chunk_size, effective_tiles = _max_tiles_to_chunk_size(requested_max_tiles)
     requested_chunk_size = int(chunk_size or derived_chunk_size)
@@ -310,21 +435,47 @@ def _topk_mean(scores: List[float], k: int) -> float:
     return float(arr[idx].mean())
 
 
+def _calibrated_probability(raw_score: float, calibration: Dict[str, Any] | None) -> float:
+    if not isinstance(calibration, dict) or calibration.get("method") != "temperature_scaling":
+        raise ValueError("probability calibration is unavailable")
+    temperature = float(calibration.get("temperature"))
+    if not math.isfinite(temperature) or temperature <= 0.0:
+        raise ValueError("probability calibration temperature is invalid")
+    clipped = min(max(float(raw_score), 1e-7), 1.0 - 1e-7)
+    calibrated_logit = math.log(clipped / (1.0 - clipped)) / temperature
+    return 1.0 / (1.0 + math.exp(-calibrated_logit))
+
+
+def acquire_inference_slot() -> float:
+    """Reserve GPU capacity before any parallel auxiliary work is started."""
+    _lazy_init()
+    queue_started = time.perf_counter()
+    acquired = _inference_slots.acquire(timeout=INFERENCE_QUEUE_TIMEOUT_SECONDS)
+    if not acquired:
+        raise InferenceBusyError("GPU inference queue is full")
+    return (time.perf_counter() - queue_started) * 1000.0
+
+
+def release_inference_slot() -> None:
+    _inference_slots.release()
+
+
 def analyze_image(
     img_path,
     chunk_size=None,
     max_tiles=None,
     top_k=None,
+    admission_queue_wait_ms=None,
 ) -> Dict[str, Any]:
     analysis_started = time.perf_counter()
-    _lazy_init()
     requested_top_k = int(top_k or TOP_K)
-    queue_started = time.perf_counter()
-    acquired = _inference_slots.acquire(timeout=INFERENCE_QUEUE_TIMEOUT_SECONDS)
-    if not acquired:
-        raise InferenceBusyError("GPU inference queue is full")
+    owns_slot = admission_queue_wait_ms is None
+    queue_wait_ms = (
+        acquire_inference_slot()
+        if owns_slot
+        else max(0.0, float(admission_queue_wait_ms))
+    )
     try:
-        queue_wait_ms = (time.perf_counter() - queue_started) * 1000.0
         (
             image,
             resize_meta,
@@ -375,12 +526,31 @@ def analyze_image(
                 "fusionProbability": round(fusion_prob, 6),
             })
     finally:
-        _inference_slots.release()
+        if owns_slot:
+            release_inference_slot()
 
     arr = np.asarray(fusion_scores, dtype=np.float32)
     used_k = max(1, min(requested_top_k, int(arr.shape[0])))
     topk_indices = np.argsort(-arr)[:used_k].tolist()
     fake_probability = float(arr[topk_indices].mean())
+    runtime_contract = _runtime_decision_contract(
+        _model_state.get("modelSha256"),
+        max_tiles=requested_max_tiles,
+        top_k=requested_top_k,
+        chunk_size=requested_chunk_size,
+    )
+    decision_policy = model_decision_policy(
+        model_sha256=_model_state.get("modelSha256"),
+        runtime_contract=runtime_contract,
+    )
+    decision_ready = decision_policy["ready"] is True
+    published_probability = (
+        _calibrated_probability(fake_probability, decision_policy.get("probabilityCalibration"))
+        if decision_ready else 0.5
+    )
+    final_label = (
+        "AI生成图像" if published_probability >= decision_policy["aiThreshold"] else "真实图像"
+    ) if decision_ready else "需人工复核"
     for item in chunk_results:
         item["selectedByTopK"] = item["index"] in topk_indices
 
@@ -411,17 +581,28 @@ def analyze_image(
             ),
             "每个 chunk 会生成 1 张全局视图，并按 tileSize 生成局部 tile 视图。",
             "所有视图进入 RealGuard v2 ONNX，输出 level1、level2 和 fusion 三组 logits。",
-            "最终 AI 概率取 fusionProbability 最高的 Top-K chunk 均值。",
+            "Top-K fusion 分数先按签名校准清单执行概率校准，再应用发布阈值。",
         ],
         "chunkCount": int(len(chunk_results)),
         "topKChunkIndices": [int(i) for i in topk_indices],
-        "fakeProbability": round(fake_probability, 6),
-        "realProbability": round(1.0 - fake_probability, 6),
-        "finalLabel": "AI生成图像" if fake_probability >= 0.5 else "真实图像",
+        "fakeProbability": round(published_probability, 6),
+        "realProbability": round(1.0 - published_probability, 6),
+        "rawModelScore": round(fake_probability, 6),
+        "finalLabel": final_label,
+        "modelDecision": {
+            **decision_policy,
+            "rawModelScore": round(fake_probability, 6),
+            "publishedProbability": round(published_probability, 6),
+            "finalLabel": final_label,
+        },
         "chunks": chunk_results,
         "runtime": {
             "activeProvider": _model_state.get("activeProvider", "unknown"),
             "cudaDeviceId": _model_state.get("cudaDeviceId"),
+            "modelRevision": _model_state.get("modelRevision", "unversioned"),
+            "modelSha256": _model_state.get("modelSha256"),
+            "deploymentCommit": _deployment_commit(),
+            "runtimeContractSha256": decision_policy.get("runtimeContractSha256"),
             "queueWaitMs": round(queue_wait_ms, 2),
             "preprocessMs": round(preprocess_ms, 2),
             "inferenceMs": round(inference_ms, 2),

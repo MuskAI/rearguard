@@ -1,4 +1,4 @@
-from tools.AIGC_Detection.inference_onnx import predict
+from tools.AIGC_Detection.inference_onnx import RemoteInferenceError, predict
 from tools.meta_data import analyze_image_metadata, classify_metadata_signals
 
 
@@ -68,6 +68,8 @@ class EvidenceCollector:
         try:
             prob_fake = predict(image_path)
             print(f"  检测结果 - AI生成概率: {prob_fake:.4f} ({prob_fake * 100:.2f}%)")
+        except RemoteInferenceError:
+            raise
         except Exception as e:
             if self.strict:
                 raise RuntimeError(f"检测模型运行失败: {e}")

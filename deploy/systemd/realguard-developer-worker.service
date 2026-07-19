@@ -1,5 +1,5 @@
 [Unit]
-Description=RealGuard Developer Detection Lease Worker
+Description=RealGuard Unified Detection Lease Worker
 After=network-online.target mysql.service realguard-detector-backend.service
 Wants=network-online.target realguard-detector-backend.service
 Requires=mysql.service
@@ -11,13 +11,16 @@ Group=ubuntu
 WorkingDirectory=/opt/realguard-server/RealGuard
 Environment=PYTHONUNBUFFERED=1
 Environment=REALGUARD_DEVELOPER_SPOOL_ROOT=/opt/realguard-data/developer-spool
-Environment=REALGUARD_DETECTION_BACKEND_URL=http://127.0.0.1:15001
+Environment=REALGUARD_WEB_TASK_SPOOL_ROOT=/opt/realguard-data/web-spool
+Environment=REALGUARD_DEVELOPER_WORKER_CONCURRENCY=2
+Environment=REALGUARD_WEB_WORKER_CONCURRENCY=1
+Environment=REALGUARD_API_WORKER_CONCURRENCY=1
 EnvironmentFile=-/etc/realguard/session.env
 EnvironmentFile=-/etc/realguard/realguard-backend.env
 EnvironmentFile=-/etc/realguard/detector-db.env
 EnvironmentFile=-/etc/realguard/agent.env
 EnvironmentFile=-/etc/realguard/watermark-precheck.env
-ExecStart=/opt/realguard-server/.venv/bin/python -m imagedetection.workers.developer_detection_worker
+ExecStart=/usr/bin/env REALGUARD_DETECTION_BACKEND_URL=http://127.0.0.1:15001 /opt/realguard-server/.venv/bin/python -m imagedetection.workers.developer_detection_worker
 Restart=always
 RestartSec=3
 TimeoutStopSec=360

@@ -373,7 +373,9 @@ export default function Sidebar({
         )}
         {history.map((h) => {
           const meta = VERDICT_META[h.verdict];
-          const confidence = `${Math.round((h.confidence ?? 0) * 100)}%`;
+          const confidence = h.confidence == null
+            ? "未发布"
+            : `${Math.round(h.confidence * 100)}%`;
           return (
             <div
               key={h.taskId}

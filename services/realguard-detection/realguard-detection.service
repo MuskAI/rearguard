@@ -9,7 +9,7 @@ User=ymk
 Group=ymk
 WorkingDirectory=/home/ymk/RealGuard/AIGC_image_detection_system
 EnvironmentFile=/etc/realguard/detection-db.env
-ExecStart=/home/ymk/miniconda3/envs/realguard/bin/gunicorn --workers 1 --threads 4 --worker-class gthread --bind 0.0.0.0:5000 --timeout 330 --graceful-timeout 45 --keep-alive 5 --access-logfile - --error-logfile - run:app
+ExecStart=/home/ymk/miniconda3/envs/realguard/bin/gunicorn --workers 1 --threads 4 --worker-class gthread --bind 127.0.0.1:5000 --timeout 330 --graceful-timeout 45 --keep-alive 5 --access-logfile - --error-logfile - run:app
 Restart=always
 RestartSec=5
 TimeoutStartSec=240
@@ -24,7 +24,7 @@ ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
 LimitNOFILE=65536
-UMask=0027
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

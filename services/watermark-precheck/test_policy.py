@@ -24,12 +24,12 @@ def test_generic_visible_logo_does_not_short_circuit():
     assert decision["shortCircuit"] is False
 
 
-def test_known_visible_ai_mark_short_circuits():
+def test_known_visible_ai_mark_remains_non_decisive():
     hit = {"provider": "gemini", "label": "Google Gemini sparkle", "confidence": 0.86, "decisive": True}
     decision = build_decision(report(), [hit])
-    assert decision["shortCircuit"] is True
-    assert decision["modelRequired"] is False
-    assert decision["reason"] == "known_visible_ai_watermark"
+    assert decision["shortCircuit"] is False
+    assert decision["modelRequired"] is True
+    assert decision["reason"] == "no_decisive_ai_provenance"
 
 
 def test_uncorroborated_medium_visible_match_remains_a_clue_only():
@@ -37,7 +37,7 @@ def test_uncorroborated_medium_visible_match_remains_a_clue_only():
     assert build_decision(report(), [hit])["shortCircuit"] is False
 
 
-def test_gemini_visible_hit_requires_bottom_right_location():
+def test_gemini_visible_hit_never_gains_decision_authority_from_location():
     assert visible_hit_is_decisive(
         "gemini",
         0.70,
@@ -49,7 +49,7 @@ def test_gemini_visible_hit_requires_bottom_right_location():
         0.65,
         {"x": 0.92, "y": 0.92, "w": 0.05, "h": 0.05},
         corroborated=False,
-    ) is True
+    ) is False
 
 
 def test_camera_c2pa_does_not_short_circuit():
@@ -66,6 +66,7 @@ def test_c2pa_generated_short_circuits():
         isAiGenerated=True,
         aiFromMetadata=True,
         aiSourceKind="generated",
+        c2paTrusted=True,
         signals=[{"name": "c2pa", "detail": "trainedAlgorithmicMedia", "confidence": "high"}],
     )
     decision = build_decision(generated, [])
@@ -79,6 +80,7 @@ def test_c2pa_enhanced_is_not_claimed_as_fully_generated():
         isAiGenerated=True,
         aiFromMetadata=True,
         aiSourceKind="enhanced",
+        c2paTrusted=True,
         signals=[{"name": "c2pa", "detail": "compositeWithTrainedAlgorithmicMedia", "confidence": "high"}],
     )
     decision = build_decision(enhanced, [])
@@ -86,7 +88,7 @@ def test_c2pa_enhanced_is_not_claimed_as_fully_generated():
     assert decision["verdict"] == "suspected_fake"
 
 
-def test_known_watermark_and_ai_metadata_exceed_99_percent():
+def test_editable_ai_metadata_does_not_gain_decision_authority():
     generated = report(
         isAiGenerated=True,
         aiFromMetadata=True,
@@ -96,18 +98,37 @@ def test_known_watermark_and_ai_metadata_exceed_99_percent():
     hit = {"provider": "gemini", "label": "Google Gemini sparkle", "confidence": 0.86, "decisive": True}
     decision = build_decision(generated, [hit])
 
-    assert decision["reason"] == "corroborated_ai_provenance"
-    assert decision["confidence"] > 0.99
-    assert decision["probabilityModel"]["corroborated"] is True
+    assert decision["reason"] == "no_decisive_ai_provenance"
+    assert decision["shortCircuit"] is False
+    assert any(
+        factor["kind"] == "editable_ai_metadata"
+        for factor in decision["probabilityModel"]["factors"]
+    )
 
 
-def test_known_watermark_and_metadata_integrity_clash_exceed_99_percent():
+def test_untrusted_c2pa_ai_declaration_does_not_short_circuit():
+    generated = report(
+        isAiGenerated=True,
+        aiFromMetadata=True,
+        aiSourceKind="generated",
+        c2paTrusted=False,
+        signals=[{"name": "c2pa", "detail": "trainedAlgorithmicMedia", "confidence": "high"}],
+    )
+
+    decision = build_decision(generated, [])
+
+    assert decision["shortCircuit"] is False
+    assert decision["modelRequired"] is True
+
+
+def test_known_watermark_and_metadata_integrity_clash_still_requires_model():
     conflicted = report(integrityClashes=["c2pa_signature_invalid"])
     hit = {"provider": "gemini", "label": "Google Gemini sparkle", "confidence": 0.86, "decisive": True}
     decision = build_decision(conflicted, [hit])
 
-    assert decision["reason"] == "watermark_metadata_conflict"
-    assert decision["confidence"] > 0.99
+    assert decision["reason"] == "no_decisive_ai_provenance"
+    assert decision["shortCircuit"] is False
+    assert decision["modelRequired"] is True
 
 
 def test_generic_logo_never_becomes_ai_evidence_even_with_integrity_clash():

@@ -128,8 +128,13 @@ def creat_app():
 
     @app.cli.command("reconcile-detection-jobs")
     def reconcile_detection_jobs():
-        """Mark Web-process jobs interrupted by a controlled restart as failed."""
-        changed = admin_state.reconcile_interrupted_detection_jobs()
+        """Fail legacy in-process jobs while preserving durable queued work."""
+        try:
+            preserved = developer_platform._active_web_task_ids()
+        except Exception as exc:
+            raise click.ClickException(f"durable Web task lookup failed: {exc}") from exc
+        changed = admin_state.reconcile_interrupted_detection_jobs(preserve_ids=preserved)
+        click.echo(f"durable detection jobs preserved: {len(preserved)}")
         click.echo(f"interrupted detection jobs reconciled: {changed}")
 
     @app.cli.command("repair-detection-owners")

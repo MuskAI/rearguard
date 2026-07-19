@@ -48,7 +48,7 @@ export interface AgentHistoryEntry {
   title: string;
   typeLabel: string;
   verdictLabel: string;
-  score: number;
+  score: number | null;
   createdAt: string;
   thumbnail?: string | null;
 }

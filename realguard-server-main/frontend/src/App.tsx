@@ -1223,13 +1223,35 @@ function ImageDetectionPage({
     };
     setExpertReviewJob(null);
     setStatus({ tone: "info", text: tr("正在分析图像……", "Analyzing image...") });
-    const data = await detectImage(nextFile, controller.signal);
+    const started = await detectImage(nextFile, controller.signal);
     assertActive();
-    setResult(data.result);
-    setStatus({ tone: "ok", text: tr("检测完成", "Detection complete") });
-    await onDone();
-    assertActive();
+    let current = started.job;
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 120000) {
+      if (current.status === "success") {
+        const nextResult = current.result?.result;
+        if (!nextResult) throw new Error(tr("检测已完成，但没有返回结果", "Detection finished without a result"));
+        assertActive();
+        setResult(nextResult);
+        setStatus({ tone: "ok", text: tr("检测完成", "Detection complete") });
+        await onDone();
+        assertActive();
+        swarmAbortRef.current = null;
+        return;
+      }
+      if (current.status === "failed") {
+        swarmAbortRef.current = null;
+        throw new Error(tr("检测暂不可用，请稍后重试", "Detection is temporarily unavailable. Please try again later."));
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 760));
+      assertActive();
+      const polled = await getImageDetectionJob(current.id, controller.signal);
+      assertActive();
+      current = polled.job;
+      setStatus({ tone: "info", text: current.summary || tr("正在分析图像……", "Analyzing image...") });
+    }
     swarmAbortRef.current = null;
+    throw new Error(tr("检测等待超时，请稍后在历史记录查看结果", "Detection timed out. Check history later."));
   }
 
   async function submit() {
@@ -1562,8 +1584,7 @@ function HistoryPage({ setPage, lang }: { setPage: (page: PageKey) => void; lang
     return [
       { label: tr("当前记录", "Current records"), value: historyFilterCounts.all ?? historyTotal, filterKey: "all" as HistoryFilterKey },
       { label: tr("访客记录", "Guest records"), value: historyFilterCounts.guest ?? 0, filterKey: "guest" as HistoryFilterKey },
-      { label: tr("生成结论", "AI verdicts"), value: historyFilterCounts.ai ?? 0, filterKey: "ai" as HistoryFilterKey },
-      { label: tr("真实结论", "Real verdicts"), value: historyFilterCounts.real ?? 0, filterKey: "real" as HistoryFilterKey },
+      { label: tr("待人工复核", "Pending review"), value: historyFilterCounts.review ?? 0, filterKey: "review" as HistoryFilterKey },
     ];
   }, [historyFilterCounts, historyTotal, records, tab, lang]);
 
@@ -2056,7 +2077,13 @@ function ImageResult({
   lang: Lang;
   panelRef: RefObject<HTMLDivElement>;
 }) {
-  const probability = Math.round((result.probability || 0) * 1000) / 10;
+  const scorePublished = result.decisionStatus === "verdict"
+    && result.scorePublished !== false
+    && typeof result.probability === "number"
+    && Number.isFinite(result.probability);
+  const probability = scorePublished
+    ? Math.round((result.probability as number) * 1000) / 10
+    : null;
   const swarm = result.swarm;
   const swarmExperts = swarm?.experts || [];
   const tr = (zh: string, en: string) => translate(lang, zh, en);
@@ -2069,7 +2096,12 @@ function ImageResult({
   });
   const metadataCount = Object.keys(result.all_metadata || {}).length;
   const capture = result.capture_evidence;
-  const requiresReview = (probability > 35 && probability < 75) || result.confidence === "低";
+  const visibleWatermark = result.visibleWatermark;
+  const requiresReview = result.reviewRequired === true
+    || result.modelDecisionReady === false
+    || !scorePublished
+    || (probability !== null && probability > 35 && probability < 75)
+    || result.confidence === "低";
   const verdictLabel = requiresReview ? tr("需人工复核", "Human review required") : result.final_label;
   const verdictTone = requiresReview ? "review" : result.final_label.includes("AI") ? "danger" : "ok";
 
@@ -2103,13 +2135,22 @@ function ImageResult({
       {result.image_url && <img className="result-media" src={result.image_url} alt={result.filename} />}
       <div className="verdict-row">
         <span className={`pill ${verdictTone}`}>{verdictLabel}</span>
-        <div className="verdict-score"><span>{tr("生成风险", "Generated risk")}</span><strong>{probability}%</strong></div>
+        <div className="verdict-score">
+          <span>{scorePublished ? tr("生成风险", "Generated risk") : tr("自动风险分数", "Automated risk score")}</span>
+          <strong>{scorePublished ? `${probability}%` : tr("未发布", "Not published")}</strong>
+        </div>
       </div>
-      <p className="result-caveat"><IconfontIcon name="info" size={15} />{tr("模型概率用于辅助判断；边界结果请结合原图、元数据与证据报告复核。", "Model probability supports review. Borderline results should be checked against the source, metadata, and evidence report.")}</p>
+      <p className="result-caveat"><IconfontIcon name="info" size={15} />{scorePublished
+        ? tr("模型概率用于辅助判断；边界结果请结合原图、元数据与证据报告复核。", "Model probability supports review. Borderline results should be checked against the source, metadata, and evidence report.")
+        : tr("当前证据不足以发布自动概率或真假结论，请结合来源凭证与人工复核。", "Current evidence does not authorize an automated probability or verdict. Review provenance and the source file.")}</p>
+      {result.evidenceCompleteness === false && (
+        <p className="result-caveat" role="status"><IconfontIcon name="alert-triangle" size={15} />{tr(result.evidenceWarnings?.[0] || "可见水印检测未完成，本次证据链不完整。", "Visible-watermark analysis was unavailable, so this evidence chain is incomplete.")}</p>
+      )}
       <div className="result-evidence-grid" aria-label={tr("证据完整度", "Evidence availability")}>
         <div><span>{tr("视觉复核", "Visual review")}</span><strong>{mode === "swarm" ? tr("多源复核", "Multi-source") : result.llm_used ? (visualIssues.length ? tr(`${visualIssues.length} 项线索`, `${visualIssues.length} signals`) : tr("未见明确可疑点", "No explicit issue")) : tr("未完成", "Unavailable")}</strong></div>
         <div><span>{tr("实拍来源证据", "Capture evidence")}</span><strong>{capture?.supportsRealCapture ? tr(`${capture.levelText}支持`, `${capture.level} support`) : capture?.level === "conflict" ? tr("存在冲突", "Conflicting") : metadataCount ? tr(`${metadataCount} 项待核验`, `${metadataCount} fields`) : tr("未形成", "Unavailable")}</strong></div>
-        <div><span>{tr("证据结论", "Evidence status")}</span><strong>{requiresReview ? tr("需要复核", "Review needed") : tr("可供参考", "Available")}</strong></div>
+        <div><span>{tr("可见水印", "Visible watermark")}</span><strong>{!visibleWatermark?.supported ? tr("检测不可用", "Unavailable") : visibleWatermark.detected ? tr("已检出", "Detected") : tr("未检出", "Not detected")}</strong></div>
+        <div><span>{tr("证据结论", "Evidence status")}</span><strong>{result.evidenceCompleteness === false ? tr("证据不完整", "Incomplete") : requiresReview ? tr("需要复核", "Review needed") : tr("可供参考", "Available")}</strong></div>
       </div>
       {visualIssues.length > 0 && (
         <div className="result-evidence-block">
@@ -2187,8 +2228,9 @@ function ImageResult({
 
 function VideoResult({ result, lang, panelRef }: { result: VideoDetectionResult; lang: Lang; panelRef: RefObject<HTMLDivElement> }) {
   const tr = (zh: string, en: string) => translate(lang, zh, en);
-  const probability = Math.round(result.fake_percentage * 10) / 10;
-  const requiresReview = probability > 35 && probability < 75;
+  const scorePublished = result.decisionStatus === "verdict" && result.fake_percentage != null;
+  const probability = scorePublished ? Math.round(result.fake_percentage! * 10) / 10 : 0;
+  const requiresReview = !scorePublished || (probability > 35 && probability < 75);
   const verdictLabel = requiresReview ? tr("需人工复核", "Human review required") : (result.final_label || tr("未标注", "Unlabeled"));
   const verdictTone = requiresReview ? "review" : result.final_label.includes("AI") ? "danger" : "ok";
   return (
@@ -2197,11 +2239,13 @@ function VideoResult({ result, lang, panelRef }: { result: VideoDetectionResult;
       {result.video_url && <video className="result-media" src={result.video_url} controls />}
       <div className="verdict-row">
         <span className={`pill ${verdictTone}`}>{verdictLabel}</span>
-        <div className="verdict-score"><span>{tr("生成风险", "Generated risk")}</span><strong>{probability}%</strong></div>
+        <div className="verdict-score"><span>{tr("自动风险分数", "Automated risk score")}</span><strong>{scorePublished ? `${probability}%` : tr("未发布", "Not published")}</strong></div>
       </div>
       <p className="result-caveat"><IconfontIcon name="info" size={15} />{tr("视频结论用于辅助复核，请结合可疑片段与原始文件确认。", "Use the suspicious segments and original file to verify the model-assisted verdict.")}</p>
-      <Progress label={tr("真实概率", "Real probability")} value={result.real_percentage} tone="green" />
-      <Progress label={tr("生成概率", "Generated probability")} value={result.fake_percentage} tone="red" />
+      {scorePublished && result.real_percentage != null && result.fake_percentage != null && <>
+        <Progress label={tr("真实概率", "Real probability")} value={result.real_percentage} tone="green" />
+        <Progress label={tr("生成概率", "Generated probability")} value={result.fake_percentage} tone="red" />
+      </>}
       <div className="result-actions">
         <button className="btn-code" type="button" onClick={() => downloadVideoReport(result.itemid)}>
           <IconfontIcon name="download" size={16} /> {tr("下载报告", "Download report")}
@@ -2255,6 +2299,8 @@ function HistoryRecords({
         const guestRecord = Boolean(record.is_guest_record);
         const hasMetadata = Boolean(record.has_metadata);
         const hasIssues = Boolean(record.has_visual_issues);
+        const reviewRequired = Boolean(record.review_required);
+        const legacyCalibrationUnknown = Boolean(record.legacy_calibration_unknown);
         const issueCount = Number(record.visual_issue_count || 0);
         const timeText = String(record.createtime || "-");
         return (
@@ -2284,6 +2330,16 @@ function HistoryRecords({
                 <div className="history-tags">
                   {hasMetadata && <span className="history-tag meta"><IconfontIcon name="info" size={12} /> {renderHighlightedText(tr("元数据", "Metadata"), query)}</span>}
                   {hasIssues && <span className="history-tag issue"><IconfontIcon name="alert-triangle" size={12} /> {renderHighlightedText(issueCount > 0 ? tr(`可疑点 ${issueCount}`, `Issues ${issueCount}`) : tr("可疑点", "Issues"), query)}</span>}
+                </div>
+              )}
+              {reviewRequired && (
+                <div className="history-tags">
+                  <span className="history-tag issue">
+                    <IconfontIcon name="alert-triangle" size={12} />
+                    {legacyCalibrationUnknown
+                      ? tr("历史校准状态未知", "Legacy calibration unknown")
+                      : tr("需要人工复核", "Human review required")}
+                  </span>
                 </div>
               )}
               <div className="history-row"><span>{tr("时间", "Time")}</span><strong>{renderHighlightedText(timeText, query)}</strong></div>
@@ -2814,8 +2870,7 @@ function getHistoryFilterOptions(tab: HistoryTabKey, lang: Lang = "zh"): Array<{
   return [
     { key: "all", label: translate(lang, "全部", "All") },
     { key: "guest", label: translate(lang, "访客", "Guest") },
-    { key: "ai", label: translate(lang, "生成结论", "AI verdicts") },
-    { key: "real", label: translate(lang, "真实结论", "Real verdicts") },
+    { key: "review", label: translate(lang, "待人工复核", "Pending review") },
   ];
 }
 
@@ -2828,8 +2883,7 @@ function matchesHistoryFilter(record: HistoryRecord, tab: HistoryTabKey, filter:
     return true;
   }
   if (filter === "guest") return Boolean(record.is_guest_record);
-  if (filter === "ai") return String(record.final_label || "").includes("AI");
-  if (filter === "real") return String(record.final_label || "").includes("真实");
+  if (filter === "review") return record.decision_status === "review_only" || Boolean(record.review_required);
   return true;
 }
 

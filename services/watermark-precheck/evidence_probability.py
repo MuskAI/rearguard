@@ -78,25 +78,26 @@ def build_probability_model(
     ai_from_metadata = bool(report.get("aiFromMetadata"))
     is_ai_generated = report.get("isAiGenerated") is True
     source_kind = str(report.get("aiSourceKind") or "")
+    c2pa_trusted = report.get("c2paTrusted") is True
 
     if ai_from_metadata and is_ai_generated:
-        if clashes:
+        if "c2pa" in signal_names and (clashes or not c2pa_trusted):
             factors.append(_factor(
                 "unverified_ai_declaration",
-                "签名异常的 AI 来源声明",
+                "未通过可信校验的 AI 来源声明",
                 1.5,
                 "untrusted_provenance",
-                source="c2pa" if "c2pa" in signal_names else "metadata",
+                source="c2pa",
             ))
-        elif source_kind == "enhanced":
+        elif "c2pa" in signal_names and c2pa_trusted and source_kind == "enhanced":
             factors.append(_factor(
                 "ai_enhancement_declaration",
                 "AI 合成编辑来源声明",
                 150.0,
                 "origin_declaration",
-                source="c2pa" if "c2pa" in signal_names else "metadata",
+                source="c2pa",
             ))
-        elif "c2pa" in signal_names:
+        elif "c2pa" in signal_names and c2pa_trusted:
             factors.append(_factor(
                 "valid_ai_c2pa",
                 "通过校验的 AI 生成内容凭证",
@@ -106,10 +107,10 @@ def build_probability_model(
             ))
         else:
             factors.append(_factor(
-                "ai_generation_metadata",
-                "明确的 AI 生成元数据或参数",
-                250.0,
-                "origin_declaration",
+                "editable_ai_metadata",
+                "可编辑的 AI 生成元数据或参数",
+                1.25,
+                "metadata_context",
                 source="metadata",
             ))
 
