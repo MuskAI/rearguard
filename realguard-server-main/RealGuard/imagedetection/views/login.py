@@ -6,6 +6,7 @@ import json
 import os
 import secrets
 import re
+import threading
 import time
 import uuid
 from datetime import datetime
@@ -45,6 +46,9 @@ PASSWORD_LOGIN_IP_LIMIT = max(1, int(os.environ.get('REALGUARD_PASSWORD_LOGIN_IP
 _USER_ACCOUNT_COLUMNS_READY = False
 _SMS_STORAGE_READY = False
 _CONSENT_STORAGE_READY = False
+_USER_ACCOUNT_COLUMNS_LOCK = threading.Lock()
+_SMS_STORAGE_LOCK = threading.Lock()
+_CONSENT_STORAGE_LOCK = threading.Lock()
 
 
 class SmsStorageError(RuntimeError):
@@ -98,53 +102,59 @@ def _ensure_user_account_columns():
     global _USER_ACCOUNT_COLUMNS_READY
     if _USER_ACCOUNT_COLUMNS_READY:
         return True
-    columns = [
-        ('account_uuid', "CHAR(36) NULL COMMENT '不可变账号标识'"),
-        ('created_at', "DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'"),
-        ('terms_version', "VARCHAR(32) NULL COMMENT '用户协议版本'"),
-        ('terms_accepted_at', "DATETIME NULL COMMENT '用户协议同意时间'"),
-        ('password_updated_at', "DATETIME NULL COMMENT '密码更新时间'"),
-        ('session_version', "INT NOT NULL DEFAULT 1 COMMENT '登录态版本'"),
-    ]
-    for column, definition in columns:
-        if not _ensure_column('user', column, definition):
+    with _USER_ACCOUNT_COLUMNS_LOCK:
+        if _USER_ACCOUNT_COLUMNS_READY:
+            return True
+        columns = [
+            ('account_uuid', "CHAR(36) NULL COMMENT '不可变账号标识'"),
+            ('created_at', "DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'"),
+            ('terms_version', "VARCHAR(32) NULL COMMENT '用户协议版本'"),
+            ('terms_accepted_at', "DATETIME NULL COMMENT '用户协议同意时间'"),
+            ('password_updated_at', "DATETIME NULL COMMENT '密码更新时间'"),
+            ('session_version', "INT NOT NULL DEFAULT 1 COMMENT '登录态版本'"),
+        ]
+        for column, definition in columns:
+            if not _ensure_column('user', column, definition):
+                return False
+        if excute_sql(
+            "UPDATE `user` SET account_uuid = UUID() WHERE account_uuid IS NULL OR account_uuid = ''",
+            fetch=False,
+        ) is None:
             return False
-    if excute_sql(
-        "UPDATE `user` SET account_uuid = UUID() WHERE account_uuid IS NULL OR account_uuid = ''",
-        fetch=False,
-    ) is None:
-        return False
-    _USER_ACCOUNT_COLUMNS_READY = True
-    return True
+        _USER_ACCOUNT_COLUMNS_READY = True
+        return True
 
 
 def _ensure_consent_event_storage():
     global _CONSENT_STORAGE_READY
     if _CONSENT_STORAGE_READY:
         return True
-    result = excute_sql(
-        """
-        CREATE TABLE IF NOT EXISTS consent_events (
-          id BIGINT NOT NULL AUTO_INCREMENT,
-          user_id INT NOT NULL,
-          phone_hash CHAR(64) NOT NULL,
-          document_version VARCHAR(32) NOT NULL,
-          terms_sha256 CHAR(64) NOT NULL,
-          privacy_sha256 CHAR(64) NOT NULL,
-          channel VARCHAR(64) NOT NULL,
-          client_ip_hash CHAR(64) NULL,
-          user_agent_hash CHAR(64) NULL,
-          accepted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          PRIMARY KEY (id),
-          KEY idx_consent_events_user_time (user_id, accepted_at),
-          CONSTRAINT fk_consent_events_user FOREIGN KEY (user_id) REFERENCES `user`(Userid)
-            ON DELETE CASCADE
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        """,
-        fetch=False,
-    )
-    _CONSENT_STORAGE_READY = result is not None
-    return _CONSENT_STORAGE_READY
+    with _CONSENT_STORAGE_LOCK:
+        if _CONSENT_STORAGE_READY:
+            return True
+        result = excute_sql(
+            """
+            CREATE TABLE IF NOT EXISTS consent_events (
+              id BIGINT NOT NULL AUTO_INCREMENT,
+              user_id INT NOT NULL,
+              phone_hash CHAR(64) NOT NULL,
+              document_version VARCHAR(32) NOT NULL,
+              terms_sha256 CHAR(64) NOT NULL,
+              privacy_sha256 CHAR(64) NOT NULL,
+              channel VARCHAR(64) NOT NULL,
+              client_ip_hash CHAR(64) NULL,
+              user_agent_hash CHAR(64) NULL,
+              accepted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (id),
+              KEY idx_consent_events_user_time (user_id, accepted_at),
+              CONSTRAINT fk_consent_events_user FOREIGN KEY (user_id) REFERENCES `user`(Userid)
+                ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """,
+            fetch=False,
+        )
+        _CONSENT_STORAGE_READY = result is not None
+        return _CONSENT_STORAGE_READY
 
 
 def _consent_hash(value):
@@ -339,41 +349,44 @@ def _ensure_sms_storage():
     global _SMS_STORAGE_READY
     if _SMS_STORAGE_READY:
         return True
-    challenge_result = excute_sql(
-        """
-        CREATE TABLE IF NOT EXISTS sms_verification_challenges (
-            scene VARCHAR(16) NOT NULL,
-            phone VARCHAR(32) NOT NULL,
-            code_hash CHAR(64) NOT NULL,
-            code_salt CHAR(32) NOT NULL,
-            expires_at BIGINT UNSIGNED NOT NULL,
-            sent_at BIGINT UNSIGNED NOT NULL,
-            failed_attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
-            consumed_at BIGINT UNSIGNED NULL,
-            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            PRIMARY KEY (scene, phone),
-            KEY idx_sms_challenge_expiry (expires_at)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        """,
-        fetch=False,
-    )
-    limit_result = excute_sql(
-        """
-        CREATE TABLE IF NOT EXISTS sms_send_limits (
-            scope_key CHAR(64) NOT NULL,
-            scope_type VARCHAR(16) NOT NULL,
-            window_started_at BIGINT UNSIGNED NOT NULL DEFAULT 0,
-            request_count INT UNSIGNED NOT NULL DEFAULT 0,
-            last_sent_at BIGINT UNSIGNED NOT NULL DEFAULT 0,
-            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            PRIMARY KEY (scope_key),
-            KEY idx_sms_limit_updated (updated_at)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        """,
-        fetch=False,
-    )
-    _SMS_STORAGE_READY = challenge_result is not None and limit_result is not None
-    return _SMS_STORAGE_READY
+    with _SMS_STORAGE_LOCK:
+        if _SMS_STORAGE_READY:
+            return True
+        challenge_result = excute_sql(
+            """
+            CREATE TABLE IF NOT EXISTS sms_verification_challenges (
+                scene VARCHAR(16) NOT NULL,
+                phone VARCHAR(32) NOT NULL,
+                code_hash CHAR(64) NOT NULL,
+                code_salt CHAR(32) NOT NULL,
+                expires_at BIGINT UNSIGNED NOT NULL,
+                sent_at BIGINT UNSIGNED NOT NULL,
+                failed_attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
+                consumed_at BIGINT UNSIGNED NULL,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (scene, phone),
+                KEY idx_sms_challenge_expiry (expires_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """,
+            fetch=False,
+        )
+        limit_result = excute_sql(
+            """
+            CREATE TABLE IF NOT EXISTS sms_send_limits (
+                scope_key CHAR(64) NOT NULL,
+                scope_type VARCHAR(16) NOT NULL,
+                window_started_at BIGINT UNSIGNED NOT NULL DEFAULT 0,
+                request_count INT UNSIGNED NOT NULL DEFAULT 0,
+                last_sent_at BIGINT UNSIGNED NOT NULL DEFAULT 0,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (scope_key),
+                KEY idx_sms_limit_updated (updated_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """,
+            fetch=False,
+        )
+        _SMS_STORAGE_READY = challenge_result is not None and limit_result is not None
+        return _SMS_STORAGE_READY
 
 
 def _normalized_ip(value):
@@ -832,20 +845,31 @@ def _sync_detection_user(phone, username='', openid='', account_uuid=''):
     if not phone:
         return
     immutable_owner = normalize_account_uuid(account_uuid)
-    exists = excute_detection_sql("SELECT Userid, account_uuid FROM user WHERE phone = %s LIMIT 1", (phone,))
-    if exists:
-        if immutable_owner and not normalize_account_uuid(exists[0].get('account_uuid')):
-            excute_detection_sql(
-                "UPDATE user SET account_uuid = %s WHERE Userid = %s AND (account_uuid IS NULL OR account_uuid = '')",
-                (immutable_owner, exists[0].get('Userid')),
-                fetch=False,
-            )
-        return
-    excute_detection_sql(
-        "INSERT INTO user (account_uuid, openid, avatar, username, phone) VALUES (%s, %s, %s, %s, %s)",
+    result = excute_detection_sql(
+        """
+        INSERT INTO user (account_uuid, openid, avatar, username, phone)
+        VALUES (%s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            account_uuid = IF(
+                account_uuid IS NULL OR account_uuid = '', VALUES(account_uuid), account_uuid
+            ),
+            openid = IF(openid IS NULL OR openid = '', VALUES(openid), openid),
+            username = IF(username IS NULL OR username = '', VALUES(username), username)
+        """,
         (immutable_owner or None, openid or phone, '', username or phone, phone),
-        fetch=False
+        fetch=False,
     )
+    if result is None:
+        return False
+    rows = excute_detection_sql(
+        "SELECT account_uuid FROM user WHERE phone = %s LIMIT 1",
+        (phone,),
+    )
+    stored_owner = normalize_account_uuid((rows or [{}])[0].get('account_uuid'))
+    if immutable_owner and stored_owner != immutable_owner:
+        print('[DETECTION USER SYNC ERROR] immutable owner mismatch')
+        return False
+    return True
 
 
 @login_blueprint.route('/sms/send_code', methods=['POST'])

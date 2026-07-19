@@ -3,6 +3,7 @@ from copy import deepcopy
 from pathlib import Path
 import sys
 import threading
+import time
 
 import pytest
 
@@ -15,6 +16,49 @@ from imagedetection import creat_app  # noqa: E402
 from imagedetection.views import api, detection, login, profile, utils  # noqa: E402
 
 ACCOUNT_UUID = "11111111-1111-4111-8111-111111111111"
+
+
+def test_sms_schema_initialization_is_serialized_across_threads(monkeypatch):
+    calls = []
+    calls_lock = threading.Lock()
+
+    def fake_sql(sql, params=None, fetch=True):
+        with calls_lock:
+            calls.append(sql)
+        time.sleep(0.01)
+        return 0
+
+    monkeypatch.setattr(login, "_SMS_STORAGE_READY", False)
+    monkeypatch.setattr(login, "excute_sql", fake_sql)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(lambda _: login._ensure_sms_storage(), range(8)))
+
+    assert results == [True] * 8
+    assert len(calls) == 2
+
+
+def test_detection_user_sync_uses_atomic_owner_preserving_upsert(monkeypatch):
+    calls = []
+
+    def fake_detection_sql(sql, params=None, fetch=True):
+        calls.append((" ".join(sql.split()), params, fetch))
+        if sql.lstrip().startswith("SELECT"):
+            return [{"account_uuid": ACCOUNT_UUID}]
+        return 1
+
+    monkeypatch.setattr(login, "excute_detection_sql", fake_detection_sql)
+
+    assert login._sync_detection_user(
+        "13800000007",
+        "owner",
+        "openid-7",
+        ACCOUNT_UUID,
+    ) is True
+    assert calls[0][0].startswith("INSERT INTO user")
+    assert "ON DUPLICATE KEY UPDATE" in calls[0][0]
+    assert "account_uuid IS NULL OR account_uuid = ''" in calls[0][0]
+    assert calls[1][0].startswith("SELECT account_uuid")
 
 
 def test_database_configuration_has_no_known_default_password():
