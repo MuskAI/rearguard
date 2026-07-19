@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import os
+import stat
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
@@ -165,6 +168,160 @@ def test_same_server_input_and_generation_time_reproduce_identical_signed_snapsh
     assert evidence_manifest.verify_manifest(later, key=SIGNING_KEY) is True
 
 
+def test_repeated_report_downloads_reuse_first_persisted_manifest_and_signature(monkeypatch, tmp_path):
+    source = tmp_path / "original.png"
+    source.write_bytes(b"immutable-original")
+    snapshot_root = tmp_path / "snapshots"
+    monkeypatch.setattr(reporting, "_render_image_report_pdf", lambda item, result: b"%PDF-1.7\n%%EOF\n")
+
+    first_pdf = reporting.image_report_pdf(
+        _item(),
+        {"final_label": "客户端字段不可信"},
+        source_path=source,
+        model_run=MODEL_RUN,
+        generated_at="2026-07-19T08:30:00Z",
+        signing_key=SIGNING_KEY,
+        snapshot_root=snapshot_root,
+    )
+    changed_server_row = _item(
+        fake=1.0,
+        aigc="真实图像",
+        clarity="低",
+        explantation="数据库记录在首次报告后被修改。",
+    )
+    second_pdf = reporting.image_report_pdf(
+        changed_server_row,
+        {"final_label": "另一个客户端字段"},
+        source_path=source,
+        model_run={"id": "later-run", "model": {"id": "later", "version": "later-v2"}},
+        generated_at="2026-07-20T09:00:00Z",
+        signing_key=SIGNING_KEY,
+        snapshot_root=snapshot_root,
+    )
+
+    first = evidence_manifest.extract_envelope_from_pdf(first_pdf)
+    second = evidence_manifest.extract_envelope_from_pdf(second_pdf)
+    assert second["manifest"] == first["manifest"]
+    assert second["signature"] == first["signature"]
+    assert second["manifest"]["generated_at"] == "2026-07-19T08:30:00Z"
+    assert second["manifest"]["conclusion"]["label"] == "AI生成图像"
+    assert second["manifest"]["model"]["version"] == "v1-onnx-mil-2026.07"
+    snapshots = list(snapshot_root.glob("*.manifest.json"))
+    assert len(snapshots) == 1
+    assert stat.S_IMODE(snapshots[0].stat().st_mode) == 0o400
+    assert snapshots[0].read_bytes() == evidence_manifest.canonical_json({
+        "manifest": first["manifest"],
+        "signature": first["signature"],
+    })
+
+
+def test_tampered_persisted_snapshot_is_rejected(tmp_path):
+    source = tmp_path / "original.png"
+    source.write_bytes(b"immutable-original")
+    snapshot_root = tmp_path / "snapshots"
+    original = evidence_manifest.get_or_create_signed_image_manifest(
+        _item(),
+        source_path=source,
+        model_run=MODEL_RUN,
+        generated_at=GENERATED_AT,
+        key=SIGNING_KEY,
+        snapshot_root=snapshot_root,
+    )
+    snapshot = next(snapshot_root.glob("*.manifest.json"))
+    tampered = copy.deepcopy(original)
+    tampered["manifest"]["conclusion"]["label"] = "真实图像"
+    replacement = snapshot_root / ".tampered.json"
+    replacement.write_bytes(evidence_manifest.canonical_json(tampered))
+    replacement.chmod(0o400)
+    os.replace(replacement, snapshot)
+
+    with pytest.raises(evidence_manifest.EvidenceManifestError, match="签名校验失败"):
+        evidence_manifest.get_or_create_signed_image_manifest(
+            _item(),
+            source_path=source,
+            model_run=MODEL_RUN,
+            generated_at="2026-07-20T09:00:00Z",
+            key=SIGNING_KEY,
+            snapshot_root=snapshot_root,
+        )
+
+
+def test_source_change_after_first_snapshot_fails_closed(tmp_path):
+    source = tmp_path / "original.png"
+    source.write_bytes(b"first-original")
+    snapshot_root = tmp_path / "snapshots"
+    evidence_manifest.get_or_create_signed_image_manifest(
+        _item(),
+        source_path=source,
+        model_run=MODEL_RUN,
+        generated_at=GENERATED_AT,
+        key=SIGNING_KEY,
+        snapshot_root=snapshot_root,
+    )
+    source.write_bytes(b"changed-original")
+
+    with pytest.raises(evidence_manifest.EvidenceManifestError, match="原始图像已变化"):
+        evidence_manifest.get_or_create_signed_image_manifest(
+            _item(),
+            source_path=source,
+            model_run=MODEL_RUN,
+            generated_at="2026-07-20T09:00:00Z",
+            key=SIGNING_KEY,
+            snapshot_root=snapshot_root,
+        )
+
+
+def test_valid_snapshot_cannot_be_substituted_for_another_record(tmp_path):
+    source = tmp_path / "original.png"
+    source.write_bytes(b"same-source")
+    snapshot_root = tmp_path / "snapshots"
+    evidence_manifest.get_or_create_signed_image_manifest(
+        _item(itemid=73),
+        source_path=source,
+        model_run=MODEL_RUN,
+        generated_at=GENERATED_AT,
+        key=SIGNING_KEY,
+        snapshot_root=snapshot_root,
+    )
+    record_73 = snapshot_root / "image-73.manifest.json"
+    record_74 = snapshot_root / "image-74.manifest.json"
+    record_74.write_bytes(record_73.read_bytes())
+    record_74.chmod(0o400)
+
+    with pytest.raises(evidence_manifest.EvidenceManifestError, match="记录 ID 不匹配"):
+        evidence_manifest.get_or_create_signed_image_manifest(
+            _item(itemid=74),
+            source_path=source,
+            model_run=MODEL_RUN,
+            generated_at=GENERATED_AT,
+            key=SIGNING_KEY,
+            snapshot_root=snapshot_root,
+        )
+
+
+def test_concurrent_first_generation_persists_exactly_one_snapshot(tmp_path):
+    source = tmp_path / "original.png"
+    source.write_bytes(b"concurrent-original")
+    snapshot_root = tmp_path / "snapshots"
+
+    def create(index):
+        return evidence_manifest.get_or_create_signed_image_manifest(
+            _item(),
+            source_path=source,
+            model_run=MODEL_RUN,
+            generated_at=f"2026-07-19T08:30:{index:02d}Z",
+            key=SIGNING_KEY,
+            snapshot_root=snapshot_root,
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        snapshots = list(executor.map(create, range(8)))
+
+    assert all(snapshot == snapshots[0] for snapshot in snapshots)
+    assert len(list(snapshot_root.glob("*.manifest.json"))) == 1
+    assert evidence_manifest.verify_manifest(snapshots[0], key=SIGNING_KEY) is True
+
+
 def test_evidence_key_is_independent_and_never_falls_back_to_flask_secret(monkeypatch, tmp_path):
     source = tmp_path / "original.png"
     source.write_bytes(b"original")
@@ -295,6 +452,7 @@ def test_report_ignores_unsigned_client_fields_and_renders_signed_server_snapsho
         model_run=MODEL_RUN,
         generated_at=GENERATED_AT,
         signing_key=SIGNING_KEY,
+        snapshot_root=tmp_path / "snapshots",
     )
     envelope = evidence_manifest.extract_envelope_from_pdf(pdf)
 
@@ -321,6 +479,7 @@ def test_html_report_embeds_signed_envelope_and_not_client_verdict(tmp_path):
         model_run=MODEL_RUN,
         generated_at=GENERATED_AT,
         signing_key=SIGNING_KEY,
+        snapshot_root=tmp_path / "snapshots",
     )
 
     assert "需人工复核 · 66.1%" in html

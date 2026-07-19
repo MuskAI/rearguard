@@ -600,6 +600,7 @@ def test_image_report_marks_borderline_result_for_human_review(tmp_path):
         model_run={},
         generated_at="2026-07-15T02:00:00Z",
         signing_key="test-evidence-key-0123456789abcdef",
+        snapshot_root=tmp_path / "snapshots",
     )
 
     assert "需人工复核 · 66.1%" in html

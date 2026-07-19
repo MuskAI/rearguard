@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import base64
+import fcntl
 import hashlib
 import hmac
 import json
 import math
 import os
 import re
+import stat
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -16,6 +19,7 @@ MANIFEST_SCHEMA = "cn.huijian.image-evidence-manifest"
 MANIFEST_VERSION = "1.0"
 SIGNATURE_ALGORITHM = "HMAC-SHA256"
 DEFAULT_POLICY_VERSION = "huijian-v1-image-report-policy-v1"
+DEFAULT_SNAPSHOT_ROOT = Path("/opt/realguard-data/evidence-manifests")
 UNRECORDED_MODEL_VERSION = "unrecorded-legacy"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _SIGNATURE_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -24,6 +28,7 @@ _PDF_BEGIN = b"% HUIJIAN-EVIDENCE-MANIFEST-V1-BEGIN\n"
 _PDF_END = b"% HUIJIAN-EVIDENCE-MANIFEST-V1-END\n"
 _MAX_EVIDENCE_SUMMARY_LENGTH = 4000
 _MAX_EMBEDDED_ENVELOPE_BYTES = 1024 * 1024
+_MAX_SNAPSHOT_BYTES = 256 * 1024
 _ARTIFACT_SIGNATURE_DOMAIN = b"huijian-pdf-artifact-v1\0"
 _KNOWN_PLACEHOLDER_KEYS = {
     "change-me",
@@ -91,6 +96,16 @@ def _safe_component(value: object, field: str) -> str:
     if not rendered or rendered in {".", ".."} or Path(rendered).name != rendered:
         raise EvidenceManifestError(f"检测记录缺少安全的{field}")
     return rendered
+
+
+def _record_id(item: Mapping[str, Any]) -> str:
+    try:
+        record_number = int(item.get("itemid"))
+    except (AttributeError, TypeError, ValueError):
+        record_number = 0
+    if record_number <= 0:
+        raise EvidenceManifestError("检测记录缺少 itemid")
+    return str(record_number)
 
 
 def _configured_source_roots() -> tuple[Path, ...]:
@@ -215,13 +230,7 @@ def build_image_manifest(
     """Build a manifest exclusively from the persisted record and server state."""
     if not isinstance(item, Mapping):
         raise EvidenceManifestError("检测记录格式无效")
-    try:
-        record_number = int(item.get("itemid"))
-    except (TypeError, ValueError):
-        record_number = 0
-    if record_number <= 0:
-        raise EvidenceManifestError("检测记录缺少 itemid")
-    record_id = str(record_number)
+    record_id = _record_id(item)
 
     original = resolve_source_path(item, source_path=source_path)
     source_sha256, source_size = sha256_file(original)
@@ -274,7 +283,7 @@ def create_signed_image_manifest(
     generated_at: datetime | str | None = None,
     key: str | bytes | None = None,
 ) -> dict[str, Any]:
-    """Create an artifact snapshot; persistence of a first snapshot is caller-owned."""
+    """Create an in-memory signed snapshot without storing it."""
     manifest = build_image_manifest(
         item,
         source_path=source_path,
@@ -290,6 +299,227 @@ def create_signed_image_manifest(
             "value": sign_manifest(manifest, key=key),
         },
     }
+
+
+def _snapshot_root(snapshot_root: str | os.PathLike[str] | None = None) -> Path:
+    configured = snapshot_root
+    if configured is None:
+        configured = os.environ.get("REALGUARD_EVIDENCE_SNAPSHOT_ROOT", "").strip()
+    root = Path(configured).expanduser() if configured else DEFAULT_SNAPSHOT_ROOT
+    if not root.is_absolute():
+        raise EvidenceManifestError("证据快照目录必须使用绝对路径")
+    try:
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        root_stat = root.lstat()
+        if not stat.S_ISDIR(root_stat.st_mode) or stat.S_ISLNK(root_stat.st_mode):
+            raise EvidenceManifestError("证据快照目录不是安全的实体目录")
+        if stat.S_IMODE(root_stat.st_mode) & 0o077:
+            os.chmod(root, 0o700)
+        return root.resolve(strict=True)
+    except EvidenceManifestError:
+        raise
+    except OSError as exc:
+        raise EvidenceManifestError("无法创建或访问服务端证据快照目录") from exc
+
+
+def _snapshot_path(root: Path, record_id: str) -> Path:
+    return root / f"image-{record_id}.manifest.json"
+
+
+@contextmanager
+def _snapshot_lock(root: Path, record_id: str):
+    lock_path = root / f".image-{record_id}.lock"
+    flags = os.O_RDWR | os.O_CREAT
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(lock_path, flags, 0o600)
+    except OSError as exc:
+        raise EvidenceManifestError("无法锁定证据快照") from exc
+    try:
+        lock_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(lock_stat.st_mode) or lock_stat.st_nlink != 1:
+            raise EvidenceManifestError("证据快照锁文件类型或链接数异常")
+        os.fchmod(descriptor, 0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
+
+
+def _snapshot_exists(path: Path) -> bool:
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise EvidenceManifestError("无法检查证据快照状态") from exc
+    return True
+
+
+def _read_snapshot(path: Path) -> dict[str, Any]:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise EvidenceManifestError("无法读取已持久化的证据快照") from exc
+    try:
+        snapshot_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(snapshot_stat.st_mode) or snapshot_stat.st_nlink != 1:
+            raise EvidenceManifestError("证据快照文件类型或链接数异常")
+        if snapshot_stat.st_size <= 0 or snapshot_stat.st_size > _MAX_SNAPSHOT_BYTES:
+            raise EvidenceManifestError("证据快照大小异常")
+        if stat.S_IMODE(snapshot_stat.st_mode) & 0o022:
+            raise EvidenceManifestError("证据快照具有不安全的写权限")
+        chunks: list[bytes] = []
+        remaining = snapshot_stat.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(64 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+    finally:
+        os.close(descriptor)
+    raw = b"".join(chunks)
+    if len(raw) != snapshot_stat.st_size:
+        raise EvidenceManifestError("证据快照读取不完整")
+    try:
+        envelope = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise EvidenceManifestError("证据快照 JSON 已损坏") from exc
+    if not isinstance(envelope, dict) or set(envelope) != {"manifest", "signature"}:
+        raise EvidenceManifestError("证据快照结构已损坏")
+    canonical = canonical_json(envelope)
+    if not hmac.compare_digest(raw, canonical):
+        raise EvidenceManifestError("证据快照不是首次写入的规范化字节序列")
+    return envelope
+
+
+def _write_snapshot_once(path: Path, envelope: Mapping[str, Any]) -> None:
+    payload = canonical_json(envelope)
+    if not payload or len(payload) > _MAX_SNAPSHOT_BYTES:
+        raise EvidenceManifestError("证据快照超过安全大小限制")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = None
+    created = False
+    try:
+        descriptor = os.open(path, flags, 0o400)
+        created = True
+        written = 0
+        while written < len(payload):
+            count = os.write(descriptor, payload[written:])
+            if count <= 0:
+                raise OSError("short write")
+            written += count
+        os.fsync(descriptor)
+        os.fchmod(descriptor, 0o400)
+        os.close(descriptor)
+        descriptor = None
+        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        directory_descriptor = os.open(path.parent, directory_flags)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    except FileExistsError as exc:
+        raise EvidenceManifestError("证据快照已存在，拒绝覆盖首次快照") from exc
+    except OSError as exc:
+        if created:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise EvidenceManifestError("首次证据快照持久化失败") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _validate_persisted_snapshot(
+    envelope: Mapping[str, Any],
+    *,
+    record_id: str,
+    source_sha256: str,
+    source_size: int,
+    key: str | bytes | None = None,
+) -> None:
+    if not verify_manifest(envelope, key=key):
+        raise EvidenceManifestError("已持久化证据快照签名校验失败")
+    manifest = envelope.get("manifest")
+    source = manifest.get("source") if isinstance(manifest, Mapping) else None
+    if not isinstance(manifest, Mapping) or manifest.get("record_id") != record_id:
+        raise EvidenceManifestError("证据快照与检测记录 ID 不匹配")
+    if not isinstance(source, Mapping):
+        raise EvidenceManifestError("证据快照缺少原件指纹")
+    if (
+        source.get("sha256") != source_sha256
+        or source.get("size_bytes") != source_size
+    ):
+        raise EvidenceManifestError("原始图像已变化，与首次证据快照不一致")
+
+
+def get_or_create_signed_image_manifest(
+    item: Mapping[str, Any],
+    *,
+    source_path: str | os.PathLike[str] | None = None,
+    model_run: Mapping[str, Any] | None = None,
+    generated_at: datetime | str | None = None,
+    key: str | bytes | None = None,
+    snapshot_root: str | os.PathLike[str] | None = None,
+) -> dict[str, Any]:
+    """Atomically persist the first signed snapshot and reuse it thereafter."""
+    if not isinstance(item, Mapping):
+        raise EvidenceManifestError("检测记录格式无效")
+    record_id = _record_id(item)
+    original = resolve_source_path(item, source_path=source_path)
+    root = _snapshot_root(snapshot_root)
+    path = _snapshot_path(root, record_id)
+
+    with _snapshot_lock(root, record_id):
+        source_sha256, source_size = sha256_file(original)
+        if _snapshot_exists(path):
+            persisted = _read_snapshot(path)
+            _validate_persisted_snapshot(
+                persisted,
+                record_id=record_id,
+                source_sha256=source_sha256,
+                source_size=source_size,
+                key=key,
+            )
+            return persisted
+
+        candidate = create_signed_image_manifest(
+            item,
+            source_path=original,
+            model_run=model_run,
+            generated_at=generated_at,
+            key=key,
+        )
+        _validate_persisted_snapshot(
+            candidate,
+            record_id=record_id,
+            source_sha256=source_sha256,
+            source_size=source_size,
+            key=key,
+        )
+        _write_snapshot_once(path, candidate)
+        persisted = _read_snapshot(path)
+        _validate_persisted_snapshot(
+            persisted,
+            record_id=record_id,
+            source_sha256=source_sha256,
+            source_size=source_size,
+            key=key,
+        )
+        return persisted
 
 
 def _valid_manifest_shape(manifest: object) -> bool:

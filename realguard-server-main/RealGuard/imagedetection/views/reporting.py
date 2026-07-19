@@ -97,14 +97,16 @@ def _signed_image_report(
     model_run: Mapping[str, Any] | None = None,
     generated_at: datetime | str | None = None,
     signing_key: str | bytes | None = None,
+    snapshot_root: str | Path | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     try:
-        envelope = evidence_manifest.create_signed_image_manifest(
+        envelope = evidence_manifest.get_or_create_signed_image_manifest(
             item,
             source_path=source_path,
             model_run=model_run,
             generated_at=generated_at,
             key=signing_key,
+            snapshot_root=snapshot_root,
         )
     except evidence_manifest.EvidenceManifestError as exc:
         raise UnprocessableEntity(
@@ -184,6 +186,7 @@ def image_report_content(
     model_run: Mapping[str, Any] | None = None,
     generated_at: datetime | str | None = None,
     signing_key: str | bytes | None = None,
+    snapshot_root: str | Path | None = None,
 ) -> str:
     del result
     envelope, result = _signed_image_report(
@@ -192,6 +195,7 @@ def image_report_content(
         model_run=model_run,
         generated_at=generated_at,
         signing_key=signing_key,
+        snapshot_root=snapshot_root,
     )
     probability = round(float(result.get("probability", 0) or 0) * 100, 1)
     confidence = _safe_text(result.get("confidence"), "")
@@ -262,6 +266,7 @@ def image_report_pdf(
     model_run: Mapping[str, Any] | None = None,
     generated_at: datetime | str | None = None,
     signing_key: str | bytes | None = None,
+    snapshot_root: str | Path | None = None,
 ) -> bytes:
     del result
     envelope, authoritative_result = _signed_image_report(
@@ -270,6 +275,7 @@ def image_report_pdf(
         model_run=model_run,
         generated_at=generated_at,
         signing_key=signing_key,
+        snapshot_root=snapshot_root,
     )
     rendered = _render_image_report_pdf(item, authoritative_result)
     try:
