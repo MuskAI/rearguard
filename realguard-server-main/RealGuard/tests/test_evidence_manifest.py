@@ -544,6 +544,19 @@ def test_source_resolution_is_confined_to_server_root(monkeypatch, tmp_path):
         evidence_manifest.resolve_source_path(_item(filename="../../secret"))
 
 
+def test_source_resolution_allows_controlled_upload_symlink(monkeypatch, tmp_path):
+    static_root = tmp_path / "release" / "static"
+    persistent_root = tmp_path / "persistent" / "uploads"
+    stored = persistent_root / "openid-73" / "image" / "stored-image.png"
+    stored.parent.mkdir(parents=True)
+    stored.write_bytes(b"trusted-original")
+    static_root.mkdir(parents=True)
+    (static_root / "uploads").symlink_to(persistent_root, target_is_directory=True)
+    monkeypatch.setenv("REALGUARD_EVIDENCE_SOURCE_ROOTS", str(static_root))
+
+    assert evidence_manifest.resolve_source_path(_item()) == stored.resolve()
+
+
 def test_missing_original_fails_closed_instead_of_signing_placeholder(monkeypatch, tmp_path):
     monkeypatch.setenv("REALGUARD_EVIDENCE_SOURCE_ROOTS", str(tmp_path / "empty-static"))
 

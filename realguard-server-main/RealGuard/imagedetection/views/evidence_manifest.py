@@ -186,6 +186,7 @@ def resolve_source_path(item: Mapping[str, Any], *, source_path: str | os.PathLi
     is never read from ``item`` or the client result payload.
     """
     roots = _configured_source_roots()
+    upload_roots = tuple((root / "uploads").resolve() for root in roots)
     candidates: list[Path] = []
     if source_path is not None:
         candidates.append(Path(source_path).expanduser())
@@ -203,7 +204,10 @@ def resolve_source_path(item: Mapping[str, Any], *, source_path: str | os.PathLi
             continue
         if source_path is not None:
             return resolved
-        if any(os.path.commonpath((str(root), str(resolved))) == str(root) for root in roots):
+        if any(
+            os.path.commonpath((str(upload_root), str(resolved))) == str(upload_root)
+            for upload_root in upload_roots
+        ):
             return resolved
     raise EvidenceManifestError("无法从服务端受控存储读取原始图像，拒绝生成无原件哈希的报告")
 
