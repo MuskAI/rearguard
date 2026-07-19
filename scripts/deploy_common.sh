@@ -54,14 +54,14 @@ run_tar_create() {
   shift 2
   if [[ "$DRY_RUN" == "1" ]]; then
     printf '+ %q' env
-    printf ' %q' COPYFILE_DISABLE=1 tar -C "$base_dir" -czf "$archive_path"
+    printf ' %q' COPYFILE_DISABLE=1 tar -C "$base_dir" --no-xattrs -czf "$archive_path"
     for arg in "$@"; do
       printf ' %q' "$arg"
     done
     printf '\n'
     return 0
   fi
-  env COPYFILE_DISABLE=1 tar -C "$base_dir" -czf "$archive_path" "$@"
+  env COPYFILE_DISABLE=1 tar -C "$base_dir" --no-xattrs -czf "$archive_path" "$@"
 }
 
 run_ssh_transport() {
