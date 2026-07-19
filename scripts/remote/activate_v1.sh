@@ -97,7 +97,7 @@ systemctl is-active --quiet realguard-backend.service
 systemctl is-enabled --quiet realguard-backup.timer
 systemctl is-active --quiet realguard-backup.timer
 sudo systemctl start realguard-backup.service
-test -L /var/backups/realguard/latest
+sudo test -L /var/backups/realguard/latest
 test -r /opt/realguard-data/ip2region_v4.xdb
 curl -fsS http://127.0.0.1/admin/login | grep -q '慧鉴 AI 管理员认证'
 admin_register_code="$(curl -sS -o /tmp/realguard-admin-register.html -w '%{http_code}' http://127.0.0.1/admin/register)"

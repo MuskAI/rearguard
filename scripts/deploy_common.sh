@@ -70,17 +70,22 @@ run_ssh_transport() {
     return 0
   fi
 
-  local attempt
+  local attempt status
   for attempt in 1 2 3 4 5; do
     if "$@"; then
       return 0
+    else
+      status=$?
+    fi
+    if [[ "$1" == "ssh" && "$status" != "255" ]]; then
+      return "$status"
     fi
     if [[ "$attempt" != "5" ]]; then
       printf 'SSH transport interrupted; retrying (%s/5)...\n' "$attempt" >&2
       sleep "$((attempt * 2))"
     fi
   done
-  return 1
+  return "$status"
 }
 
 run_scp() {
