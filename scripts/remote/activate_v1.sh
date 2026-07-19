@@ -28,6 +28,9 @@ sudo chown root:root /etc/realguard/session.env
 sudo install -m 644 /tmp/realguard-backend.service /etc/systemd/system/realguard-backend.service
 sudo sed "s/15001/$DETECTOR_PORT/g" /tmp/realguard-detector-backend.service \
   | sudo tee /etc/systemd/system/realguard-detector-backend.service >/dev/null
+sudo install -m 700 /tmp/realguard-backup /usr/local/sbin/realguard-backup
+sudo install -m 644 /tmp/realguard-backup.service /etc/systemd/system/realguard-backup.service
+sudo install -m 644 /tmp/realguard-backup.timer /etc/systemd/system/realguard-backup.timer
 sudo install -d -m 755 /etc/systemd/system/realguard-backend.service.d
 sudo tee /etc/systemd/system/realguard-backend.service.d/40-detector-backend-url.conf >/dev/null <<UNIT
 [Service]
@@ -47,6 +50,7 @@ sudo bash -lc '
 
 sudo systemctl daemon-reload
 sudo systemctl enable realguard-backend.service realguard-detector-backend.service >/dev/null
+sudo systemctl enable realguard-backup.timer >/dev/null
 sudo systemctl restart realguard-detector-backend.service
 sudo systemctl restart realguard-backend.service
 
@@ -81,6 +85,9 @@ done
 test "$health_ready" = "1"
 systemctl is-active --quiet realguard-detector-backend.service
 systemctl is-active --quiet realguard-backend.service
+systemctl is-enabled --quiet realguard-backup.timer
+sudo systemctl start realguard-backup.service
+test -L /var/backups/realguard/latest
 test -r /opt/realguard-data/ip2region_v4.xdb
 curl -fsS http://127.0.0.1/admin/login | grep -q '慧鉴 AI 管理员认证'
 admin_register_code="$(curl -sS -o /tmp/realguard-admin-register.html -w '%{http_code}' http://127.0.0.1/admin/register)"
@@ -95,6 +102,9 @@ rm -f \
   /tmp/realguard-nginx-snippets.tgz \
   /tmp/realguard-backend.service \
   /tmp/realguard-detector-backend.service \
+  /tmp/realguard-backup \
+  /tmp/realguard-backup.service \
+  /tmp/realguard-backup.timer \
   /tmp/realguard-v1.DEPLOYED_COMMIT \
   /tmp/realguard-ip2region-v4.xdb \
   /tmp/realguard-frontend.nginx.conf \

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the RealGuard backup every day
+
+[Timer]
+OnCalendar=*-*-* 03:15:00 Asia/Shanghai
+RandomizedDelaySec=30m
+Persistent=true
+Unit=realguard-backup.service
+
+[Install]
+WantedBy=timers.target

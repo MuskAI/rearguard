@@ -36,6 +36,9 @@ HTTPS_NGINX_CONFIG="$ROOT_DIR/deploy/nginx/realguard.conf"
 NGINX_SNIPPETS_DIR="$ROOT_DIR/deploy/nginx/snippets"
 WEB_SERVICE_UNIT="$ROOT_DIR/deploy/systemd/realguard-backend.service"
 DETECTOR_SERVICE_UNIT="$ROOT_DIR/deploy/systemd/realguard-detector-backend.service"
+BACKUP_SERVICE_UNIT="$ROOT_DIR/deploy/systemd/realguard-backup.service"
+BACKUP_TIMER_UNIT="$ROOT_DIR/deploy/systemd/realguard-backup.timer"
+BACKUP_SCRIPT="$ROOT_DIR/scripts/remote/backup_realguard.sh"
 ACTIVATE_SCRIPT="$ROOT_DIR/scripts/remote/activate_v1.sh"
 COMMIT_SHA="$(latest_commit_for_paths \
   realguard-server-main/RealGuard \
@@ -44,6 +47,7 @@ COMMIT_SHA="$(latest_commit_for_paths \
   deploy/nginx \
   deploy/systemd \
   scripts/deploy_v1.sh \
+  scripts/remote/backup_realguard.sh \
   scripts/remote/activate_v1.sh \
   scripts/deploy_common.sh)"
 DETECTOR_PORT="${REALGUARD_DETECTOR_PORT:-15001}"
@@ -62,6 +66,7 @@ log_step 1 "Verify V1 backend and deployment scripts"
 run_local "$BACKEND_DIR/.venv-test/bin/python" -m compileall "$BACKEND_DIR/imagedetection"
 run_local "$BACKEND_DIR/.venv-test/bin/python" -m py_compile "$BACKEND_DIR/detector_backend.py"
 run_local bash -n "$ACTIVATE_SCRIPT"
+run_local bash -n "$BACKUP_SCRIPT"
 (
   cd "$BACKEND_DIR"
   run_local .venv-test/bin/python -m pytest tests
@@ -93,6 +98,9 @@ run_scp "$NGINX_CONFIG" "$REMOTE:/tmp/realguard-frontend.nginx.conf"
 run_scp "$HTTPS_NGINX_CONFIG" "$REMOTE:/tmp/realguard-https.nginx.conf"
 run_scp "$WEB_SERVICE_UNIT" "$REMOTE:/tmp/realguard-backend.service"
 run_scp "$DETECTOR_SERVICE_UNIT" "$REMOTE:/tmp/realguard-detector-backend.service"
+run_scp "$BACKUP_SERVICE_UNIT" "$REMOTE:/tmp/realguard-backup.service"
+run_scp "$BACKUP_TIMER_UNIT" "$REMOTE:/tmp/realguard-backup.timer"
+run_scp "$BACKUP_SCRIPT" "$REMOTE:/tmp/realguard-backup"
 run_scp "$ACTIVATE_SCRIPT" "$REMOTE:/tmp/realguard-activate-v1.sh"
 
 log_step 5 "Activate V1 release"

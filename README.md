@@ -517,6 +517,29 @@ curl -I https://rrreal.cn/
 
 生产数据不在 GitHub。正式交接时至少要给接手人一份最近备份。
 
+生产部署会安装 `realguard-backup.timer`，每天在北京时间 03:15 后的随机
+30 分钟窗口内执行。它在线备份 `system`、`image_detection`、V2 SQLite、
+累计访问 SQLite 和上传文件，并为每份备份生成 `SHA256SUMS`。默认目录是
+`/var/backups/realguard`，默认保留 14 天。
+
+```bash
+systemctl status realguard-backup.timer
+sudo systemctl start realguard-backup.service
+sudo journalctl -u realguard-backup.service -n 100 --no-pager
+sudo sh -c 'cd /var/backups/realguard/latest && sha256sum -c SHA256SUMS'
+```
+
+本机备份不能应对整机或云盘故障。生产必须在 `/etc/realguard/backup.env`
+配置异地 `rclone` 目标，并将该文件权限设为 `0600`：
+
+```bash
+REALGUARD_BACKUP_RETENTION_DAYS=14
+REALGUARD_BACKUP_RCLONE_REMOTE=remote-name:realguard-backups
+```
+
+每季度应从异地副本恢复到隔离环境，验证两个 MySQL 库、两份 SQLite 和
+上传文件均可读取；目标为 RPO 不超过 24 小时、RTO 不超过 2 小时。
+
 ### MySQL 备份
 
 在服务器上执行：
@@ -626,7 +649,7 @@ WHERE Userid IS NULL AND (phone IS NULL OR phone = '');
 - 检测服务 health 可能显示 `degraded`，原因是 `model_deploy.onnx.data` 外部权重文件缺失。服务仍可启动，但如需完整 ONNX 推理，需要补齐该模型文件或确认线上走真实回退链路。
 - 旧图像历史里有部分 openid-only 记录，不能自动安全归属，需要人工确认映射。
 - Umami 监控后台不在 `deploy_v1.sh` / `deploy_v2.sh` 自动发布范围内。
-- 生产数据备份流程需要定期自动化，目前 README 只给手动命令。
+- 自动备份已提供，但异地 `rclone` 目标和季度恢复演练仍需由运维配置并留档。
 
 ## Git 工作流
 

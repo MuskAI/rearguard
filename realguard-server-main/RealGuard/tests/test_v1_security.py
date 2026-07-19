@@ -15,6 +15,12 @@ from imagedetection import creat_app  # noqa: E402
 from imagedetection.views import api, detection, login, profile, utils  # noqa: E402
 
 
+def test_database_configuration_has_no_known_default_password():
+    source = (ROOT / "imagedetection" / "views" / "utils.py").read_text(encoding="utf-8")
+
+    assert "'123456'" not in source
+
+
 @pytest.fixture
 def client():
     app = creat_app()
