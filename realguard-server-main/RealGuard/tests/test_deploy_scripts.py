@@ -105,3 +105,15 @@ def test_gpu_deploy_contract_checks_response_signing_key_id():
     assert 'test "$public_response_key_id" = "$gpu_response_key_id"' in deploy
     assert 'responseIntegrityKeyId") == sys.argv[4]' in gpu_activate
     assert "REALGUARD_MODEL_RESPONSE_HMAC_KEY_ID" in public_activate
+
+
+def test_first_gpu_deploy_rollback_handles_missing_public_marker():
+    rollback = (
+        ROOT / "scripts" / "remote" / "rollback_public_gpu_deploy.sh"
+    ).read_text(encoding="utf-8")
+    gpu_activate = (
+        ROOT / "scripts" / "remote" / "activate_detection_service.sh"
+    ).read_text(encoding="utf-8")
+
+    assert 'if [[ -f "$marker_target" ]]; then' in rollback
+    assert "Port 5000 is still owned by a process outside" in gpu_activate

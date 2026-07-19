@@ -22,7 +22,10 @@ esac
 
 exec 9>/var/lock/realguard-public-gpu-deploy.lock
 flock -w 60 9
-current_commit="$(tr -d '[:space:]' < "$marker_target" 2>/dev/null || true)"
+current_commit=""
+if [[ -f "$marker_target" ]]; then
+  current_commit="$(tr -d '[:space:]' < "$marker_target")"
+fi
 if [[ "$current_commit" != "$expected_commit" ]]; then
   exit 0
 fi

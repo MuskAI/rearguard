@@ -184,6 +184,19 @@ mv -Tf "$release_base/current.next" "$release_base/current"
 sudo systemctl stop "$service_name"
 sudo systemctl stop "$watermark_service_name"
 sudo systemctl stop "$yolo_service_name"
+port_released=0
+for _ in {1..10}; do
+  if ! sudo ss -ltnp "sport = :5000" | grep -q LISTEN; then
+    port_released=1
+    break
+  fi
+  sleep 1
+done
+if [[ "$port_released" != "1" ]]; then
+  echo "Port 5000 is still owned by a process outside the managed detector service" >&2
+  sudo ss -ltnp "sport = :5000" >&2 || true
+  exit 1
+fi
 ln -sfn "$release_root/model/inference_onnx.py" "$model_target.next"
 mv -Tf "$model_target.next" "$model_target"
 ln -sfn "$release_root/model/image_preprocessing.py" "$preprocess_target.next"
