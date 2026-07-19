@@ -12,10 +12,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from imagedetection import creat_app  # noqa: E402
-from imagedetection.views import api, detection, reporting  # noqa: E402
+from imagedetection.views import api, detection, evidence_manifest, reporting  # noqa: E402
 import detector_backend  # noqa: E402
 
-OWNER_WHERE = "(phone = %s) OR ((phone IS NULL OR phone = '') AND openid = %s)"
+ACCOUNT_UUID = "11111111-1111-4111-8111-111111111111"
+OWNER_WHERE = "owner_account_uuid = %s"
 GUEST_OWNER_WHERE = "Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s"
 IMAGE_HISTORY_QUERY = f"SELECT * FROM data WHERE {OWNER_WHERE} ORDER BY {api.HISTORY_ORDER_BY}"
 VIDEO_HISTORY_QUERY = f"SELECT * FROM video_data WHERE {OWNER_WHERE} ORDER BY {api.HISTORY_ORDER_BY}"
@@ -39,10 +40,21 @@ def client():
     return app.test_client()
 
 
+@pytest.fixture(autouse=True)
+def isolate_evidence_persistence(monkeypatch):
+    """Flow tests do not require a live detection DB or evidence filesystem."""
+    monkeypatch.setattr(
+        detection,
+        "_persist_and_freeze_completed_image_result",
+        lambda itemid, result: True,
+    )
+
+
 def _login_session(client, phone="13800000000"):
     with client.session_transaction() as sess:
         sess["user_info"] = {
             "Userid": 1,
+            "account_uuid": ACCOUNT_UUID,
             "username": "tester",
             "phone": phone,
             "openid": "openid-1",
@@ -152,6 +164,24 @@ def test_developer_api_key_lifecycle(client, monkeypatch):
 
     monkeypatch.setattr(api, "excute_sql", fake_sql)
     monkeypatch.setattr(api, "excute_sql_lastid", fake_lastid)
+    def fake_create_with_limit(user_id, options):
+        api_key = f"{api.DEVELOPER_API_KEY_PREFIX}created-test-secret"
+        row_id = fake_lastid(
+            "INSERT INTO developer_api_keys",
+            (
+                user_id,
+                options["name"],
+                api._developer_key_hash(api_key),
+                api.DEVELOPER_API_KEY_PREFIX,
+                api_key[-4:],
+                options["scopes"],
+                options["expires_at"],
+                options["ip_allowlist"],
+            ),
+        )
+        return api_key, next(row for row in rows if row["id"] == row_id), None
+
+    monkeypatch.setattr(api, "_create_developer_key_with_limit", fake_create_with_limit)
 
     created = client.post("/api/developer/keys", json={"name": "Agent key"})
     payload = created.get_json()
@@ -363,7 +393,8 @@ def test_remote_primary_result_is_imported_into_local_user_history(monkeypatch):
 
     assert itemid == 648
     assert "INSERT INTO data" in inserted["sql"]
-    assert inserted["params"][-1] == 42
+    assert inserted["params"][-2] == 42
+    assert inserted["params"][-1] is None
     assert api_json["data"]["data_itemid"] == 648
     assert api_json["data"]["filename"] == "local-result.png"
     assert api_json["data"]["image_url"] == "/api/media/image/648"
@@ -579,7 +610,8 @@ def test_v2_publishable_contract_accepts_verified_provenance_source():
     })
 
 
-def test_image_report_marks_borderline_result_for_human_review(tmp_path):
+def test_image_report_marks_borderline_result_for_human_review(tmp_path, monkeypatch):
+    monkeypatch.setattr(evidence_manifest, "load_recorded_metadata", lambda record_id: {})
     source = tmp_path / "sample.png"
     source.write_bytes(b"sample-image")
     html = reporting.image_report_content(
@@ -912,6 +944,13 @@ def test_swarm_detect_async_job_returns_expert_consensus(client, monkeypatch, tm
 
     monkeypatch.setattr(detection, "BACKGROUND_THREAD_CLASS", ImmediateThread)
     monkeypatch.setattr(detection, "_persist_swarm_history_result", lambda *args, **kwargs: 321)
+    frozen_results = []
+    monkeypatch.setattr(
+        detection,
+        "_persist_and_freeze_completed_image_result",
+        lambda itemid, result: frozen_results.append((itemid, dict(result))) or True,
+    )
+    primary_freeze_flags = []
 
     def fake_primary(
         image_bytes,
@@ -922,7 +961,9 @@ def test_swarm_detect_async_job_returns_expert_consensus(client, monkeypatch, tm
         is_guest=False,
         mark_guest=True,
         include_internal_evidence=False,
+        freeze_evidence=True,
     ):
+        primary_freeze_flags.append(freeze_evidence)
         return {
             "status": "success",
             "result": {
@@ -953,6 +994,7 @@ def test_swarm_detect_async_job_returns_expert_consensus(client, monkeypatch, tm
 
     assert created.status_code == 202
     job_id = created.get_json()["job"]["id"]
+    assert detection.admin_state.get_detection_job(job_id)["actor"]["account_uuid"] == ACCOUNT_UUID
     loaded = client.get(f"/image_upload/jobs/{job_id}")
 
     assert loaded.status_code == 200
@@ -963,6 +1005,10 @@ def test_swarm_detect_async_job_returns_expert_consensus(client, monkeypatch, tm
     result = job["result"]["result"]
     assert result["itemid"] == 321
     assert result["probability"] == pytest.approx(0.76)
+    assert primary_freeze_flags == [False]
+    assert len(frozen_results) == 1
+    assert frozen_results[0][0] == 321
+    assert frozen_results[0][1]["swarm"]["enabled"] is True
     assert result["swarm"]["enabled"] is True
     assert result["swarm"]["effectiveExperts"] == 2
     assert any(expert["publicName"] == "主鉴伪专家" and expert["status"] == "success" for expert in result["swarm"]["experts"])
@@ -1508,6 +1554,11 @@ def test_video_detect_logged_in_builds_public_media_url(client, monkeypatch):
 
     monkeypatch.setattr(
         detection,
+        "claim_detection_record_owner",
+        lambda table, itemid, account_uuid, *args: account_uuid == ACCOUNT_UUID,
+    )
+    monkeypatch.setattr(
+        detection,
         "excute_detection_sql",
         lambda sql, params=None, fetch=True: [{
             "itemid": 21,
@@ -1641,7 +1692,7 @@ def test_video_report_downloads_attachment_for_logged_user(client, monkeypatch):
 
     def fake_detection_sql(sql, params=None, fetch=True):
         if sql == f"SELECT * FROM video_data WHERE itemid = %s AND ({OWNER_WHERE}) LIMIT 1":
-            assert params == ("41", "13800000000", "openid-1")
+            assert params == ("41", ACCOUNT_UUID)
             return [{
                 "itemid": 41,
                 "filename": "clip.mp4",
@@ -1676,7 +1727,7 @@ def test_history_detection_records_include_report_urls(client, monkeypatch):
 
     def fake_detection_sql(sql, params=None, fetch=True):
         if sql == IMAGE_HISTORY_QUERY:
-            assert params == ("13800000000", "openid-1")
+            assert params == (ACCOUNT_UUID,)
             return [{
                 "itemid": 51,
                 "filename": "img.png",
@@ -1688,7 +1739,7 @@ def test_history_detection_records_include_report_urls(client, monkeypatch):
                 "explantation": "视觉可疑点\n- 背景纹理重复",
             }]
         if sql == VIDEO_HISTORY_QUERY:
-            assert params == ("13800000000", "openid-1")
+            assert params == (ACCOUNT_UUID,)
             return [{
                 "itemid": 61,
                 "filename": "vid.mp4",
@@ -1716,12 +1767,12 @@ def test_history_detection_records_include_report_urls(client, monkeypatch):
     assert video_response.get_json()["records"][0]["report_url"] == "/video_upload/report?itemid=61"
 
 
-def test_history_uses_verified_phone_when_detection_userid_differs(client, monkeypatch):
+def test_history_uses_immutable_uuid_when_detection_userid_differs(client, monkeypatch):
     _login_session(client)
 
     def fake_detection_sql(sql, params=None, fetch=True):
         if sql == IMAGE_HISTORY_QUERY:
-            assert params == ("13800000000", "openid-1")
+            assert params == (ACCOUNT_UUID,)
             return [{
                 "itemid": 71,
                 "Userid": 999,

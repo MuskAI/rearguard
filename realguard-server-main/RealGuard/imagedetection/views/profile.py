@@ -14,7 +14,12 @@ def profile_page():
     user_info = session['user_info']
     phone = user_info.get('phone', '')
     openid = user_info.get('openid', '')
-    history_where, history_params = detection_owner_where(phone, openid)
+    history_where, history_params = detection_owner_where(
+        phone,
+        openid,
+        account_uuid=user_info.get('account_uuid'),
+        require_account_uuid=True,
+    )
 
     user = {
         'username': user_info.get('username', ''),

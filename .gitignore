@@ -35,9 +35,13 @@ logs/
 *.sqlite
 *.sqlite3
 *.db
+*.json.lock
+realguard-server-main/RealGuard/admin_state.json
+realguard-server-main/RealGuard/model_registry.json
+.playwright-cli/
+output/
 
 # Generated archives
 *.zip
 *.tar
 *.tar.gz
-

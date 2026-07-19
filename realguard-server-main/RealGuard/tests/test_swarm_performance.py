@@ -2,7 +2,16 @@ import threading
 
 import pytest
 
-from imagedetection.views import detection
+from imagedetection.views import admin_state, detection
+
+
+@pytest.fixture(autouse=True)
+def isolate_evidence_persistence(monkeypatch):
+    monkeypatch.setattr(
+        detection,
+        "_persist_and_freeze_completed_image_result",
+        lambda itemid, result: True,
+    )
 
 
 def _primary_result(filename):
@@ -146,3 +155,16 @@ def test_swarm_reuses_primary_visible_precheck(monkeypatch):
     )
     assert visible["status"] == "success"
     assert visible["message"].endswith("source=shared-upload")
+
+
+def test_interrupted_web_jobs_are_failed_without_touching_completed_jobs(monkeypatch, tmp_path):
+    monkeypatch.setattr(admin_state, "STATE_PATH", tmp_path / "admin-state.json")
+    queued = admin_state.create_detection_job({}, "queued.png", mode="fast")
+    completed = admin_state.create_detection_job({}, "done.png", mode="swarm")
+    admin_state.update_detection_job(completed["id"], {"status": "success", "progress": 100})
+
+    assert admin_state.reconcile_interrupted_detection_jobs() == 1
+    interrupted = admin_state.get_detection_job(queued["id"])
+    assert interrupted["status"] == "failed"
+    assert "重启中断" in interrupted["error"]
+    assert admin_state.get_detection_job(completed["id"])["status"] == "success"

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   ArrowLeft,
@@ -70,11 +70,11 @@ const LANGUAGE_LABELS: Record<CodeLanguage, string> = {
 };
 
 function formatNumber(value: number | undefined) {
-  return new Intl.NumberFormat("zh-CN").format(Number(value || 0));
+  return value === undefined ? "—" : new Intl.NumberFormat("zh-CN").format(Number(value));
 }
 
 function formatMoney(fen: number | undefined) {
-  return `¥${(Number(fen || 0) / 100).toFixed(2)}`;
+  return fen === undefined ? "—" : `¥${(Number(fen) / 100).toFixed(2)}`;
 }
 
 function compactDate(value?: string) {
@@ -242,22 +242,40 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
   const [newKeyExpiry, setNewKeyExpiry] = useState("90");
   const [newKeyScopes, setNewKeyScopes] = useState({ fast: true, swarm: true });
   const [newKeyIps, setNewKeyIps] = useState("");
+  const loadGeneration = useRef(0);
+  const accountIdentity = user?.account_uuid || (user ? String(user.Userid) : "");
+  const accountIdentityRef = useRef(accountIdentity);
+  accountIdentityRef.current = accountIdentity;
 
   const load = useCallback(async () => {
     if (!user) return;
+    const generation = ++loadGeneration.current;
     setLoading(true);
     const [accountResult, keyResult, ledgerResult] = await Promise.allSettled([
       fetchDeveloperAccount(days),
       fetchDeveloperKeys(),
       fetchDeveloperLedger(80),
     ]);
-    if (accountResult.status === "fulfilled") setAccount(accountResult.value);
-    if (keyResult.status === "fulfilled") setKeys(keyResult.value.keys || []);
-    if (ledgerResult.status === "fulfilled") setLedger(ledgerResult.value.entries || []);
+    if (generation !== loadGeneration.current) return;
+    setAccount(accountResult.status === "fulfilled" ? accountResult.value : null);
+    setKeys(keyResult.status === "fulfilled" ? keyResult.value.keys || [] : []);
+    setLedger(ledgerResult.status === "fulfilled" ? ledgerResult.value.entries || [] : []);
     const rejected = [accountResult, keyResult, ledgerResult].find((item) => item.status === "rejected");
     setError(rejected?.status === "rejected" ? (rejected.reason instanceof Error ? rejected.reason.message : "开发者数据读取失败") : "");
     setLoading(false);
   }, [days, user]);
+
+  useEffect(() => {
+    loadGeneration.current += 1;
+    setAccount(null);
+    setKeys([]);
+    setLedger([]);
+    setError("");
+    setCreateOpen(false);
+    setRevealedKey(null);
+    setKeyBusy(null);
+    setLoading(false);
+  }, [accountIdentity]);
 
   useEffect(() => {
     void load();
@@ -286,6 +304,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
     if (!newKeyName.trim() || (!newKeyScopes.fast && !newKeyScopes.swarm)) return;
     setKeyBusy("create");
     setError("");
+    const operationIdentity = accountIdentity;
     try {
       const response = await createDeveloperKey({
         name: newKeyName.trim(),
@@ -297,40 +316,48 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
         expiresAt: expiryFromChoice(newKeyExpiry),
         ipAllowlist: newKeyIps.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean),
       });
+      if (operationIdentity !== accountIdentityRef.current) return;
       setKeys((current) => [response.key, ...current]);
       setCreateOpen(false);
       setRevealedKey({ value: response.apiKey, title: "API Key 已创建" });
     } catch (requestError) {
+      if (operationIdentity !== accountIdentityRef.current) return;
       setError(requestError instanceof Error ? requestError.message : "API Key 创建失败");
     } finally {
-      setKeyBusy(null);
+      if (operationIdentity === accountIdentityRef.current) setKeyBusy(null);
     }
   }
 
   async function revokeKey(key: DeveloperApiKey) {
     if (!window.confirm(`确认撤销 ${key.name}？使用该 Key 的请求会立即失败。`)) return;
     setKeyBusy(key.id);
+    const operationIdentity = accountIdentity;
     try {
       await revokeDeveloperKey(key.id);
+      if (operationIdentity !== accountIdentityRef.current) return;
       setKeys((current) => current.map((item) => item.id === key.id ? { ...item, status: "revoked", revokedAt: new Date().toISOString() } : item));
     } catch (requestError) {
+      if (operationIdentity !== accountIdentityRef.current) return;
       setError(requestError instanceof Error ? requestError.message : "API Key 撤销失败");
     } finally {
-      setKeyBusy(null);
+      if (operationIdentity === accountIdentityRef.current) setKeyBusy(null);
     }
   }
 
   async function rotateKey(key: DeveloperApiKey) {
     if (!window.confirm(`轮换 ${key.name}？旧 Key 会立即撤销。`)) return;
     setKeyBusy(key.id);
+    const operationIdentity = accountIdentity;
     try {
       const response = await rotateDeveloperKey(key.id);
+      if (operationIdentity !== accountIdentityRef.current) return;
       setKeys((current) => [response.key, ...current.map((item) => item.id === key.id ? { ...item, status: "revoked" } : item)]);
       setRevealedKey({ value: response.apiKey, title: "API Key 已轮换" });
     } catch (requestError) {
+      if (operationIdentity !== accountIdentityRef.current) return;
       setError(requestError instanceof Error ? requestError.message : "API Key 轮换失败");
     } finally {
-      setKeyBusy(null);
+      if (operationIdentity === accountIdentityRef.current) setKeyBusy(null);
     }
   }
 
@@ -396,7 +423,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
         </header>
 
         <div className="developer-scroll">
-          {tab === "overview" && <Overview account={account} endpoint={endpoint} copied={copied} onCopy={copyText} onOpenKeys={() => setTab("keys")} onOpenDocs={() => setTab("docs")} />}
+          {tab === "overview" && <Overview account={account} available={Boolean(account && !error)} endpoint={endpoint} copied={copied} onCopy={copyText} onOpenKeys={() => setTab("keys")} onOpenDocs={() => setTab("docs")} />}
           {tab === "keys" && <KeysPanel keys={keys} busy={keyBusy} onCreate={() => setCreateOpen(true)} onRotate={rotateKey} onRevoke={revokeKey} />}
           {tab === "docs" && (
             <DocsPanel
@@ -418,7 +445,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
         <div className="developer-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setCreateOpen(false); }}>
           <section className="developer-modal" role="dialog" aria-modal="true" aria-labelledby="create-key-title">
             <header><div><h2 id="create-key-title">创建 API Key</h2><p>明文只展示一次，创建后请立即保存。</p></div><button type="button" onClick={() => setCreateOpen(false)} aria-label="关闭"><X size={19} /></button></header>
-            <label><span>名称</span><input value={newKeyName} onChange={(event) => setNewKeyName(event.target.value)} maxLength={120} placeholder="例如：生产环境" /></label>
+            <label><span>名称</span><input autoFocus value={newKeyName} onChange={(event) => setNewKeyName(event.target.value)} maxLength={120} placeholder="例如：生产环境" /></label>
             <fieldset>
               <legend>检测权限</legend>
               <label className="developer-check-row"><input type="checkbox" checked={newKeyScopes.fast} onChange={(event) => setNewKeyScopes((value) => ({ ...value, fast: event.target.checked }))} /><span><strong>快速检测</strong><small>主模型与水印检测</small></span></label>
@@ -436,7 +463,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
           <section className="developer-modal developer-secret-modal" role="dialog" aria-modal="true" aria-labelledby="secret-title">
             <header><div><h2 id="secret-title">{revealedKey.title}</h2><p>关闭后将无法再次查看完整 Key。</p></div></header>
             <div className="developer-secret-value"><code>{revealedKey.value}</code><button type="button" onClick={() => void copyText(revealedKey.value, "secret")}>{copied === "secret" ? <Check size={17} /> : <Copy size={17} />}{copied === "secret" ? "已复制" : "复制"}</button></div>
-            <footer><button type="button" className="developer-primary-action" onClick={() => setRevealedKey(null)}>我已保存</button></footer>
+            <footer><button autoFocus type="button" className="developer-primary-action" onClick={() => setRevealedKey(null)}>我已保存</button></footer>
           </section>
         </div>
       )}
@@ -444,8 +471,9 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
   );
 }
 
-function Overview({ account, endpoint, copied, onCopy, onOpenKeys, onOpenDocs }: {
+function Overview({ account, available, endpoint, copied, onCopy, onOpenKeys, onOpenDocs }: {
   account: DeveloperAccountResponse | null;
+  available: boolean;
   endpoint: string;
   copied: string;
   onCopy: (value: string, token: string) => void;
@@ -461,7 +489,7 @@ function Overview({ account, endpoint, copied, onCopy, onOpenKeys, onOpenDocs }:
   ];
   return (
     <div className="developer-page developer-overview">
-      <section className="developer-section-heading"><div><p>API 状态 <span><i /> 可接入</span></p><h2>把慧鉴AI接入你的业务流程</h2><small>一期开放图像鉴伪，快速与 Swarm 模式使用同一套异步任务接口。</small></div><button type="button" className="developer-primary-action" onClick={onOpenKeys}><KeyRound size={16} /> 创建 API Key</button></section>
+      <section className="developer-section-heading"><div><p>API 状态 <span className={available ? "" : "is-unknown"}><i /> {available ? "账号数据已连接" : "状态尚未确认"}</span></p><h2>把慧鉴AI接入你的业务流程</h2><small>一期开放图像鉴伪，快速与 Swarm 模式使用同一套异步任务接口。</small></div><button type="button" className="developer-primary-action" onClick={onOpenKeys}><KeyRound size={16} /> 创建 API Key</button></section>
       <section className="developer-metric-strip" aria-label="开发者账户指标">
         {metrics.map((item) => { const Icon = item.icon; return <article key={item.label}><span><Icon size={18} /></span><div><small>{item.label}</small><strong>{item.value}</strong><p>{item.note}</p></div></article>; })}
       </section>

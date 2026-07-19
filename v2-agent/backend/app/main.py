@@ -12,7 +12,10 @@ import time
 import hashlib
 import hmac
 import io
+import ipaddress
 import logging
+import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from urllib import error as urlerror
 from urllib.parse import quote
@@ -21,7 +24,7 @@ from urllib import request as urlrequest
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
 from . import (
     detector,
@@ -37,7 +40,6 @@ from . import (
     watermark_yolo,
 )
 
-app = FastAPI(title="慧鉴 AI 鉴伪工作台", version="0.3.0")
 logger = logging.getLogger(__name__)
 ACCESS_TOKEN = os.getenv("JIANZHEN_ACCESS_TOKEN", "").strip()
 ADMIN_ACCESS_TOKEN = os.getenv("JIANZHEN_ADMIN_ACCESS_TOKEN", "").strip()
@@ -57,12 +59,28 @@ ALLOW_ANONYMOUS_DETECT = str(os.getenv("JIANZHEN_ALLOW_ANONYMOUS_DETECT", "0")).
 ALLOW_DIRECT_DEVELOPER_KEYS = str(os.getenv("JIANZHEN_ALLOW_DIRECT_DEVELOPER_KEYS", "0")).lower() in {"1", "true", "yes"}
 DEVELOPER_AUTH_CONFIGURED = bool(DEVELOPER_AUTH_URL and DEVELOPER_AUTH_SECRET)
 REPORT_SHARE_SECRET = os.getenv("JIANZHEN_REPORT_SHARE_SECRET", "").strip()
+PUBLIC_BASE_URL = os.getenv("JIANZHEN_PUBLIC_BASE_URL", "").strip().rstrip("/")
 REPORT_SHARE_DEFAULT_SECONDS = int(os.getenv("JIANZHEN_REPORT_SHARE_DEFAULT_SECONDS", str(7 * 24 * 60 * 60)))
 REPORT_SHARE_MAX_SECONDS = int(os.getenv("JIANZHEN_REPORT_SHARE_MAX_SECONDS", str(30 * 24 * 60 * 60)))
+TRUSTED_PROXY_NETWORKS = tuple(
+    ipaddress.ip_network(value.strip(), strict=False)
+    for value in os.getenv("JIANZHEN_TRUSTED_PROXY_CIDRS", "127.0.0.0/8,::1/128").split(",")
+    if value.strip()
+)
 FORENSICS_CACHE_MAX_AGE_SECONDS = int(os.getenv("JIANZHEN_FORENSICS_CACHE_MAX_AGE_SECONDS", str(7 * 24 * 60 * 60)))
 FORENSICS_MAX_SOURCE_PIXELS = int(os.getenv("JIANZHEN_FORENSICS_MAX_SOURCE_PIXELS", "24000000"))
 FORENSICS_MAX_CONCURRENCY = max(1, int(os.getenv("JIANZHEN_FORENSICS_MAX_CONCURRENCY", "2")))
 _FORENSICS_SEMAPHORE = asyncio.Semaphore(FORENSICS_MAX_CONCURRENCY)
+FORENSICS_QUEUE_TIMEOUT_SECONDS = max(
+    0.1,
+    float(os.getenv("JIANZHEN_FORENSICS_QUEUE_TIMEOUT_SECONDS", "15")),
+)
+DETECTION_MAX_CONCURRENCY = max(1, int(os.getenv("JIANZHEN_DETECTION_MAX_CONCURRENCY", "4")))
+DETECTION_QUEUE_TIMEOUT_SECONDS = max(
+    0.1,
+    float(os.getenv("JIANZHEN_DETECTION_QUEUE_TIMEOUT_SECONDS", "15")),
+)
+_DETECTION_SEMAPHORE = asyncio.Semaphore(DETECTION_MAX_CONCURRENCY)
 TELEMETRY_QUEUE_MAX = max(64, int(os.getenv("JIANZHEN_TELEMETRY_QUEUE_MAX", "2048")))
 TELEMETRY_PRUNE_INTERVAL_SECONDS = max(
     300,
@@ -71,6 +89,18 @@ TELEMETRY_PRUNE_INTERVAL_SECONDS = max(
 _TELEMETRY_QUEUE: asyncio.Queue | None = None
 _TELEMETRY_WORKER: asyncio.Task | None = None
 _TELEMETRY_MAINTENANCE: asyncio.Task | None = None
+
+
+@asynccontextmanager
+async def _app_lifespan(_app: FastAPI):
+    await start_telemetry_worker()
+    try:
+        yield
+    finally:
+        await stop_telemetry_worker()
+
+
+app = FastAPI(title="慧鉴 AI 鉴伪工作台", version="0.3.0", lifespan=_app_lifespan)
 PROTECTED_ENDPOINTS = [
     "/api/admin/health",
     "/api/history",
@@ -80,6 +110,7 @@ PROTECTED_ENDPOINTS = [
     "/api/report/{report_id}/download",
     "/api/report/{report_id}/export",
     "/api/report/{report_id}/share",
+    "/api/report/{report_id}/share/{share_id}",
     "/api/metrics",
 ]
 DEVELOPER_PROTECTED_ENDPOINTS = [
@@ -149,7 +180,6 @@ async def _telemetry_maintenance() -> None:
         _enqueue_telemetry(storage.prune_telemetry)
 
 
-@app.on_event("startup")
 async def start_telemetry_worker() -> None:
     global _TELEMETRY_QUEUE, _TELEMETRY_WORKER, _TELEMETRY_MAINTENANCE
     _TELEMETRY_QUEUE = asyncio.Queue(maxsize=TELEMETRY_QUEUE_MAX)
@@ -157,7 +187,6 @@ async def start_telemetry_worker() -> None:
     _TELEMETRY_MAINTENANCE = asyncio.create_task(_telemetry_maintenance())
 
 
-@app.on_event("shutdown")
 async def stop_telemetry_worker() -> None:
     global _TELEMETRY_QUEUE, _TELEMETRY_WORKER, _TELEMETRY_MAINTENANCE
     if _TELEMETRY_MAINTENANCE:
@@ -209,13 +238,31 @@ def _detect_type(filename: str, declared: str | None) -> str:
     return inferred
 
 
+def _trusted_proxy_request(request: Request) -> bool:
+    if not request.client:
+        return False
+    try:
+        peer = ipaddress.ip_address(request.client.host)
+    except ValueError:
+        return False
+    return any(peer in network for network in TRUSTED_PROXY_NETWORKS)
+
+
 def _client_ip(request: Request) -> str | None:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",", 1)[0].strip()
-    real_ip = request.headers.get("x-real-ip")
-    if real_ip:
-        return real_ip.strip()
+    if _trusted_proxy_request(request):
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            candidate = forwarded.split(",", 1)[0].strip()
+            try:
+                return str(ipaddress.ip_address(candidate))
+            except ValueError:
+                pass
+        real_ip = request.headers.get("x-real-ip")
+        if real_ip:
+            try:
+                return str(ipaddress.ip_address(real_ip.strip()))
+            except ValueError:
+                pass
     return request.client.host if request.client else None
 
 
@@ -271,9 +318,14 @@ def _verify_session_user_sync(request: Request) -> dict | None:
     user_id = user.get("Userid") or user.get("userId") or user.get("id") or user.get("phone") or user.get("openid")
     if not user_id:
         return None
+    try:
+        account_uuid = str(uuid.UUID(str(user.get("account_uuid") or user.get("accountUuid") or "")))
+    except (ValueError, TypeError, AttributeError):
+        return None
     return {
         "mode": "session",
         "userId": user_id,
+        "accountUuid": account_uuid,
         "phone": user.get("phone"),
         "openid": user.get("openid"),
         "username": user.get("username"),
@@ -341,10 +393,15 @@ def _verify_developer_key_sync(api_key: str, request: Request) -> dict:
 
     if not data.get("valid"):
         raise HTTPException(status_code=401, detail="API Key 缺失或无效")
+    try:
+        account_uuid = str(uuid.UUID(str(data.get("accountUuid") or "")))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(status_code=503, detail="API Key 账号缺少稳定身份标识") from exc
     return {
         "mode": "developer",
         "keyId": data.get("keyId"),
         "userId": data.get("userId"),
+        "accountUuid": account_uuid,
         "scopes": data.get("scopes") or [],
     }
 
@@ -373,8 +430,8 @@ async def _require_developer_access(request: Request) -> dict:
 
 
 def _forensics_cache_scope(actor: dict) -> str | None:
-    if actor.get("userId") is not None:
-        raw_scope = f"user:{actor['userId']}"
+    if actor.get("accountUuid") is not None:
+        raw_scope = f"account:{actor['accountUuid']}"
     elif actor.get("keyId") is not None:
         raw_scope = f"key:{actor['keyId']}"
     elif actor.get("mode") == "admin":
@@ -400,9 +457,13 @@ def _require_owned_item(request: Request, item: dict, *, missing_detail: str) ->
 def _require_actor_owns_item(actor: dict, item: dict, *, missing_detail: str) -> dict:
     if actor.get("mode") == "admin":
         return actor
-    item_user_id = str(item.get("_developerUserId") or "")
-    actor_user_id = str(actor.get("userId") or "")
-    if item_user_id and actor_user_id and secrets.compare_digest(item_user_id, actor_user_id):
+    item_account_uuid = str(item.get("_developerAccountUuid") or "")
+    actor_account_uuid = str(actor.get("accountUuid") or "")
+    if (
+        item_account_uuid
+        and actor_account_uuid
+        and secrets.compare_digest(item_account_uuid, actor_account_uuid)
+    ):
         return actor
     # Hide object existence from other tenants and from users accessing legacy
     # unowned rows. Null ownership must be repaired explicitly by an admin.
@@ -430,13 +491,18 @@ def _require_report_share_access(request: Request, item: dict) -> dict:
 
 def _report_share_secret() -> str:
     secret = REPORT_SHARE_SECRET
-    if not secret:
-        raise HTTPException(status_code=503, detail="报告分享签名密钥未配置")
+    if len(secret.encode("utf-8")) < 32 or secret.lower().startswith(("change-", "replace-")):
+        raise HTTPException(status_code=503, detail="报告分享签名密钥未安全配置")
     return secret
 
 
 def _sign_report_share(report_id: str, expires: int) -> str:
     message = f"v1:{report_id}:{expires}".encode("utf-8")
+    return hmac.new(_report_share_secret().encode("utf-8"), message, hashlib.sha256).hexdigest()
+
+
+def _sign_persisted_report_share(share_id: str, report_id: str, expires: int) -> str:
+    message = f"v2:{share_id}:{report_id}:{expires}".encode("utf-8")
     return hmac.new(_report_share_secret().encode("utf-8"), message, hashlib.sha256).hexdigest()
 
 
@@ -448,16 +514,68 @@ def _verify_report_share(report_id: str, expires: int, signature: str) -> None:
         raise HTTPException(status_code=403, detail="报告分享链接签名无效")
 
 
+def _audit_report_share_access(request: Request, share: dict, outcome: str) -> None:
+    storage.record_report_share_access(
+        share_id=str(share["shareId"]),
+        report_id=str(share["reportId"]),
+        client_ip=_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+        outcome=outcome,
+    )
+
+
+def _validate_persisted_report_share(
+    request: Request,
+    *,
+    share: dict,
+    report_id: str,
+    expires: int,
+    signature: str,
+    legacy: bool = False,
+) -> None:
+    expected = (
+        _sign_report_share(report_id, expires)
+        if legacy
+        else _sign_persisted_report_share(str(share["shareId"]), report_id, expires)
+    )
+    if not signature or not hmac.compare_digest(signature, expected):
+        _audit_report_share_access(request, share, "invalid_signature")
+        raise HTTPException(status_code=403, detail="报告分享链接签名无效")
+    if str(share.get("reportId") or "") != report_id or int(share.get("expiresAt") or 0) != expires:
+        _audit_report_share_access(request, share, "record_mismatch")
+        raise HTTPException(status_code=403, detail="报告分享链接与服务端记录不匹配")
+    if share.get("revokedAt"):
+        _audit_report_share_access(request, share, "revoked")
+        raise HTTPException(status_code=410, detail="报告分享链接已撤销")
+    if expires < int(time.time()):
+        _audit_report_share_access(request, share, "expired")
+        raise HTTPException(status_code=410, detail="报告分享链接已过期")
+
+
 def _request_origin(request: Request) -> str:
-    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip()
-    forwarded_host = request.headers.get("x-forwarded-host", "").split(",", 1)[0].strip()
+    if PUBLIC_BASE_URL:
+        return PUBLIC_BASE_URL
+    trust_forwarded = _trusted_proxy_request(request)
+    untrusted_forwarded = not trust_forwarded and any(
+        request.headers.get(name)
+        for name in ("x-forwarded-proto", "x-forwarded-host", "x-forwarded-prefix")
+    )
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip() if trust_forwarded else ""
+    forwarded_host = request.headers.get("x-forwarded-host", "").split(",", 1)[0].strip() if trust_forwarded else ""
     proto = forwarded_proto or request.url.scheme
     host = forwarded_host or request.headers.get("host") or request.url.netloc
-    return f"{proto}://{host}".rstrip("/")
+    origin = f"{proto}://{host}".rstrip("/")
+    if origin in _allowed_origins() or (
+        not untrusted_forwarded and host.startswith(("testserver", "127.0.0.1:", "localhost:"))
+    ):
+        return origin
+    allowed = _allowed_origins()
+    preferred = next((value for value in allowed if value.startswith("https://www.")), "")
+    return preferred or (allowed[0] if allowed else "https://www.rrreal.cn")
 
 
 def _public_api_prefix(request: Request) -> str:
-    forwarded_prefix = request.headers.get("x-forwarded-prefix", "").strip()
+    forwarded_prefix = request.headers.get("x-forwarded-prefix", "").strip() if _trusted_proxy_request(request) else ""
     if forwarded_prefix:
         return "/" + forwarded_prefix.strip("/")
     host = (request.headers.get("host") or request.url.netloc or "").lower()
@@ -466,8 +584,16 @@ def _public_api_prefix(request: Request) -> str:
     return os.getenv("JIANZHEN_PUBLIC_API_PREFIX", "/v2-api").strip() or "/v2-api"
 
 
-def _build_public_report_link(request: Request, report_id: str, expires: int, signature: str) -> dict:
-    query = f"expires={expires}&sig={signature}"
+def _build_public_report_link(
+    request: Request,
+    report_id: str,
+    expires: int,
+    signature: str,
+    *,
+    share_id: str | None = None,
+) -> dict:
+    share_query = f"shareId={quote(share_id, safe='')}&" if share_id else ""
+    query = f"{share_query}expires={expires}&sig={signature}"
     api_path = f"/api/report/{quote(report_id, safe='')}/public?{query}"
     public_path = f"{_public_api_prefix(request).rstrip('/')}/report/{quote(report_id, safe='')}/public?{query}"
     return {
@@ -482,6 +608,20 @@ async def _read_upload(file: UploadFile) -> bytes:
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail=f"文件超过 {MAX_UPLOAD_BYTES // (1024 * 1024)}MB 上限")
     return data
+
+
+async def _acquire_forensics_slot() -> None:
+    try:
+        await asyncio.wait_for(
+            _FORENSICS_SEMAPHORE.acquire(),
+            timeout=FORENSICS_QUEUE_TIMEOUT_SECONDS,
+        )
+    except TimeoutError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail="取证任务较多，请稍后重试",
+            headers={"Retry-After": str(max(1, round(FORENSICS_QUEUE_TIMEOUT_SECONDS)))},
+        ) from exc
 
 
 async def _validate_image_pixels(data: bytes) -> tuple[int, int]:
@@ -708,6 +848,7 @@ def _build_result(
 def _strip_internal_history_fields(item: dict) -> dict:
     clean = dict(item)
     clean.pop("_developerUserId", None)
+    clean.pop("_developerAccountUuid", None)
     clean.pop("_developerKeyId", None)
     watermark_verdict.apply(clean, clean.get("visibleWatermark"))
     return clean
@@ -716,6 +857,29 @@ def _strip_internal_history_fields(item: dict) -> dict:
 @app.get("/api/health")
 def health() -> dict:
     return _public_capabilities()
+
+
+@app.get("/api/ready")
+def ready() -> Response:
+    capabilities = _public_capabilities()
+    storage_status = storage.healthcheck()
+    checks = {
+        "imageModelConfigured": capabilities["capabilities"]["image"] == "available",
+        "storageAvailable": bool(storage_status.get("available")),
+        "accessProtectionConfigured": bool(
+            ACCESS_TOKEN or SESSION_AUTH_URL or DEVELOPER_AUTH_CONFIGURED
+        ),
+    }
+    is_ready = all(checks.values())
+    return JSONResponse(
+        status_code=200 if is_ready else 503,
+        content={
+            "status": "ready" if is_ready else "not_ready",
+            "checks": checks,
+            "capabilities": capabilities["capabilities"],
+        },
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/api/admin/health")
@@ -735,11 +899,34 @@ def admin_health(request: Request) -> dict:
 @app.post("/api/detect")
 async def detect(request: Request, file: UploadFile = File(...), fileType: str | None = Form(default=None)) -> dict:
     actor = await _require_developer_access(request)
+    try:
+        await asyncio.wait_for(
+            _DETECTION_SEMAPHORE.acquire(),
+            timeout=DETECTION_QUEUE_TIMEOUT_SECONDS,
+        )
+    except TimeoutError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail="当前检测任务较多，请稍后重试",
+            headers={"Retry-After": "5"},
+        ) from exc
+    try:
+        return await _detect_with_slot(request, file, fileType, actor)
+    finally:
+        _DETECTION_SEMAPHORE.release()
+
+
+async def _detect_with_slot(
+    request: Request,
+    file: UploadFile,
+    file_type: str | None,
+    actor: dict,
+) -> dict:
     data = await _read_upload(file)
     if not data:
         raise HTTPException(status_code=400, detail="空文件")
     filename = file.filename or "unknown"
-    ftype = _detect_type(filename, fileType)
+    ftype = _detect_type(filename, file_type)
     if ftype in {"video", "audio"}:
         label = "视频" if ftype == "video" else "音频"
         raise HTTPException(status_code=422, detail=f"{label}检测能力尚未部署，本次不会生成模拟结论")
@@ -838,31 +1025,32 @@ async def forensics(
     taskId: str | None = Form(default=None),
 ) -> dict:
     actor = await _require_developer_access(request)
-    data = await _read_upload(file)
-    if not data:
-        raise HTTPException(status_code=400, detail="空文件")
-    filename = file.filename or "unknown"
-    ftype = _detect_type(filename, None)
-    if ftype != "image":
-        raise HTTPException(status_code=400, detail="可解释性取证分析目前仅支持图像")
-    await _validate_image_pixels(data)
+    await _acquire_forensics_slot()
+    try:
+        data = await _read_upload(file)
+        if not data:
+            raise HTTPException(status_code=400, detail="空文件")
+        filename = file.filename or "unknown"
+        ftype = _detect_type(filename, None)
+        if ftype != "image":
+            raise HTTPException(status_code=400, detail="可解释性取证分析目前仅支持图像")
+        await _validate_image_pixels(data)
 
-    started = time.perf_counter()
-    sha256 = hashlib.sha256(data).hexdigest()
-    history_item = _require_matching_history_upload(actor, taskId, sha256) if taskId else None
-    cache_scope = _forensics_cache_scope(actor)
-    cache_type = (
-        f"image-forensics:{detector.FORENSICS_PIPELINE_VERSION}:{detector.VLM_MODEL}:{cache_scope}"
-        if cache_scope
-        else None
-    )
-    cached = (
-        await run_in_threadpool(storage.get_cached_analysis, cache_type, sha256, FORENSICS_CACHE_MAX_AGE_SECONDS)
-        if cache_type
-        else None
-    )
-    cache_hit = cached is not None
-    async with _FORENSICS_SEMAPHORE:
+        started = time.perf_counter()
+        sha256 = hashlib.sha256(data).hexdigest()
+        history_item = _require_matching_history_upload(actor, taskId, sha256) if taskId else None
+        cache_scope = _forensics_cache_scope(actor)
+        cache_type = (
+            f"image-forensics:{detector.FORENSICS_PIPELINE_VERSION}:{detector.VLM_MODEL}:{cache_scope}"
+            if cache_scope
+            else None
+        )
+        cached = (
+            await run_in_threadpool(storage.get_cached_analysis, cache_type, sha256, FORENSICS_CACHE_MAX_AGE_SECONDS)
+            if cache_type
+            else None
+        )
+        cache_hit = cached is not None
         if await request.is_disconnected():
             raise HTTPException(status_code=499, detail="客户端已停止等待取证结果")
         report = (
@@ -870,6 +1058,8 @@ async def forensics(
             if cached
             else await run_in_threadpool(detector.explainable, data)
         )
+    finally:
+        _FORENSICS_SEMAPHORE.release()
 
     report["elapsedMs"] = int((time.perf_counter() - started) * 1000)
     report["fileMeta"] = {"name": filename, "type": ftype, "size": f"{len(data) / 1024:.1f}KB"}
@@ -928,14 +1118,18 @@ async def provenance_check(
     taskId: str | None = Form(default=None),
 ) -> dict:
     actor = await _require_developer_access(request)
-    data = await _read_upload(file)
-    if not data:
-        raise HTTPException(status_code=400, detail="空文件")
-    filename = file.filename or "unknown"
-    sha256 = hashlib.sha256(data).hexdigest()
-    history_item = _require_matching_history_upload(actor, taskId, sha256) if taskId else None
-    started = time.perf_counter()
-    report = await run_in_threadpool(provenance.read_provenance, data, provenance.mime_for(filename), filename)
+    await _acquire_forensics_slot()
+    try:
+        data = await _read_upload(file)
+        if not data:
+            raise HTTPException(status_code=400, detail="空文件")
+        filename = file.filename or "unknown"
+        sha256 = hashlib.sha256(data).hexdigest()
+        history_item = _require_matching_history_upload(actor, taskId, sha256) if taskId else None
+        started = time.perf_counter()
+        report = await run_in_threadpool(provenance.read_provenance, data, provenance.mime_for(filename), filename)
+    finally:
+        _FORENSICS_SEMAPHORE.release()
     report["elapsedMs"] = int((time.perf_counter() - started) * 1000)
     report["fileMeta"] = {"name": filename, "size": f"{len(data) / 1024:.1f}KB"}
     if history_item is not None:
@@ -982,7 +1176,9 @@ def history(request: Request) -> dict:
         raise HTTPException(status_code=400, detail="verdict 不受支持")
 
     items, total, filter_counts = storage.list_history(
-        owner_user_id=None if actor.get("mode") == "admin" else str(actor.get("userId") or ""),
+        owner_account_uuid=(
+            None if actor.get("mode") == "admin" else str(actor.get("accountUuid") or "")
+        ),
         limit=limit,
         offset=offset,
         query=request.query_params.get("query"),
@@ -1050,6 +1246,11 @@ def report_download(report_id: str, request: Request) -> Response:
         forensics=clean_item.get("forensics"),
         provenance=clean_item.get("provenance"),
     )
+    _audit_report_share_access(
+        request,
+        {"shareId": f"direct:{report_id}", "reportId": report_id},
+        "downloaded_authenticated",
+    )
     return Response(
         content=pdf,
         media_type="application/pdf",
@@ -1072,6 +1273,11 @@ def report_export(report_id: str, request: Request) -> Response:
         forensics=clean_item.get("forensics"),
         provenance=clean_item.get("provenance"),
     )
+    _audit_report_share_access(
+        request,
+        {"shareId": f"direct:{report_id}", "reportId": report_id},
+        "exported_authenticated",
+    )
     return Response(
         content=pdf,
         media_type="application/pdf",
@@ -1086,7 +1292,7 @@ def report_share(report_id: str, request: Request, payload: dict | None = Body(d
     item = storage.get_history(report_id)
     if not item:
         raise HTTPException(status_code=404, detail="报告不存在")
-    _require_report_share_access(request, item)
+    actor = _require_report_share_access(request, item)
     body = payload or {}
     try:
         requested_seconds = int(body.get("expiresInSeconds") or REPORT_SHARE_DEFAULT_SECONDS)
@@ -1094,12 +1300,65 @@ def report_share(report_id: str, request: Request, payload: dict | None = Body(d
         raise HTTPException(status_code=400, detail="expiresInSeconds 必须是整数秒")
     ttl_seconds = max(60, min(requested_seconds, REPORT_SHARE_MAX_SECONDS))
     expires = int(time.time()) + ttl_seconds
-    signature = _sign_report_share(report_id, expires)
-    links = _build_public_report_link(request, report_id, expires, signature)
+    share_id = f"rgs_{secrets.token_urlsafe(18)}"
+    signature = _sign_persisted_report_share(share_id, report_id, expires)
+    creator_user_id = str(
+        actor.get("accountUuid") or actor.get("userId") or actor.get("mode") or "unknown"
+    )
+    share = storage.create_report_share(
+        share_id=share_id,
+        report_id=report_id,
+        expires_at=expires,
+        created_by_user_id=creator_user_id,
+        created_by_key_id=str(actor.get("keyId") or "") or None,
+        created_by_mode=str(actor.get("mode") or "unknown"),
+    )
+    _audit_report_share_access(request, share, "created")
+    links = _build_public_report_link(request, report_id, expires, signature, share_id=share_id)
     return {
         **links,
+        "shareId": share_id,
+        "createdAt": share["createdAt"],
         "expiresAt": datetime.fromtimestamp(expires, tz=timezone.utc).isoformat(),
         "expiresInSeconds": ttl_seconds,
+    }
+
+
+@app.delete("/api/report/{report_id}/share/{share_id}")
+def report_share_revoke(report_id: str, share_id: str, request: Request) -> dict:
+    item = storage.get_history(report_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="报告不存在")
+    _require_report_share_access(request, item)
+    share = storage.revoke_report_share(report_id, share_id)
+    if not share:
+        raise HTTPException(status_code=404, detail="分享链接不存在")
+    _audit_report_share_access(request, share, "revoked_by_owner")
+    return {
+        "shareId": share["shareId"],
+        "reportId": share["reportId"],
+        "revokedAt": share["revokedAt"],
+    }
+
+
+@app.get("/api/report/{report_id}/shares")
+def report_share_list(report_id: str, request: Request) -> dict:
+    item = storage.get_history(report_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="报告不存在")
+    _require_report_share_access(request, item)
+    now = int(time.time())
+    return {
+        "items": [
+            {
+                **share,
+                "active": not share.get("revokedAt") and int(share["expiresAt"]) >= now,
+                "expiresAt": datetime.fromtimestamp(
+                    int(share["expiresAt"]), tz=timezone.utc
+                ).isoformat(),
+            }
+            for share in storage.list_report_shares(report_id)
+        ]
     }
 
 
@@ -1110,21 +1369,72 @@ def report_public(report_id: str, request: Request) -> Response:
     except ValueError:
         raise HTTPException(status_code=400, detail="expires 必须是整数秒时间戳")
     signature = request.query_params.get("sig", "")
-    _verify_report_share(report_id, expires, signature)
-    item = storage.get_history(report_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="报告不存在")
+    share_id = request.query_params.get("shareId", "").strip()
+    if share_id:
+        share = storage.get_report_share(share_id)
+        if not share:
+            raise HTTPException(status_code=404, detail="报告分享链接不存在")
+        _validate_persisted_report_share(
+            request,
+            share=share,
+            report_id=report_id,
+            expires=expires,
+            signature=signature,
+        )
+        item = storage.get_history(report_id)
+        if not item:
+            _audit_report_share_access(request, share, "report_missing")
+            raise HTTPException(status_code=404, detail="报告不存在")
+    else:
+        # Existing v1 HMAC links cannot contain a database identifier. A valid
+        # legacy link is imported deterministically on first access, after
+        # which this and every later access is governed by the stored record.
+        _verify_report_share(report_id, expires, signature)
+        item = storage.get_history(report_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="报告不存在")
+        fingerprint = hashlib.sha256(signature.encode("utf-8")).hexdigest()
+        legacy_share_id = "rgs_legacy_" + hashlib.sha256(
+            f"{report_id}:{expires}:{fingerprint}".encode("utf-8")
+        ).hexdigest()[:24]
+        share = storage.register_legacy_report_share(
+            share_id=legacy_share_id,
+            report_id=report_id,
+            expires_at=expires,
+            owner_user_id=str(item.get("_developerUserId") or "legacy-unknown"),
+            signature_fingerprint=fingerprint,
+        )
+        _validate_persisted_report_share(
+            request,
+            share=share,
+            report_id=report_id,
+            expires=expires,
+            signature=signature,
+            legacy=True,
+        )
     clean_item = _strip_internal_history_fields(item)
     html = reporting.build_report_html(
         clean_item,
         forensics=clean_item.get("forensics"),
         provenance=clean_item.get("provenance"),
     )
+    current_share = storage.get_report_share(share["shareId"])
+    if not current_share:
+        raise HTTPException(status_code=404, detail="报告分享链接不存在")
+    _validate_persisted_report_share(
+        request,
+        share=current_share,
+        report_id=report_id,
+        expires=expires,
+        signature=signature,
+        legacy=bool(current_share.get("legacy")),
+    )
+    _audit_report_share_access(request, current_share, "granted")
     return Response(
         content=html,
         media_type="text/html; charset=utf-8",
         headers={
-            "Cache-Control": "private, max-age=60",
+            "Cache-Control": "private, no-store, max-age=0",
             "X-Robots-Tag": "noindex",
         },
     )

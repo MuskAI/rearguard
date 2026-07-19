@@ -1,0 +1,34 @@
+[Unit]
+Description=RealGuard Developer Detection Lease Worker
+After=network-online.target mysql.service realguard-detector-backend.service
+Wants=network-online.target realguard-detector-backend.service
+Requires=mysql.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/realguard-server/RealGuard
+Environment=PYTHONUNBUFFERED=1
+Environment=REALGUARD_DEVELOPER_SPOOL_ROOT=/opt/realguard-data/developer-spool
+Environment=REALGUARD_DETECTION_BACKEND_URL=http://127.0.0.1:15001
+EnvironmentFile=-/etc/realguard/session.env
+EnvironmentFile=-/etc/realguard/realguard-backend.env
+EnvironmentFile=-/etc/realguard/detector-db.env
+EnvironmentFile=-/etc/realguard/agent.env
+EnvironmentFile=-/etc/realguard/watermark-precheck.env
+ExecStart=/opt/realguard-server/.venv/bin/python -m imagedetection.workers.developer_detection_worker
+Restart=always
+RestartSec=3
+TimeoutStopSec=360
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/opt/realguard-server/RealGuard /opt/realguard-data /tmp
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

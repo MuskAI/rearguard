@@ -9,6 +9,7 @@ OFFSITE_REMOTE="${REALGUARD_BACKUP_RCLONE_REMOTE:-}"
 V2_DB="${JIANZHEN_DB_PATH:-/opt/jianzhen-v2/data/jianzhen-v2.sqlite3}"
 TRAFFIC_DB="${REALGUARD_TRAFFIC_CUMULATIVE_DB:-/opt/realguard-data/traffic-cumulative.sqlite3}"
 UPLOADS_DIR="${REALGUARD_UPLOADS_DIR:-/opt/realguard-server/RealGuard/imagedetection/static/uploads}"
+EVIDENCE_MANIFEST_DIR="${REALGUARD_EVIDENCE_SNAPSHOT_ROOT:-/opt/realguard-data/evidence-manifests}"
 
 [[ "$RETENTION_DAYS" =~ ^[0-9]+$ ]] && (( RETENTION_DAYS >= 1 ))
 install -d -m 700 "$BACKUP_ROOT"
@@ -51,7 +52,7 @@ dump_mysql() {
 backup_sqlite() {
   local source="$1" destination="$2"
   [[ -f "$source" ]] || return 0
-  python3 - "$source" "$destination" <<'PY'
+  "${PYTHON_BIN:-python3}" - "$source" "$destination" <<'PY'
 import sqlite3
 import sys
 
@@ -83,6 +84,9 @@ backup_sqlite "$TRAFFIC_DB" "$staging/traffic-cumulative.sqlite3"
 if [[ -d "$UPLOADS_DIR" ]]; then
   tar -C "$UPLOADS_DIR" -czf "$staging/uploads.tgz" .
 fi
+if [[ -d "$EVIDENCE_MANIFEST_DIR" ]]; then
+  tar -C "$EVIDENCE_MANIFEST_DIR" -czf "$staging/evidence-manifests.tgz" .
+fi
 
 cat >"$staging/MANIFEST" <<EOF
 created_at=$timestamp
@@ -90,6 +94,7 @@ hostname=$hostname_safe
 v2_database=$V2_DB
 traffic_database=$TRAFFIC_DB
 uploads_directory=$UPLOADS_DIR
+evidence_manifest_directory=$EVIDENCE_MANIFEST_DIR
 EOF
 (
   cd "$staging"

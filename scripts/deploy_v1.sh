@@ -36,20 +36,25 @@ HTTPS_NGINX_CONFIG="$ROOT_DIR/deploy/nginx/realguard.conf"
 NGINX_SNIPPETS_DIR="$ROOT_DIR/deploy/nginx/snippets"
 WEB_SERVICE_UNIT="$ROOT_DIR/deploy/systemd/realguard-backend.service"
 DETECTOR_SERVICE_UNIT="$ROOT_DIR/deploy/systemd/realguard-detector-backend.service"
+DEVELOPER_WORKER_SERVICE_UNIT="$ROOT_DIR/deploy/systemd/realguard-developer-worker.service"
 BACKUP_SERVICE_UNIT="$ROOT_DIR/deploy/systemd/realguard-backup.service"
 BACKUP_TIMER_UNIT="$ROOT_DIR/deploy/systemd/realguard-backup.timer"
 BACKUP_SCRIPT="$ROOT_DIR/scripts/remote/backup_realguard.sh"
 ACTIVATE_SCRIPT="$ROOT_DIR/scripts/remote/activate_v1.sh"
+DEPLOY_PATHS=(
+  realguard-server-main/RealGuard
+  realguard-server-main/frontend
+  realguard-server-main/deploy/nginx-realguard-frontend.conf
+  deploy/nginx
+  deploy/systemd
+  scripts/deploy_v1.sh
+  scripts/remote/backup_realguard.sh
+  scripts/remote/activate_v1.sh
+  scripts/deploy_common.sh
+)
+assert_deploy_paths_clean "${DEPLOY_PATHS[@]}"
 COMMIT_SHA="$(latest_commit_for_paths \
-  realguard-server-main/RealGuard \
-  realguard-server-main/frontend \
-  realguard-server-main/deploy/nginx-realguard-frontend.conf \
-  deploy/nginx \
-  deploy/systemd \
-  scripts/deploy_v1.sh \
-  scripts/remote/backup_realguard.sh \
-  scripts/remote/activate_v1.sh \
-  scripts/deploy_common.sh)"
+  "${DEPLOY_PATHS[@]}")"
 DETECTOR_PORT="${REALGUARD_DETECTOR_PORT:-15001}"
 IP2REGION_XDB_URL="https://raw.githubusercontent.com/lionsoul2014/ip2region/cd40e3a1d532d645697999d646cf0e10481cef33/data/ip2region_v4.xdb"
 IP2REGION_XDB_SHA256="6307a9696f5711f84bcb8b25f07894de68a64a0ed4a1cc7e990562dd3084f210"
@@ -98,6 +103,7 @@ run_scp "$NGINX_CONFIG" "$REMOTE:/tmp/realguard-frontend.nginx.conf"
 run_scp "$HTTPS_NGINX_CONFIG" "$REMOTE:/tmp/realguard-https.nginx.conf"
 run_scp "$WEB_SERVICE_UNIT" "$REMOTE:/tmp/realguard-backend.service"
 run_scp "$DETECTOR_SERVICE_UNIT" "$REMOTE:/tmp/realguard-detector-backend.service"
+run_scp "$DEVELOPER_WORKER_SERVICE_UNIT" "$REMOTE:/tmp/realguard-developer-worker.service"
 run_scp "$BACKUP_SERVICE_UNIT" "$REMOTE:/tmp/realguard-backup.service"
 run_scp "$BACKUP_TIMER_UNIT" "$REMOTE:/tmp/realguard-backup.timer"
 run_scp "$BACKUP_SCRIPT" "$REMOTE:/tmp/realguard-backup"
@@ -105,8 +111,5 @@ run_scp "$ACTIVATE_SCRIPT" "$REMOTE:/tmp/realguard-activate-v1.sh"
 
 log_step 5 "Activate V1 release"
 run_remote "IP2REGION_XDB_SHA256='$IP2REGION_XDB_SHA256' REALGUARD_DETECTOR_PORT='$DETECTOR_PORT' bash /tmp/realguard-activate-v1.sh"
-
-log_step 6 "Repair detection history ownership"
-run_remote "sudo bash -lc 'set -a; [ ! -f /etc/realguard/session.env ] || . /etc/realguard/session.env; [ ! -f /etc/realguard/realguard-backend.env ] || . /etc/realguard/realguard-backend.env; [ ! -f /etc/realguard/detector-db.env ] || . /etc/realguard/detector-db.env; set +a; cd /opt/realguard-server/RealGuard && /opt/realguard-server/.venv/bin/python -m flask --app run:app repair-detection-owners'"
 
 printf '\nV1 deployed from commit %s to %s\n' "$COMMIT_SHA" "$REMOTE"

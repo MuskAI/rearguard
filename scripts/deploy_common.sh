@@ -17,6 +17,16 @@ latest_commit_for_paths() {
   git -C "$REPO_ROOT" log -1 --format=%h -- "$@"
 }
 
+assert_deploy_paths_clean() {
+  local status
+  status="$(git -C "$REPO_ROOT" status --porcelain=v1 --untracked-files=all -- "$@")"
+  if [[ -n "$status" ]]; then
+    printf 'Deployment paths contain uncommitted changes:\n%s\n' "$status" >&2
+    printf 'Commit the release inputs before deploying so DEPLOYED_COMMIT remains trustworthy.\n' >&2
+    exit 1
+  fi
+}
+
 remote_target() {
   printf '%s@%s\n' "$DEPLOY_USER" "$DEPLOY_HOST"
 }
@@ -91,6 +101,7 @@ run_ssh_transport() {
 run_scp() {
   run_ssh_transport scp \
     -i "$DEPLOY_SSH_KEY" \
+    -o IdentitiesOnly=yes \
     -o BatchMode=yes \
     -o ConnectTimeout=15 \
     -o ControlMaster=auto \
@@ -105,6 +116,7 @@ run_remote() {
   remote="$(remote_target)"
   run_ssh_transport ssh \
     -i "$DEPLOY_SSH_KEY" \
+    -o IdentitiesOnly=yes \
     -o BatchMode=yes \
     -o ConnectTimeout=15 \
     -o ControlMaster=auto \
@@ -123,6 +135,7 @@ run_remote_capture() {
   fi
   run_ssh_transport ssh \
     -i "$DEPLOY_SSH_KEY" \
+    -o IdentitiesOnly=yes \
     -o BatchMode=yes \
     -o ConnectTimeout=15 \
     -o ControlMaster=auto \

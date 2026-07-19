@@ -90,6 +90,22 @@ def video_report_filename(itemid: int | str) -> str:
     return f"huijian-video-report-{itemid}.pdf"
 
 
+def freeze_image_evidence_snapshot(
+    item: Mapping[str, Any],
+    model_run: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Freeze the first server-authoritative image evidence snapshot.
+
+    Detection completion code can call this helper after the persisted record,
+    original file, model-run audit, and EXIF row are durable. It intentionally
+    accepts no client result payload.
+    """
+    return evidence_manifest.get_or_create_signed_image_manifest(
+        item,
+        model_run=model_run,
+    )
+
+
 def _signed_image_report(
     item: Mapping[str, Any],
     *,
@@ -118,10 +134,14 @@ def _signed_image_report(
     model = manifest["model"]
     signature = envelope["signature"]
     evidence_text = manifest["evidence_summary"]["text"]
+    structured = manifest.get("structured_evidence") or {}
+    visible_watermark = structured.get("visible_watermark")
+    capture = structured.get("capture_evidence") or {}
+    metadata = structured.get("metadata") or {}
     human_manifest = "\n".join([
         evidence_text,
         "",
-        "电子证据清单（以下字段均由服务端签名）",
+        "签名完整性清单（以下字段均由服务端签名）",
         f"任务ID：{manifest['task_id']}",
         f"记录ID：{manifest['record_id']}",
         f"原文件SHA-256：{source['sha256']}",
@@ -147,9 +167,9 @@ def _signed_image_report(
         "img_format": item.get("img_format", ""),
         "resolution": item.get("resolution", ""),
         "visual_issues": [],
-        "all_metadata": {},
-        "capture_evidence": None,
-        "visibleWatermark": None,
+        "all_metadata": metadata if metadata.get("present") else {},
+        "capture_evidence": capture,
+        "visibleWatermark": visible_watermark,
     }
     return envelope, authoritative_result
 
@@ -162,7 +182,7 @@ def _html_envelope_block(envelope: Mapping[str, Any]) -> str:
     encoded = base64.urlsafe_b64encode(evidence_manifest.canonical_json(envelope)).decode("ascii")
     return f"""
         <section class="card" aria-labelledby="evidence-manifest-title">
-          <h2 id="evidence-manifest-title">不可变证据清单</h2>
+          <h2 id="evidence-manifest-title">签名完整性清单</h2>
           <table>
             <tbody>
               <tr><td>任务 / 记录 ID</td><td>{escape(manifest['task_id'])} / {escape(manifest['record_id'])}</td></tr>
@@ -172,7 +192,7 @@ def _html_envelope_block(envelope: Mapping[str, Any]) -> str:
               <tr><td>HMAC 签名</td><td style="word-break:break-all;">{escape(signature['value'])}</td></tr>
             </tbody>
           </table>
-          <div class="footnote">签名算法：{escape(signature['algorithm'])}；密钥标识：{escape(signature['key_id'])}。验证时以签名清单为权威证据。</div>
+          <div class="footnote">签名算法：{escape(signature['algorithm'])}；密钥标识：{escape(signature['key_id'])}。签名清单用于服务端完整性校验，不替代司法鉴定或人工复核。</div>
           <script type="application/vnd.huijian.evidence+base64">{encoded}</script>
         </section>
     """

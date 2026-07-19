@@ -30,6 +30,7 @@ def test_logged_in_feedback_is_scoped_to_current_owner(client, monkeypatch):
     with client.session_transaction() as session:
         session["user_info"] = {
             "Userid": 7,
+            "account_uuid": "11111111-1111-4111-8111-111111111111",
             "phone": "13800000000",
             "openid": "owner-openid",
         }
@@ -39,8 +40,8 @@ def test_logged_in_feedback_is_scoped_to_current_owner(client, monkeypatch):
     assert response.status_code == 200
     assert response.get_json()["feedback"] == 1
     assert "Userid" not in captured["sql"]
-    assert "phone = %s" in captured["sql"]
-    assert captured["params"] == ("满意", 31, "13800000000", "owner-openid")
+    assert "owner_account_uuid = %s" in captured["sql"]
+    assert captured["params"] == ("满意", 31, "11111111-1111-4111-8111-111111111111")
     assert captured["fetch"] is False
 
 

@@ -14,6 +14,8 @@ if str(ROOT) not in sys.path:
 from imagedetection import creat_app  # noqa: E402
 from imagedetection.views import api, detection, login, profile, utils  # noqa: E402
 
+ACCOUNT_UUID = "11111111-1111-4111-8111-111111111111"
+
 
 def test_database_configuration_has_no_known_default_password():
     source = (ROOT / "imagedetection" / "views" / "utils.py").read_text(encoding="utf-8")
@@ -201,6 +203,7 @@ def _login_session(client, phone="13800000000"):
     with client.session_transaction() as sess:
         sess["user_info"] = {
             "Userid": 1,
+            "account_uuid": ACCOUNT_UUID,
             "username": "tester",
             "phone": phone,
             "openid": "openid-1",
@@ -307,13 +310,13 @@ def test_authenticate_password_user_upgrades_legacy_secret(monkeypatch):
     assert update_fetch is False
 
 
-def test_image_result_api_queries_with_user_phone(client, monkeypatch):
+def test_image_result_api_queries_with_account_uuid(client, monkeypatch):
     calls = []
 
     def fake_detection_sql(sql, params=None, fetch=True):
         calls.append((sql, params))
-        if sql == "SELECT * FROM data WHERE itemid = %s AND ((phone = %s) OR ((phone IS NULL OR phone = '') AND openid = %s)) LIMIT 1":
-            assert params == ("7", "13800000000", "openid-1")
+        if sql == "SELECT * FROM data WHERE itemid = %s AND (owner_account_uuid = %s) LIMIT 1":
+            assert params == ("7", ACCOUNT_UUID)
             return [{
                 "itemid": 7,
                 "filename": "sample.png",
@@ -338,7 +341,7 @@ def test_image_result_api_queries_with_user_phone(client, monkeypatch):
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["result"]["itemid"] == 7
-    assert any(params == ("7", "13800000000", "openid-1") for _, params in calls)
+    assert any(params == ("7", ACCOUNT_UUID) for _, params in calls)
 
 
 def test_image_result_recovers_generic_watermark_from_runtime_precheck(client, monkeypatch):
@@ -492,11 +495,27 @@ def test_owner_query_never_uses_loose_identity_or_conditions():
     where, params = detection._detection_owner_where(7, "13800000007", "openid-7")
 
     assert "Userid" not in where
-    assert where == "(phone = %s) OR ((phone IS NULL OR phone = '') AND openid = %s)"
-    assert params == ("13800000007", "openid-7")
+    assert where == "1 = 0"
+    assert params == ()
 
 
-def test_profile_counts_use_stable_identity_fallbacks(client, monkeypatch):
+def test_immutable_owner_query_uses_only_account_uuid():
+    account_uuid = "f2de4eb4-a3b1-4fde-b760-3af9d74d7a2d"
+
+    where, params = detection._detection_owner_where(
+        7,
+        "13800000007",
+        "openid-7",
+        account_uuid,
+    )
+
+    assert where == "owner_account_uuid = %s"
+    assert params == (account_uuid,)
+    assert "phone" not in where
+    assert "openid" not in where
+
+
+def test_profile_counts_use_immutable_account_uuid(client, monkeypatch):
     calls = []
 
     def fake_detection_sql(sql, params=None, fetch=True):
@@ -512,9 +531,8 @@ def test_profile_counts_use_stable_identity_fallbacks(client, monkeypatch):
     assert len(calls) == 2
     for sql, params in calls:
         assert "Userid" not in sql
-        assert "(phone = %s)" in sql
-        assert "(phone IS NULL OR phone = '') AND openid = %s" in sql
-        assert params == ("13800000000", "openid-1")
+        assert "owner_account_uuid = %s" in sql
+        assert params == (ACCOUNT_UUID,)
 
 
 def test_legacy_login_clears_previous_account_state(client, monkeypatch):
@@ -567,6 +585,24 @@ def test_runtime_job_owner_conflict_prefers_stable_user_id():
     assert detection._runtime_owner_matches(owner, 1, "13800000000", "openid-1", False) is False
 
 
+def test_runtime_job_rejects_recycled_phone_with_different_account_uuid():
+    owner = {
+        "Userid": 22,
+        "account_uuid": "f2de4eb4-a3b1-4fde-b760-3af9d74d7a2d",
+        "phone": "13800000000",
+        "openid": "openid-1",
+    }
+
+    assert detection._runtime_owner_matches(
+        owner,
+        22,
+        "13800000000",
+        "openid-1",
+        False,
+        "4936858d-7081-4a20-8862-ddb7c43f11f5",
+    ) is False
+
+
 def test_guest_runtime_job_cannot_access_a_bound_account_job():
     owner = {"Userid": 22, "phone": "", "openid": "guest-shared"}
 
@@ -587,8 +623,8 @@ def test_image_result_hides_foreign_record(client, monkeypatch):
 
     assert response.status_code == 404
     assert "Userid" not in calls[0][0]
-    assert "phone = %s" in calls[0][0]
-    assert calls[0][1] == ("88", "13800000000", "openid-1")
+    assert "owner_account_uuid = %s" in calls[0][0]
+    assert calls[0][1] == ("88", ACCOUNT_UUID)
 
 
 def test_detection_owner_repair_uses_detection_database_identities(monkeypatch):
@@ -1049,6 +1085,7 @@ def test_versioned_user_session_is_revoked_when_account_version_changes(client, 
         "excute_sql",
         lambda *args, **kwargs: [{
             "Userid": 7,
+            "account_uuid": "f2de4eb4-a3b1-4fde-b760-3af9d74d7a2d",
             "phone": "13800000007",
             "openid": "openid-7",
             "session_version": 3,
@@ -1057,6 +1094,7 @@ def test_versioned_user_session_is_revoked_when_account_version_changes(client, 
     with client.session_transaction() as sess:
         sess["user_info"] = {
             "Userid": 7,
+            "account_uuid": "f2de4eb4-a3b1-4fde-b760-3af9d74d7a2d",
             "username": "tester",
             "phone": "13800000007",
             "openid": "openid-7",
@@ -1078,6 +1116,38 @@ def test_current_versioned_user_session_remains_valid(client, monkeypatch):
         "excute_sql",
         lambda *args, **kwargs: [{
             "Userid": 7,
+            "account_uuid": "f2de4eb4-a3b1-4fde-b760-3af9d74d7a2d",
+            "phone": "13800000007",
+            "openid": "openid-7",
+            "session_version": 3,
+        }],
+    )
+    monkeypatch.setattr(api, "excute_detection_sql", lambda *args, **kwargs: [{"cnt": 0}])
+    with client.session_transaction() as sess:
+        sess["user_info"] = {
+            "Userid": 7,
+            "account_uuid": "f2de4eb4-a3b1-4fde-b760-3af9d74d7a2d",
+            "username": "tester",
+            "phone": "13800000007",
+            "openid": "openid-7",
+            "session_version": 3,
+        }
+
+    response = client.get("/api/me")
+
+    assert response.status_code == 200
+    assert response.get_json()["authenticated"] is True
+
+
+def test_valid_versioned_session_is_upgraded_with_immutable_uuid(client, monkeypatch):
+    account_uuid = "f2de4eb4-a3b1-4fde-b760-3af9d74d7a2d"
+    monkeypatch.setattr(login, "_ensure_user_account_columns", lambda: True)
+    monkeypatch.setattr(
+        login,
+        "excute_sql",
+        lambda *args, **kwargs: [{
+            "Userid": 7,
+            "account_uuid": account_uuid,
             "phone": "13800000007",
             "openid": "openid-7",
             "session_version": 3,
@@ -1097,6 +1167,51 @@ def test_current_versioned_user_session_remains_valid(client, monkeypatch):
 
     assert response.status_code == 200
     assert response.get_json()["authenticated"] is True
+    with client.session_transaction() as sess:
+        assert sess["user_info"]["account_uuid"] == account_uuid
+
+
+def test_claim_detection_owner_never_overwrites_another_uuid(monkeypatch):
+    calls = []
+
+    def fake_execute(sql, params=None, fetch=True):
+        calls.append((" ".join(sql.split()), params, fetch))
+        if sql.lstrip().upper().startswith("UPDATE"):
+            return 0
+        return []
+
+    monkeypatch.setattr(utils, "excute_detection_sql", fake_execute)
+    account_uuid = "f2de4eb4-a3b1-4fde-b760-3af9d74d7a2d"
+
+    claimed = utils.claim_detection_record_owner(
+        "data",
+        81,
+        account_uuid,
+        phone="13800000007",
+        openid="openid-7",
+    )
+
+    assert claimed is False
+    assert calls == [(
+        "SELECT itemid FROM `data` WHERE itemid = %s AND owner_account_uuid = %s LIMIT 1",
+        (81, account_uuid),
+        True,
+    )]
+
+
+def test_claim_detection_owner_accepts_already_bound_same_uuid(monkeypatch):
+    account_uuid = "f2de4eb4-a3b1-4fde-b760-3af9d74d7a2d"
+
+    def fake_execute(sql, params=None, fetch=True):
+        if sql.lstrip().upper().startswith("UPDATE"):
+            return 0
+        return [{"itemid": 81}]
+
+    monkeypatch.setattr(utils, "excute_detection_sql", fake_execute)
+
+    assert utils.claim_detection_record_owner(
+        "data", 81, account_uuid, phone="13800000007"
+    ) is True
 
 
 def test_profile_password_change_revokes_all_sessions_and_clears_current(client, monkeypatch):
@@ -1183,11 +1298,12 @@ def test_owned_image_history_delete_removes_database_media_and_thumbnail(tmp_pat
     monkeypatch.setattr(api, "get_detection_db_connection", Connection)
     monkeypatch.setattr(api, "_local_detection_media_path", lambda kind, item: (tmp_path.resolve(), original.resolve()))
     monkeypatch.setattr(api, "_thumbnail_cache_path", lambda item: thumbnail)
+    monkeypatch.setattr(api.evidence_manifest, "delete_signed_image_manifest", lambda itemid: True)
 
     deleted, message, status = api._delete_owned_history_record(
         "image",
         42,
-        {"mode": "user", "phone": "13800000007", "openid": ""},
+        {"mode": "user", "account_uuid": ACCOUNT_UUID, "phone": "13800000007", "openid": ""},
     )
 
     assert (deleted, message, status) == (True, "", 204)
@@ -1195,8 +1311,8 @@ def test_owned_image_history_delete_removes_database_media_and_thumbnail(tmp_pat
     assert not thumbnail.exists()
     assert any(sql.startswith("DELETE FROM exif") for sql, _ in statements)
     delete_sql, delete_params = next((sql, params) for sql, params in statements if sql.startswith("DELETE FROM data"))
-    assert "phone = %s" in delete_sql
-    assert delete_params == (42, "13800000007")
+    assert "owner_account_uuid = %s" in delete_sql
+    assert delete_params == (42, ACCOUNT_UUID)
 
 
 def test_history_delete_does_not_remove_foreign_record(client, monkeypatch):

@@ -560,6 +560,7 @@ export async function detect(file: File, fileType?: FileType): Promise<DetectRes
 
 export interface AccountUser {
   Userid: number;
+  account_uuid?: string;
   username: string;
   phone: string;
   openid?: string;
@@ -1209,11 +1210,22 @@ export async function downloadReport(reportId: string): Promise<string> {
 }
 
 export interface ReportShareLink {
+  shareId: string;
   url: string;
   publicPath?: string;
   apiPath?: string;
   expiresAt: string;
   expiresInSeconds: number;
+}
+
+export interface ReportShareItem {
+  shareId: string;
+  reportId: string;
+  createdAt: string;
+  expiresAt: string;
+  revokedAt?: string | null;
+  active: boolean;
+  legacy: boolean;
 }
 
 export async function createReportShareLink(reportId: string, expiresInSeconds = 7 * 24 * 60 * 60): Promise<ReportShareLink> {
@@ -1231,6 +1243,24 @@ export async function createReportShareLink(reportId: string, expiresInSeconds =
     };
   }
   return link;
+}
+
+export async function listReportShares(reportId: string): Promise<ReportShareItem[]> {
+  const res = await fetch(`/v2-api/report/${encodeURIComponent(reportId)}/shares`, withSession());
+  const payload = await parseJson<{ items: ReportShareItem[] }>(res, "加载分享记录失败");
+  return payload.items || [];
+}
+
+export async function revokeReportShare(reportId: string, shareId: string): Promise<void> {
+  const res = await fetch(
+    `/v2-api/report/${encodeURIComponent(reportId)}/share/${encodeURIComponent(shareId)}`,
+    {
+      credentials: "include",
+      method: "DELETE",
+      headers: withAuthHeaders(),
+    },
+  );
+  await parseJson(res, "撤销分享链接失败");
 }
 
 export async function fetchHealth(): Promise<HealthStatus> {

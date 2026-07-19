@@ -2142,8 +2142,62 @@ video {
 }
 
 .result-actions button {
-  min-height: 40px;
+  min-height: 44px;
   font-size: 11px;
+}
+
+.report-share-panel {
+  display: grid;
+  gap: 10px;
+  padding: 14px 0 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.report-share-panel > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.report-share-list {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.report-share-list > div:first-child,
+.report-share-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.report-share-list > div:first-child span,
+.report-share-row small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.report-share-row {
+  min-width: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.report-share-row > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.report-share-row code {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .result-action-error {

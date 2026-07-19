@@ -52,6 +52,7 @@ WHERE FIND_IN_SET('detect', `scopes`) > 0;
 
 CREATE TABLE IF NOT EXISTS `developer_usage_events` (
   `id` BIGINT NOT NULL AUTO_INCREMENT,
+  `task_id` VARCHAR(64) NULL,
   `user_id` INT NOT NULL,
   `key_id` BIGINT NULL,
   `pipeline` VARCHAR(32) NOT NULL,
@@ -63,6 +64,7 @@ CREATE TABLE IF NOT EXISTS `developer_usage_events` (
   `total_tokens` INT NOT NULL DEFAULT 0,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_developer_usage_task` (`task_id`),
   KEY `idx_developer_usage_user_created` (`user_id`, `created_at`),
   KEY `idx_developer_usage_key_created` (`key_id`, `created_at`),
   KEY `idx_developer_usage_pipeline_created` (`pipeline`, `created_at`)
@@ -97,12 +99,29 @@ INSERT IGNORE INTO `developer_pricing` (`mode`, `display_name`, `unit_price_fen`
 CREATE TABLE IF NOT EXISTS `developer_detection_tasks` (
   `task_id` VARCHAR(64) NOT NULL,
   `user_id` INT NOT NULL,
+  `account_uuid` CHAR(36) NOT NULL,
   `key_id` BIGINT NOT NULL,
   `mode` VARCHAR(16) NOT NULL,
   `filename` VARCHAR(255) NOT NULL,
+  `mime_type` VARCHAR(127) NOT NULL DEFAULT 'application/octet-stream',
+  `execution_filename` VARCHAR(255) NULL,
   `request_sha256` CHAR(64) NOT NULL,
+  `spool_path` VARCHAR(255) NULL,
+  `spool_size` BIGINT UNSIGNED NULL,
+  `request_context_json` TEXT NULL,
   `idempotency_key` VARCHAR(128) NULL,
-  `status` VARCHAR(24) NOT NULL DEFAULT 'queued',
+  `status` VARCHAR(24) NOT NULL DEFAULT 'preparing',
+  `lease_owner` VARCHAR(64) NULL,
+  `lease_expires_at` DATETIME(6) NULL,
+  `attempt_count` INT UNSIGNED NOT NULL DEFAULT 0,
+  `last_heartbeat_at` DATETIME(6) NULL,
+  `effect_item_id` INT NULL,
+  `effect_result_json` MEDIUMTEXT NULL,
+  `daily_quota_reserved` TINYINT(1) NOT NULL DEFAULT 0,
+  `daily_quota_day` DATE NULL,
+  `prompt_tokens` INT UNSIGNED NOT NULL DEFAULT 0,
+  `completion_tokens` INT UNSIGNED NOT NULL DEFAULT 0,
+  `total_tokens` INT UNSIGNED NOT NULL DEFAULT 0,
   `result_item_id` INT NULL,
   `result_json` MEDIUMTEXT NULL,
   `error_message` VARCHAR(500) NULL,
@@ -110,9 +129,10 @@ CREATE TABLE IF NOT EXISTS `developer_detection_tasks` (
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `completed_at` DATETIME NULL,
   PRIMARY KEY (`task_id`),
-  UNIQUE KEY `uk_developer_task_idempotency` (`user_id`, `idempotency_key`),
+  UNIQUE KEY `uk_developer_task_idempotency` (`account_uuid`, `idempotency_key`),
   KEY `idx_developer_tasks_user_created` (`user_id`, `created_at`),
-  KEY `idx_developer_tasks_key_created` (`key_id`, `created_at`)
+  KEY `idx_developer_tasks_key_created` (`key_id`, `created_at`),
+  KEY `idx_developer_tasks_lease` (`status`, `lease_expires_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `developer_billing_reservations` (

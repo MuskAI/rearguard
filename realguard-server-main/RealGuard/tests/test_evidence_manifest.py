@@ -41,6 +41,11 @@ MODEL_RUN = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _persisted_metadata_store(monkeypatch):
+    monkeypatch.setattr(evidence_manifest, "load_recorded_metadata", lambda record_id: {})
+
+
 def _item(**overrides):
     item = {
         "itemid": 73,
@@ -94,6 +99,63 @@ def test_signed_manifest_contains_required_server_evidence_and_verifies(tmp_path
     assert manifest["generated_at"] == "2026-07-19T08:30:00Z"
     assert envelope["signature"]["algorithm"] == "HMAC-SHA256"
     assert evidence_manifest.verify_manifest(envelope, key=SIGNING_KEY) is True
+
+
+def test_boundary_score_is_signed_as_manual_review_with_raw_label_preserved(tmp_path):
+    source = tmp_path / "boundary.png"
+    source.write_bytes(b"boundary-image")
+
+    envelope = evidence_manifest.create_signed_image_manifest(
+        _item(fake=52.0, aigc="AI生成图像", clarity="低"),
+        source_path=source,
+        model_run=MODEL_RUN,
+        generated_at=GENERATED_AT,
+        key=SIGNING_KEY,
+    )
+
+    conclusion = envelope["manifest"]["conclusion"]
+    assert conclusion["label"] == "需人工复核"
+    assert conclusion["raw_model_label"] == "AI生成图像"
+
+
+def test_metadata_snapshot_includes_reproducible_normalized_digest(monkeypatch, tmp_path):
+    metadata = {"Make": "Example Camera", "ISO": 100}
+    monkeypatch.setattr(evidence_manifest, "load_recorded_metadata", lambda record_id: metadata)
+    source = tmp_path / "metadata.png"
+    source.write_bytes(b"metadata-image")
+
+    envelope = evidence_manifest.create_signed_image_manifest(
+        _item(),
+        source_path=source,
+        model_run=MODEL_RUN,
+        generated_at=GENERATED_AT,
+        key=SIGNING_KEY,
+    )
+
+    snapshot = envelope["manifest"]["structured_evidence"]["metadata"]
+    assert snapshot["extractor"] == "server-persisted-exif-v1"
+    assert snapshot["normalized_sha256"] == hashlib.sha256(
+        evidence_manifest.canonical_json(metadata)
+    ).hexdigest()
+
+
+def test_detection_fails_closed_when_completion_snapshot_cannot_be_frozen(monkeypatch):
+    monkeypatch.setattr(detection, "excute_detection_sql", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(detection, "_load_detection_record", lambda *_: _item())
+    monkeypatch.setattr(
+        detection.reporting,
+        "freeze_image_evidence_snapshot",
+        lambda *_: (_ for _ in ()).throw(RuntimeError("snapshot unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="证据快照固化失败"):
+        detection._persist_and_freeze_completed_image_result(73, {
+            "probability": 0.8,
+            "detector_probability": 0.8,
+            "final_label": "AI生成图像",
+            "confidence": "高",
+            "explanation": "test",
+        })
 
 
 @pytest.mark.parametrize(
@@ -166,6 +228,106 @@ def test_same_server_input_and_generation_time_reproduce_identical_signed_snapsh
     assert later["manifest"]["generated_at"] != first["manifest"]["generated_at"]
     assert later["signature"]["value"] != first["signature"]["value"]
     assert evidence_manifest.verify_manifest(later, key=SIGNING_KEY) is True
+
+
+def test_rotated_keyring_verifies_old_snapshot_and_new_signatures_use_active_key(monkeypatch, tmp_path):
+    source = tmp_path / "original.png"
+    source.write_bytes(b"rotation-original")
+    old_key = "old-evidence-key-0123456789abcdef0123456789abcdef"
+    new_key = "new-evidence-key-0123456789abcdef0123456789abcdef"
+    monkeypatch.setenv("REALGUARD_EVIDENCE_HMAC_KEY_ID", "evidence-2026-01")
+    monkeypatch.setenv("REALGUARD_EVIDENCE_HMAC_KEY", old_key)
+    old_envelope = evidence_manifest.create_signed_image_manifest(
+        _item(),
+        source_path=source,
+        model_run=MODEL_RUN,
+        generated_at=GENERATED_AT,
+    )
+
+    monkeypatch.setenv("REALGUARD_EVIDENCE_HMAC_KEY_ID", "evidence-2026-07")
+    monkeypatch.setenv("REALGUARD_EVIDENCE_HMAC_KEY", new_key)
+    monkeypatch.setenv(
+        "REALGUARD_EVIDENCE_HMAC_KEYS_JSON",
+        '{"evidence-2026-01":"old-evidence-key-0123456789abcdef0123456789abcdef"}',
+    )
+
+    assert evidence_manifest.verify_manifest(old_envelope) is True
+    new_envelope = evidence_manifest.create_signed_image_manifest(
+        _item(itemid=74),
+        source_path=source,
+        model_run=MODEL_RUN,
+        generated_at=GENERATED_AT,
+    )
+    assert new_envelope["signature"]["key_id"] == "evidence-2026-07"
+    assert new_envelope["manifest"]["signature_key_id"] == "evidence-2026-07"
+    assert evidence_manifest.verify_manifest(new_envelope) is True
+
+
+def test_unknown_historical_key_id_and_placeholder_key_are_rejected(monkeypatch, tmp_path):
+    source = tmp_path / "original.png"
+    source.write_bytes(b"old-original")
+    monkeypatch.setenv("REALGUARD_EVIDENCE_HMAC_KEY_ID", "old-key")
+    old = evidence_manifest.create_signed_image_manifest(
+        _item(),
+        source_path=source,
+        model_run=MODEL_RUN,
+        generated_at=GENERATED_AT,
+        key=SIGNING_KEY,
+    )
+    monkeypatch.setenv("REALGUARD_EVIDENCE_HMAC_KEY_ID", "new-key")
+    monkeypatch.setenv("REALGUARD_EVIDENCE_HMAC_KEY", SIGNING_KEY)
+    monkeypatch.delenv("REALGUARD_EVIDENCE_HMAC_KEYS_JSON", raising=False)
+    assert evidence_manifest.verify_manifest(old) is False
+
+    monkeypatch.setenv(
+        "REALGUARD_EVIDENCE_HMAC_KEYS_JSON",
+        '{"old-key":"replace-with-an-independent-random-64-hex-character-key"}',
+    )
+    with pytest.raises(evidence_manifest.EvidenceManifestError, match="公开占位符"):
+        evidence_manifest._verification_keyring()
+
+    monkeypatch.setenv("REALGUARD_EVIDENCE_HMAC_KEYS_JSON", '{"old-key":null}')
+    with pytest.raises(evidence_manifest.EvidenceManifestError, match="必须是字符串"):
+        evidence_manifest._verification_keyring()
+
+
+def test_old_snapshot_pdf_remains_verifiable_after_active_key_rotation(monkeypatch, tmp_path):
+    source = tmp_path / "original.png"
+    source.write_bytes(b"historic-report-original")
+    snapshot_root = tmp_path / "snapshots"
+    old_key = "old-report-key-0123456789abcdef0123456789abcdef"
+    new_key = "new-report-key-0123456789abcdef0123456789abcdef"
+    monkeypatch.setattr(reporting, "_render_image_report_pdf", lambda item, result: b"%PDF-1.7\n%%EOF\n")
+    monkeypatch.setenv("REALGUARD_EVIDENCE_HMAC_KEY_ID", "report-2026-01")
+    monkeypatch.setenv("REALGUARD_EVIDENCE_HMAC_KEY", old_key)
+    reporting.image_report_pdf(
+        _item(),
+        {},
+        source_path=source,
+        model_run=MODEL_RUN,
+        generated_at=GENERATED_AT,
+        snapshot_root=snapshot_root,
+    )
+
+    monkeypatch.setenv("REALGUARD_EVIDENCE_HMAC_KEY_ID", "report-2026-07")
+    monkeypatch.setenv("REALGUARD_EVIDENCE_HMAC_KEY", new_key)
+    monkeypatch.setenv(
+        "REALGUARD_EVIDENCE_HMAC_KEYS_JSON",
+        '{"report-2026-01":"old-report-key-0123456789abcdef0123456789abcdef"}',
+    )
+    historic_pdf = reporting.image_report_pdf(
+        _item(),
+        {"final_label": "客户端无效字段"},
+        source_path=source,
+        model_run={"id": "new-run"},
+        generated_at="2026-07-20T08:30:00Z",
+        snapshot_root=snapshot_root,
+    )
+
+    embedded = evidence_manifest.extract_envelope_from_pdf(historic_pdf)
+    assert embedded["signature"]["key_id"] == "report-2026-01"
+    assert embedded["artifact"]["signature"]["key_id"] == "report-2026-01"
+    assert reporting.verify_image_report(historic_pdf) is True
 
 
 def test_repeated_report_downloads_reuse_first_persisted_manifest_and_signature(monkeypatch, tmp_path):
@@ -462,7 +624,7 @@ def test_report_ignores_unsigned_client_fields_and_renders_signed_server_snapsho
     assert "主模型与服务端取证证据一致" in rendered["result"]["explanation"]
     assert "客户端声称没有风险" not in rendered["result"]["explanation"]
     assert rendered["result"]["visual_issues"] == []
-    assert rendered["result"]["visibleWatermark"] is None
+    assert rendered["result"]["visibleWatermark"]["detected"] is True
     assert envelope["manifest"]["source"]["sha256"] == hashlib.sha256(b"authoritative-source").hexdigest()
     assert envelope["manifest"]["model"]["version"] == "v1-onnx-mil-2026.07"
     assert reporting.verify_image_report(pdf, signing_key=SIGNING_KEY) is True
@@ -483,10 +645,115 @@ def test_html_report_embeds_signed_envelope_and_not_client_verdict(tmp_path):
     )
 
     assert "需人工复核 · 66.1%" in html
-    assert "不可变证据清单" in html
+    assert "签名完整性清单" in html
     assert hashlib.sha256(b"original").hexdigest() in html
     assert "v1-onnx-mil-2026.07" in html
     assert "客户端声称没有风险" not in html
+
+
+def test_server_watermark_and_capture_metadata_are_signed_and_rendered(monkeypatch, tmp_path):
+    source = tmp_path / "camera-original.jpg"
+    source.write_bytes(b"camera-original")
+    metadata = {
+        "EXIF:Make": "Canon",
+        "EXIF:Model": "EOS R5",
+        "EXIF:ExposureTime": "1/250",
+        "EXIF:FNumber": "2.8",
+        "EXIF:ISO": "400",
+        "EXIF:FocalLength": "50 mm",
+        "EXIF:DateTimeOriginal": "2026:07:18 10:20:30",
+        "EXIF:BodySerialNumber": "private-serial-must-not-be-signed",
+        "GPSLatitude": "30.123456",
+    }
+    monkeypatch.setattr(evidence_manifest, "load_recorded_metadata", lambda record_id: metadata)
+    model_run = copy.deepcopy(MODEL_RUN)
+    model_run["meta"]["visibleWatermark"]["hits"] = [{
+        "provider": "gemini",
+        "label": "Gemini",
+        "confidence": 0.96,
+        "bbox": {"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.12},
+        "method": "registry",
+        "model": "watermark-model",
+        "modelRevision": "sha256:abc",
+        "evidenceRole": "provenance",
+        "decisive": True,
+    }]
+    rendered = {}
+
+    def fake_renderer(item, result):
+        rendered["result"] = copy.deepcopy(result)
+        return b"%PDF-1.7\n%%EOF\n"
+
+    monkeypatch.setattr(reporting, "_render_image_report_pdf", fake_renderer)
+    pdf = reporting.image_report_pdf(
+        _item(filename="camera-original.jpg"),
+        {
+            "all_metadata": {"EXIF:Make": "attacker"},
+            "capture_evidence": {"summary": "attacker"},
+            "visibleWatermark": {"detected": False},
+        },
+        source_path=source,
+        model_run=model_run,
+        generated_at=GENERATED_AT,
+        signing_key=SIGNING_KEY,
+        snapshot_root=tmp_path / "snapshots",
+    )
+    envelope = evidence_manifest.extract_envelope_from_pdf(pdf)
+    structured = envelope["manifest"]["structured_evidence"]
+
+    assert structured["visible_watermark"]["hits"][0]["bbox"] == {
+        "x": 0.1, "y": 0.2, "w": 0.3, "h": 0.12,
+    }
+    assert structured["capture_evidence"]["supportsRealCapture"] is True
+    assert structured["capture_evidence"]["privacy"]["gpsRedacted"] is True
+    assert structured["metadata"]["present"] is True
+    assert "private-serial-must-not-be-signed" not in evidence_manifest.canonical_json(envelope).decode("utf-8")
+    assert "30.123456" not in evidence_manifest.canonical_json(envelope).decode("utf-8")
+    assert rendered["result"]["visibleWatermark"] == structured["visible_watermark"]
+    assert rendered["result"]["capture_evidence"] == structured["capture_evidence"]
+    assert rendered["result"]["all_metadata"] == structured["metadata"]
+    assert reporting.verify_image_report(pdf, signing_key=SIGNING_KEY) is True
+
+
+def test_freeze_helper_reuses_server_snapshot_api_and_accepts_no_client_result(monkeypatch):
+    item = _item()
+    model_run = {"id": "run-server"}
+    expected = {"manifest": {"record_id": "73"}, "signature": {"value": "signed"}}
+    captured = {}
+
+    def fake_freeze(received_item, **kwargs):
+        captured["item"] = received_item
+        captured["kwargs"] = kwargs
+        return expected
+
+    monkeypatch.setattr(evidence_manifest, "get_or_create_signed_image_manifest", fake_freeze)
+
+    assert reporting.freeze_image_evidence_snapshot(item, model_run=model_run) is expected
+    assert captured == {"item": item, "kwargs": {"model_run": model_run}}
+    with pytest.raises(TypeError):
+        reporting.freeze_image_evidence_snapshot(item, model_run=model_run, result={"fake": True})
+
+
+def test_user_erasure_removes_corrupt_regular_snapshot(tmp_path):
+    root = tmp_path / "snapshots"
+    root.mkdir(mode=0o700)
+    snapshot = root / "image-73.manifest.json"
+    snapshot.write_bytes(b"corrupt snapshot")
+
+    assert evidence_manifest.delete_signed_image_manifest(73, snapshot_root=root) is True
+    assert not snapshot.exists()
+
+
+def test_user_erasure_rejects_snapshot_symlink(tmp_path):
+    root = tmp_path / "snapshots"
+    root.mkdir(mode=0o700)
+    target = tmp_path / "outside.json"
+    target.write_text("must remain", encoding="utf-8")
+    (root / "image-73.manifest.json").symlink_to(target)
+
+    with pytest.raises(evidence_manifest.EvidenceManifestError):
+        evidence_manifest.delete_signed_image_manifest(73, snapshot_root=root)
+    assert target.read_text(encoding="utf-8") == "must remain"
 
 
 def test_report_endpoint_returns_clear_422_when_historical_original_is_missing(monkeypatch, tmp_path):

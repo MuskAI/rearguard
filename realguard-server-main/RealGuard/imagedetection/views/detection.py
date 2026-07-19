@@ -28,12 +28,14 @@ from imagedetection.views import (
     watermark_verdict,
 )
 from imagedetection.views.utils import (
+    claim_detection_record_owner,
     create_folder,
     detection_owner_where,
     excute_detection_sql,
     excute_detection_sql_lastid,
     get_file_size_str,
     get_image_info,
+    normalize_account_uuid,
     safe_truncate,
 )
 
@@ -377,6 +379,10 @@ def _backend_identity(user_info):
     return openid or phone or 'guest', phone
 
 
+def _account_uuid(user_info):
+    return normalize_account_uuid((user_info or {}).get('account_uuid'))
+
+
 def _detection_database_user_id(phone='', openid=''):
     """Resolve an owner ID in the detection database, not the account database."""
     phone = str(phone or '').strip()
@@ -401,24 +407,28 @@ def _detection_owner():
     return None, '', guest_openid, True
 
 
-def _detection_owner_where(user_id, phone, openid):
-    del user_id
-    return detection_owner_where(phone, openid)
+def _detection_owner_where(user_id, phone, openid, account_uuid=''):
+    return detection_owner_where(
+        phone,
+        openid,
+        account_uuid=account_uuid,
+        require_account_uuid=user_id not in (None, ''),
+    )
 
 
-def _runtime_owner_matches(owner, user_id, phone, openid, is_guest):
+def _runtime_owner_matches(owner, user_id, phone, openid, is_guest, account_uuid=''):
     owner = owner or {}
     owner_user_id = owner.get('Userid') or owner.get('userId') or owner.get('id')
     owner_phone = str(owner.get('phone') or '').strip()
     owner_openid = str(owner.get('openid') or '').strip()
     if is_guest:
         return bool(openid and owner_user_id in (None, '') and not owner_phone and owner_openid == openid)
+    immutable_owner = normalize_account_uuid(account_uuid)
+    stored_owner = normalize_account_uuid(owner.get('account_uuid') or owner.get('owner_account_uuid'))
+    if immutable_owner:
+        return bool(stored_owner and stored_owner == immutable_owner)
     if user_id not in (None, ''):
-        if owner_user_id not in (None, ''):
-            return str(owner_user_id) == str(user_id)
-        if phone and owner_phone:
-            return owner_phone == phone
-        return bool(openid and not owner_phone and owner_openid == openid)
+        return False
     if phone and owner_phone:
         return owner_phone == phone
     return bool(openid and not owner_phone and owner_openid == openid)
@@ -426,13 +436,14 @@ def _runtime_owner_matches(owner, user_id, phone, openid, is_guest):
 
 def _load_detection_record(table, itemid):
     user_id, phone, openid, is_guest = _detection_owner()
+    account_uuid = _account_uuid(session.get('user_info'))
     if is_guest:
         if not openid:
             return None
         sql = f"SELECT * FROM {table} WHERE itemid = %s AND Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s LIMIT 1"
         rows = excute_detection_sql(sql, (itemid, openid))
     else:
-        owner_where, owner_params = _detection_owner_where(user_id, phone, openid)
+        owner_where, owner_params = _detection_owner_where(user_id, phone, openid, account_uuid)
         sql = f"SELECT * FROM {table} WHERE itemid = %s AND ({owner_where}) LIMIT 1"
         rows = excute_detection_sql(sql, (itemid, *owner_params))
     return rows[0] if rows else None
@@ -646,6 +657,48 @@ def _record_model_run(itemid, data, user_info):
         print(f"[MODEL RUN LOG ERROR] {exc}")
 
 
+def _persist_and_freeze_completed_image_result(itemid, result):
+    """Persist the final fused verdict before freezing its signed evidence."""
+    if not itemid:
+        raise RuntimeError('检测结果缺少历史记录 ID')
+    probability = _clamp01((result or {}).get('probability'), 0.5)
+    detector_probability = _clamp01(
+        (result or {}).get('detector_probability'),
+        probability,
+    )
+    final_label = (result or {}).get('final_label') or (
+        'AI生成图像' if probability >= 0.5 else '真实图像'
+    )
+    updated = excute_detection_sql(
+        """
+        UPDATE data
+        SET fake = %s, detector_probability = %s, aigc = %s,
+            clarity = %s, explantation = %s
+        WHERE itemid = %s
+        """,
+        (
+            round(probability * 100.0, 2),
+            detector_probability,
+            final_label,
+            (result or {}).get('confidence') or _conf_level_from_score(probability),
+            safe_truncate((result or {}).get('explanation') or '', 500),
+            itemid,
+        ),
+        fetch=False,
+    )
+    if updated is None:
+        raise RuntimeError('最终融合结论写入历史失败')
+
+    item = _load_detection_record('data', itemid)
+    if not item:
+        raise RuntimeError('最终融合结论写入后无法读取历史记录')
+    try:
+        reporting.freeze_image_evidence_snapshot(item)
+    except Exception as exc:
+        raise RuntimeError('检测结论已生成，但证据快照固化失败，请稍后重试') from exc
+    return True
+
+
 def _primary_image_endpoint():
     model = _primary_image_model()
     timeout = int(model.get('timeoutSeconds') or IMAGE_DETECT_TIMEOUT) if model else IMAGE_DETECT_TIMEOUT
@@ -708,18 +761,23 @@ def _local_detection_record(itemid):
     if itemid in (None, ''):
         return None
     rows = excute_detection_sql(
-        "SELECT itemid, filename, Userid, phone, openid FROM data WHERE itemid = %s LIMIT 1",
+        "SELECT itemid, filename, Userid, owner_account_uuid, phone, openid FROM data WHERE itemid = %s LIMIT 1",
         (itemid,),
     )
     return rows[0] if rows else None
 
 
-def _record_matches_detection_actor(record, source_filename, backend_openid, phone):
+def _record_matches_detection_actor(record, source_filename, backend_openid, phone, account_uuid=''):
     if not record:
         return False
     record_phone = str(record.get('phone') or '').strip()
     record_openid = str(record.get('openid') or '').strip()
-    actor_matches = record_phone == phone if phone else record_openid == backend_openid
+    immutable_owner = normalize_account_uuid(account_uuid)
+    record_owner = normalize_account_uuid(record.get('owner_account_uuid'))
+    if immutable_owner:
+        actor_matches = immutable_owner == record_owner
+    else:
+        actor_matches = record_phone == phone if phone else record_openid == backend_openid
     filename_matches = bool(source_filename) and str(record.get('filename') or '') == str(source_filename)
     return actor_matches and filename_matches
 
@@ -751,8 +809,8 @@ def _insert_local_detection_record(data, image_bytes, filename, backend_openid, 
         """
         INSERT INTO data
             (createtime, filename, fake, detector_probability, openid, phone, aigc,
-             file_size, img_format, resolution, clarity, explantation, Userid)
-        VALUES (NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             file_size, img_format, resolution, clarity, explantation, Userid, owner_account_uuid)
+        VALUES (NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             stored_name,
@@ -767,6 +825,7 @@ def _insert_local_detection_record(data, image_bytes, filename, backend_openid, 
             confidence,
             safe_truncate(explanation, 500),
             _detection_database_user_id(phone, backend_openid),
+            _account_uuid(user_info) or None,
         ),
     )
     if not itemid:
@@ -788,7 +847,10 @@ def _ensure_local_primary_record(api_json, image_bytes, filename, backend_openid
     remote_itemid = data.get('data_itemid')
     remote_filename = str(data.get('filename') or '').strip()
     local_record = _local_detection_record(remote_itemid)
-    if _record_matches_detection_actor(local_record, remote_filename, backend_openid, phone):
+    account_uuid = _account_uuid(user_info)
+    if _record_matches_detection_actor(local_record, remote_filename, backend_openid, phone, account_uuid):
+        if account_uuid and not claim_detection_record_owner('data', remote_itemid, account_uuid):
+            raise RuntimeError('检测结果不可验证为当前账号所有')
         if (data.get('watermark_verdict_override') or {}).get('applied'):
             updated = excute_detection_sql(
                 """
@@ -899,8 +961,8 @@ def _insert_v2_fallback_record(payload, image_bytes, filename, backend_openid, p
         """
         INSERT INTO data
             (createtime, filename, fake, detector_probability, openid, phone, aigc,
-             file_size, img_format, resolution, clarity, explantation, Userid)
-        VALUES (NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             file_size, img_format, resolution, clarity, explantation, Userid, owner_account_uuid)
+        VALUES (NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             stored_name,
@@ -915,6 +977,7 @@ def _insert_v2_fallback_record(payload, image_bytes, filename, backend_openid, p
             confidence_level,
             safe_truncate(explanation, 500),
             _detection_database_user_id(phone, backend_openid),
+            _account_uuid(user_info) or None,
         ),
     )
     if not itemid:
@@ -1036,8 +1099,8 @@ def _insert_aliyun_record(model, aliyun_payload, image_bytes, filename, backend_
         """
         INSERT INTO data
             (createtime, filename, fake, openid, phone, aigc,
-             file_size, img_format, resolution, clarity, explantation, Userid)
-        VALUES (NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             file_size, img_format, resolution, clarity, explantation, Userid, owner_account_uuid)
+        VALUES (NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             stored_name,
@@ -1051,6 +1114,7 @@ def _insert_aliyun_record(model, aliyun_payload, image_bytes, filename, backend_
             confidence_level,
             safe_truncate(explanation, 500),
             _detection_database_user_id(phone, backend_openid),
+            _account_uuid(user_info) or None,
         ),
     )
     if not itemid:
@@ -1201,6 +1265,7 @@ def _run_image_detection_payload(
     is_guest=False,
     mark_guest=True,
     include_internal_evidence=False,
+    freeze_evidence=True,
 ):
     backend_openid, phone = _backend_identity(user_info)
     safe_name = secure_filename(filename) or filename
@@ -1354,6 +1419,11 @@ def _run_image_detection_payload(
             result['visibleWatermark'] = visible_watermark
             if watermark_verdict.apply_to_result(result, visible_watermark):
                 result.pop('probabilityModel', None)
+        if freeze_evidence:
+            result['evidenceSnapshotReady'] = _persist_and_freeze_completed_image_result(
+                data_itemid,
+                result,
+            )
         if include_internal_evidence and isinstance(data.get('remote_evidence'), dict):
             result['_remote_evidence'] = data.get('remote_evidence')
         return {'status': 'success', 'result': result}, 200
@@ -1748,6 +1818,7 @@ def _swarm_primary_expert(image_bytes, filename, mimetype, user_info, is_guest):
         is_guest=is_guest,
         mark_guest=False,
         include_internal_evidence=True,
+        freeze_evidence=False,
     )
     if status_code >= 400 or payload.get('status') == 'error':
         return None, {
@@ -2290,7 +2361,12 @@ def _persist_swarm_history_result(final_result, image_bytes, filename, backend_o
     itemid = (final_result or {}).get('itemid')
     record = _local_detection_record(itemid)
     expected_filename = str((final_result or {}).get('filename') or '').strip()
-    if _record_matches_detection_actor(record, expected_filename, backend_openid, phone):
+    account_uuid = _account_uuid(user_info)
+    if _record_matches_detection_actor(record, expected_filename, backend_openid, phone, account_uuid):
+        if account_uuid and not claim_detection_record_owner(
+            'data', itemid, account_uuid, phone, backend_openid
+        ):
+            raise RuntimeError('Swarm 结果归属绑定失败')
         fake_pct = round(_clamp01(final_result.get('probability'), 0.5) * 100.0, 2)
         detector_probability = _clamp01(
             final_result.get('detector_probability'),
@@ -2478,13 +2554,17 @@ def _run_swarm_detection_payload(image_bytes, filename, mimetype, user_info, *, 
                 'confidence': final_result['confidence'],
             })
             final_result['swarm'] = swarm
-    _persist_swarm_history_result(
+    itemid = _persist_swarm_history_result(
         final_result,
         image_bytes,
         filename,
         backend_openid,
         phone,
         user_info,
+    )
+    final_result['evidenceSnapshotReady'] = _persist_and_freeze_completed_image_result(
+        itemid,
+        final_result,
     )
     payload = {'status': 'success', 'result': final_result}
     _swarm_update_job(job_id, experts, 100, 'Swarm 专家会诊完成', status='success', result=payload)
@@ -2617,7 +2697,9 @@ def image_detection_job(job_id):
         return jsonify({'status': 'error', 'message': '任务不存在'}), 404
     owner = job.get('actor') or {}
     user_id, phone, openid, is_guest = _detection_owner()
-    allowed = _runtime_owner_matches(owner, user_id, phone, openid, is_guest)
+    allowed = _runtime_owner_matches(
+        owner, user_id, phone, openid, is_guest, _account_uuid(session.get('user_info'))
+    )
     if not allowed:
         return jsonify({'status': 'error', 'message': '无权查看该任务'}), 403
     return jsonify({'status': 'success', 'job': _public_detection_job(job)})
@@ -2658,7 +2740,9 @@ def image_detection_feedback():
         owner_where = "Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s"
         owner_params = (openid,)
     else:
-        owner_where, owner_params = _detection_owner_where(user_id, phone, openid)
+        owner_where, owner_params = _detection_owner_where(
+            user_id, phone, openid, _account_uuid(session.get('user_info'))
+        )
     sql = f"UPDATE data SET feedback = %s WHERE itemid = %s AND ({owner_where})"
     n = excute_detection_sql(sql, (db_text, itemid, *owner_params), fetch=False)
     if n is None:
@@ -2840,6 +2924,12 @@ def video_detect():
 
     data = api_json.get('data') or {}
     itemid = data.get('data_itemid')
+    account_uuid = _account_uuid(user_info)
+    if itemid and account_uuid and not claim_detection_record_owner('video_data', itemid, account_uuid):
+        return jsonify({
+            'status': 'error',
+            'message': '视频检测完成，但后端未返回可验证的账号归属；结果已拒绝展示',
+        }), 502
     fake_pct = _to_float(data.get('fake_percentage', 0), 0.0)
     real_pct = _to_float(data.get('real_percentage', max(0, 100 - fake_pct)), max(0, 100 - fake_pct))
     conf_score = _conf_score_from_api(data.get('confidence'), fake_pct)

@@ -1,5 +1,17 @@
 import { type ReactNode, useState } from "react";
-import { DetectResult, ForensicReport, ProvenanceReport, VERDICT_META, TYPE_LABEL, createReportShareLink, downloadReport } from "../api";
+import { Link2, ShieldOff, X } from "lucide-react";
+import {
+  DetectResult,
+  ForensicReport,
+  ProvenanceReport,
+  ReportShareItem,
+  VERDICT_META,
+  TYPE_LABEL,
+  createReportShareLink,
+  downloadReport,
+  listReportShares,
+  revokeReportShare,
+} from "../api";
 import ConfidenceRing from "./ConfidenceRing";
 
 interface Props {
@@ -323,6 +335,8 @@ export default function ResultCard({
   const [reportBusy, setReportBusy] = useState(false);
   const [shareBusy, setShareBusy] = useState(false);
   const [shareMessage, setShareMessage] = useState("");
+  const [sharePanelOpen, setSharePanelOpen] = useState(false);
+  const [shares, setShares] = useState<ReportShareItem[]>([]);
   const fileMeta = result.fileMeta || { name: "未知文件", type: "document" as const, size: "未知" };
   const fileType = fileMeta.type || "document";
   const fileLabel = TYPE_LABEL[fileType] || "文件";
@@ -356,6 +370,7 @@ export default function ResultCard({
     setShareMessage("");
     try {
       const link = await createReportShareLink(result.reportId);
+      setShares(await listReportShares(result.reportId));
       try {
         await navigator.clipboard.writeText(link.url);
         setShareMessage("分享链接已复制，7 天内有效");
@@ -365,6 +380,41 @@ export default function ResultCard({
       }
     } catch (error) {
       window.alert(actionErrorMessage(error, "生成分享链接失败"));
+    } finally {
+      setShareBusy(false);
+    }
+  }
+
+  async function handleSharePanel() {
+    if (sharePanelOpen) {
+      setSharePanelOpen(false);
+      return;
+    }
+    if (shareBusy) return;
+    setShareBusy(true);
+    try {
+      setShares(await listReportShares(result.reportId));
+      setSharePanelOpen(true);
+    } catch (error) {
+      window.alert(actionErrorMessage(error, "加载分享记录失败"));
+    } finally {
+      setShareBusy(false);
+    }
+  }
+
+  async function handleRevokeShare(shareId: string) {
+    if (shareBusy) return;
+    setShareBusy(true);
+    try {
+      await revokeReportShare(result.reportId, shareId);
+      setShares((current) => current.map((item) => (
+        item.shareId === shareId
+          ? { ...item, active: false, revokedAt: new Date().toISOString() }
+          : item
+      )));
+      setShareMessage("分享链接已撤销");
+    } catch (error) {
+      window.alert(actionErrorMessage(error, "撤销分享链接失败"));
     } finally {
       setShareBusy(false);
     }
@@ -515,6 +565,15 @@ export default function ResultCard({
             >
               {shareBusy ? "生成中" : "复制分享链接"}
             </button>
+            <button
+              onClick={handleSharePanel}
+              disabled={shareBusy}
+              aria-label={sharePanelOpen ? "关闭分享管理" : "管理分享链接"}
+              title={sharePanelOpen ? "关闭分享管理" : "管理分享链接"}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-ink-600 bg-ink-900 text-ink-950 hover:border-brand-cyan/50 disabled:opacity-50"
+            >
+              {sharePanelOpen ? <X size={15} /> : <Link2 size={15} />}
+            </button>
             {onForensics && (
               <button
                 onClick={onForensics}
@@ -539,6 +598,42 @@ export default function ResultCard({
               </span>
             )}
           </div>
+
+          {sharePanelOpen && (
+            <section aria-label="分享链接管理" className="border-y border-ink-700 py-3">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <h3 className="text-xs font-semibold text-ink-950">分享链接</h3>
+                <span className="text-[11px] text-ink-500">{shares.filter((item) => item.active).length} 个有效</span>
+              </div>
+              {shares.length === 0 ? (
+                <p className="text-xs text-ink-500">尚未创建分享链接</p>
+              ) : (
+                <div className="divide-y divide-ink-700">
+                  {shares.map((item) => (
+                    <div key={item.shareId} className="flex items-center justify-between gap-3 py-2 first:pt-0 last:pb-0">
+                      <div className="min-w-0">
+                        <div className="truncate font-mono text-[11px] text-ink-950">{item.shareId}</div>
+                        <div className="mt-0.5 text-[11px] text-ink-500">
+                          {item.active ? `有效至 ${new Date(item.expiresAt).toLocaleString()}` : "已失效"}
+                        </div>
+                      </div>
+                      {item.active && (
+                        <button
+                          onClick={() => handleRevokeShare(item.shareId)}
+                          disabled={shareBusy}
+                          aria-label="撤销分享链接"
+                          title="撤销分享链接"
+                          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-cinnabar/30 text-cinnabar hover:bg-cinnabar/10 disabled:opacity-50"
+                        >
+                          <ShieldOff size={14} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
 
           <div className="rounded-lg border border-ink-700 bg-ink-900 px-4">
             <Disclosure title="判定维度">

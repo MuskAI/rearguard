@@ -4,6 +4,7 @@ import ipaddress
 import io
 import os
 import secrets
+import time
 import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -15,7 +16,7 @@ from PIL import Image
 from flask import Blueprint, Response, jsonify, request, send_file, session, stream_with_context
 
 from imagedetection.views.historical_record import DETECTION_BACKEND_BASE_URL
-from imagedetection.views import admin_state, traffic_geo
+from imagedetection.views import admin_state, evidence_manifest, traffic_geo
 from imagedetection.views.login import (
     PasswordLoginRateLimitError,
     SmsStorageError,
@@ -28,6 +29,7 @@ from imagedetection.views.login import (
     _record_terms_acceptance as _append_terms_acceptance,
     _session_version,
     _sync_detection_user,
+    _user_session_payload,
     _verify_sms_code,
 )
 from imagedetection.views.utils import (
@@ -38,10 +40,18 @@ from imagedetection.views.utils import (
     format_createtime,
     get_db_connection,
     get_detection_db_connection,
+    normalize_account_uuid,
 )
 
 
 api_blueprint = Blueprint("api_blueprint", __name__, url_prefix="/api")
+DEVELOPER_WORKER_HEARTBEAT = Path(
+    os.environ.get("REALGUARD_DEVELOPER_WORKER_HEARTBEAT", "/opt/realguard-data/developer-worker.heartbeat")
+)
+DEVELOPER_WORKER_MAX_HEARTBEAT_AGE = max(
+    10,
+    int(os.environ.get("REALGUARD_DEVELOPER_WORKER_MAX_HEARTBEAT_AGE", "60")),
+)
 THUMBNAIL_CACHE_DIR = Path(os.environ.get("REALGUARD_THUMBNAIL_CACHE_DIR", "/tmp/realguard-thumbnails"))
 THUMBNAIL_MAX_SIZE = (
     int(os.environ.get("REALGUARD_THUMBNAIL_MAX_WIDTH", "220")),
@@ -119,6 +129,7 @@ def _ensure_user_account_columns():
     if _USER_ACCOUNT_COLUMNS_READY:
         return True
     columns = [
+        ("account_uuid", "CHAR(36) NULL COMMENT '不可变账号标识'"),
         ("created_at", "DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'"),
         ("terms_version", "VARCHAR(32) NULL COMMENT '用户协议版本'"),
         ("terms_accepted_at", "DATETIME NULL COMMENT '用户协议同意时间'"),
@@ -128,21 +139,26 @@ def _ensure_user_account_columns():
     for column, definition in columns:
         if not _ensure_column("user", column, definition):
             return False
+    if excute_sql(
+        "UPDATE `user` SET account_uuid = UUID() WHERE account_uuid IS NULL OR account_uuid = ''",
+        fetch=False,
+    ) is None:
+        return False
     _USER_ACCOUNT_COLUMNS_READY = True
     return True
 
 
 def _set_session_user(user, phone):
-    _sync_detection_user(phone, user.get("username") or phone, user.get("openid", "") or phone)
+    session_user = _user_session_payload(user, phone)
+    _sync_detection_user(
+        phone,
+        user.get("username") or phone,
+        user.get("openid", "") or phone,
+        session_user.get("account_uuid"),
+    )
     session.clear()
     session.permanent = True
-    session["user_info"] = {
-        "Userid": user["Userid"],
-        "username": user.get("username") or phone,
-        "phone": phone,
-        "openid": user.get("openid", ""),
-        "session_version": _session_version(user),
-    }
+    session["user_info"] = session_user
     return session["user_info"]
 
 
@@ -338,6 +354,153 @@ def _issue_developer_key(user_id, options):
     return api_key, row_id
 
 
+def _create_developer_key_with_limit(user_id, options):
+    """Serialize the active-key limit and insert on the owning account row."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        conn.begin()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT Userid FROM `user` WHERE Userid = %s FOR UPDATE",
+                (user_id,),
+            )
+            if not cursor.fetchone():
+                conn.rollback()
+                return None, None, "开发者账号不存在"
+            cursor.execute(
+                "SELECT COUNT(*) AS cnt FROM developer_api_keys WHERE user_id = %s AND status = 'active'",
+                (user_id,),
+            )
+            active_count = int((cursor.fetchone() or {}).get("cnt") or 0)
+            if active_count >= DEVELOPER_API_KEY_MAX_ACTIVE:
+                conn.rollback()
+                return None, None, f"最多只能保留 {DEVELOPER_API_KEY_MAX_ACTIVE} 个 active API Key"
+
+            api_key = f"{DEVELOPER_API_KEY_PREFIX}{secrets.token_urlsafe(32)}"
+            cursor.execute(
+                """
+                INSERT INTO developer_api_keys
+                    (user_id, name, key_hash, key_prefix, key_last4, scopes, status, expires_at, ip_allowlist)
+                VALUES (%s, %s, %s, %s, %s, %s, 'active', %s, %s)
+                """,
+                (
+                    user_id,
+                    options["name"],
+                    _developer_key_hash(api_key),
+                    DEVELOPER_API_KEY_PREFIX,
+                    api_key[-4:],
+                    options["scopes"],
+                    options["expires_at"],
+                    options["ip_allowlist"],
+                ),
+            )
+            row_id = cursor.lastrowid
+            cursor.execute(
+                """
+                SELECT id, name, key_prefix, key_last4, scopes, status, created_at, last_used_at,
+                       revoked_at, expires_at, ip_allowlist
+                FROM developer_api_keys
+                WHERE id = %s AND user_id = %s
+                LIMIT 1
+                """,
+                (row_id, user_id),
+            )
+            row = cursor.fetchone()
+            if not row:
+                raise RuntimeError("API Key 写入后无法读取")
+        conn.commit()
+        return api_key, row, None
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        print(f"[API KEY CREATE ERROR] {exc}")
+        return None, None, "创建 API Key 失败，请稍后重试"
+    finally:
+        if conn:
+            conn.close()
+
+
+def _rotate_developer_key_atomic(user_id, key_id, payload):
+    conn = None
+    try:
+        conn = get_db_connection()
+        conn.begin()
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT Userid FROM `user` WHERE Userid = %s FOR UPDATE", (user_id,))
+            if not cursor.fetchone():
+                conn.rollback()
+                return None, None, "开发者账号不存在", 404
+            cursor.execute(
+                """
+                SELECT id, name, scopes, status, expires_at, ip_allowlist
+                FROM developer_api_keys
+                WHERE id = %s AND user_id = %s AND status = 'active'
+                LIMIT 1 FOR UPDATE
+                """,
+                (key_id, user_id),
+            )
+            current = cursor.fetchone()
+            if not current:
+                conn.rollback()
+                return None, None, "API Key 不存在或已撤销", 404
+            options, options_error = _developer_key_options(
+                payload,
+                fallback_name=current.get("name") or "Default key",
+                fallback_scopes=current.get("scopes"),
+                fallback_expiry=current.get("expires_at"),
+                fallback_ips=current.get("ip_allowlist"),
+            )
+            if options_error:
+                conn.rollback()
+                return None, None, options_error, 400
+            api_key = f"{DEVELOPER_API_KEY_PREFIX}{secrets.token_urlsafe(32)}"
+            cursor.execute(
+                """
+                INSERT INTO developer_api_keys
+                    (user_id, name, key_hash, key_prefix, key_last4, scopes, status, expires_at, ip_allowlist)
+                VALUES (%s, %s, %s, %s, %s, %s, 'active', %s, %s)
+                """,
+                (
+                    user_id,
+                    options["name"],
+                    _developer_key_hash(api_key),
+                    DEVELOPER_API_KEY_PREFIX,
+                    api_key[-4:],
+                    options["scopes"],
+                    options["expires_at"],
+                    options["ip_allowlist"],
+                ),
+            )
+            row_id = cursor.lastrowid
+            cursor.execute(
+                "UPDATE developer_api_keys SET status = 'revoked', revoked_at = NOW() "
+                "WHERE id = %s AND user_id = %s AND status = 'active'",
+                (key_id, user_id),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("原 API Key 状态已变化")
+            cursor.execute(
+                """
+                SELECT id, name, key_prefix, key_last4, scopes, status, created_at, last_used_at,
+                       revoked_at, expires_at, ip_allowlist
+                FROM developer_api_keys WHERE id = %s AND user_id = %s LIMIT 1
+                """,
+                (row_id, user_id),
+            )
+            row = cursor.fetchone()
+        conn.commit()
+        return api_key, row, None, 200
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        print(f"[API KEY ROTATE ERROR] {exc}")
+        return None, None, "轮换 API Key 失败，请稍后重试", 500
+    finally:
+        if conn:
+            conn.close()
+
+
 def _ensure_developer_api_key_table():
     global _DEVELOPER_KEY_TABLE_READY
     if _DEVELOPER_KEY_TABLE_READY:
@@ -392,6 +555,7 @@ def _ensure_developer_usage_table():
         """
         CREATE TABLE IF NOT EXISTS developer_usage_events (
           id BIGINT NOT NULL AUTO_INCREMENT,
+          task_id VARCHAR(64) NULL,
           user_id INT NOT NULL,
           key_id BIGINT NULL,
           pipeline VARCHAR(32) NOT NULL,
@@ -403,6 +567,7 @@ def _ensure_developer_usage_table():
           total_tokens INT NOT NULL DEFAULT 0,
           created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
           PRIMARY KEY (id),
+          UNIQUE KEY uk_developer_usage_task (task_id),
           KEY idx_developer_usage_user_created (user_id, created_at),
           KEY idx_developer_usage_key_created (key_id, created_at),
           KEY idx_developer_usage_pipeline_created (pipeline, created_at)
@@ -410,7 +575,22 @@ def _ensure_developer_usage_table():
         """,
         fetch=False,
     )
-    _DEVELOPER_USAGE_TABLE_READY = result is not None
+    if result is not None:
+        result = _ensure_column(
+            "developer_usage_events",
+            "task_id",
+            "VARCHAR(64) NULL COMMENT '可幂等恢复的开发者任务标识' AFTER id",
+        )
+    if result:
+        indexes = excute_sql("SHOW INDEX FROM developer_usage_events WHERE Key_name = %s", ("uk_developer_usage_task",))
+        if indexes == []:
+            result = excute_sql(
+                "ALTER TABLE developer_usage_events ADD UNIQUE INDEX uk_developer_usage_task (task_id)",
+                fetch=False,
+            ) is not None
+        elif indexes is None:
+            result = False
+    _DEVELOPER_USAGE_TABLE_READY = bool(result)
     return _DEVELOPER_USAGE_TABLE_READY
 
 
@@ -445,7 +625,7 @@ def _active_developer_key(api_key, *, touch=True):
     rows = excute_sql(
         """
         SELECT k.id, k.user_id, k.name, k.scopes, k.status, k.expires_at, k.ip_allowlist,
-               u.phone, u.username, u.openid
+               u.account_uuid, u.phone, u.username, u.openid
         FROM developer_api_keys k
         JOIN user u ON u.Userid = k.user_id
         WHERE k.key_hash = %s
@@ -506,7 +686,7 @@ def _consume_developer_key_request(api_key):
             cursor.execute(
                 """
                 SELECT k.id, k.user_id, k.name, k.scopes, k.status, k.expires_at,
-                       k.ip_allowlist, u.phone, u.username, u.openid,
+                       k.ip_allowlist, u.account_uuid, u.phone, u.username, u.openid,
                        q.daily_limit, q.rate_limit_per_minute,
                        NOW() AS quota_now
                 FROM developer_api_keys k
@@ -736,17 +916,19 @@ def _record_developer_usage_event(
     prompt_tokens=0,
     completion_tokens=0,
     total_tokens=0,
+    task_id=None,
 ):
     if not actor or not _ensure_developer_usage_table():
         return False
     result = excute_sql(
         """
-        INSERT INTO developer_usage_events
-          (user_id, key_id, pipeline, endpoint, model_version, status_code,
+        INSERT IGNORE INTO developer_usage_events
+          (task_id, user_id, key_id, pipeline, endpoint, model_version, status_code,
            prompt_tokens, completion_tokens, total_tokens)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
+            task_id,
             actor.get("user_id"),
             actor.get("id"),
             pipeline,
@@ -925,6 +1107,7 @@ def _history_identity(allow_empty=False):
         return {
             "mode": "user",
             "user_id": user.get("Userid") or user.get("userId") or user.get("id"),
+            "account_uuid": str(user.get("account_uuid") or "").strip(),
             "phone": str(user.get("phone") or "").strip(),
             "openid": str(user.get("openid") or "").strip(),
         }, None
@@ -939,7 +1122,13 @@ def _history_identity(allow_empty=False):
 def _history_actor_where(actor):
     phone = str((actor or {}).get("phone") or "").strip()
     openid = str((actor or {}).get("openid") or "").strip()
-    return detection_owner_where(phone, openid)
+    account_uuid = normalize_account_uuid((actor or {}).get("account_uuid"))
+    return detection_owner_where(
+        phone,
+        openid,
+        account_uuid=account_uuid,
+        require_account_uuid=(actor or {}).get("mode") == "user",
+    )
 
 
 def _is_guest_detection_record(item):
@@ -1129,6 +1318,7 @@ def me():
     phone = user.get("phone", "")
     actor = {
         "user_id": user.get("Userid") or user.get("userId") or user.get("id"),
+        "account_uuid": user.get("account_uuid"),
         "phone": phone,
         "openid": user.get("openid", ""),
     }
@@ -1146,6 +1336,31 @@ def me():
         counters["video_detect"] = rows[0].get("cnt", 0)
 
     return jsonify({"status": "success", "authenticated": True, "user": user, "counters": counters})
+
+
+@api_blueprint.route("/ready")
+def ready():
+    account_db = excute_sql("SELECT 1 AS ok")
+    detection_db = excute_detection_sql("SELECT 1 AS ok")
+    try:
+        heartbeat_age = max(0.0, time.time() - DEVELOPER_WORKER_HEARTBEAT.stat().st_mtime)
+        worker_ready = heartbeat_age <= DEVELOPER_WORKER_MAX_HEARTBEAT_AGE
+    except OSError:
+        heartbeat_age = None
+        worker_ready = False
+    checks = {
+        "accountDatabase": bool(account_db),
+        "detectionDatabase": bool(detection_db),
+        "developerWorker": worker_ready,
+    }
+    response = jsonify({
+        "status": "ready" if all(checks.values()) else "not_ready",
+        "checks": checks,
+        "workerHeartbeatAgeSeconds": round(heartbeat_age, 2) if heartbeat_age is not None else None,
+    })
+    response.status_code = 200 if all(checks.values()) else 503
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @api_blueprint.route("/login/password", methods=["POST"])
@@ -1234,8 +1449,8 @@ def register():
     affected = excute_sql(
         """
         INSERT INTO user
-            (phone, secret, username, openid, terms_version, terms_accepted_at, password_updated_at)
-        VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+            (account_uuid, phone, secret, username, openid, terms_version, terms_accepted_at, password_updated_at)
+        VALUES (UUID(), %s, %s, %s, %s, %s, NOW(), NOW())
         """,
         (phone, _hash_password(secret), username, "", TERMS_VERSION),
         fetch=False,
@@ -1245,7 +1460,8 @@ def register():
     if not _record_terms_acceptance(phone):
         return jsonify({"status": "error", "message": "协议确认记录失败，请稍后重试"}), 500
 
-    _sync_detection_user(phone, username, phone)
+    created_user = _find_user_by_phone(phone) or {}
+    _sync_detection_user(phone, username, phone, created_user.get("account_uuid"))
     return jsonify({"status": "success", "message": "注册成功，请登录"})
 
 
@@ -1324,29 +1540,11 @@ def create_developer_api_key():
     if options_error:
         return jsonify({"status": "error", "message": options_error}), 400
 
-    rows = excute_sql(
-        "SELECT COUNT(*) AS cnt FROM developer_api_keys WHERE user_id = %s AND status = 'active'",
-        (user["Userid"],),
-    )
-    active_count = int((rows or [{}])[0].get("cnt") or 0)
-    if active_count >= DEVELOPER_API_KEY_MAX_ACTIVE:
-        return jsonify({"status": "error", "message": f"最多只能保留 {DEVELOPER_API_KEY_MAX_ACTIVE} 个 active API Key"}), 400
-
-    api_key, row_id = _issue_developer_key(user["Userid"], options)
-    if not row_id:
-        return jsonify({"status": "error", "message": "创建 API Key 失败，请稍后重试"}), 500
-
-    rows = excute_sql(
-        """
-        SELECT id, name, key_prefix, key_last4, scopes, status, created_at, last_used_at,
-               revoked_at, expires_at, ip_allowlist
-        FROM developer_api_keys
-        WHERE id = %s AND user_id = %s
-        LIMIT 1
-        """,
-        (row_id, user["Userid"]),
-    )
-    key_payload = _developer_key_payload((rows or [{}])[0])
+    api_key, row, create_error = _create_developer_key_with_limit(user["Userid"], options)
+    if create_error:
+        status = 400 if create_error.startswith("最多只能") else 500
+        return jsonify({"status": "error", "message": create_error}), status
+    key_payload = _developer_key_payload(row or {})
     return jsonify({"status": "success", "apiKey": api_key, "key": key_payload})
 
 
@@ -1358,66 +1556,14 @@ def rotate_developer_api_key(key_id):
     if not _ensure_developer_api_key_table():
         return jsonify({"status": "error", "message": "API Key 存储初始化失败"}), 500
 
-    rows = excute_sql(
-        """
-        SELECT id, name, scopes, status, expires_at, ip_allowlist
-        FROM developer_api_keys
-        WHERE id = %s AND user_id = %s AND status = 'active'
-        LIMIT 1
-        """,
-        (key_id, user["Userid"]),
-    )
-    if rows is None:
-        return jsonify({"status": "error", "message": "读取 API Key 失败"}), 500
-    if not rows:
-        return jsonify({"status": "error", "message": "API Key 不存在或已撤销"}), 404
-
-    current = rows[0]
     payload = request.get_json(silent=True) or {}
-    options, options_error = _developer_key_options(
-        payload,
-        fallback_name=current.get("name") or "Default key",
-        fallback_scopes=current.get("scopes"),
-        fallback_expiry=current.get("expires_at"),
-        fallback_ips=current.get("ip_allowlist"),
-    )
-    if options_error:
-        return jsonify({"status": "error", "message": options_error}), 400
-
-    api_key, row_id = _issue_developer_key(user["Userid"], options)
-    if not row_id:
-        return jsonify({"status": "error", "message": "轮换 API Key 失败，请稍后重试"}), 500
-    revoked = excute_sql(
-        """
-        UPDATE developer_api_keys
-        SET status = 'revoked', revoked_at = NOW()
-        WHERE id = %s AND user_id = %s AND status = 'active'
-        """,
-        (key_id, user["Userid"]),
-        fetch=False,
-    )
-    if revoked != 1:
-        excute_sql(
-            "UPDATE developer_api_keys SET status = 'revoked', revoked_at = NOW() WHERE id = %s",
-            (row_id,),
-            fetch=False,
-        )
-        return jsonify({"status": "error", "message": "原 API Key 状态已变化，请刷新后重试"}), 409
-
-    created_rows = excute_sql(
-        """
-        SELECT id, name, key_prefix, key_last4, scopes, status, created_at, last_used_at,
-               revoked_at, expires_at, ip_allowlist
-        FROM developer_api_keys
-        WHERE id = %s AND user_id = %s
-        LIMIT 1
-        """,
-        (row_id, user["Userid"]),
-    )
+    api_key, row, rotate_error, status = _rotate_developer_key_atomic(user["Userid"], key_id, payload)
+    if rotate_error:
+        return jsonify({"status": "error", "message": rotate_error}), status
     return jsonify({
         "status": "success",
         "apiKey": api_key,
-        "key": _developer_key_payload((created_rows or [{}])[0]),
+        "key": _developer_key_payload(row or {}),
         "revoked": key_id,
     })
 
@@ -1461,6 +1607,7 @@ def verify_developer_api_key():
         "valid": True,
         "keyId": row.get("id"),
         "userId": row.get("user_id"),
+        "accountUuid": row.get("account_uuid"),
         "user": {
             "phone": row.get("phone") or "",
             "username": row.get("username") or "",
@@ -1758,6 +1905,11 @@ def _delete_owned_history_record(kind, itemid, actor):
             _thumbnail_cache_path(item).unlink(missing_ok=True)
         except OSError:
             pass
+        try:
+            evidence_manifest.delete_signed_image_manifest(itemid)
+        except evidence_manifest.EvidenceManifestError as exc:
+            print(f"[EVIDENCE DELETE ERROR] item={itemid}: {exc}")
+            return False, "记录已删除，但证据快照清理失败，请联系管理员", 500
     return True, "", 204
 
 

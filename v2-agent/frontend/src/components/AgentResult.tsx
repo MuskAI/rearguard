@@ -13,15 +13,28 @@ import {
   Image as ImageIcon,
   Info,
   Layers3,
+  Link2,
   LoaderCircle,
   Microscope,
   ScanLine,
   ShieldCheck,
+  ShieldOff,
   Sparkles,
   Video,
 } from "lucide-react";
 import type { AgentOutcome } from "../agentTypes";
-import type { CaptureEvidence, ForensicReport, ProbabilityModel, ProvenanceReport, SynthIDResult, VisibleWatermarkResult } from "../api";
+import {
+  createReportShareLink,
+  listReportShares,
+  revokeReportShare,
+  type CaptureEvidence,
+  type ForensicReport,
+  type ProbabilityModel,
+  type ProvenanceReport,
+  type ReportShareItem,
+  type SynthIDResult,
+  type VisibleWatermarkResult,
+} from "../api";
 import { buildEvidenceExplanation, hasDecisiveAiWatermark } from "../evidenceExplanation";
 
 type ResultTab = "summary" | "evidence" | "file";
@@ -506,7 +519,16 @@ function ProbabilitySection({ model }: { model?: ProbabilityModel }) {
 
 export default function AgentResult(props: Props) {
   const [tab, setTab] = useState<ResultTab>("summary");
-  useEffect(() => setTab("summary"), [props.outcome.id]);
+  const [shareBusy, setShareBusy] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareMessage, setShareMessage] = useState("");
+  const [shares, setShares] = useState<ReportShareItem[]>([]);
+  useEffect(() => {
+    setTab("summary");
+    setShareOpen(false);
+    setShareMessage("");
+    setShares([]);
+  }, [props.outcome.id]);
   const verdict = useMemo(() => verdictFor(props.outcome), [props.outcome]);
   const explanationPoints = useMemo(
     () => buildEvidenceExplanation(props.outcome, verdict.risk, verdict.label),
@@ -535,6 +557,65 @@ export default function AgentResult(props: Props) {
   const forensicsActionLabel = props.forensicsBusy
     ? props.forensicsPreviewState === "skipped" ? "服务端判读中" : forensics?.source === "browser-preview" ? "模型判读中" : forensics?.source === "vlm" ? "正在归档" : "本地图谱生成中"
     : forensics ? "重新生成取证图谱" : "生成取证图谱";
+
+  async function refreshShares() {
+    if (props.outcome.kind !== "evidence") return;
+    setShares(await listReportShares(props.outcome.result.reportId));
+  }
+
+  async function createShare() {
+    if (props.outcome.kind !== "evidence" || shareBusy) return;
+    setShareBusy(true);
+    setShareMessage("");
+    try {
+      const link = await createReportShareLink(props.outcome.result.reportId);
+      await refreshShares();
+      try {
+        await navigator.clipboard.writeText(link.url);
+        setShareMessage("链接已复制；持有链接的人可在 7 天内查看报告");
+      } catch {
+        window.prompt("复制报告分享链接", link.url);
+        setShareMessage("链接已创建；持有链接的人可在 7 天内查看报告");
+      }
+    } catch (error) {
+      setShareMessage(error instanceof Error ? error.message : "生成分享链接失败");
+    } finally {
+      setShareBusy(false);
+    }
+  }
+
+  async function toggleShares() {
+    if (props.outcome.kind !== "evidence" || shareBusy) return;
+    if (shareOpen) {
+      setShareOpen(false);
+      return;
+    }
+    setShareBusy(true);
+    setShareMessage("");
+    try {
+      await refreshShares();
+      setShareOpen(true);
+    } catch (error) {
+      setShareMessage(error instanceof Error ? error.message : "加载分享记录失败");
+    } finally {
+      setShareBusy(false);
+    }
+  }
+
+  async function revokeShare(shareId: string) {
+    if (props.outcome.kind !== "evidence" || shareBusy) return;
+    if (!window.confirm("撤销后，已发出的该链接将立即失效。确认撤销？")) return;
+    setShareBusy(true);
+    try {
+      await revokeReportShare(props.outcome.result.reportId, shareId);
+      await refreshShares();
+      setShareMessage("分享链接已撤销");
+    } catch (error) {
+      setShareMessage(error instanceof Error ? error.message : "撤销分享链接失败");
+    } finally {
+      setShareBusy(false);
+    }
+  }
 
   const evidenceItems = props.outcome.kind === "image"
     ? [...(props.outcome.result.swarm?.evidence || []), ...(props.outcome.result.visual_issues || [])]
@@ -625,7 +706,38 @@ export default function AgentResult(props: Props) {
               {props.provenanceBusy ? <LoaderCircle size={17} className="spin" /> : <Fingerprint size={17} />}
               {provenance ? "重新验证内容凭证" : "验证内容凭证"}
             </button>
+            {props.outcome.kind === "evidence" && (
+              <>
+                <button type="button" className="secondary-button" onClick={() => void createShare()} disabled={shareBusy}>
+                  {shareBusy ? <LoaderCircle size={17} className="spin" /> : <Link2 size={17} />}
+                  创建 7 天分享链接
+                </button>
+                <button type="button" className="icon-button" onClick={() => void toggleShares()} disabled={shareBusy} aria-label={shareOpen ? "关闭分享管理" : "管理分享链接"} title={shareOpen ? "关闭分享管理" : "管理分享链接"}>
+                  <ShieldOff size={17} />
+                </button>
+              </>
+            )}
           </div>
+          {props.outcome.kind === "evidence" && (shareMessage || shareOpen) && (
+            <section className="report-share-panel" aria-label="报告分享管理">
+              {shareMessage && <p role="status">{shareMessage}</p>}
+              {shareOpen && (
+                <div className="report-share-list">
+                  <div><strong>已创建的链接</strong><span>{shares.filter((item) => item.active).length} 个有效</span></div>
+                  {shares.length === 0 ? <p>尚未创建分享链接</p> : shares.map((item) => (
+                    <div className="report-share-row" key={item.shareId}>
+                      <span><code>{item.shareId}</code><small>{item.active ? `有效至 ${new Date(item.expiresAt).toLocaleString()}` : "已失效"}</small></span>
+                      {item.active && (
+                        <button type="button" className="icon-button danger" onClick={() => void revokeShare(item.shareId)} disabled={shareBusy} aria-label="撤销分享链接" title="撤销分享链接">
+                          <ShieldOff size={16} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
           {props.actionError && (
             <div className="result-action-error" role="alert">
               <AlertTriangle size={16} /><span>{props.actionError}</span>

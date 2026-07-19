@@ -17,7 +17,12 @@ AGENT_DIR = IMAGEDETECTION_DIR / "Agent"
 if str(AGENT_DIR) not in sys.path:
     sys.path.append(str(AGENT_DIR))
 
-from tools.AIGC_Detection.inference_onnx import analyze_image, get_model_status  # noqa: E402
+from tools.AIGC_Detection.inference_onnx import (  # noqa: E402
+    ImagePixelsTooLargeError,
+    InferenceBusyError,
+    analyze_image,
+    get_model_status,
+)
 
 
 model_inference_blueprint = Blueprint("model_inference", __name__)
@@ -186,6 +191,12 @@ def model_predict():
             "msg": "success",
             "data": data,
         })
+    except ImagePixelsTooLargeError as exc:
+        return jsonify({"code": 413, "msg": str(exc)}), 413
+    except InferenceBusyError as exc:
+        response = jsonify({"code": 429, "msg": str(exc)})
+        response.headers["Retry-After"] = "5"
+        return response, 429
     except ValueError as exc:
         return jsonify({"code": 400, "msg": str(exc)}), 400
     except Exception as exc:

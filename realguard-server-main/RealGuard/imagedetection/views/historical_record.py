@@ -19,7 +19,12 @@ STATIC_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'sta
 def _session_history_where(user_info):
     phone = str((user_info or {}).get('phone') or '').strip()
     openid = str((user_info or {}).get('openid') or '').strip()
-    return detection_owner_where(phone, openid)
+    return detection_owner_where(
+        phone,
+        openid,
+        account_uuid=(user_info or {}).get('account_uuid'),
+        require_account_uuid=True,
+    )
 
 
 def _detection_static_url(kind, item):

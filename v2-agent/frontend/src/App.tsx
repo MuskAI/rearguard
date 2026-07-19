@@ -77,6 +77,7 @@ type FallbackOffer = {
   previewUrl?: string;
   mode: ImageAnalysisMode;
   reason: string;
+  jobId?: string;
 };
 
 function initialAppView(): AppView {
@@ -376,7 +377,13 @@ export default function App() {
     if (pendingSwarmFile) void analyzeFile(pendingSwarmFile, "swarm", nextUser);
   }
 
-  function logout() {
+  async function logout() {
+    try {
+      await logoutAccount();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "退出失败，请检查网络后重试");
+      return;
+    }
     resetTask();
     historyTokenRef.current += 1;
     userIdRef.current = null;
@@ -387,14 +394,22 @@ export default function App() {
     setMobileHistoryOpen(false);
     setGuestConsent(false);
     setConsentWarning(false);
-    void logoutAccount().catch(() => undefined);
   }
 
-  async function runImage(file: File, previewUrl: string | undefined, token: number, controller: AbortController, mode: ImageAnalysisMode) {
+  async function runImage(
+    file: File,
+    previewUrl: string | undefined,
+    token: number,
+    controller: AbortController,
+    mode: ImageAnalysisMode,
+    existingJobId?: string,
+  ) {
     try {
-      const started = mode === "swarm"
-        ? await startImageAgent(file, controller.signal)
-        : await startFastImageAgent(file, controller.signal);
+      const started = existingJobId
+        ? await fetchImageAgentJob(existingJobId, controller.signal)
+        : mode === "swarm"
+          ? await startImageAgent(file, controller.signal)
+          : await startFastImageAgent(file, controller.signal);
       if (runTokenRef.current !== token) return;
       let job = started.job;
       setProgress(progressFromJob(job, mode));
@@ -440,7 +455,15 @@ export default function App() {
         job = polled.job;
         setProgress(progressFromJob(job, mode));
       }
-      throw new Error(`${mode === "swarm" ? "Swarm 复核" : "快速检测"}超时，请稍后重试`);
+      setProgress(null);
+      setFallbackOffer({
+        file,
+        previewUrl,
+        mode,
+        jobId: job.id,
+        reason: `服务器任务 ${job.id} 仍在运行，页面已暂停高频刷新`,
+      });
+      return;
     } catch (error) {
       if (isAbort(error) || runTokenRef.current !== token) throw error;
       const message = error instanceof Error ? error.message : (mode === "swarm" ? "Swarm 复核暂不可用" : "快速检测暂不可用");
@@ -564,7 +587,7 @@ export default function App() {
 
   async function runFallbackChain() {
     const offer = fallbackOffer;
-    if (!offer || busy) return;
+    if (!offer || offer.jobId || busy) return;
     const controller = new AbortController();
     runControllerRef.current = controller;
     const token = ++runTokenRef.current;
@@ -605,6 +628,34 @@ export default function App() {
       if (isAbort(error) || runTokenRef.current !== token) return;
       setProgress(null);
       setErrorMessage(error instanceof Error ? error.message : "备用证据链未完成，请稍后重试");
+    } finally {
+      if (runTokenRef.current === token) setBusy(false);
+    }
+  }
+
+  async function resumePendingImageJob() {
+    const offer = fallbackOffer;
+    if (!offer?.jobId || busy) return;
+    const controller = new AbortController();
+    runControllerRef.current = controller;
+    const token = ++runTokenRef.current;
+    setFallbackOffer(null);
+    setErrorMessage("");
+    setBusy(true);
+    setProgress({
+      title: "正在继续查询原任务",
+      detail: `不会重新上传文件 · ${offer.jobId}`,
+      percent: 82,
+      stage: "report",
+      analysisMode: offer.mode,
+    });
+    try {
+      await runImage(offer.file, offer.previewUrl, token, controller, offer.mode, offer.jobId);
+    } catch (error) {
+      if (!isAbort(error) && runTokenRef.current === token) {
+        setProgress(null);
+        setErrorMessage(error instanceof Error ? error.message : "原任务状态查询失败，请稍后再试");
+      }
     } finally {
       if (runTokenRef.current === token) setBusy(false);
     }
@@ -963,11 +1014,17 @@ export default function App() {
                 <div className="fallback-choice" role="alert" aria-live="polite">
                   <span><ShieldCheck size={19} /></span>
                   <div>
-                    <strong>{fallbackOffer.mode === "swarm" ? "Swarm 复核未完成" : "快速检测未完成"}</strong>
-                    <p>{fallbackOffer.reason}。文件尚未提交到备用模型，你可以重试原模式，或明确选择备用证据链。</p>
+                    <strong>{fallbackOffer.jobId ? "任务仍在服务器运行" : fallbackOffer.mode === "swarm" ? "Swarm 复核未完成" : "快速检测未完成"}</strong>
+                    <p>{fallbackOffer.reason}。{fallbackOffer.jobId ? "继续查询不会重复提交，也不会重复扣减额度。" : "文件尚未提交到备用模型，你可以重试原模式，或明确选择备用证据链。"}</p>
                     <div className="fallback-choice-actions">
-                      <button type="button" className="secondary-button" onClick={retryCurrentFile}><RefreshCw size={15} /> 重试原模式</button>
-                      <button type="button" className="primary-button" onClick={() => void runFallbackChain()}><ShieldCheck size={15} /> 使用备用证据链</button>
+                      {fallbackOffer.jobId ? (
+                        <button type="button" className="primary-button" onClick={() => void resumePendingImageJob()}><RefreshCw size={15} /> 继续查询原任务</button>
+                      ) : (
+                        <>
+                          <button type="button" className="secondary-button" onClick={retryCurrentFile}><RefreshCw size={15} /> 重试原模式</button>
+                          <button type="button" className="primary-button" onClick={() => void runFallbackChain()}><ShieldCheck size={15} /> 使用备用证据链</button>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>

@@ -2488,7 +2488,7 @@ def admin_users():
     params.append(limit + 1)
     rows = excute_sql(
         f"""
-        SELECT Userid, phone, username, openid, created_at, terms_version, terms_accepted_at
+        SELECT Userid, account_uuid, phone, username, openid, created_at, terms_version, terms_accepted_at
         FROM user
         {where}
         ORDER BY Userid DESC
@@ -2519,7 +2519,7 @@ def admin_user_detail(user_id):
         return error
     rows = excute_sql(
         """
-        SELECT Userid, phone, username, openid, created_at, terms_version, terms_accepted_at
+        SELECT Userid, account_uuid, phone, username, openid, created_at, terms_version, terms_accepted_at
         FROM user
         WHERE Userid = %s
         LIMIT 1
@@ -2531,7 +2531,12 @@ def admin_user_detail(user_id):
     row = rows[0]
     phone = row.get("phone") or ""
     openid = row.get("openid") or ""
-    history_where, history_params = detection_owner_where(phone, openid)
+    history_where, history_params = detection_owner_where(
+        phone,
+        openid,
+        account_uuid=row.get("account_uuid"),
+        require_account_uuid=True,
+    )
     select_clause = _detection_data_select_clause()
     detection_rows = excute_detection_sql(
         f"""

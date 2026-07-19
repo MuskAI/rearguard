@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import sqlite3
 import subprocess
+import sys
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -37,6 +38,11 @@ def test_backup_script_creates_consistent_local_snapshot(tmp_path):
     uploads = tmp_path / "uploads"
     uploads.mkdir()
     (uploads / "sample.txt").write_text("upload evidence", encoding="utf-8")
+    evidence_manifests = tmp_path / "evidence-manifests"
+    evidence_manifests.mkdir()
+    (evidence_manifests / "image-7.manifest.json").write_text(
+        '{"manifest":{"record_id":"7"}}', encoding="utf-8"
+    )
     backup_root = tmp_path / "backups"
     mysqldump_args_log = tmp_path / "mysqldump-args.log"
     env = {
@@ -53,7 +59,9 @@ def test_backup_script_creates_consistent_local_snapshot(tmp_path):
         "JIANZHEN_DB_PATH": str(v2_db),
         "REALGUARD_TRAFFIC_CUMULATIVE_DB": str(traffic_db),
         "REALGUARD_UPLOADS_DIR": str(uploads),
+        "REALGUARD_EVIDENCE_SNAPSHOT_ROOT": str(evidence_manifests),
         "MYSQLDUMP_ARGS_LOG": str(mysqldump_args_log),
+        "PYTHON_BIN": sys.executable,
     }
 
     completed = subprocess.run(
@@ -73,6 +81,10 @@ def test_backup_script_creates_consistent_local_snapshot(tmp_path):
     assert (snapshot / "jianzhen-v2.sqlite3").is_file()
     assert (snapshot / "traffic-cumulative.sqlite3").is_file()
     assert (snapshot / "uploads.tgz").is_file()
+    assert (snapshot / "evidence-manifests.tgz").is_file()
+    assert f"evidence_manifest_directory={evidence_manifests}" in (
+        snapshot / "MANIFEST"
+    ).read_text(encoding="utf-8")
     mysqldump_calls = mysqldump_args_log.read_text(encoding="utf-8").splitlines()
     assert len(mysqldump_calls) == 2
     assert all("--no-tablespaces" in call for call in mysqldump_calls)

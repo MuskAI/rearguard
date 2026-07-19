@@ -387,14 +387,19 @@ DEPLOY_SSH_KEY=/path/to/private_key ./scripts/deploy_v1.sh
 
 脚本会做：
 
+- 拒绝发布路径中的未提交改动，保证版本标记对应实际制品
 - Flask 后端编译与测试
 - 旧前端兼容构建
 - 后端打包上传
 - 前端 `dist/` 同步到 `/var/www/realguard-frontend/`
 - 安装生产 Nginx 配置并执行 `nginx -t`
 - 重启 `realguard-detector-backend.service`
+- 安装并重启 `realguard-developer-worker.service`，从持久 spool 恢复开发者检测任务
 - 重启 `realguard-backend.service`
-- 执行 `developer-db-upgrade`，创建或升级 API Key、用量和计费表
+- 在迁移前创建并校验完整备份
+- 执行 `identity-db-upgrade` 和 `developer-db-upgrade`，升级不可变账户归属、API Key、用量和计费表
+- 将被服务重启中断的网页任务明确标为失败，不保留永久“处理中”状态
+- 后端和前端均保留上一版本，全部健康检查通过后才清理回滚副本
 - 写入 `/opt/realguard-server/DEPLOYED_COMMIT`
 - 健康检查
 
@@ -406,11 +411,13 @@ DEPLOY_SSH_KEY=/path/to/private_key ./scripts/deploy_v2.sh
 
 脚本会做：
 
+- 拒绝发布路径中的未提交改动，保证版本标记对应实际制品
 - 证据后端编译和测试
 - 统一 Agent 前端构建
-- 后端打包上传
+- 后端与锁定依赖打包上传
 - 前端 `dist/` 同步到 `/var/www/v2/`
-- 重启 `jianzhen-v2-backend.service`
+- 安装受限权限的 `jianzhen-v2-backend.service`
+- 通过版本目录原子切换后端和前端，健康检查失败时自动恢复上一版本
 - 写入 `/opt/jianzhen-v2/DEPLOYED_COMMIT`
 - 健康检查
 
@@ -519,7 +526,8 @@ curl -I https://rrreal.cn/
 
 生产部署会安装 `realguard-backup.timer`，每天在北京时间 03:15 后的随机
 30 分钟窗口内执行。它在线备份 `system`、`image_detection`、V2 SQLite、
-累计访问 SQLite 和上传文件，并为每份备份生成 `SHA256SUMS`。默认目录是
+累计访问 SQLite、上传原件和首次签名证据快照，并为每份备份生成
+`SHA256SUMS`。默认目录是
 `/var/backups/realguard`，默认保留 14 天。
 
 ```bash
@@ -537,8 +545,9 @@ REALGUARD_BACKUP_RETENTION_DAYS=14
 REALGUARD_BACKUP_RCLONE_REMOTE=remote-name:realguard-backups
 ```
 
-每季度应从异地副本恢复到隔离环境，验证两个 MySQL 库、两份 SQLite 和
-上传文件均可读取；目标为 RPO 不超过 24 小时、RTO 不超过 2 小时。
+每季度应从异地副本恢复到隔离环境，验证两个 MySQL 库、两份 SQLite、
+上传原件和 `evidence-manifests.tgz` 均可读取，并抽样验签 PDF 报告；目标为
+RPO 不超过 24 小时、RTO 不超过 2 小时。
 
 ### MySQL 备份
 
@@ -611,24 +620,27 @@ MySQL 检测历史主要在：
 
 - `system.user`
 
-MySQL 历史接口按以下优先级归属记录：
+正式账户使用 `system.user.account_uuid` 作为不可变账号标识，图像和视频历史分别
+写入 `image_detection.data.owner_account_uuid` 与
+`image_detection.video_data.owner_account_uuid`。登录态、网页历史、媒体、报告和
+开发者 API 都必须只按该 UUID 精确过滤；两个数据库各自的自增 `Userid` 不能跨库
+比较，手机号和 openid 也不能在正常请求里作为回退条件。
 
-1. `Userid = 当前用户 Userid`
-2. 仅当 `Userid IS NULL` 时，允许 `phone = 当前用户手机号`
-3. 仅当 `Userid IS NULL` 且手机号为空时，允许 `openid = 当前用户 openid`
-
-不能把这三个条件写成宽松的 `Userid = ? OR phone = ? OR openid = ?`，否则一条已经绑定给其他 `Userid` 的记录仍可能因旧手机号或 openid 相同而泄露。
+`identity-db-upgrade` 只创建 UUID 字段和索引，不按手机号或 openid 自动认领旧历史。
+新模型返回的记录通过条件更新绑定；更新为 0 行时必须再次查询确认 UUID 完全一致，
+避免读取与绑定之间的并发串号。
 
 证据服务的 SQLite 历史使用 `developer_user_id` 作为强制租户字段。列表、详情、工件、报告、分享和删除都必须先比较当前会话的 `Userid`；`developer_user_id IS NULL` 的旧访客记录不会被任意登录用户自动认领，只有管理员可修复归属。
 
-注意：仍有旧记录只有 openid，没有 `Userid` 或手机号。不能随便把这类记录展示给任意登录账号，否则会泄露他人历史。需要人工确认 openid 和手机号映射后再更新数据库。
+注意：迁移后仍没有 `owner_account_uuid` 的旧记录默认对普通账号不可见。不能按相似
+手机号或 openid 自动展示，必须由管理员核实归属后再修复。
 
 查询未绑定图像记录：
 
 ```sql
 SELECT COUNT(*)
 FROM image_detection.data
-WHERE Userid IS NULL AND (phone IS NULL OR phone = '');
+WHERE owner_account_uuid IS NULL OR owner_account_uuid = '';
 ```
 
 ## 安全说明
@@ -643,13 +655,16 @@ WHERE Userid IS NULL AND (phone IS NULL OR phone = '');
 - 私有接口响应必须保留 `Cache-Control: private, no-store`，账户切换时前端必须取消旧请求并清空旧状态。
 - 管理员账号和大屏 token 只在服务器环境变量或数据库中维护。
 - 对外开发者请求必须经过 `/api/openapi/v1/` 计费网关；`/api/developer/v1/detect` 与证据服务直连 Key 均保持停用。
+- 开发者异步检测只由 `realguard-developer-worker.service` 执行；上传文件先原子写入权限为 `0600` 的私有 spool，再预占额度并入队。数据库租约、心跳、幂等键和最大重试次数共同约束重启恢复。
+- 图像 PDF 报告首次生成时固化服务端证据清单，记录原件 SHA-256、模型/策略版本和结论并独立签名；后续下载复用首次快照，原件或快照变化时失败关闭。
 
 ## 已知问题和待办
 
-- 检测服务 health 可能显示 `degraded`，原因是 `model_deploy.onnx.data` 外部权重文件缺失。服务仍可启动，但如需完整 ONNX 推理，需要补齐该模型文件或确认线上走真实回退链路。
 - 旧图像历史里有部分 openid-only 记录，不能自动安全归属，需要人工确认映射。
+- 网页端快速检测和 Swarm 复核仍由单个 Web 进程执行；重启时会明确失败，但不会像开发者 API 任务一样自动续跑。完全恢复需要将网页任务也迁移到持久任务队列。
+- V1 图像 PDF 已有首次固化签名清单；视频报告和 V2 深度取证报告还没有统一到同一套证据签名、密钥轮换和验签策略，不能宣称达到司法取证级。
 - Umami 监控后台不在 `deploy_v1.sh` / `deploy_v2.sh` 自动发布范围内。
-- 自动备份已提供，但异地 `rclone` 目标和季度恢复演练仍需由运维配置并留档。
+- 自动备份已提供，但异地 `rclone`、KMS/HSM 或 WORM 存储以及季度恢复演练仍需由运维配置并留档。
 
 ## Git 工作流
 
@@ -719,6 +734,7 @@ git checkout main
 - MySQL root 或运维账号权限
 - 最近一次 MySQL 备份
 - 最近一次检测服务 uploads 备份
+- 最近一次签名证据快照备份，并完成抽样验签
 - 最近一次证据服务 data 备份
 - DashScope / 阿里云短信 / 其他云服务权限
 - 管理员账号或重置方式

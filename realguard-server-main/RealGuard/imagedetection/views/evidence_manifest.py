@@ -16,13 +16,15 @@ from typing import Any, Mapping
 
 
 MANIFEST_SCHEMA = "cn.huijian.image-evidence-manifest"
-MANIFEST_VERSION = "1.0"
+MANIFEST_VERSION = "1.1"
+SUPPORTED_MANIFEST_VERSIONS = frozenset({"1.0", MANIFEST_VERSION})
 SIGNATURE_ALGORITHM = "HMAC-SHA256"
 DEFAULT_POLICY_VERSION = "huijian-v1-image-report-policy-v1"
 DEFAULT_SNAPSHOT_ROOT = Path("/opt/realguard-data/evidence-manifests")
 UNRECORDED_MODEL_VERSION = "unrecorded-legacy"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _SIGNATURE_RE = re.compile(r"^[0-9a-f]{64}$")
+_KEY_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _BASE64URL_RE = re.compile(br"^[A-Za-z0-9_-]+$")
 _PDF_BEGIN = b"% HUIJIAN-EVIDENCE-MANIFEST-V1-BEGIN\n"
 _PDF_END = b"% HUIJIAN-EVIDENCE-MANIFEST-V1-END\n"
@@ -72,8 +74,66 @@ def _signing_key(key: str | bytes | None = None) -> bytes:
     return raw
 
 
+def _active_key_id() -> str:
+    key_id = os.environ.get("REALGUARD_EVIDENCE_HMAC_KEY_ID", "v1").strip() or "v1"
+    if not _KEY_ID_RE.fullmatch(key_id):
+        raise EvidenceManifestError("证据签名 active key_id 格式无效")
+    return key_id
+
+
+def _verification_keyring(*, active_key: str | bytes | None = None) -> tuple[str, dict[str, bytes]]:
+    """Load historical verification keys and overlay the active signing key.
+
+    The JSON mapping is verification-only. New manifests always use the active
+    ``REALGUARD_EVIDENCE_HMAC_KEY_ID`` and ``REALGUARD_EVIDENCE_HMAC_KEY`` pair.
+    """
+    raw_json = os.environ.get("REALGUARD_EVIDENCE_HMAC_KEYS_JSON", "").strip()
+    try:
+        configured = json.loads(raw_json) if raw_json else {}
+    except json.JSONDecodeError as exc:
+        raise EvidenceManifestError("历史证据签名密钥环不是有效 JSON") from exc
+    if not isinstance(configured, dict) or len(configured) > 64:
+        raise EvidenceManifestError("历史证据签名密钥环必须是最多 64 项的 JSON 对象")
+
+    keyring: dict[str, bytes] = {}
+    for raw_key_id, raw_key in configured.items():
+        key_id = str(raw_key_id or "").strip()
+        if not _KEY_ID_RE.fullmatch(key_id):
+            raise EvidenceManifestError("历史证据签名 key_id 格式无效")
+        if not isinstance(raw_key, str):
+            raise EvidenceManifestError(f"历史证据签名密钥 {key_id} 必须是字符串")
+        try:
+            keyring[key_id] = _signing_key(raw_key)
+        except EvidenceManifestError as exc:
+            raise EvidenceManifestError(f"历史证据签名密钥 {key_id} 无效：{exc}") from exc
+
+    active_id = _active_key_id()
+    keyring[active_id] = _signing_key(active_key)
+    return active_id, keyring
+
+
+def _key_for_id(
+    key_id: object,
+    *,
+    active_key: str | bytes | None = None,
+    require_active: bool = False,
+) -> bytes:
+    selected_id = str(key_id or "").strip()
+    if not _KEY_ID_RE.fullmatch(selected_id):
+        raise EvidenceManifestError("证据签名 key_id 格式无效")
+    active_id, keyring = _verification_keyring(active_key=active_key)
+    if require_active and selected_id != active_id:
+        raise EvidenceManifestError("新增证据清单只能使用 active key")
+    selected = keyring.get(selected_id)
+    if selected is None:
+        raise EvidenceManifestError(f"证据签名 key_id 未知：{selected_id}")
+    return selected
+
+
 def sign_manifest(manifest: Mapping[str, Any], *, key: str | bytes | None = None) -> str:
-    return hmac.new(_signing_key(key), canonical_json(manifest), hashlib.sha256).hexdigest()
+    key_id = manifest.get("signature_key_id") if isinstance(manifest, Mapping) else None
+    signing_key = _key_for_id(key_id, active_key=key, require_active=True)
+    return hmac.new(signing_key, canonical_json(manifest), hashlib.sha256).hexdigest()
 
 
 def _utc_iso(value: datetime | str | None = None) -> str:
@@ -172,6 +232,31 @@ def load_recorded_model_run(record_id: object) -> dict[str, Any]:
     return dict(run) if isinstance(run, dict) else {}
 
 
+def load_recorded_metadata(record_id: object) -> dict[str, Any]:
+    """Load persisted EXIF facts from the detection database."""
+    try:
+        from .utils import excute_detection_sql
+
+        rows = excute_detection_sql(
+            "SELECT all_metadata FROM exif WHERE data_itemid = %s LIMIT 1",
+            (record_id,),
+        )
+    except Exception as exc:
+        raise EvidenceManifestError("无法读取服务端持久化元数据") from exc
+    if rows is None:
+        raise EvidenceManifestError("无法读取服务端持久化元数据")
+    raw = rows[0].get("all_metadata") if rows else None
+    if not raw:
+        return {}
+    try:
+        metadata = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise EvidenceManifestError("服务端持久化元数据 JSON 已损坏") from exc
+    if not isinstance(metadata, dict):
+        raise EvidenceManifestError("服务端持久化元数据不是 JSON 对象")
+    return metadata
+
+
 def _model_snapshot(model_run: Mapping[str, Any] | None) -> dict[str, str]:
     run = model_run if isinstance(model_run, Mapping) else {}
     model = run.get("model") if isinstance(run.get("model"), Mapping) else {}
@@ -186,20 +271,94 @@ def _model_snapshot(model_run: Mapping[str, Any] | None) -> dict[str, str]:
     }
 
 
-def _evidence_signals(model_run: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+def _clamp01(value: object) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(number):
+        return 0.0
+    return round(max(0.0, min(1.0, number)), 4)
+
+
+def _safe_evidence_text(value: object, limit: int = 240) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
+
+
+def _structured_visible_watermark(model_run: Mapping[str, Any] | None) -> dict[str, Any] | None:
     run = model_run if isinstance(model_run, Mapping) else {}
     meta = run.get("meta") if isinstance(run.get("meta"), Mapping) else {}
     visible = meta.get("visibleWatermark") if isinstance(meta.get("visibleWatermark"), Mapping) else {}
     if not visible:
-        return []
+        return None
+    hits = []
+    for raw_hit in visible.get("hits") or []:
+        if not isinstance(raw_hit, Mapping):
+            continue
+        raw_bbox = raw_hit.get("bbox") if isinstance(raw_hit.get("bbox"), Mapping) else {}
+        bbox = {
+            "x": _clamp01(raw_bbox.get("x")),
+            "y": _clamp01(raw_bbox.get("y")),
+            "w": _clamp01(raw_bbox.get("w")),
+            "h": _clamp01(raw_bbox.get("h")),
+        }
+        hit = {
+            "provider": _safe_evidence_text(raw_hit.get("provider"), 120),
+            "label": _safe_evidence_text(raw_hit.get("label"), 160),
+            "confidence": _clamp01(raw_hit.get("confidence")),
+            "bbox": bbox,
+            "method": _safe_evidence_text(raw_hit.get("method"), 120),
+            "model": _safe_evidence_text(raw_hit.get("model"), 160),
+            "model_revision": _safe_evidence_text(raw_hit.get("modelRevision"), 160),
+            "evidence_role": _safe_evidence_text(raw_hit.get("evidenceRole"), 80),
+            "decisive": bool(raw_hit.get("decisive")),
+        }
+        hits.append(hit)
+        if len(hits) >= 24:
+            break
+    return {
+        "enabled": bool(visible.get("enabled", True)),
+        "supported": bool(visible.get("supported", True)),
+        "detected": bool(visible.get("detected")),
+        "confidence": _clamp01(visible.get("confidence")),
+        "provider": _safe_evidence_text(visible.get("provider") or "server_watermark_detector", 120),
+        "evidence_level": _safe_evidence_text(visible.get("evidenceLevel"), 80),
+        "hits": hits,
+        "note": _safe_evidence_text(visible.get("note"), 1000),
+    }
+
+
+def _capture_evidence(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
     try:
-        confidence = round(max(0.0, min(1.0, float(visible.get("confidence") or 0.0))), 4)
-    except (TypeError, ValueError):
-        confidence = 0.0
+        from .capture_evidence import analyze_capture_evidence
+
+        evidence = analyze_capture_evidence(dict(metadata or {}))
+    except Exception as exc:
+        raise EvidenceManifestError("无法从服务端元数据重建实拍证据") from exc
+    if not isinstance(evidence, dict):
+        raise EvidenceManifestError("服务端实拍证据结构无效")
+    return evidence
+
+
+def _metadata_evidence(metadata: Mapping[str, Any], capture: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = canonical_json(metadata)
+    return {
+        "present": bool(metadata),
+        "field_count": max(0, int(capture.get("fieldCount") or 0)),
+        "capture_model_version": _safe_evidence_text(capture.get("version"), 120),
+        "extractor": "server-persisted-exif-v1",
+        "normalized_sha256": hashlib.sha256(normalized).hexdigest(),
+        "privacy": dict(capture.get("privacy") or {}),
+    }
+
+
+def _evidence_signals(visible: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    if not visible:
+        return []
     return [{
         "type": "visible_watermark",
         "detected": bool(visible.get("detected")),
-        "confidence": confidence,
+        "confidence": _clamp01(visible.get("confidence")),
         "provider": str(visible.get("provider") or "server_watermark_detector")[:120],
         "hit_count": min(1000, len(visible.get("hits") or [])) if isinstance(visible.get("hits"), list) else 0,
     }]
@@ -235,21 +394,26 @@ def build_image_manifest(
     original = resolve_source_path(item, source_path=source_path)
     source_sha256, source_size = sha256_file(original)
     selected_run = load_recorded_model_run(record_id) if model_run is None else model_run
+    recorded_metadata = load_recorded_metadata(record_id)
+    visible_watermark = _structured_visible_watermark(selected_run)
+    capture = _capture_evidence(recorded_metadata)
     probability = _percent(item.get("fake"))
-    conclusion = _stored_text(
+    raw_model_label = _stored_text(
         item,
         "aigc",
         "AI生成图像" if probability >= 50 else "真实图像",
     )
+    confidence = _stored_text(item, "clarity", "未记录")
+    conclusion = raw_model_label
+    if 35.0 < probability < 75.0 or confidence in {"低", "较低", "未记录"}:
+        conclusion = "需人工复核"
     evidence_summary = _stored_text(item, "explantation", "服务端未留存详细证据摘要")
     evidence_summary = evidence_summary[:_MAX_EVIDENCE_SUMMARY_LENGTH]
 
     return {
         "schema": MANIFEST_SCHEMA,
         "schema_version": MANIFEST_VERSION,
-        "signature_key_id": os.environ.get(
-            "REALGUARD_EVIDENCE_HMAC_KEY_ID", "v1"
-        ).strip() or "v1",
+        "signature_key_id": _active_key_id(),
         "task_id": f"IMG-{record_id}",
         "record_id": record_id,
         "source": {
@@ -263,13 +427,20 @@ def build_image_manifest(
         ).strip() or DEFAULT_POLICY_VERSION,
         "conclusion": {
             "label": conclusion,
+            "raw_model_label": raw_model_label,
             "risk_score_percent": probability,
-            "confidence": _stored_text(item, "clarity", "未记录"),
+            "confidence": confidence,
         },
         "evidence_summary": {
             "text": evidence_summary,
             "source": "persisted_server_record",
-            "signals": _evidence_signals(selected_run),
+            "signals": _evidence_signals(visible_watermark),
+        },
+        "structured_evidence": {
+            "visible_watermark": visible_watermark,
+            "capture_evidence": capture,
+            "metadata": _metadata_evidence(recorded_metadata, capture),
+            "source": "server_model_run_and_persisted_detection_record",
         },
         "generated_at": _utc_iso(generated_at),
     }
@@ -522,6 +693,32 @@ def get_or_create_signed_image_manifest(
         return persisted
 
 
+def delete_signed_image_manifest(
+    record_id: int | str,
+    *,
+    snapshot_root: str | os.PathLike[str] | None = None,
+) -> bool:
+    """Delete an owned record's immutable snapshot as part of user erasure."""
+    normalized_id = str(record_id or "").strip()
+    if not normalized_id or not normalized_id.isdigit():
+        raise EvidenceManifestError("证据快照记录 ID 无效")
+    root = _snapshot_root(snapshot_root)
+    path = _snapshot_path(root, normalized_id)
+    with _snapshot_lock(root, normalized_id):
+        if not _snapshot_exists(path):
+            return False
+        try:
+            snapshot_stat = path.lstat()
+            if not stat.S_ISREG(snapshot_stat.st_mode) or snapshot_stat.st_nlink != 1:
+                raise EvidenceManifestError("证据快照文件类型或链接数异常")
+            path.unlink()
+        except EvidenceManifestError:
+            raise
+        except OSError as exc:
+            raise EvidenceManifestError("无法删除证据快照") from exc
+    return True
+
+
 def _valid_manifest_shape(manifest: object) -> bool:
     if not isinstance(manifest, Mapping):
         return False
@@ -529,7 +726,7 @@ def _valid_manifest_shape(manifest: object) -> bool:
     model = manifest.get("model")
     conclusion = manifest.get("conclusion")
     summary = manifest.get("evidence_summary")
-    if manifest.get("schema") != MANIFEST_SCHEMA or manifest.get("schema_version") != MANIFEST_VERSION:
+    if manifest.get("schema") != MANIFEST_SCHEMA or manifest.get("schema_version") not in SUPPORTED_MANIFEST_VERSIONS:
         return False
     if not str(manifest.get("task_id") or "") or not str(manifest.get("record_id") or ""):
         return False
@@ -556,6 +753,18 @@ def _valid_manifest_shape(manifest: object) -> bool:
         return False
     if not isinstance(summary.get("text"), str) or not isinstance(summary.get("signals"), list):
         return False
+    if manifest.get("schema_version") == MANIFEST_VERSION:
+        structured = manifest.get("structured_evidence")
+        if not isinstance(structured, Mapping):
+            return False
+        if structured.get("source") != "server_model_run_and_persisted_detection_record":
+            return False
+        if structured.get("visible_watermark") is not None and not isinstance(structured.get("visible_watermark"), Mapping):
+            return False
+        if not isinstance(structured.get("capture_evidence"), Mapping):
+            return False
+        if not isinstance(structured.get("metadata"), Mapping):
+            return False
     try:
         _utc_iso(str(manifest.get("generated_at") or ""))
     except EvidenceManifestError:
@@ -587,7 +796,8 @@ def verify_manifest(
     if not _valid_manifest_shape(manifest) or not _SIGNATURE_RE.fullmatch(str(signature or "")):
         return False
     try:
-        expected = sign_manifest(manifest, key=key)
+        verification_key = _key_for_id(manifest.get("signature_key_id"), active_key=key)
+        expected = hmac.new(verification_key, canonical_json(manifest), hashlib.sha256).hexdigest()
     except EvidenceManifestError:
         return False
     return hmac.compare_digest(expected, str(signature))
@@ -615,7 +825,8 @@ def _artifact_signature(
     key: str | bytes | None = None,
 ) -> str:
     payload = _ARTIFACT_SIGNATURE_DOMAIN + canonical_json(manifest) + b"\0" + canonical_json(artifact)
-    return hmac.new(_signing_key(key), payload, hashlib.sha256).hexdigest()
+    artifact_key = _key_for_id(manifest.get("signature_key_id"), active_key=key)
+    return hmac.new(artifact_key, payload, hashlib.sha256).hexdigest()
 
 
 def bind_pdf_artifact(

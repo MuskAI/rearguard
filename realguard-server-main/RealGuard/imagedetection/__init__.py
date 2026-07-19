@@ -11,6 +11,7 @@ from .views import historical_record
 from .views import profile
 from .views import api
 from .views import admin
+from .views import admin_state
 from .views import developer_platform
 from .views import utils
 
@@ -101,6 +102,17 @@ def creat_app():
             raise click.ClickException("admin schema upgrade failed")
         click.echo("admin schema ready")
 
+    @app.cli.command("identity-db-upgrade")
+    def identity_db_upgrade():
+        """Create immutable account ownership without guessing legacy owners."""
+        try:
+            changes = utils.apply_account_identity_schema()
+        except Exception as exc:
+            raise click.ClickException(f"identity schema upgrade failed: {exc}") from exc
+        for label, count in changes.items():
+            click.echo(f"{label}: {count}")
+        click.echo("identity schema ready")
+
     @app.cli.command("developer-db-upgrade")
     def developer_db_upgrade():
         """Create or update developer API and billing tables."""
@@ -113,6 +125,12 @@ def creat_app():
             if not upgrade():
                 raise click.ClickException(f"developer schema upgrade failed: {label}")
             click.echo(f"developer schema ready: {label}")
+
+    @app.cli.command("reconcile-detection-jobs")
+    def reconcile_detection_jobs():
+        """Mark Web-process jobs interrupted by a controlled restart as failed."""
+        changed = admin_state.reconcile_interrupted_detection_jobs()
+        click.echo(f"interrupted detection jobs reconciled: {changed}")
 
     @app.cli.command("repair-detection-owners")
     def repair_detection_owners():

@@ -12,6 +12,7 @@ USE `system`;
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `user` (
   `Userid` INT NOT NULL AUTO_INCREMENT,
+  `account_uuid` CHAR(36) NOT NULL COMMENT '不可变账号标识',
   `phone` VARCHAR(32) NOT NULL COMMENT '登录手机号',
   `secret` VARCHAR(255) NOT NULL COMMENT '密码',
   `username` VARCHAR(128) NULL DEFAULT NULL,
@@ -22,6 +23,7 @@ CREATE TABLE IF NOT EXISTS `user` (
   `password_updated_at` DATETIME NULL DEFAULT NULL COMMENT '密码更新时间',
   `session_version` INT NOT NULL DEFAULT 1 COMMENT '登录态版本，重置密码时递增',
   PRIMARY KEY (`Userid`),
+  UNIQUE KEY `uk_user_account_uuid` (`account_uuid`),
   UNIQUE KEY `uk_user_phone` (`phone`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户';
 
@@ -130,9 +132,11 @@ CREATE TABLE IF NOT EXISTS `data` (
   `clarity` VARCHAR(255) NULL COMMENT '置信度等展示字段',
   `explantation` VARCHAR(512) NULL COMMENT '说明（字段名与代码一致）',
   `Userid` INT NULL,
+  `owner_account_uuid` CHAR(36) NULL COMMENT 'system.user不可变账号标识',
   `feedback` TINYINT NULL DEFAULT NULL COMMENT '1=满意 -1=不满意',
   PRIMARY KEY (`itemid`),
-  KEY `idx_data_phone_ct` (`phone`, `createtime`)
+  KEY `idx_data_phone_ct` (`phone`, `createtime`),
+  KEY `idx_data_owner_uuid_ct` (`owner_account_uuid`, `createtime`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='图像鉴伪检测记录';
 
 -- ---------------------------------------------------------------------------
@@ -146,6 +150,7 @@ CREATE TABLE IF NOT EXISTS `exif` (
   `openid` VARCHAR(128) NULL,
   `phone` VARCHAR(32) NULL,
   `Userid` INT NULL,
+  `owner_account_uuid` CHAR(36) NULL COMMENT 'system.user不可变账号标识',
   `metadata_count` INT NULL,
   `has_ai_signal` TINYINT NULL,
   `has_real_signal` TINYINT NULL,
@@ -191,6 +196,8 @@ CREATE TABLE IF NOT EXISTS `video_data` (
   `openid` VARCHAR(128) NULL,
   `phone` VARCHAR(32) NULL,
   `Userid` INT NULL,
+  `owner_account_uuid` CHAR(36) NULL COMMENT 'system.user不可变账号标识',
   PRIMARY KEY (`itemid`),
-  KEY `idx_video_data_phone_ct` (`phone`, `createtime`)
+  KEY `idx_video_data_phone_ct` (`phone`, `createtime`),
+  KEY `idx_video_data_owner_uuid_ct` (`owner_account_uuid`, `createtime`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='视频鉴伪检测记录';

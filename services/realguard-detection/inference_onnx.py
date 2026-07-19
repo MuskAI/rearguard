@@ -43,6 +43,23 @@ MAX_CONCURRENT_INFERENCES = max(
     1,
     int(os.environ.get("REALGUARD_V2_MAX_CONCURRENT_INFERENCES", "1")),
 )
+INFERENCE_QUEUE_TIMEOUT_SECONDS = max(
+    0.1,
+    float(os.environ.get("REALGUARD_V2_INFERENCE_QUEUE_TIMEOUT_SECONDS", "20")),
+)
+MAX_SOURCE_PIXELS = max(
+    1024 * 1024,
+    int(os.environ.get("REALGUARD_V2_MAX_SOURCE_PIXELS", "24000000")),
+)
+MAX_CHUNKS = max(1, int(os.environ.get("REALGUARD_V2_MAX_CHUNKS", "64")))
+
+
+class InferenceBusyError(RuntimeError):
+    pass
+
+
+class ImagePixelsTooLargeError(ValueError):
+    pass
 
 session = None
 input_name = None
@@ -229,6 +246,39 @@ def _split_image_into_chunks(image: Image.Image, chunk_size: int):
     return [chunk for chunk, _ in _split_image_into_chunks_with_boxes(image, chunk_size)]
 
 
+def _prepare_analysis_chunks(img_path, chunk_size, max_tiles):
+    with Image.open(img_path) as source_image:
+        width, height = source_image.size
+        if width <= 0 or height <= 0 or width * height > MAX_SOURCE_PIXELS:
+            raise ImagePixelsTooLargeError(
+                f"image pixels exceed limit {MAX_SOURCE_PIXELS}: {width}x{height}"
+            )
+        image = source_image.convert("RGB")
+    image, resize_meta = downsample_for_analysis(image, MAX_ANALYSIS_SIDE)
+    requested_max_tiles = int(max_tiles or MAX_TILES)
+    derived_chunk_size, effective_tiles = _max_tiles_to_chunk_size(requested_max_tiles)
+    requested_chunk_size = int(chunk_size or derived_chunk_size)
+    if requested_chunk_size <= 0:
+        raise ValueError("chunk_size must be positive")
+    actual_chunk_size = requested_chunk_size
+    width, height = image.size
+    while math.ceil(width / actual_chunk_size) * math.ceil(height / actual_chunk_size) > MAX_CHUNKS:
+        actual_chunk_size += max(1, actual_chunk_size // 4)
+    chunks = _split_image_into_chunks_with_boxes(image, chunk_size=actual_chunk_size)
+    if not chunks:
+        raise ValueError("empty image chunks")
+    return (
+        image,
+        resize_meta,
+        requested_max_tiles,
+        derived_chunk_size,
+        effective_tiles,
+        requested_chunk_size,
+        actual_chunk_size,
+        chunks,
+    )
+
+
 def _build_input_tensor(image: Image.Image) -> Tuple[np.ndarray, Dict[str, int]]:
     global preprocess_transform
     image = image.convert("RGB")
@@ -268,28 +318,29 @@ def analyze_image(
 ) -> Dict[str, Any]:
     analysis_started = time.perf_counter()
     _lazy_init()
-    image = Image.open(img_path).convert("RGB")
-    image, resize_meta = downsample_for_analysis(image, MAX_ANALYSIS_SIDE)
-    requested_max_tiles = int(max_tiles or MAX_TILES)
     requested_top_k = int(top_k or TOP_K)
-    derived_chunk_size, effective_tiles = _max_tiles_to_chunk_size(requested_max_tiles)
-    actual_chunk_size = int(chunk_size or derived_chunk_size)
-    if actual_chunk_size <= 0:
-        raise ValueError("chunk_size must be positive")
-
-    chunks = _split_image_into_chunks_with_boxes(image, chunk_size=actual_chunk_size)
-    if not chunks:
-        raise ValueError("empty image chunks")
-
-    chunk_results = []
-    fusion_scores = []
-    level1_scores = []
-    level2_scores = []
-    preprocess_ms = 0.0
-    inference_ms = 0.0
     queue_started = time.perf_counter()
-    with _inference_slots:
+    acquired = _inference_slots.acquire(timeout=INFERENCE_QUEUE_TIMEOUT_SECONDS)
+    if not acquired:
+        raise InferenceBusyError("GPU inference queue is full")
+    try:
         queue_wait_ms = (time.perf_counter() - queue_started) * 1000.0
+        (
+            image,
+            resize_meta,
+            requested_max_tiles,
+            derived_chunk_size,
+            effective_tiles,
+            requested_chunk_size,
+            actual_chunk_size,
+            chunks,
+        ) = _prepare_analysis_chunks(img_path, chunk_size, max_tiles)
+        chunk_results = []
+        fusion_scores = []
+        level1_scores = []
+        level2_scores = []
+        preprocess_ms = 0.0
+        inference_ms = 0.0
         for index, (chunk, box) in enumerate(chunks):
             preprocess_started = time.perf_counter()
             x_np, input_meta = _build_input_tensor(chunk)
@@ -323,6 +374,8 @@ def analyze_image(
                 "level2Probability": round(level2_prob, 6),
                 "fusionProbability": round(fusion_prob, 6),
             })
+    finally:
+        _inference_slots.release()
 
     arr = np.asarray(fusion_scores, dtype=np.float32)
     used_k = max(1, min(requested_top_k, int(arr.shape[0])))
@@ -339,6 +392,8 @@ def analyze_image(
         "downsample": resize_meta,
         "parameters": {
             "chunkSize": int(actual_chunk_size),
+            "requestedChunkSize": int(requested_chunk_size),
+            "maxChunks": int(MAX_CHUNKS),
             "derivedChunkSize": int(derived_chunk_size),
             "maxTiles": int(requested_max_tiles),
             "effectiveTiles": int(effective_tiles),

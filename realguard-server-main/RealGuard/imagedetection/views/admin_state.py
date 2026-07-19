@@ -587,6 +587,7 @@ def append_audit(actor, action, target, before=None, after=None, meta=None):
         "createdAt": time.strftime("%Y-%m-%d %H:%M:%S"),
         "actor": {
             "id": actor.get("Userid"),
+            "account_uuid": actor.get("account_uuid") or "",
             "username": actor.get("username") or "",
             "phone": actor.get("phone") or "",
         },
@@ -774,6 +775,7 @@ def create_detection_job(actor, filename, kind="image", mode=None, experts=None)
         "updatedAt": time.strftime("%Y-%m-%d %H:%M:%S"),
         "actor": {
             "id": actor.get("Userid"),
+            "account_uuid": actor.get("account_uuid") or "",
             "username": actor.get("username") or "",
             "phone": actor.get("phone") or "",
             "openid": actor.get("openid") or "",
@@ -821,6 +823,28 @@ def list_detection_jobs(limit=100):
     except (TypeError, ValueError):
         limit = 100
     return jobs[:limit]
+
+
+def reconcile_interrupted_detection_jobs():
+    """Fail jobs whose in-process executor disappeared during a controlled restart."""
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    def mutate(state):
+        changed = 0
+        jobs = state.setdefault("detectionJobs", {})
+        for job_id, entry in list(jobs.items()):
+            if str(entry.get("status") or "").lower() not in {"queued", "running"}:
+                continue
+            entry["status"] = "failed"
+            entry["error"] = "服务发布或重启中断了本次任务，请重新提交原文件"
+            entry["summary"] = "任务执行进程已退出，系统未生成检测结论，也不会将其计为成功任务"
+            entry["updatedAt"] = now
+            jobs[str(job_id)] = entry
+            changed += 1
+        state["detectionJobs"] = dict(list(jobs.items())[-500:])
+        return changed
+
+    return int(_update_state(mutate) or 0)
 
 
 def get_api_key_quota(key_id):

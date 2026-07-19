@@ -13,11 +13,15 @@ Images whose longest side exceeds 2048 pixels are downsampled proportionally
 before chunk generation. The response preserves `originalSize`, adds
 `processedSize` and `downsample`, and keeps visible-watermark localization on
 the untouched upload so normalized watermark boxes still map to the original.
+Uploads above 24 million source pixels are rejected before RGB decoding. A
+request that waits more than 20 seconds for a GPU slot receives HTTP 429 with
+a `Retry-After` header instead of occupying memory indefinitely.
 
 ## Deployment targets
 
 - `inference_onnx.py` -> `/home/ymk/RealGuard/AIGC_image_detection_system/imagedetection/Agent/tools/AIGC_Detection/inference_onnx.py`
 - `remote_inference.py` -> `/home/ymk/RealGuard/AIGC_image_detection_system/imagedetection/views/remote_inference.py`
+- `realguard-detection.service` -> `/etc/systemd/system/realguard-detection.service`
 - `realguard-detection-gpu.conf` -> `/etc/systemd/system/realguard-detection.service.d/gpu.conf`
 - `realguard-detection-shared-precheck.conf` -> `/etc/systemd/system/realguard-detection.service.d/shared-precheck.conf`
 - `realguard-web-tunnel.service` -> `/etc/systemd/system/realguard-web-tunnel.service`
@@ -30,6 +34,12 @@ while user history and metadata remain owned by the public application server.
 The untracked `/etc/realguard/model-inference.env` file must contain the same
 `REALGUARD_MODEL_INTERNAL_TOKEN` on both servers. On the public server it also
 defines `REALGUARD_REMOTE_INFERENCE_URL` as the tunnel-local internal endpoint.
+Database credentials belong in `/etc/realguard/detection-db.env`, owned by
+`root:root` with mode `0600`; they must never be embedded in the world-readable
+systemd unit.
+The production service uses one Gunicorn worker with four threads. Keeping a
+single worker prevents duplicate ONNX sessions from consuming GPU memory, while
+the inference semaphore controls concurrent CUDA execution inside that worker.
 
 The public detector still performs local metadata extraction before calling
 the GPU model and therefore requires ExifTool:

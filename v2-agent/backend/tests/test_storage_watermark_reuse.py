@@ -75,8 +75,8 @@ def _boxed_report() -> dict:
 def test_history_results_remain_immutable_for_same_user_and_exact_sha(isolated_storage):
     storage = isolated_storage
     shared_sha = "a" * 64
-    owner_one = {"userId": "user-1", "keyId": "key-1"}
-    owner_two = {"userId": "user-2", "keyId": "key-2"}
+    owner_one = {"userId": "user-1", "accountUuid": "account-1", "keyId": "key-1"}
+    owner_two = {"userId": "user-2", "accountUuid": "account-2", "keyId": "key-2"}
 
     storage.put_history(
         _result("old-owner-one", "2026-07-16T08:12:00+00:00", _clear_report(), verdict="real"),
@@ -119,8 +119,8 @@ def test_history_results_remain_immutable_for_same_user_and_exact_sha(isolated_s
     assert different_file["visibleWatermark"]["detected"] is False
     assert "reanalysis" not in original_hit["visibleWatermark"]
 
-    owner_one_items, _, owner_one_counts = storage.list_history(owner_user_id="user-1")
-    owner_two_items, _, owner_two_counts = storage.list_history(owner_user_id="user-2")
+    owner_one_items, _, owner_one_counts = storage.list_history(owner_account_uuid="account-1")
+    owner_two_items, _, owner_two_counts = storage.list_history(owner_account_uuid="account-2")
     owner_one_by_task = {item["taskId"]: item for item in owner_one_items}
 
     assert owner_one_by_task["old-owner-one"]["hasVisibleWatermark"] is False
@@ -148,7 +148,7 @@ def test_admin_legacy_history_results_also_remain_immutable(isolated_storage):
     )
 
     original = storage.get_history("legacy-old")
-    all_items, _, counts = storage.list_history(owner_user_id=None)
+    all_items, _, counts = storage.list_history(owner_account_uuid=None)
     by_task = {item["taskId"]: item for item in all_items}
 
     assert original["visibleWatermark"]["detected"] is False

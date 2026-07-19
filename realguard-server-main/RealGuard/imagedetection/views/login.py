@@ -15,7 +15,13 @@ import requests
 from flask import Blueprint, jsonify, has_request_context, render_template, request, session, redirect, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from imagedetection.views.utils import create_folder, excute_detection_sql, excute_sql, get_db_connection
+from imagedetection.views.utils import (
+    create_folder,
+    excute_detection_sql,
+    excute_sql,
+    get_db_connection,
+    normalize_account_uuid,
+)
 
 login_blueprint = Blueprint('login_blueprint', __name__)
 
@@ -93,6 +99,7 @@ def _ensure_user_account_columns():
     if _USER_ACCOUNT_COLUMNS_READY:
         return True
     columns = [
+        ('account_uuid', "CHAR(36) NULL COMMENT '不可变账号标识'"),
         ('created_at', "DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'"),
         ('terms_version', "VARCHAR(32) NULL COMMENT '用户协议版本'"),
         ('terms_accepted_at', "DATETIME NULL COMMENT '用户协议同意时间'"),
@@ -102,6 +109,11 @@ def _ensure_user_account_columns():
     for column, definition in columns:
         if not _ensure_column('user', column, definition):
             return False
+    if excute_sql(
+        "UPDATE `user` SET account_uuid = UUID() WHERE account_uuid IS NULL OR account_uuid = ''",
+        fetch=False,
+    ) is None:
+        return False
     _USER_ACCOUNT_COLUMNS_READY = True
     return True
 
@@ -252,8 +264,16 @@ def _session_version(user):
 
 def _user_session_payload(user, phone=None):
     resolved_phone = str(phone if phone is not None else (user or {}).get('phone') or '').strip()
+    account_uuid = normalize_account_uuid((user or {}).get('account_uuid'))
+    if not account_uuid and (user or {}).get('Userid') not in (None, ''):
+        rows = excute_sql(
+            "SELECT account_uuid FROM user WHERE Userid = %s LIMIT 1",
+            ((user or {}).get('Userid'),),
+        )
+        account_uuid = normalize_account_uuid((rows or [{}])[0].get('account_uuid'))
     return {
         'Userid': user['Userid'],
+        'account_uuid': account_uuid,
         'username': user.get('username') or resolved_phone,
         'phone': resolved_phone,
         'openid': user.get('openid', ''),
@@ -280,13 +300,15 @@ def validate_current_user_session(*, allow_legacy=False):
         session.clear()
         return False
     rows = excute_sql(
-        "SELECT Userid, phone, openid, session_version FROM user WHERE Userid = %s LIMIT 1",
+        "SELECT Userid, account_uuid, phone, openid, session_version FROM user WHERE Userid = %s LIMIT 1",
         (user_id,),
     )
     if not rows:
         session.clear()
         return False
     account = rows[0]
+    claimed_account_uuid = normalize_account_uuid(user_info.get('account_uuid'))
+    account_uuid = normalize_account_uuid(account.get('account_uuid'))
     try:
         valid_version = int(claimed_version) == _session_version(account)
     except (TypeError, ValueError):
@@ -298,7 +320,16 @@ def validate_current_user_session(*, allow_legacy=False):
     identity_matches = (claimed_phone and claimed_phone == account_phone) or (
         not claimed_phone and claimed_openid and claimed_openid == account_openid
     )
-    if not valid_version or not identity_matches:
+    if not claimed_account_uuid and account_uuid and valid_version and identity_matches:
+        # One-time rollout upgrade for already signed, still-valid sessions.
+        user_info['account_uuid'] = account_uuid
+        session['user_info'] = user_info
+        session.modified = True
+        claimed_account_uuid = account_uuid
+    immutable_identity_matches = bool(
+        claimed_account_uuid and account_uuid and hmac.compare_digest(claimed_account_uuid, account_uuid)
+    )
+    if not valid_version or not identity_matches or not immutable_identity_matches:
         session.clear()
         return False
     return True
@@ -796,16 +827,23 @@ def _send_sms_code(phone, scene):
     return code if os.environ.get('SMS_DEBUG_RETURN_CODE') == '1' else None
 
 
-def _sync_detection_user(phone, username='', openid=''):
+def _sync_detection_user(phone, username='', openid='', account_uuid=''):
     """同步网页账号到 /home/ymk/RealGuard 鉴伪后端数据库。"""
     if not phone:
         return
-    exists = excute_detection_sql("SELECT Userid FROM user WHERE phone = %s LIMIT 1", (phone,))
+    immutable_owner = normalize_account_uuid(account_uuid)
+    exists = excute_detection_sql("SELECT Userid, account_uuid FROM user WHERE phone = %s LIMIT 1", (phone,))
     if exists:
+        if immutable_owner and not normalize_account_uuid(exists[0].get('account_uuid')):
+            excute_detection_sql(
+                "UPDATE user SET account_uuid = %s WHERE Userid = %s AND (account_uuid IS NULL OR account_uuid = '')",
+                (immutable_owner, exists[0].get('Userid')),
+                fetch=False,
+            )
         return
     excute_detection_sql(
-        "INSERT INTO user (openid, avatar, username, phone) VALUES (%s, %s, %s, %s)",
-        (openid or phone, '', username or phone, phone),
+        "INSERT INTO user (account_uuid, openid, avatar, username, phone) VALUES (%s, %s, %s, %s, %s)",
+        (immutable_owner or None, openid or phone, '', username or phone, phone),
         fetch=False
     )
 
@@ -891,10 +929,16 @@ def login_verify():
             _clear_password_phone_attempts(phone)
             if not _record_terms_acceptance(phone):
                 return render_template('login.html', error='协议确认记录失败，请稍后重试')
-            _sync_detection_user(phone, user.get('username') or phone, user.get('openid', '') or phone)
+            session_payload = _user_session_payload(user, phone)
+            _sync_detection_user(
+                phone,
+                user.get('username') or phone,
+                user.get('openid', '') or phone,
+                session_payload.get('account_uuid'),
+            )
             session.clear()
             session.permanent = True
-            session['user_info'] = _user_session_payload(user, phone)
+            session['user_info'] = session_payload
             return redirect('/index')
         return render_template('login.html', error='手机号或密码错误')
     return render_template('login.html', error='登录失败')
@@ -919,10 +963,16 @@ def login_sms_verify():
         if user:
             if not _record_terms_acceptance(phone):
                 return render_template('login.html', error='协议确认记录失败，请稍后重试', login_mode='sms')
-            _sync_detection_user(phone, user.get('username') or phone, user.get('openid', '') or phone)
+            session_payload = _user_session_payload(user, phone)
+            _sync_detection_user(
+                phone,
+                user.get('username') or phone,
+                user.get('openid', '') or phone,
+                session_payload.get('account_uuid'),
+            )
             session.clear()
             session.permanent = True
-            session['user_info'] = _user_session_payload(user, phone)
+            session['user_info'] = session_payload
             return redirect('/index')
         return render_template('login.html', error='该手机号尚未注册', login_mode='sms')
     return render_template('login.html', error='登录失败', login_mode='sms')
@@ -995,15 +1045,16 @@ def register_verify():
 
         sql = """
         INSERT INTO user
-            (phone, secret, username, openid, terms_version, terms_accepted_at, password_updated_at)
-        VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+            (account_uuid, phone, secret, username, openid, terms_version, terms_accepted_at, password_updated_at)
+        VALUES (UUID(), %s, %s, %s, %s, %s, NOW(), NOW())
         """
         result = excute_sql(sql, (phone, _hash_password(secret), username, '', TERMS_VERSION), fetch=False)
 
         if result and result > 0:
             if not _record_terms_acceptance(phone, channel='web_register'):
                 return render_template('register.html', error='协议确认记录失败，请稍后重试')
-            _sync_detection_user(phone, username, phone)
+            created_user = _find_user_by_phone(phone) or {}
+            _sync_detection_user(phone, username, phone, created_user.get('account_uuid'))
             # 创建用户文件夹
             user_dir = os.path.join(current_dir, '..', 'static', 'uploads', phone)
             create_folder(os.path.join(user_dir, 'image'))

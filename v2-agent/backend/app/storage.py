@@ -16,6 +16,13 @@ DB_PATH = DATA_DIR / "jianzhen-v2.sqlite3"
 ANALYSIS_CACHE_VERSION = os.getenv("JIANZHEN_ANALYSIS_CACHE_VERSION", "v8-provenance-first")
 REQUEST_EVENT_RETENTION_DAYS = max(1, int(os.getenv("JIANZHEN_REQUEST_EVENT_RETENTION_DAYS", "90")))
 TOKEN_USAGE_RETENTION_DAYS = max(30, int(os.getenv("JIANZHEN_TOKEN_USAGE_RETENTION_DAYS", "730")))
+REPORT_SHARE_ACCESS_RETENTION_DAYS = max(
+    30, int(os.getenv("JIANZHEN_REPORT_SHARE_ACCESS_RETENTION_DAYS", "90"))
+)
+REPORT_SHARE_RETENTION_DAYS = max(
+    REPORT_SHARE_ACCESS_RETENTION_DAYS,
+    int(os.getenv("JIANZHEN_REPORT_SHARE_RETENTION_DAYS", "730")),
+)
 PUBLISHABLE_VERDICTS = frozenset({"real", "suspected_fake", "highly_suspected_fake"})
 PUBLISHABLE_SOURCES = frozenset({"vlm", "provenance"})
 
@@ -36,6 +43,22 @@ def _connect() -> sqlite3.Connection:
                 _init(conn)
                 _INITIALIZED = True
     return conn
+
+
+def healthcheck() -> dict[str, Any]:
+    """Verify that the durable SQLite store can acquire a write lock."""
+    try:
+        with _connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT INTO readiness_probe (id, checked_at) VALUES (1, ?) "
+                "ON CONFLICT(id) DO UPDATE SET checked_at = excluded.checked_at",
+                (now_iso(),),
+            )
+            conn.rollback()
+        return {"available": True, "writable": True}
+    except (OSError, sqlite3.Error) as exc:
+        return {"available": False, "error": type(exc).__name__}
 
 
 def _init(conn: sqlite3.Connection) -> None:
@@ -63,6 +86,7 @@ def _init(conn: sqlite3.Connection) -> None:
             result_json TEXT NOT NULL,
             thumbnail TEXT,
             developer_user_id TEXT,
+            developer_account_uuid TEXT,
             developer_key_id TEXT
         );
 
@@ -116,14 +140,54 @@ def _init(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_token_usage_user_created_at ON token_usage_events(developer_user_id, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_token_usage_key_created_at ON token_usage_events(developer_key_id, created_at DESC);
 
+        CREATE TABLE IF NOT EXISTS report_shares (
+            share_id TEXT PRIMARY KEY,
+            report_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at INTEGER NOT NULL,
+            created_by_user_id TEXT NOT NULL,
+            created_by_key_id TEXT,
+            created_by_mode TEXT NOT NULL,
+            revoked_at TEXT,
+            legacy INTEGER NOT NULL DEFAULT 0,
+            signature_fingerprint TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_report_shares_report_id ON report_shares(report_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_report_shares_creator ON report_shares(created_by_user_id, created_at DESC);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_report_shares_legacy_signature
+            ON report_shares(report_id, signature_fingerprint)
+            WHERE signature_fingerprint IS NOT NULL;
+
+        CREATE TABLE IF NOT EXISTS report_share_access_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            share_id TEXT NOT NULL,
+            report_id TEXT NOT NULL,
+            accessed_at TEXT NOT NULL,
+            client_ip TEXT,
+            user_agent TEXT,
+            outcome TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_report_share_access_share
+            ON report_share_access_events(share_id, accessed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_report_share_access_report
+            ON report_share_access_events(report_id, accessed_at DESC);
+
         CREATE TABLE IF NOT EXISTS counters (
             name TEXT PRIMARY KEY,
             value INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS readiness_probe (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            checked_at TEXT NOT NULL
         );
         """
     )
     for statement in (
         "ALTER TABLE history ADD COLUMN developer_user_id TEXT",
+        "ALTER TABLE history ADD COLUMN developer_account_uuid TEXT",
         "ALTER TABLE history ADD COLUMN developer_key_id TEXT",
     ):
         try:
@@ -223,14 +287,16 @@ def put_history(
 ) -> None:
     meta = result.get("fileMeta", {})
     developer_user_id = str((actor or {}).get("userId") or "") or None
+    developer_account_uuid = str((actor or {}).get("accountUuid") or "") or None
     developer_key_id = str((actor or {}).get("keyId") or "") or None
     with _connect() as conn:
         conn.execute(
             """
             INSERT OR REPLACE INTO history
                 (task_id, report_id, created_at, sha256, file_type, file_name, file_size,
-                 resolution, result_json, thumbnail, developer_user_id, developer_key_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 resolution, result_json, thumbnail, developer_user_id,
+                 developer_account_uuid, developer_key_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 result["taskId"],
@@ -244,6 +310,7 @@ def put_history(
                 json.dumps(result, ensure_ascii=False),
                 thumbnail,
                 developer_user_id,
+                developer_account_uuid,
                 developer_key_id,
             ),
         )
@@ -386,7 +453,7 @@ def _matches_history_filters(
 
 def list_history(
     *,
-    owner_user_id: str | None = None,
+    owner_account_uuid: str | None = None,
     limit: int = 100,
     offset: int = 0,
     query: str | None = None,
@@ -400,14 +467,14 @@ def list_history(
 ) -> tuple[list[dict[str, Any]], int, dict[str, int]]:
     ownership_sql = ""
     ownership_params: tuple[Any, ...] = ()
-    if owner_user_id is not None:
-        ownership_sql = "WHERE h.developer_user_id = ?"
-        ownership_params = (str(owner_user_id),)
+    if owner_account_uuid is not None:
+        ownership_sql = "WHERE h.developer_account_uuid = ?"
+        ownership_params = (str(owner_account_uuid),)
     with _connect() as conn:
         rows = conn.execute(
             f"""
             SELECT h.task_id, h.report_id, h.created_at, h.sha256, h.file_type, h.file_name, h.result_json, h.thumbnail,
-                   h.developer_user_id,
+                   h.developer_user_id, h.developer_account_uuid,
                    a.forensics_json, a.provenance_json
             FROM history h
             LEFT JOIN history_artifacts a ON a.task_id = h.task_id
@@ -465,7 +532,7 @@ def get_history(item_id: str) -> dict[str, Any] | None:
             """
             SELECT h.task_id, h.created_at, h.sha256, h.result_json, h.thumbnail,
                    h.file_name, h.file_type, h.file_size, h.resolution,
-                   h.developer_user_id, h.developer_key_id,
+                   h.developer_user_id, h.developer_account_uuid, h.developer_key_id,
                    a.forensics_json, a.provenance_json
             FROM history h
             LEFT JOIN history_artifacts a ON a.task_id = h.task_id
@@ -477,6 +544,7 @@ def get_history(item_id: str) -> dict[str, Any] | None:
         return None
     result = json.loads(row["result_json"])
     result["_developerUserId"] = row["developer_user_id"]
+    result["_developerAccountUuid"] = row["developer_account_uuid"]
     result["_developerKeyId"] = row["developer_key_id"]
     _ensure_result_file_meta(result, row)
     if row["forensics_json"]:
@@ -497,6 +565,14 @@ def delete_history(item_id: str) -> dict[str, Any] | None:
     file_type = str(file_meta.get("type") or "")
     with _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """
+            UPDATE report_shares
+            SET revoked_at = COALESCE(revoked_at, ?)
+            WHERE report_id = ?
+            """,
+            (now_iso(), report_id),
+        )
         conn.execute(
             "DELETE FROM history_artifacts WHERE task_id = ?",
             (task_id,),
@@ -527,6 +603,161 @@ def delete_history(item_id: str) -> dict[str, Any] | None:
                 )
         conn.commit()
     return item
+
+
+def _report_share_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "shareId": row["share_id"],
+        "reportId": row["report_id"],
+        "createdAt": row["created_at"],
+        "expiresAt": int(row["expires_at"]),
+        "createdByUserId": row["created_by_user_id"],
+        "createdByKeyId": row["created_by_key_id"],
+        "createdByMode": row["created_by_mode"],
+        "revokedAt": row["revoked_at"],
+        "legacy": bool(row["legacy"]),
+    }
+
+
+def create_report_share(
+    *,
+    share_id: str,
+    report_id: str,
+    expires_at: int,
+    created_by_user_id: str,
+    created_by_key_id: str | None,
+    created_by_mode: str,
+    legacy: bool = False,
+    signature_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    created_at = now_iso()
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO report_shares
+                (share_id, report_id, created_at, expires_at, created_by_user_id,
+                 created_by_key_id, created_by_mode, revoked_at, legacy, signature_fingerprint)
+            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+            """,
+            (
+                share_id,
+                report_id,
+                created_at,
+                int(expires_at),
+                created_by_user_id,
+                created_by_key_id,
+                created_by_mode,
+                int(legacy),
+                signature_fingerprint,
+            ),
+        )
+        conn.commit()
+    share = get_report_share(share_id)
+    if share is None:
+        raise RuntimeError("report share was not persisted")
+    return share
+
+
+def register_legacy_report_share(
+    *,
+    share_id: str,
+    report_id: str,
+    expires_at: int,
+    owner_user_id: str,
+    signature_fingerprint: str,
+) -> dict[str, Any]:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO report_shares
+                (share_id, report_id, created_at, expires_at, created_by_user_id,
+                 created_by_key_id, created_by_mode, revoked_at, legacy, signature_fingerprint)
+            VALUES (?, ?, ?, ?, ?, NULL, 'legacy', NULL, 1, ?)
+            ON CONFLICT(report_id, signature_fingerprint) WHERE signature_fingerprint IS NOT NULL
+            DO NOTHING
+            """,
+            (share_id, report_id, now_iso(), int(expires_at), owner_user_id, signature_fingerprint),
+        )
+        row = conn.execute(
+            """
+            SELECT * FROM report_shares
+            WHERE report_id = ? AND signature_fingerprint = ?
+            """,
+            (report_id, signature_fingerprint),
+        ).fetchone()
+        conn.commit()
+    if row is None:
+        raise RuntimeError("legacy report share was not persisted")
+    return _report_share_from_row(row)
+
+
+def get_report_share(share_id: str) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM report_shares WHERE share_id = ?",
+            (share_id,),
+        ).fetchone()
+    return _report_share_from_row(row) if row else None
+
+
+def list_report_shares(report_id: str) -> list[dict[str, Any]]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM report_shares
+            WHERE report_id = ?
+            ORDER BY created_at DESC
+            """,
+            (report_id,),
+        ).fetchall()
+    return [_report_share_from_row(row) for row in rows]
+
+
+def revoke_report_share(report_id: str, share_id: str) -> dict[str, Any] | None:
+    revoked_at = now_iso()
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT * FROM report_shares WHERE share_id = ? AND report_id = ?",
+            (share_id, report_id),
+        ).fetchone()
+        if row is None:
+            conn.rollback()
+            return None
+        if row["revoked_at"] is None:
+            conn.execute(
+                "UPDATE report_shares SET revoked_at = ? WHERE share_id = ?",
+                (revoked_at, share_id),
+            )
+        conn.commit()
+    return get_report_share(share_id)
+
+
+def record_report_share_access(
+    *,
+    share_id: str,
+    report_id: str,
+    client_ip: str | None,
+    user_agent: str | None,
+    outcome: str,
+) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO report_share_access_events
+                (share_id, report_id, accessed_at, client_ip, user_agent, outcome)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                share_id[:128],
+                report_id[:256],
+                now_iso(),
+                (client_ip or "")[:128] or None,
+                (user_agent or "")[:512] or None,
+                outcome[:64],
+            ),
+        )
+        conn.commit()
 
 
 def put_history_artifacts(
@@ -626,6 +857,15 @@ def prune_telemetry() -> dict[str, int]:
     token_cutoff = (
         datetime.now(timezone.utc) - timedelta(days=TOKEN_USAGE_RETENTION_DAYS)
     ).isoformat()
+    share_access_cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=REPORT_SHARE_ACCESS_RETENTION_DAYS)
+    ).isoformat()
+    share_cutoff_epoch = int(
+        (datetime.now(timezone.utc) - timedelta(days=REPORT_SHARE_RETENTION_DAYS)).timestamp()
+    )
+    share_revoked_cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=REPORT_SHARE_RETENTION_DAYS)
+    ).isoformat()
     with _connect() as conn:
         request_cursor = conn.execute(
             "DELETE FROM request_events WHERE created_at < ?",
@@ -635,10 +875,23 @@ def prune_telemetry() -> dict[str, int]:
             "DELETE FROM token_usage_events WHERE created_at < ?",
             (token_cutoff,),
         )
+        share_access_cursor = conn.execute(
+            "DELETE FROM report_share_access_events WHERE accessed_at < ?",
+            (share_access_cutoff,),
+        )
+        share_cursor = conn.execute(
+            """
+            DELETE FROM report_shares
+            WHERE expires_at < ? OR (revoked_at IS NOT NULL AND revoked_at < ?)
+            """,
+            (share_cutoff_epoch, share_revoked_cutoff),
+        )
         conn.commit()
         return {
             "requestEvents": max(int(request_cursor.rowcount or 0), 0),
             "tokenUsageEvents": max(int(token_cursor.rowcount or 0), 0),
+            "reportShareAccessEvents": max(int(share_access_cursor.rowcount or 0), 0),
+            "reportShares": max(int(share_cursor.rowcount or 0), 0),
         }
 
 

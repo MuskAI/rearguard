@@ -5,8 +5,9 @@ import importlib
 import json
 import sys
 import struct
+import time
 import zlib
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi.testclient import TestClient
 import pytest
@@ -78,7 +79,7 @@ def _forensic_analysis() -> dict:
 def client(monkeypatch, tmp_path):
     monkeypatch.setenv("JIANZHEN_ACCESS_TOKEN", "internal-token")
     monkeypatch.setenv("JIANZHEN_ADMIN_ACCESS_TOKEN", "test-token")
-    monkeypatch.setenv("JIANZHEN_REPORT_SHARE_SECRET", "independent-report-share-secret")
+    monkeypatch.setenv("JIANZHEN_REPORT_SHARE_SECRET", "independent-report-share-secret-32")
     monkeypatch.setenv("JIANZHEN_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-dashscope-key")
     monkeypatch.setenv("JIANZHEN_ALLOW_ANONYMOUS_DETECT", "true")
@@ -91,14 +92,14 @@ def client(monkeypatch, tmp_path):
     importlib.reload(main)
     monkeypatch.setattr(main.detector, "API_KEY", "test-dashscope-key")
     monkeypatch.setattr(main.detector, "analyze", _stable_vlm_analyze)
-    return TestClient(main.app)
+    return TestClient(main.app, client=("127.0.0.1", 50000))
 
 
 @pytest.fixture
 def developer_key_client(monkeypatch, tmp_path):
     monkeypatch.setenv("JIANZHEN_ACCESS_TOKEN", "internal-token")
     monkeypatch.setenv("JIANZHEN_ADMIN_ACCESS_TOKEN", "admin-token")
-    monkeypatch.setenv("JIANZHEN_REPORT_SHARE_SECRET", "independent-report-share-secret")
+    monkeypatch.setenv("JIANZHEN_REPORT_SHARE_SECRET", "independent-report-share-secret-32")
     monkeypatch.setenv("JIANZHEN_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("JIANZHEN_ALLOW_DIRECT_DEVELOPER_KEYS", "true")
     monkeypatch.setenv("JIANZHEN_DEVELOPER_AUTH_URL", "http://realguard-v1.internal/api/developer/keys/verify")
@@ -115,13 +116,25 @@ def developer_key_client(monkeypatch, tmp_path):
 
     def fake_verify(api_key, request):
         if api_key == "rg_sk_user1":
-            return {"mode": "developer", "keyId": 101, "userId": 1, "scopes": ["detect", "reports"]}
+            return {
+                "mode": "developer",
+                "keyId": 101,
+                "userId": 1,
+                "accountUuid": "11111111-1111-4111-8111-111111111111",
+                "scopes": ["detect", "reports"],
+            }
         if api_key == "rg_sk_user2":
-            return {"mode": "developer", "keyId": 202, "userId": 2, "scopes": ["detect", "reports"]}
+            return {
+                "mode": "developer",
+                "keyId": 202,
+                "userId": 2,
+                "accountUuid": "22222222-2222-4222-8222-222222222222",
+                "scopes": ["detect", "reports"],
+            }
         raise main.HTTPException(status_code=401, detail="API Key 缺失或无效")
 
     monkeypatch.setattr(main, "_verify_developer_key_sync", fake_verify)
-    return TestClient(main.app)
+    return TestClient(main.app, client=("127.0.0.1", 50000))
 
 
 def test_metrics_requires_token(client):
@@ -141,6 +154,20 @@ def test_request_metric_storage_failure_does_not_replace_business_response(clien
 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+
+
+def test_readiness_requires_real_image_model_and_storage(client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    ready = client.get("/api/ready")
+    monkeypatch.setattr(main.detector, "API_KEY", "")
+    unavailable = client.get("/api/ready")
+
+    assert ready.status_code == 200
+    assert ready.json()["status"] == "ready"
+    assert ready.headers["cache-control"] == "no-store"
+    assert unavailable.status_code == 503
+    assert unavailable.json()["checks"]["imageModelConfigured"] is False
 
 
 def test_forensics_cache_is_scoped_by_user_and_does_not_leak_filename(developer_key_client, monkeypatch):
@@ -218,7 +245,12 @@ def test_v1_session_unlocks_own_v2_history_but_not_admin_metrics(client, monkeyp
 
     def fake_session_user(request):
         if "session=valid" in request.headers.get("cookie", ""):
-            return {"mode": "session", "userId": 7, "phone": "13800000000"}
+            return {
+                "mode": "session",
+                "userId": 7,
+                "accountUuid": "77777777-7777-4777-8777-777777777777",
+                "phone": "13800000000",
+            }
         return None
 
     monkeypatch.setattr(main, "_verify_session_user_sync", fake_session_user)
@@ -239,9 +271,19 @@ def test_session_history_is_strictly_isolated_by_user(client, monkeypatch):
     def fake_session_user(request):
         cookie = request.headers.get("cookie", "")
         if "session=user-a" in cookie:
-            return {"mode": "session", "userId": 101, "phone": "13800000101"}
+            return {
+                "mode": "session",
+                "userId": 101,
+                "accountUuid": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                "phone": "13800000101",
+            }
         if "session=user-b" in cookie:
-            return {"mode": "session", "userId": 202, "phone": "13800000202"}
+            return {
+                "mode": "session",
+                "userId": 101,
+                "accountUuid": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                "phone": "13800000202",
+            }
         return None
 
     monkeypatch.setattr(main, "_verify_session_user_sync", fake_session_user)
@@ -303,7 +345,12 @@ def test_unowned_guest_history_is_not_claimed_by_logged_in_user(client, monkeypa
     monkeypatch.setattr(
         main,
         "_verify_session_user_sync",
-        lambda request: {"mode": "session", "userId": 303, "phone": "13800000303"},
+        lambda request: {
+            "mode": "session",
+            "userId": 303,
+            "accountUuid": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+            "phone": "13800000303",
+        },
     )
     client.cookies.set("session", "logged-in")
     listing = client.get("/api/history")
@@ -632,7 +679,12 @@ def test_v1_session_can_detect_when_developer_api_key_is_required(developer_key_
 
     def fake_session_user(request):
         if "session=valid" in request.headers.get("cookie", ""):
-            return {"mode": "session", "userId": 8, "phone": "13900000000"}
+            return {
+                "mode": "session",
+                "userId": 8,
+                "accountUuid": "88888888-8888-4888-8888-888888888888",
+                "phone": "13900000000",
+            }
         return None
 
     monkeypatch.setattr(main, "_verify_session_user_sync", fake_session_user)
@@ -767,14 +819,199 @@ def test_developer_key_report_share_is_scoped_to_owner(developer_key_client):
     assert tampered.status_code == 403
 
 
-def test_report_share_requires_independent_signing_secret(client, monkeypatch):
+def test_report_share_is_persisted_and_public_access_is_audited(developer_key_client):
+    from app import storage
+
+    detect = developer_key_client.post(
+        "/api/detect",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+        files={"file": ("persisted.txt", b"persisted report share", "text/plain")},
+    )
+    report_id = detect.json()["reportId"]
+    created = developer_key_client.post(
+        f"/api/report/{report_id}/share",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+        json={"expiresInSeconds": 3600},
+    )
+    payload = created.json()
+    query = parse_qs(urlsplit(payload["apiPath"]).query)
+
+    accessed = developer_key_client.get(
+        payload["apiPath"],
+        headers={"X-Forwarded-For": "203.0.113.18", "User-Agent": "share-audit-pytest"},
+    )
+    listed = developer_key_client.get(
+        f"/api/report/{report_id}/shares",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+    )
+    foreign_list = developer_key_client.get(
+        f"/api/report/{report_id}/shares",
+        headers={"X-RealGuard-Key": "rg_sk_user2"},
+    )
+    with storage._connect() as conn:
+        share = conn.execute(
+            "SELECT * FROM report_shares WHERE share_id = ?",
+            (payload["shareId"],),
+        ).fetchone()
+        audit = conn.execute(
+            "SELECT * FROM report_share_access_events WHERE share_id = ? ORDER BY id DESC LIMIT 1",
+            (payload["shareId"],),
+        ).fetchone()
+
+    assert created.status_code == 200
+    assert payload["shareId"].startswith("rgs_")
+    assert query["shareId"] == [payload["shareId"]]
+    assert share["report_id"] == report_id
+    assert share["created_by_user_id"] == "11111111-1111-4111-8111-111111111111"
+    assert accessed.headers["cache-control"] == "private, no-store, max-age=0"
+    assert listed.status_code == 200
+    assert listed.json()["items"][0]["shareId"] == payload["shareId"]
+    assert listed.json()["items"][0]["active"] is True
+    assert foreign_list.status_code == 404
+    assert share["created_by_key_id"] == "101"
+    assert share["created_by_mode"] == "developer"
+    assert share["revoked_at"] is None
+    assert int(share["expires_at"]) > int(time.time())
+    assert accessed.status_code == 200
+    assert audit["report_id"] == report_id
+    assert audit["client_ip"] == "203.0.113.18"
+    assert audit["user_agent"] == "share-audit-pytest"
+    assert audit["outcome"] == "granted"
+
+
+def test_public_report_share_requires_its_database_record(developer_key_client):
+    from app import storage
+
+    detect = developer_key_client.post(
+        "/api/detect",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+        files={"file": ("database-gate.txt", b"database gated report share", "text/plain")},
+    )
+    report_id = detect.json()["reportId"]
+    created = developer_key_client.post(
+        f"/api/report/{report_id}/share",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+        json={"expiresInSeconds": 3600},
+    ).json()
+    with storage._connect() as conn:
+        conn.execute("DELETE FROM report_shares WHERE share_id = ?", (created["shareId"],))
+        conn.commit()
+
+    response = developer_key_client.get(created["apiPath"])
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "报告分享链接不存在"
+
+
+def test_owner_can_revoke_one_share_without_affecting_another(developer_key_client):
+    from app import storage
+
+    detect = developer_key_client.post(
+        "/api/detect",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+        files={"file": ("revoke.txt", b"single report share revocation", "text/plain")},
+    )
+    report_id = detect.json()["reportId"]
+
+    def create_share() -> dict:
+        return developer_key_client.post(
+            f"/api/report/{report_id}/share",
+            headers={"X-RealGuard-Key": "rg_sk_user1"},
+            json={"expiresInSeconds": 3600},
+        ).json()
+
+    first = create_share()
+    second = create_share()
+    foreign = developer_key_client.delete(
+        f"/api/report/{report_id}/share/{first['shareId']}",
+        headers={"X-RealGuard-Key": "rg_sk_user2"},
+    )
+    revoked = developer_key_client.delete(
+        f"/api/report/{report_id}/share/{first['shareId']}",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+    )
+    first_access = developer_key_client.get(first["apiPath"])
+    second_access = developer_key_client.get(second["apiPath"])
+    with storage._connect() as conn:
+        first_row = conn.execute(
+            "SELECT revoked_at FROM report_shares WHERE share_id = ?",
+            (first["shareId"],),
+        ).fetchone()
+        second_row = conn.execute(
+            "SELECT revoked_at FROM report_shares WHERE share_id = ?",
+            (second["shareId"],),
+        ).fetchone()
+        outcomes = [
+            row["outcome"]
+            for row in conn.execute(
+                "SELECT outcome FROM report_share_access_events WHERE share_id = ? ORDER BY id",
+                (first["shareId"],),
+            ).fetchall()
+        ]
+
+    assert first["shareId"] != second["shareId"]
+    assert foreign.status_code == 404
+    assert revoked.status_code == 200
+    assert revoked.json()["revokedAt"]
+    assert first_access.status_code == 410
+    assert first_access.json()["detail"] == "报告分享链接已撤销"
+    assert second_access.status_code == 200
+    assert first_row["revoked_at"]
+    assert second_row["revoked_at"] is None
+    assert outcomes == ["created", "revoked_by_owner", "revoked"]
+
+
+def test_legacy_hmac_share_is_imported_audited_and_revocable(developer_key_client):
+    from app import main, storage
+
+    detect = developer_key_client.post(
+        "/api/detect",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+        files={"file": ("legacy.txt", b"legacy hmac report share", "text/plain")},
+    )
+    report_id = detect.json()["reportId"]
+    expires = int(time.time()) + 3600
+    signature = main._sign_report_share(report_id, expires)
+    legacy_path = f"/api/report/{report_id}/public?expires={expires}&sig={signature}"
+
+    first_access = developer_key_client.get(legacy_path)
+    second_access = developer_key_client.get(legacy_path)
+    with storage._connect() as conn:
+        shares = conn.execute(
+            "SELECT * FROM report_shares WHERE report_id = ? AND legacy = 1",
+            (report_id,),
+        ).fetchall()
+        audit_count = conn.execute(
+            "SELECT COUNT(*) AS n FROM report_share_access_events WHERE report_id = ?",
+            (report_id,),
+        ).fetchone()["n"]
+    legacy_share_id = shares[0]["share_id"]
+    revoked = developer_key_client.delete(
+        f"/api/report/{report_id}/share/{legacy_share_id}",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+    )
+    after_revoke = developer_key_client.get(legacy_path)
+
+    assert first_access.status_code == 200
+    assert second_access.status_code == 200
+    assert len(shares) == 1
+    assert shares[0]["created_by_user_id"] == "1"
+    assert shares[0]["created_by_mode"] == "legacy"
+    assert audit_count == 2
+    assert revoked.status_code == 200
+    assert after_revoke.status_code == 410
+    assert after_revoke.json()["detail"] == "报告分享链接已撤销"
+
+
+@pytest.mark.parametrize("unsafe_secret", ["", "short-secret", "replace-with-a-secret"])
+def test_report_share_requires_independent_signing_secret(client, monkeypatch, unsafe_secret):
     from app import main
 
     detect = client.post(
         "/api/detect",
         files={"file": ("sample.txt", b"independent share secret", "text/plain")},
     )
-    monkeypatch.setattr(main, "REPORT_SHARE_SECRET", "")
+    monkeypatch.setattr(main, "REPORT_SHARE_SECRET", unsafe_secret)
 
     response = client.post(
         f"/api/report/{detect.json()['reportId']}/share",
@@ -783,7 +1020,66 @@ def test_report_share_requires_independent_signing_secret(client, monkeypatch):
     )
 
     assert response.status_code == 503
-    assert response.json()["detail"] == "报告分享签名密钥未配置"
+    assert response.json()["detail"] == "报告分享签名密钥未安全配置"
+
+
+def test_report_share_url_rejects_untrusted_forwarded_host(developer_key_client, monkeypatch):
+    from app import main
+
+    monkeypatch.setattr(main, "PUBLIC_BASE_URL", "")
+    monkeypatch.setattr(main, "TRUSTED_PROXY_NETWORKS", ())
+    detect = developer_key_client.post(
+        "/api/detect",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+        files={"file": ("host.txt", b"host header test", "text/plain")},
+    )
+    response = developer_key_client.post(
+        f"/api/report/{detect.json()['reportId']}/share",
+        headers={
+            "X-RealGuard-Key": "rg_sk_user1",
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-Host": "attacker.example",
+        },
+        json={},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["url"].startswith("https://www.rrreal.cn/")
+
+
+def test_expired_report_share_retention_cannot_be_extended_by_recent_access(
+    developer_key_client, monkeypatch
+):
+    from app import storage
+
+    monkeypatch.setattr(storage, "REPORT_SHARE_RETENTION_DAYS", 30)
+    share_id = "rgs_retention_test"
+    storage.create_report_share(
+        share_id=share_id,
+        report_id="report-retention-test",
+        expires_at=int(time.time()) - 31 * 24 * 60 * 60,
+        created_by_user_id="1",
+        created_by_key_id="101",
+        created_by_mode="developer",
+    )
+    storage.record_report_share_access(
+        share_id=share_id,
+        report_id="report-retention-test",
+        client_ip="203.0.113.22",
+        user_agent="retention-test",
+        outcome="expired",
+    )
+
+    deleted = storage.prune_telemetry()
+
+    assert deleted["reportShares"] == 1
+    assert storage.get_report_share(share_id) is None
+    with storage._connect() as conn:
+        event_count = conn.execute(
+            "SELECT COUNT(*) AS n FROM report_share_access_events WHERE share_id = ?",
+            (share_id,),
+        ).fetchone()["n"]
+    assert event_count == 1
 
 
 def test_report_download_returns_attachment_pdf(client):
