@@ -1472,6 +1472,7 @@ def test_image_detect_uses_detector_backend_when_web_proxy_has_no_local_artifact
 
     def fake_backend_post(url, **kwargs):
         assert url == detection.IMAGE_DETECT_API
+        assert kwargs["data"]["account_uuid"] == ACCOUNT_UUID
         return _FakeResponse({
             "code": 200,
             "data": {
@@ -1522,7 +1523,13 @@ def test_detector_backend_image_endpoint_returns_v1_contract(monkeypatch):
     )
     monkeypatch.setattr(detector_backend, "get_image_info", lambda path: ("PNG", "320x240"))
     monkeypatch.setattr(detector_backend, "get_file_size_str", lambda path: "1KB")
-    monkeypatch.setattr(detector_backend, "excute_detection_sql_lastid", lambda sql, params=None: 91)
+    inserted = []
+
+    def fake_insert(sql, params=None):
+        inserted.append((sql, params))
+        return 91
+
+    monkeypatch.setattr(detector_backend, "excute_detection_sql_lastid", fake_insert)
     monkeypatch.setattr(
         detector_backend,
         "_consume_remote_inference_evidence",
@@ -1537,6 +1544,7 @@ def test_detector_backend_image_endpoint_returns_v1_contract(monkeypatch):
             "image_file": (BytesIO(b"fake-image"), "demo.png"),
             "openid": "openid-1",
             "phone": "13800000000",
+            "account_uuid": ACCOUNT_UUID,
         },
         content_type="multipart/form-data",
     )
@@ -1550,6 +1558,8 @@ def test_detector_backend_image_endpoint_returns_v1_contract(monkeypatch):
     assert payload["data"]["image_url"].endswith("/static/uploads/openid-1/image/stored-demo.png")
     assert payload["data"]["agent_reasoning"] == "native-v1"
     assert payload["data"]["remote_evidence"]["visibleWatermarkPrecheck"]["status"] == "ok"
+    assert "owner_account_uuid" in inserted[0][0]
+    assert inserted[0][1][-1] == ACCOUNT_UUID
 
 
 def test_video_detect_logged_in_builds_public_media_url(client, monkeypatch):

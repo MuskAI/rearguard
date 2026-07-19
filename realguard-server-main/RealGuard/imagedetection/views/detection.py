@@ -1403,7 +1403,11 @@ def _run_image_detection_payload(
             api_resp = _backend_post(
                 primary_endpoint,
                 files={'image_file': (safe_name, io.BytesIO(image_bytes), mimetype)},
-                data={'openid': backend_openid, 'phone': phone},
+                data={
+                    'openid': backend_openid,
+                    'phone': phone,
+                    'account_uuid': _account_uuid(user_info),
+                },
                 timeout=primary_timeout,
             )
             api_resp.raise_for_status()

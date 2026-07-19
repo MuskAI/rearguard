@@ -18,6 +18,7 @@ from imagedetection.views.utils import (
     excute_detection_sql_lastid,
     get_file_size_str,
     get_image_info,
+    normalize_account_uuid,
     safe_truncate,
 )
 
@@ -284,7 +285,7 @@ def _detection_user_id(phone="", openid=""):
     return (rows or [{}])[0].get("Userid")
 
 
-def _persist_result(payload, image_bytes, filename, openid, phone):
+def _persist_result(payload, image_bytes, filename, openid, phone, account_uuid=""):
     folder = openid or phone or "guest"
     stored_name, file_path = _save_upload(image_bytes, folder, filename)
     img_format, resolution = get_image_info(file_path)
@@ -306,8 +307,8 @@ def _persist_result(payload, image_bytes, filename, openid, phone):
         """
         INSERT INTO data
             (createtime, filename, fake, detector_probability, openid, phone, aigc,
-             file_size, img_format, resolution, clarity, explantation, Userid)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             file_size, img_format, resolution, clarity, explantation, Userid, owner_account_uuid)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -323,6 +324,7 @@ def _persist_result(payload, image_bytes, filename, openid, phone):
             confidence,
             safe_truncate(explanation, 500),
             _detection_user_id(phone, openid),
+            normalize_account_uuid(account_uuid) or None,
         ),
     )
     if not itemid:
@@ -428,6 +430,10 @@ def create_app():
 
         openid = str(request.form.get("openid") or "").strip()[:64]
         phone = str(request.form.get("phone") or "").strip()[:20]
+        raw_account_uuid = str(request.form.get("account_uuid") or "").strip()
+        account_uuid = normalize_account_uuid(raw_account_uuid)
+        if raw_account_uuid and not account_uuid:
+            return jsonify({"code": 400, "msg": "账号标识格式无效"}), 400
         temp_path = None
         try:
             _ensure_capability_ready()
@@ -436,7 +442,7 @@ def create_app():
             remote_evidence = _consume_remote_inference_evidence()
             if remote_evidence:
                 payload["remote_evidence"] = remote_evidence
-            data = _persist_result(payload, image_bytes, safe_name, openid, phone)
+            data = _persist_result(payload, image_bytes, safe_name, openid, phone, account_uuid)
             return jsonify({"code": 200, "msg": "success", "data": data})
         except RuntimeError as exc:
             return jsonify({"code": 503, "msg": str(exc)}), 503
