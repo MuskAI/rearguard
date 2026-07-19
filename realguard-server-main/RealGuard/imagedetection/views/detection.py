@@ -806,6 +806,57 @@ def _record_matches_detection_actor(record, source_filename, backend_openid, pho
     return actor_matches and filename_matches
 
 
+def _materialize_primary_source(record, data, image_bytes, filename, backend_openid, phone, account_uuid=''):
+    folder = backend_openid or phone or 'guest'
+    current_name = str((record or {}).get('filename') or '').strip()
+    current_path = os.path.join(STATIC_ROOT, 'uploads', folder, 'image', current_name)
+    if current_name and os.path.isfile(current_path):
+        data.update({
+            'filename': current_name,
+            'image_url': f"/api/media/image/{record['itemid']}",
+        })
+        return
+
+    stored_name, file_path = _save_local_upload(image_bytes, folder, filename)
+    try:
+        img_format, resolution = get_image_info(file_path)
+        file_size = get_file_size_str(file_path)
+        immutable_owner = normalize_account_uuid(account_uuid)
+        if immutable_owner:
+            owner_where = 'owner_account_uuid = %s'
+            owner_params = (immutable_owner,)
+        else:
+            guest_openid = str(backend_openid or '').strip()
+            if phone or not guest_openid:
+                raise RuntimeError('远端检测记录缺少可验证的不可变账号归属')
+            owner_where = "Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s"
+            owner_params = (guest_openid,)
+        updated = excute_detection_sql(
+            f"""
+            UPDATE data
+            SET filename = %s, file_size = %s, img_format = %s, resolution = %s
+            WHERE itemid = %s AND ({owner_where})
+            """,
+            (stored_name, file_size, img_format, resolution, record['itemid'], *owner_params),
+            fetch=False,
+        )
+        if updated != 1:
+            raise RuntimeError('远端检测原件归档时所有者校验失败')
+    except Exception:
+        try:
+            os.remove(file_path)
+        except OSError:
+            pass
+        raise
+    data.update({
+        'filename': stored_name,
+        'image_url': f"/api/media/image/{record['itemid']}",
+        'file_size': file_size,
+        'img_format': img_format,
+        'resolution': resolution,
+    })
+
+
 def _insert_local_detection_record(data, image_bytes, filename, backend_openid, phone, user_info):
     stored_name, file_path = _save_local_upload(
         image_bytes,
@@ -875,6 +926,15 @@ def _ensure_local_primary_record(api_json, image_bytes, filename, backend_openid
     if _record_matches_detection_actor(local_record, remote_filename, backend_openid, phone, account_uuid):
         if account_uuid and not claim_detection_record_owner('data', remote_itemid, account_uuid):
             raise RuntimeError('检测结果不可验证为当前账号所有')
+        _materialize_primary_source(
+            local_record,
+            data,
+            image_bytes,
+            filename,
+            backend_openid,
+            phone,
+            account_uuid,
+        )
         if (data.get('watermark_verdict_override') or {}).get('applied'):
             updated = excute_detection_sql(
                 """

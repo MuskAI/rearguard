@@ -400,7 +400,7 @@ def test_remote_primary_result_is_imported_into_local_user_history(monkeypatch):
     assert api_json["data"]["image_url"] == "/api/media/image/648"
 
 
-def test_existing_primary_record_keeps_detection_database_owner(monkeypatch):
+def test_existing_guest_primary_record_materializes_source_without_duplication(monkeypatch):
     updates = []
     api_json = {
         "code": 200,
@@ -416,10 +416,19 @@ def test_existing_primary_record_keeps_detection_database_owner(monkeypatch):
             "itemid": itemid,
             "filename": "stored.png",
             "Userid": None,
-            "phone": "13800000000",
-            "openid": "openid-1",
+            "owner_account_uuid": None,
+            "phone": "",
+            "openid": "guest-existing",
         },
     )
+    monkeypatch.setattr(detection.os.path, "isfile", lambda path: False)
+    monkeypatch.setattr(
+        detection,
+        "_save_local_upload",
+        lambda image_bytes, folder, filename: ("local-stored.png", "/tmp/local-stored.png"),
+    )
+    monkeypatch.setattr(detection, "get_image_info", lambda path: ("PNG", "640x480"))
+    monkeypatch.setattr(detection, "get_file_size_str", lambda path: "12KB")
     monkeypatch.setattr(
         detection,
         "excute_detection_sql",
@@ -435,13 +444,16 @@ def test_existing_primary_record_keeps_detection_database_owner(monkeypatch):
         api_json,
         b"image-bytes",
         "upload.png",
-        "openid-1",
-        "13800000000",
-        {"Userid": 1},
+        "guest-existing",
+        "",
+        {"Userid": None, "openid": "guest-existing"},
     )
 
     assert itemid == 22
-    assert updates == []
+    assert len(updates) == 1
+    assert "UPDATE data" in updates[0][0]
+    assert updates[0][1][-1] == "guest-existing"
+    assert api_json["data"]["filename"] == "local-stored.png"
 
 
 def test_swarm_final_result_updates_the_same_history_record(monkeypatch):
