@@ -52,3 +52,16 @@ printf '%s %s\n' "$status" "$calls"
     assert completed.returncode == 0
     assert completed.stdout.strip() == "0 2"
     assert "retrying (1/5)" in completed.stderr
+
+
+def test_nginx_rate_limit_response_is_machine_readable_and_retryable():
+    configs = (
+        ROOT / "deploy" / "nginx" / "realguard.conf",
+        ROOT / "realguard-server-main" / "deploy" / "nginx-realguard-frontend.conf",
+    )
+
+    for config in configs:
+        body = config.read_text(encoding="utf-8")
+        assert "error_page 429 = @realguard_rate_limited;" in body
+        assert 'add_header Retry-After "2" always;' in body
+        assert '"code":"rate_limited"' in body

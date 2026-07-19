@@ -27,6 +27,15 @@ def percentile(values: list[float], quantile: float) -> float | None:
     return ordered[index]
 
 
+def retry_after_seconds(response: requests.Response, *, default: float = 2.0) -> float:
+    raw_value = response.headers.get("Retry-After", "").strip()
+    try:
+        seconds = float(raw_value)
+    except (TypeError, ValueError):
+        seconds = default
+    return max(0.2, min(seconds, 30.0))
+
+
 def summarize(results: list[dict[str, Any]], *, wall_seconds: float) -> dict[str, Any]:
     succeeded = [result for result in results if result.get("status") == "success"]
     latencies = [float(result["latencySeconds"]) for result in succeeded]
@@ -44,6 +53,7 @@ def summarize(results: list[dict[str, Any]], *, wall_seconds: float) -> dict[str
         "errorRate": round((attempted - len(succeeded)) / attempted, 4) if attempted else 0.0,
         "wallSeconds": round(wall_seconds, 3),
         "throughputPerSecond": round(len(succeeded) / wall_seconds, 4) if wall_seconds > 0 else 0.0,
+        "throttledResponses": sum(int(result.get("throttledResponses") or 0) for result in results),
         "latencySeconds": {
             "mean": round(statistics.fmean(latencies), 3) if latencies else None,
             "p50": round(percentile(latencies, 0.50), 3) if latencies else None,
@@ -119,19 +129,35 @@ def _detect_once(
         "User-Agent": USER_AGENT,
     }
     started = time.monotonic()
+    deadline = started + args.task_timeout
+    throttled_responses = 0
     try:
-        submit = requests.post(
-            f"{args.base_url}/api/openapi/v1/image-detections",
-            headers=headers,
-            data={"mode": args.mode},
-            files={"image": (image_name, image_bytes, mime_type)},
-            timeout=args.request_timeout,
-        )
+        while True:
+            submit = requests.post(
+                f"{args.base_url}/api/openapi/v1/image-detections",
+                headers=headers,
+                data={"mode": args.mode},
+                files={"image": (image_name, image_bytes, mime_type)},
+                timeout=args.request_timeout,
+            )
+            if submit.status_code != 429:
+                break
+            throttled_responses += 1
+            if time.monotonic() >= deadline:
+                return {
+                    "index": index,
+                    "status": "failed",
+                    "error": "submit_rate_limit_timeout",
+                    "throttledResponses": throttled_responses,
+                    "latencySeconds": time.monotonic() - started,
+                }
+            time.sleep(retry_after_seconds(submit))
         if submit.status_code not in {200, 202}:
             return {
                 "index": index,
                 "status": "failed",
                 "error": f"submit_http_{submit.status_code}",
+                "throttledResponses": throttled_responses,
                 "latencySeconds": time.monotonic() - started,
             }
         task = submit.json()
@@ -141,9 +167,9 @@ def _detect_once(
                 "index": index,
                 "status": "failed",
                 "error": "submit_missing_task_id",
+                "throttledResponses": throttled_responses,
                 "latencySeconds": time.monotonic() - started,
             }
-        deadline = started + args.task_timeout
         terminal = task
         while time.monotonic() < deadline:
             status = str(terminal.get("status") or "")
@@ -155,12 +181,17 @@ def _detect_once(
                 headers=headers,
                 timeout=args.request_timeout,
             )
+            if response.status_code == 429:
+                throttled_responses += 1
+                time.sleep(retry_after_seconds(response))
+                continue
             if response.status_code != 200:
                 return {
                     "index": index,
                     "taskId": task_id,
                     "status": "failed",
                     "error": f"poll_http_{response.status_code}",
+                    "throttledResponses": throttled_responses,
                     "latencySeconds": time.monotonic() - started,
                 }
             terminal = response.json()
@@ -170,6 +201,7 @@ def _detect_once(
                 "taskId": task_id,
                 "status": "failed",
                 "error": "task_timeout",
+                "throttledResponses": throttled_responses,
                 "latencySeconds": time.monotonic() - started,
             }
         if terminal.get("status") != "success":
@@ -179,21 +211,37 @@ def _detect_once(
                 "status": "failed",
                 "error": f"task_{terminal.get('status') or 'unknown'}",
                 "message": terminal.get("error"),
+                "throttledResponses": throttled_responses,
                 "latencySeconds": time.monotonic() - started,
             }
         report_bytes = 0
         if args.download_report:
-            report = requests.get(
-                f"{args.base_url}/api/openapi/v1/image-detections/{task_id}/report",
-                headers=headers,
-                timeout=args.request_timeout,
-            )
+            while True:
+                report = requests.get(
+                    f"{args.base_url}/api/openapi/v1/image-detections/{task_id}/report",
+                    headers=headers,
+                    timeout=args.request_timeout,
+                )
+                if report.status_code != 429:
+                    break
+                throttled_responses += 1
+                if time.monotonic() >= deadline:
+                    return {
+                        "index": index,
+                        "taskId": task_id,
+                        "status": "failed",
+                        "error": "report_rate_limit_timeout",
+                        "throttledResponses": throttled_responses,
+                        "latencySeconds": time.monotonic() - started,
+                    }
+                time.sleep(retry_after_seconds(report))
             if report.status_code != 200 or not report.content.startswith(b"%PDF"):
                 return {
                     "index": index,
                     "taskId": task_id,
                     "status": "failed",
                     "error": f"report_http_{report.status_code}",
+                    "throttledResponses": throttled_responses,
                     "latencySeconds": time.monotonic() - started,
                 }
             report_bytes = len(report.content)
@@ -203,6 +251,7 @@ def _detect_once(
             "itemId": (terminal.get("result") or {}).get("itemid"),
             "status": "success",
             "reportBytes": report_bytes,
+            "throttledResponses": throttled_responses,
             "latencySeconds": time.monotonic() - started,
         }
     except (ValueError, requests.RequestException) as exc:
@@ -210,6 +259,7 @@ def _detect_once(
             "index": index,
             "status": "failed",
             "error": type(exc).__name__,
+            "throttledResponses": throttled_responses,
             "latencySeconds": time.monotonic() - started,
         }
 
@@ -236,7 +286,7 @@ def main() -> int:
     parser.add_argument("--concurrency", type=int, default=1)
     parser.add_argument("--request-timeout", type=float, default=30.0)
     parser.add_argument("--task-timeout", type=float, default=360.0)
-    parser.add_argument("--poll-interval", type=float, default=0.5)
+    parser.add_argument("--poll-interval", type=float, default=1.5)
     parser.add_argument("--phone-env", default="HUIJIAN_TEST_PHONE")
     parser.add_argument("--password-env", default="HUIJIAN_TEST_PASSWORD")
     parser.add_argument("--api-key-env", default="HUIJIAN_API_KEY")
