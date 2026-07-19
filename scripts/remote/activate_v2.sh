@@ -7,6 +7,7 @@ release_root="/opt/jianzhen-v2/releases/$commit_sha"
 current_app=""
 frontend_switched=0
 app_switched=0
+unit_switched=0
 
 rollback() {
   status=$?
@@ -19,6 +20,15 @@ rollback() {
   if [[ "$app_switched" == "1" && -n "$current_app" && -e "$current_app" ]]; then
     sudo ln -sfn "$current_app" /opt/jianzhen-v2/app.next
     sudo mv -Tf /opt/jianzhen-v2/app.next /opt/jianzhen-v2/app
+  fi
+  if [[ "$unit_switched" == "1" ]]; then
+    if [[ -f /tmp/jianzhen-v2-backend.service.previous ]]; then
+      sudo cp -a /tmp/jianzhen-v2-backend.service.previous \
+        /etc/systemd/system/jianzhen-v2-backend.service
+    else
+      sudo rm -f /etc/systemd/system/jianzhen-v2-backend.service
+    fi
+    sudo systemctl daemon-reload
   fi
   sudo systemctl restart jianzhen-v2-backend.service || true
   exit "$status"
@@ -34,6 +44,10 @@ if ! sudo grep -q '^JIANZHEN_REPORT_SHARE_SECRET=' /etc/realguard/jianzhen-v2.en
 fi
 if ! sudo grep -q '^JIANZHEN_PUBLIC_BASE_URL=' /etc/realguard/jianzhen-v2.env; then
   printf 'JIANZHEN_PUBLIC_BASE_URL=https://www.rrreal.cn\n' \
+    | sudo tee -a /etc/realguard/jianzhen-v2.env >/dev/null
+fi
+if ! sudo grep -q '^JIANZHEN_DATA_DIR=' /etc/realguard/jianzhen-v2.env; then
+  printf 'JIANZHEN_DATA_DIR=/opt/jianzhen-v2/data\n' \
     | sudo tee -a /etc/realguard/jianzhen-v2.env >/dev/null
 fi
 sudo chmod 600 /etc/realguard/jianzhen-v2.env
@@ -60,14 +74,19 @@ sudo -u ubuntu /opt/jianzhen-v2/.venv/bin/python -m pip install \
   --disable-pip-version-check --no-cache-dir --quiet --require-hashes \
   -r "$release_root/requirements.lock"
 
+sudo rm -f /tmp/jianzhen-v2-backend.service.previous
+if [[ -f /etc/systemd/system/jianzhen-v2-backend.service ]]; then
+  sudo cp -a /etc/systemd/system/jianzhen-v2-backend.service \
+    /tmp/jianzhen-v2-backend.service.previous
+fi
 sudo install -m 644 /tmp/jianzhen-v2-backend.service \
   /etc/systemd/system/jianzhen-v2-backend.service
+unit_switched=1
 sudo systemctl daemon-reload
 sudo systemctl enable jianzhen-v2-backend.service >/dev/null
 sudo ln -sfn "$release_root/app" /opt/jianzhen-v2/app.next
 sudo mv -Tf /opt/jianzhen-v2/app.next /opt/jianzhen-v2/app
 app_switched=1
-sudo install -m 644 /tmp/jianzhen-v2.DEPLOYED_COMMIT /opt/jianzhen-v2/DEPLOYED_COMMIT
 sudo systemctl restart jianzhen-v2-backend.service
 
 health_ready=0
@@ -94,9 +113,11 @@ frontend_switched=1
 
 curl -fsS -o /dev/null http://127.0.0.1/
 curl -fsS http://127.0.0.1/v2-api/ready >/dev/null
+sudo install -m 644 /tmp/jianzhen-v2.DEPLOYED_COMMIT /opt/jianzhen-v2/DEPLOYED_COMMIT
 sudo rm -rf /var/www/v2.previous
 frontend_switched=0
 app_switched=0
+unit_switched=0
 trap - ERR
 
 sudo find /opt/jianzhen-v2/releases -mindepth 1 -maxdepth 1 -type d \
@@ -111,6 +132,7 @@ rm -f \
   /tmp/jianzhen-v2-frontend.tgz \
   /tmp/jianzhen-v2.DEPLOYED_COMMIT \
   /tmp/jianzhen-v2-backend.service \
+  /tmp/jianzhen-v2-backend.service.previous \
   /tmp/jianzhen-activate-v2.sh
 
 cat /opt/jianzhen-v2/DEPLOYED_COMMIT
