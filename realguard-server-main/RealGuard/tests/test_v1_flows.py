@@ -1423,7 +1423,7 @@ def test_image_detect_does_not_fallback_when_admin_disables_it(client, monkeypat
     assert "未启用 V2 兜底" in response.get_json()["message"]
 
 
-def test_image_detect_blocks_v1_when_required_artifact_is_missing(client, monkeypatch):
+def test_image_detect_uses_detector_backend_when_web_proxy_has_no_local_artifact(client, monkeypatch):
     _login_session(client)
     monkeypatch.setattr(detection, "V2_INTERNAL_TOKEN", "")
     monkeypatch.setattr(
@@ -1451,11 +1451,28 @@ def test_image_detect_blocks_v1_when_required_artifact_is_missing(client, monkey
     monkeypatch.setattr(
         detection.model_registry,
         "model_artifact_ready",
-        lambda model: (False, ["missing external ONNX weight file: model_deploy.onnx.data"], {}),
+        lambda model: (_ for _ in ()).throw(
+            AssertionError("the Web proxy must not require a local model artifact")
+        ),
     )
+    monkeypatch.setattr(detection, "_metadata_for_item", lambda itemid: {})
+    monkeypatch.setattr(detection, "_ensure_local_primary_record", lambda *args, **kwargs: 45)
 
     def fake_backend_post(url, **kwargs):
-        raise AssertionError("primary backend should not be called when V1 artifacts are missing")
+        assert url == detection.IMAGE_DETECT_API
+        return _FakeResponse({
+            "code": 200,
+            "data": {
+                "data_itemid": 45,
+                "fake_percentage": 12.0,
+                "final_label": "真实图像",
+                "confidence": "高",
+                "filename": "demo.png",
+                "file_size": "1KB",
+                "img_format": "png",
+                "resolution": "64x64",
+            },
+        })
 
     monkeypatch.setattr(detection, "_backend_post", fake_backend_post)
 
@@ -1465,10 +1482,8 @@ def test_image_detect_blocks_v1_when_required_artifact_is_missing(client, monkey
         content_type="multipart/form-data",
     )
 
-    assert response.status_code == 503
-    message = response.get_json()["message"]
-    assert "V1 主检测模型文件未就绪" in message
-    assert "不会静默切换模型" in message
+    assert response.status_code == 200
+    assert response.get_json()["result"]["itemid"] == 45
 
 
 def test_detector_backend_image_endpoint_returns_v1_contract(monkeypatch):

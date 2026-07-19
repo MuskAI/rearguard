@@ -91,6 +91,8 @@ if [[ ! -f /opt/realguard-data/admin_state.json ]]; then
     sudo chmod 600 /opt/realguard-data/admin_state.json
   fi
 fi
+sudo chown ubuntu:ubuntu /opt/realguard-data/admin_state.json
+sudo chmod 600 /opt/realguard-data/admin_state.json
 
 sudo install -d -m 755 -o ubuntu -g ubuntu /opt/realguard-server/releases
 if [[ -L /opt/realguard-server/RealGuard ]]; then
@@ -189,6 +191,12 @@ sudo bash -lc '
   /opt/realguard-server/.venv/bin/python -m flask --app run:app developer-db-upgrade
   /opt/realguard-server/.venv/bin/python -m flask --app run:app reconcile-detection-jobs
 '
+sudo chown ubuntu:ubuntu /opt/realguard-data/admin_state.json
+sudo chmod 600 /opt/realguard-data/admin_state.json
+if [[ -f /opt/realguard-data/.admin_state.json.lock ]]; then
+  sudo chown ubuntu:ubuntu /opt/realguard-data/.admin_state.json.lock
+  sudo chmod 600 /opt/realguard-data/.admin_state.json.lock
+fi
 
 sudo systemctl daemon-reload
 sudo systemctl enable \

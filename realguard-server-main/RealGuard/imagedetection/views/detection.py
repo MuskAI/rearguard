@@ -706,10 +706,6 @@ def _primary_image_endpoint():
         return '', timeout, 'V1 主检测模型已在后台禁用，请联系管理员启用主模型或调整路由策略'
     if model and aliyun_green.is_aliyun_model(model):
         return str(model.get('endpoint') or '').strip(), timeout, ''
-    if model and model.get('id') == 'v1-onnx-mil':
-        artifact_ready, warnings, _ = model_registry.model_artifact_ready(model)
-        if not artifact_ready:
-            return '', timeout, 'V1 主检测模型文件未就绪：' + '；'.join(warnings)
     endpoint = str(model.get('endpoint') or IMAGE_DETECT_API).strip()
     if not endpoint:
         return '', timeout, 'V1 主检测模型端点未配置'
