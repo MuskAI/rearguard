@@ -81,6 +81,16 @@ sudo install -d -m 755 -o ubuntu -g ubuntu /opt/realguard-data
 sudo install -d -m 700 -o ubuntu -g ubuntu /opt/realguard-data/developer-spool
 sudo install -d -m 700 -o ubuntu -g ubuntu /opt/realguard-data/evidence-manifests
 sudo install -m 644 /tmp/realguard-ip2region-v4.xdb /opt/realguard-data/ip2region_v4.xdb
+if [[ ! -f /opt/realguard-data/admin_state.json ]]; then
+  if [[ -f /home/ubuntu/.local/state/realguard/admin_state.json ]]; then
+    sudo install -m 600 -o ubuntu -g ubuntu \
+      /home/ubuntu/.local/state/realguard/admin_state.json \
+      /opt/realguard-data/admin_state.json
+  else
+    sudo -u ubuntu touch /opt/realguard-data/admin_state.json
+    sudo chmod 600 /opt/realguard-data/admin_state.json
+  fi
+fi
 
 sudo install -d -m 755 -o ubuntu -g ubuntu /opt/realguard-server/releases
 if [[ -L /opt/realguard-server/RealGuard ]]; then
@@ -145,6 +155,10 @@ fi
 if ! sudo grep -q '^REALGUARD_EVIDENCE_HMAC_KEYS_JSON=' /etc/realguard/realguard-backend.env; then
   # Verification-only history. Existing operator-managed keyrings are never replaced.
   printf "REALGUARD_EVIDENCE_HMAC_KEYS_JSON='{}'\n" \
+    | sudo tee -a /etc/realguard/realguard-backend.env >/dev/null
+fi
+if ! sudo grep -q '^REALGUARD_ADMIN_STATE_PATH=' /etc/realguard/realguard-backend.env; then
+  printf 'REALGUARD_ADMIN_STATE_PATH=/opt/realguard-data/admin_state.json\n' \
     | sudo tee -a /etc/realguard/realguard-backend.env >/dev/null
 fi
 sudo chmod 600 /etc/realguard/realguard-backend.env
@@ -248,6 +262,7 @@ sudo test -L /var/backups/realguard/latest
 test -r /opt/realguard-data/ip2region_v4.xdb
 test "$(stat -c '%a' /opt/realguard-data/developer-spool)" = "700"
 test "$(stat -c '%a' /opt/realguard-data/evidence-manifests)" = "700"
+test "$(stat -c '%a' /opt/realguard-data/admin_state.json)" = "600"
 curl -fsS http://127.0.0.1/admin/login | grep -q '慧鉴 AI 管理员认证'
 admin_register_code="$(curl -sS -o /tmp/realguard-admin-register.html -w '%{http_code}' http://127.0.0.1/admin/register)"
 test "$admin_register_code" = "403"

@@ -654,6 +654,7 @@ WHERE owner_account_uuid IS NULL OR owner_account_uuid = '';
 - 任意远程视频 URL 默认关闭；只有明确设置 `REALGUARD_ALLOW_REMOTE_VIDEO_URLS=1` 才开启，生产不建议开启。
 - 私有接口响应必须保留 `Cache-Control: private, no-store`，账户切换时前端必须取消旧请求并清空旧状态。
 - 管理员账号和大屏 token 只在服务器环境变量或数据库中维护。
+- 管理状态固定写入 `/opt/realguard-data/admin_state.json`；不要放回受 `ProtectHome` 隔离的用户主目录。
 - 对外开发者请求必须经过 `/api/openapi/v1/` 计费网关；`/api/developer/v1/detect` 与证据服务直连 Key 均保持停用。
 - 开发者异步检测只由 `realguard-developer-worker.service` 执行；上传文件先原子写入权限为 `0600` 的私有 spool，再预占额度并入队。数据库租约、心跳、幂等键和最大重试次数共同约束重启恢复。
 - 图像 PDF 报告首次生成时固化服务端证据清单，记录原件 SHA-256、模型/策略版本和结论并独立签名；后续下载复用首次快照，原件或快照变化时失败关闭。
