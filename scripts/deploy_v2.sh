@@ -49,7 +49,7 @@ REMOTE="$(remote_target)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 log_step 1 "Verify V2 backend"
-run_local python3 -m compileall "$BACKEND_DIR/app"
+run_local "$BACKEND_DIR/.venv/bin/python" -m compileall "$BACKEND_DIR/app"
 run_local bash -n "$ACTIVATE_SCRIPT"
 (
   cd "$BACKEND_DIR"

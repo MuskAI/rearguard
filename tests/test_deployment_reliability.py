@@ -118,6 +118,13 @@ def test_v2_status_manifest_covers_unit_and_activation_script() -> None:
     assert 'scripts/remote/activate_v2.sh' in v2_block
 
 
+def test_v2_preflight_uses_the_project_python_runtime() -> None:
+    source = (ROOT / "scripts" / "deploy_v2.sh").read_text(encoding="utf-8")
+
+    assert '"$BACKEND_DIR/.venv/bin/python" -m compileall' in source
+    assert "run_local python3 -m compileall" not in source
+
+
 def test_activation_scripts_lock_and_v2_runtime_rolls_back_atomically() -> None:
     v1 = (ROOT / "scripts" / "remote" / "activate_v1.sh").read_text(encoding="utf-8")
     v2 = (ROOT / "scripts" / "remote" / "activate_v2.sh").read_text(encoding="utf-8")
