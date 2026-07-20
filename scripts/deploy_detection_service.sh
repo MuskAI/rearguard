@@ -210,7 +210,8 @@ gpu_response_key_hash="$(
     "sudo awk -F= '/^REALGUARD_MODEL_RESPONSE_HMAC_KEY=/{print substr(\$0, index(\$0, \"=\") + 1); exit}' \
        /etc/realguard/model-inference.env | python3 -c \
        'import hashlib,sys; value=sys.stdin.read().strip(); assert len(value)==64 and all(c in \"0123456789abcdef\" for c in value); print(hashlib.sha256(value.encode()).hexdigest())'" \
-    | tr -d '\r'
+    | tr -d '\r' \
+    | tail -n 1
 )"
 [[ "$public_response_key_hash" =~ ^[0-9a-f]{64}$ ]]
 test "$public_response_key_hash" = "$gpu_response_key_hash"
@@ -221,7 +222,8 @@ gpu_response_key_id="$(
   ssh -tt "${ssh_options[@]}" "$GPU_USER@$GPU_HOST" \
     "value=\$(sudo awk -F= '/^REALGUARD_MODEL_RESPONSE_HMAC_KEY_ID=/{print substr(\$0, index(\$0, \"=\") + 1); exit}' \
        /etc/realguard/model-inference.env); printf '%s' \"\${value:-v1}\"" \
-    | tr -d '\r'
+    | tr -d '\r' \
+    | tail -n 1
 )"
 [[ "$public_response_key_id" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$ ]]
 test "$public_response_key_id" = "$gpu_response_key_id"
