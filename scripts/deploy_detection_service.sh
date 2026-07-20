@@ -60,7 +60,7 @@ restore_public_config() {
 }
 
 rollback_gpu_release() {
-  ssh -tt "${ssh_options[@]}" "$GPU_USER@$GPU_HOST" \
+  ssh -q -tt "${ssh_options[@]}" "$GPU_USER@$GPU_HOST" \
     'current=$(readlink -f /home/ymk/realguard-detection-releases/current 2>/dev/null || true); \
      if [[ -z "$current" || ! -f "$current/DEPLOYED_COMMIT" ]]; then exit 0; fi; \
      test "$(tr -d "[:space:]" < "$current/DEPLOYED_COMMIT")" = "'"$commit_sha"'" || exit 0; \
@@ -206,7 +206,7 @@ public_response_key_hash="$(public_ssh \
      /etc/realguard/model-inference.env | python3 -c \
      'import hashlib,sys; value=sys.stdin.read().strip(); assert len(value)==64 and all(c in \"0123456789abcdef\" for c in value); print(hashlib.sha256(value.encode()).hexdigest())'")"
 gpu_response_key_hash="$(
-  ssh -tt "${ssh_options[@]}" "$GPU_USER@$GPU_HOST" \
+  ssh -q -tt "${ssh_options[@]}" "$GPU_USER@$GPU_HOST" \
     "sudo awk -F= '/^REALGUARD_MODEL_RESPONSE_HMAC_KEY=/{print substr(\$0, index(\$0, \"=\") + 1); exit}' \
        /etc/realguard/model-inference.env | python3 -c \
        'import hashlib,sys; value=sys.stdin.read().strip(); assert len(value)==64 and all(c in \"0123456789abcdef\" for c in value); print(hashlib.sha256(value.encode()).hexdigest())'" \
