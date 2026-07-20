@@ -148,6 +148,8 @@ def test_v1_release_can_build_a_pinned_runtime_as_the_service_user():
 
     assert "run.py detector_backend.py model_decision_contract.py" in deploy
     assert "requirements.txt requirements.lock imagedetection" in deploy
+    assert "--retry-all-errors" in deploy
+    assert "--connect-timeout 15" in deploy
     assert (
         'sudo install -d -m 755 -o ubuntu -g ubuntu "$release_root" '
         '"$release_root/RealGuard"'

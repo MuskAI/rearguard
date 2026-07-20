@@ -93,7 +93,13 @@ run_tar_create "$BACKEND_DIR" "$ARCHIVE_PATH" \
 run_tar_create "$FRONTEND_DIR/dist" "$FRONTEND_ARCHIVE_PATH" .
 run_tar_create "$NGINX_SNIPPETS_DIR" "$NGINX_SNIPPETS_ARCHIVE_PATH" .
 write_commit_marker "$MARKER_PATH" "$COMMIT_SHA"
-run_local curl -fsSL "$IP2REGION_XDB_URL" -o "$IP2REGION_XDB_PATH"
+run_local curl -fsSL \
+  --retry 5 \
+  --retry-all-errors \
+  --retry-delay 2 \
+  --connect-timeout 15 \
+  --max-time 120 \
+  "$IP2REGION_XDB_URL" -o "$IP2REGION_XDB_PATH"
 if [[ "$DRY_RUN" != "1" ]]; then
   printf '%s  %s\n' "$IP2REGION_XDB_SHA256" "$IP2REGION_XDB_PATH" | shasum -a 256 -c -
 fi
