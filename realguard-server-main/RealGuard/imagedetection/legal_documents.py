@@ -27,12 +27,14 @@ _PINNED_IDENTITIES = {
 
 
 def _legal_document_candidates(name):
+    # Production activation validates the pinned identities before the new
+    # frontend is switched live. Only inspect an explicitly staged directory;
+    # reading the currently live frontend would compare two different releases.
     configured = str(os.environ.get("REALGUARD_LEGAL_DOCS_DIR") or "").strip()
     if configured:
         yield Path(configured) / f"{name}.html"
     project_root = Path(__file__).resolve().parents[2]
     yield project_root / "frontend" / "public" / "legal" / f"{name}.html"
-    yield Path("/var/www/realguard-frontend/legal") / f"{name}.html"
 
 
 def identity_from_file(path):

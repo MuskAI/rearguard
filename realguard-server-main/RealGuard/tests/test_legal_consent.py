@@ -31,6 +31,16 @@ def test_stale_deployment_override_is_rejected(monkeypatch):
         )
 
 
+def test_explicit_staged_legal_directory_is_verified(monkeypatch, tmp_path):
+    (tmp_path / "privacy.html").write_text(
+        "<p>版本：2026-07-19</p>", encoding="utf-8"
+    )
+    monkeypatch.setenv("REALGUARD_LEGAL_DOCS_DIR", str(tmp_path))
+
+    with pytest.raises(RuntimeError, match="法律文档与后端身份清单不一致"):
+        legal_documents._resolve_identity("privacy")
+
+
 def test_existing_consent_table_gets_per_document_version_columns(monkeypatch):
     statements = []
 
