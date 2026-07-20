@@ -101,5 +101,5 @@ Web 主机仍有余量，继续增加 Web 进程不能解决 GPU 任务时延。
 - 临时检测记录：0
 - 临时上传文件：0
 - 临时后台状态任务：0
-- 真实未归属图像历史：仍为 699，测试前后未变化
+- 真实未归属历史：图像 699 条、视频 58 条，测试前后未变化；两类记录均保持 UUID 失败关闭
 - 验收结束时 `realguard-backend`、`realguard-developer-worker`、`realguard-detector-backend`、`jianzhen-v2-backend`、`nginx` 均为 `active`
