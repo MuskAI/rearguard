@@ -3,15 +3,28 @@ import { appendUploadConsent, LEGAL_CONSENT } from "./legalConsent";
 export type Verdict = "real" | "suspected_fake" | "highly_suspected_fake" | "unknown";
 export type FileType = "image" | "video" | "audio" | "document";
 
+interface ApiRequestErrorOptions {
+  retryAfterMs?: number;
+  code?: string;
+  details?: unknown;
+  requestId?: string;
+}
+
 export class ApiRequestError extends Error {
   readonly status: number;
   readonly retryAfterMs: number;
+  readonly code: string;
+  readonly details: unknown;
+  readonly requestId: string;
 
-  constructor(message: string, status: number, retryAfterMs = 0) {
+  constructor(message: string, status: number, options: ApiRequestErrorOptions = {}) {
     super(message);
     this.name = "ApiRequestError";
     this.status = status;
-    this.retryAfterMs = retryAfterMs;
+    this.retryAfterMs = options.retryAfterMs || 0;
+    this.code = options.code || "";
+    this.details = options.details;
+    this.requestId = options.requestId || "";
   }
 }
 
@@ -34,29 +47,101 @@ function retryAfterMs(response: Response): number {
   return Number.isFinite(date) ? Math.max(0, date - Date.now()) : 0;
 }
 
+function errorRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function errorText(value: unknown): string {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+export async function apiRequestErrorFromResponse(response: Response, fallback: string): Promise<ApiRequestError> {
+  const defaultMessage = response.status === 429
+    ? "当前请求较多，系统已启动短时保护，请稍候重试"
+    : fallback;
+  let message = defaultMessage;
+  let code = "";
+  let details: unknown;
+  let requestId = response.headers.get("X-Request-Id")?.trim() || "";
+
+  try {
+    const payload: unknown = await response.json();
+    const root = errorRecord(payload);
+    const envelope = errorRecord(root.error);
+    message = errorText(envelope.message)
+      || errorText(root.message)
+      || errorText(root.detail)
+      || defaultMessage;
+    code = errorText(envelope.code) || errorText(root.code);
+    details = envelope.details
+      ?? root.details
+      ?? (root.detail && typeof root.detail !== "string" ? root.detail : undefined);
+    requestId = errorText(envelope.requestId)
+      || errorText(envelope.request_id)
+      || errorText(root.requestId)
+      || errorText(root.request_id)
+      || requestId;
+  } catch {
+    // Keep the operation-specific fallback when a proxy returns HTML or an empty body.
+  }
+
+  return new ApiRequestError(message, response.status, {
+    code,
+    details,
+    requestId,
+    retryAfterMs: retryAfterMs(response),
+  });
+}
+
 function withAuthHeaders(init?: HeadersInit): Headers {
   return new Headers(init);
+}
+
+let sessionCsrfToken = "";
+let sessionCsrfPromise: Promise<void> | null = null;
+
+export async function ensureSessionCsrf(): Promise<void> {
+  if (sessionCsrfToken || typeof window === "undefined") return;
+  if (sessionCsrfPromise) return sessionCsrfPromise;
+  sessionCsrfPromise = fetch("/v2-api/csrf", {
+    credentials: "include",
+    cache: "no-store",
+    headers: { Accept: "application/json" },
+  })
+    .then(async (response) => {
+      if (!response.ok) return;
+      const payload = await response.json() as { csrfToken?: unknown };
+      if (typeof payload.csrfToken === "string" && payload.csrfToken.length >= 32) {
+        sessionCsrfToken = payload.csrfToken;
+      }
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      sessionCsrfPromise = null;
+    });
+  return sessionCsrfPromise;
+}
+
+export function sessionCsrfHeaders(init?: HeadersInit): Headers {
+  const headers = withAuthHeaders(init);
+  if (sessionCsrfToken) headers.set("X-Huijian-CSRF", sessionCsrfToken);
+  return headers;
 }
 
 function withSession(init: RequestInit = {}): RequestInit {
   return {
     ...init,
     credentials: "include",
-    headers: withAuthHeaders(init.headers),
+    headers: sessionCsrfHeaders(init.headers),
   };
 }
 
 async function parseJson<T>(res: Response, fallback: string): Promise<T> {
   if (!res.ok) {
     if (res.status === 401) notifySessionExpired();
-    let message = res.status === 429 ? "当前请求较多，系统已启动短时保护，请稍候重试" : fallback;
-    try {
-      const data = await res.json();
-      if (res.status !== 429) message = data.detail || data.message || message;
-    } catch {
-      // Keep the user-facing fallback when the server returns HTML, empty text, or a proxy error.
-    }
-    throw new ApiRequestError(message, res.status, retryAfterMs(res));
+    throw await apiRequestErrorFromResponse(res, fallback);
   }
   try {
     return await res.json();
@@ -916,12 +1001,13 @@ async function accountJson<T>(path: string, init: RequestInit = {}, fallback = "
   return parseJson<T>(res, fallback);
 }
 
-export function fetchCurrentUser(): Promise<{
+export async function fetchCurrentUser(): Promise<{
   status: string;
   authenticated: boolean;
   user: AccountUser | null;
   counters: AccountCounters;
 }> {
+  await ensureSessionCsrf();
   return accountJson("/api/me", {}, "用户状态暂不可用");
 }
 
@@ -990,10 +1076,14 @@ export function createDeveloperKey(payload: {
   scopes: string[];
   expiresAt?: string | null;
   ipAllowlist?: string[];
-}) {
+}, idempotencyKey: string) {
   return accountJson<{ status: string; apiKey: string; key: DeveloperApiKey }>(
     "/api/developer/keys",
-    { method: "POST", body: JSON.stringify(payload) },
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+      headers: { "Idempotency-Key": idempotencyKey },
+    },
     "API Key 创建失败",
   );
 }
@@ -1006,10 +1096,14 @@ export function revokeDeveloperKey(keyId: number) {
   );
 }
 
-export function rotateDeveloperKey(keyId: number) {
+export function rotateDeveloperKey(keyId: number, idempotencyKey: string) {
   return accountJson<{ status: string; apiKey: string; key: DeveloperApiKey; revoked: number }>(
     `/api/developer/keys/${encodeURIComponent(String(keyId))}/rotate`,
-    { method: "POST", body: JSON.stringify({}) },
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+      headers: { "Idempotency-Key": idempotencyKey },
+    },
     "API Key 轮换失败",
   );
 }
@@ -1328,9 +1422,10 @@ export interface ReportShareItem {
 
 export async function createReportShareLink(reportId: string, expiresInSeconds = 7 * 24 * 60 * 60): Promise<ReportShareLink> {
   const res = await fetch(`/v2-api/report/${encodeURIComponent(reportId)}/share`, {
-    credentials: "include",
-    method: "POST",
-    headers: withAuthHeaders({ "Content-Type": "application/json" }),
+    ...withSession({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    }),
     body: JSON.stringify({ expiresInSeconds }),
   });
   const link = await parseJson<ReportShareLink>(res, "生成分享链接失败");
@@ -1352,11 +1447,7 @@ export async function listReportShares(reportId: string): Promise<ReportShareIte
 export async function revokeReportShare(reportId: string, shareId: string): Promise<void> {
   const res = await fetch(
     `/v2-api/report/${encodeURIComponent(reportId)}/share/${encodeURIComponent(shareId)}`,
-    {
-      credentials: "include",
-      method: "DELETE",
-      headers: withAuthHeaders(),
-    },
+    withSession({ method: "DELETE" }),
   );
   await parseJson(res, "撤销分享链接失败");
 }

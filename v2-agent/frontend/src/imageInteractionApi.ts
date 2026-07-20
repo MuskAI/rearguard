@@ -1,18 +1,10 @@
-import { ApiRequestError, notifySessionExpired } from "./api";
+import { apiRequestErrorFromResponse, ensureSessionCsrf, notifySessionExpired, sessionCsrfHeaders } from "./api";
 import type { ImageAgentJob } from "./api";
 import { appendUploadConsent } from "./legalConsent";
 
-function retryAfterMs(response: Response): number {
-  const value = response.headers.get("Retry-After")?.trim();
-  if (!value) return 0;
-  const seconds = Number(value);
-  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
-  const date = Date.parse(value);
-  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : 0;
-}
-
 async function requestJson<T>(path: string, init: RequestInit, fallback: string): Promise<T> {
-  const headers = new Headers(init.headers);
+  await ensureSessionCsrf();
+  const headers = sessionCsrfHeaders(init.headers);
   if (init.body && !(init.body instanceof FormData)) headers.set("Content-Type", "application/json");
   const response = await fetch(path, {
     ...init,
@@ -22,14 +14,7 @@ async function requestJson<T>(path: string, init: RequestInit, fallback: string)
   });
   if (!response.ok) {
     if (response.status === 401) notifySessionExpired();
-    let message = fallback;
-    try {
-      const body = await response.json();
-      message = body.detail || body.message || message;
-    } catch {
-      // Keep the concise fallback when a proxy returns HTML or an empty body.
-    }
-    throw new ApiRequestError(message, response.status, retryAfterMs(response));
+    throw await apiRequestErrorFromResponse(response, fallback);
   }
   try {
     return await response.json();

@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import {
   AccountUser,
+  ApiRequestError,
   DetectResult,
   FileType,
   HealthStatus,
@@ -61,6 +62,7 @@ import AuthDialog from "./components/AuthDialog";
 import DeveloperPlatform from "./components/DeveloperPlatform";
 import OfficialHome from "./components/OfficialHome";
 import ResultFeedback from "./components/ResultFeedback";
+import { trackPageview } from "./analytics";
 import "./interaction.css";
 
 const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
@@ -165,6 +167,25 @@ function evidenceHistoryEntry(record: Awaited<ReturnType<typeof fetchHistory>>["
 
 function isAbort(error: unknown) {
   return error instanceof DOMException && error.name === "AbortError";
+}
+
+const AUTHENTICATION_ERROR_CODES = new Set([
+  "authentication_required",
+  "account_identity_required",
+  "guest_detection_limit_reached",
+  "guest_limit_reached",
+  "session_expired",
+  "unauthorized",
+]);
+
+function isAuthenticationRequiredError(error: unknown): error is ApiRequestError {
+  return error instanceof ApiRequestError
+    && (error.status === 401 || AUTHENTICATION_ERROR_CODES.has(error.code));
+}
+
+function isUploadConsentRequiredError(error: unknown): error is ApiRequestError {
+  return error instanceof ApiRequestError
+    && (error.status === 428 || error.code === "upload_consent_required" || error.code === "legal_documents_changed");
 }
 
 function wait(ms: number, signal: AbortSignal) {
@@ -337,6 +358,11 @@ export default function App() {
       const selector = view === "home" ? "#official-home-title" : view === "developer" ? ".developer-topbar h1" : ".topbar-title h1";
       document.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
     });
+  }, [view]);
+
+  useEffect(() => {
+    const page = view === "home" ? "home" : view === "developer" ? "history" : "image";
+    trackPageview(page);
   }, [view]);
 
   const outcomeId = outcome?.id;
@@ -530,7 +556,7 @@ export default function App() {
     } catch (error) {
       if (isAbort(error) || runTokenRef.current !== token) throw error;
       const message = error instanceof Error ? error.message : (mode === "swarm" ? "Swarm 复核暂不可用" : "快速检测暂不可用");
-      if (message.includes("登录") || message.includes("次数")) throw error;
+      if (isAuthenticationRequiredError(error) || isUploadConsentRequiredError(error)) throw error;
       if (isRateLimitedError(error)) {
         throw new Error("当前提交任务较多，请稍候几秒后重试当前文件");
       }
@@ -633,7 +659,11 @@ export default function App() {
       const message = error instanceof Error ? error.message : "鉴伪任务未完成，请稍后重试";
       setProgress(null);
       setErrorMessage(message);
-      if (message.includes("登录") || message.includes("次数")) setAuthOpen(true);
+      if (isAuthenticationRequiredError(error)) setAuthOpen(true);
+      if (!user && isUploadConsentRequiredError(error)) {
+        setGuestConsent(false);
+        setConsentWarning(true);
+      }
     } finally {
       if (runTokenRef.current === token) setBusy(false);
     }

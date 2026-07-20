@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import sys
 
+import pytest
 from PIL import Image
 
 
@@ -71,6 +72,102 @@ def test_provenance_reader_marks_trusted_chain_as_trusted(monkeypatch):
 
     assert report["validationState"] == "Trusted"
     assert report["credentialTrusted"] is True
+
+
+def test_provenance_parse_error_discards_partial_trusted_claim(monkeypatch):
+    class MalformedIngredientsReader(_FakeC2paReader):
+        validation_state = "Trusted"
+
+        def json(self):
+            document = json.loads(super().json())
+            document["manifests"]["manifest"]["ingredients"] = [
+                {"title": "source.png", "relationship": "parentOf"},
+                "malformed ingredient",
+            ]
+            return json.dumps(document)
+
+    monkeypatch.setattr(provenance, "Reader", MalformedIngredientsReader)
+    monkeypatch.setattr(
+        provenance.metadata_reader,
+        "inspect_metadata",
+        lambda *_args, **_kwargs: {},
+    )
+
+    report = provenance.read_provenance(b"payload", "image/png", "sample.png")
+
+    assert report["error"].startswith("parse_error:")
+    assert report["hasCredentials"] is False
+    assert report["validationState"] is None
+    assert report["credentialTrusted"] is False
+    assert report["isAiGenerated"] is None
+    assert report["actions"] == []
+    assert report["ingredients"] == []
+    assert provenance_precheck._local_source_decision(report) is None
+
+
+def test_only_typed_manifest_not_found_is_reported_as_no_manifest(monkeypatch):
+    class MissingReader:
+        def __init__(self, *_args, **_kwargs):
+            raise provenance.C2paError.ManifestNotFound("missing")
+
+    monkeypatch.setattr(provenance, "Reader", MissingReader)
+    monkeypatch.setattr(
+        provenance.metadata_reader,
+        "inspect_metadata",
+        lambda *_args, **_kwargs: {},
+    )
+
+    report = provenance.read_provenance(b"payload", "image/png", "sample.png")
+
+    assert report["error"] == "no_manifest"
+
+
+def test_corrupt_c2pa_reader_failure_is_not_downgraded_to_no_manifest(monkeypatch):
+    class CorruptReader:
+        def __init__(self, *_args, **_kwargs):
+            raise provenance.C2paError.Verify("invalid claim")
+
+    monkeypatch.setattr(provenance, "Reader", CorruptReader)
+    monkeypatch.setattr(
+        provenance.metadata_reader,
+        "inspect_metadata",
+        lambda *_args, **_kwargs: {},
+    )
+
+    report = provenance.read_provenance(b"payload", "image/png", "sample.png")
+
+    assert report["error"] == "c2pa_read_error:_C2paVerify"
+    assert report["error"] != "no_manifest"
+
+
+@pytest.mark.parametrize("source_type", ["negativeFilm", "positiveFilm", "print"])
+def test_analog_or_print_sources_are_not_strong_direct_camera_evidence(
+    monkeypatch,
+    source_type,
+):
+    class AnalogReader(_FakeC2paReader):
+        validation_state = "Trusted"
+
+        def json(self):
+            document = json.loads(super().json())
+            action = document["manifests"]["manifest"]["assertions"][0]["data"]["actions"][0]
+            action["digitalSourceType"] = (
+                "http://cv.iptc.org/newscodes/digitalsourcetype/" + source_type
+            )
+            return json.dumps(document)
+
+    monkeypatch.setattr(provenance, "Reader", AnalogReader)
+    monkeypatch.setattr(
+        provenance.metadata_reader,
+        "inspect_metadata",
+        lambda *_args, **_kwargs: {},
+    )
+
+    report = provenance.read_provenance(b"payload", "image/png", "sample.png")
+
+    assert report["credentialTrusted"] is True
+    assert report["isAiGenerated"] is None
+    assert report["captureEvidence"] is None
 
 
 def test_no_decision_does_not_build_analysis():
@@ -220,10 +317,13 @@ def test_invalid_ai_c2pa_requires_pixel_model_without_corroboration():
         }
     )
     assert local is not None
-    decision, _ = local
+    decision, report = local
     assert decision["verdict"] is None
     assert decision["confidence"] == 0.0
     assert decision["modelRequired"] is True
+    assert decision["evidenceKinds"] == ["c2pa", "integrity_clash"]
+    assert report["c2paValidationState"] == "invalid"
+    assert report["integrityClashes"] == ["c2pa_validation_invalid"]
 
 
 def test_unknown_ai_c2pa_state_cannot_short_circuit_pixel_model():
@@ -255,7 +355,11 @@ def test_valid_ai_c2pa_cannot_short_circuit_without_trusted_chain():
     decision, report = local
     assert decision["shortCircuit"] is False
     assert decision["modelRequired"] is True
+    assert decision["evidenceKinds"] == ["c2pa"]
     assert report["c2paTrusted"] is False
+    assert report["c2paValidationState"] == "valid"
+    assert report["integrityClashes"] == []
+    assert "保持中性" in decision["summary"]
 
 
 def test_trusted_ai_c2pa_can_short_circuit_pixel_model():

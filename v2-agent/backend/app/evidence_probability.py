@@ -46,6 +46,37 @@ def _signal_names(report: dict[str, Any]) -> set[str]:
     }
 
 
+def _c2pa_validation_state(report: dict[str, Any], clashes: list[str]) -> str:
+    state = str(
+        report.get("c2paValidationState")
+        or report.get("validationState")
+        or ""
+    ).strip().lower()
+    if state:
+        return state
+    for clash in clashes:
+        normalized = clash.strip().lower()
+        if normalized.startswith("c2pa_not_trusted:"):
+            return normalized.rsplit(":", 1)[-1]
+    return ""
+
+
+def _is_integrity_failure(clash: str) -> bool:
+    normalized = clash.strip().lower()
+    if "c2pa" not in normalized:
+        return True
+    return any(token in normalized for token in (
+        "invalid",
+        "hard_binding",
+        "hard-binding",
+        "hard binding",
+        "hardbinding",
+        "binding_mismatch",
+        "hash_mismatch",
+        "tamper",
+    ))
+
+
 def _known_watermark_lr(confidence: float) -> float:
     confidence = clamp_probability(confidence, 0.5)
     return round(min(240.0, max(60.0, 20.0 * _odds(confidence))), 3)
@@ -79,9 +110,16 @@ def _factor(kind: str, label: str, likelihood_ratio: float, group: str, *, sourc
 def build_probability_model(report: dict[str, Any], known_hits: list[dict[str, Any]]) -> dict[str, Any]:
     factors: list[dict[str, Any]] = []
     signal_names = _signal_names(report)
-    clashes = [str(item) for item in report.get("integrityClashes") or [] if str(item)]
+    raw_clashes = [str(item) for item in report.get("integrityClashes") or [] if str(item)]
+    c2pa_validation_state = _c2pa_validation_state(report, raw_clashes)
+    clashes = [clash for clash in raw_clashes if _is_integrity_failure(clash)]
+    if (
+        c2pa_validation_state == "invalid"
+        and not any("c2pa" in clash.lower() for clash in clashes)
+    ):
+        clashes.append("c2pa_validation_invalid")
     has_c2pa_integrity_clash = any(
-        "c2pa" in clash.lower() and any(token in clash.lower() for token in ("invalid", "signature", "tamper"))
+        "c2pa" in clash.lower()
         for clash in clashes
     )
     ai_from_metadata = bool(report.get("aiFromMetadata"))
@@ -91,12 +129,7 @@ def build_probability_model(report: dict[str, Any], known_hits: list[dict[str, A
     capture = report.get("captureEvidence") if isinstance(report.get("captureEvidence"), dict) else {}
 
     if ai_from_metadata and is_ai_generated:
-        if "c2pa" in signal_names and not c2pa_trusted:
-            factors.append(_factor(
-                "unverified_ai_declaration", "未通过可信校验的 AI 来源声明", 1.5,
-                "untrusted_provenance", source="c2pa",
-            ))
-        elif "c2pa" in signal_names and c2pa_trusted and source_kind == "enhanced":
+        if "c2pa" in signal_names and c2pa_trusted and source_kind == "enhanced":
             factors.append(_factor(
                 "ai_enhancement_declaration", "AI 合成编辑来源声明", 150.0,
                 "origin_declaration", source="c2pa",
@@ -105,6 +138,15 @@ def build_probability_model(report: dict[str, Any], known_hits: list[dict[str, A
             factors.append(_factor(
                 "valid_ai_c2pa", "通过校验的 AI 生成内容凭证", 1000.0,
                 "origin_declaration", source="c2pa",
+            ))
+        elif "c2pa" in signal_names and c2pa_validation_state == "valid":
+            # A valid signature from an untrusted signer is readable provenance,
+            # not evidence for or against AI generation.
+            pass
+        elif "c2pa" in signal_names:
+            factors.append(_factor(
+                "unverified_ai_declaration", "未通过可信校验的 AI 来源声明", 1.5,
+                "untrusted_provenance", source="c2pa",
             ))
         else:
             factors.append(_factor(

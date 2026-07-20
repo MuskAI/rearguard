@@ -1,6 +1,7 @@
 """Lightweight persistent storage for V2 history, cache, and metrics."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -10,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from . import watermark_verdict
+from . import evidence_manifest_v2, privacy_erasure_ledger, watermark_verdict
 
 
 DATA_DIR = Path(os.getenv("JIANZHEN_DATA_DIR", Path(__file__).resolve().parents[1] / "data"))
@@ -31,12 +32,16 @@ PUBLISHABLE_AUTHORITIES = frozenset({"decisive_provenance"})
 _INIT_LOCK = threading.Lock()
 _INITIALIZED = False
 
+EvidenceConflictError = evidence_manifest_v2.EvidenceConflictError
+EvidenceIntegrityError = evidence_manifest_v2.EvidenceIntegrityError
+
 
 def _connect() -> sqlite3.Connection:
     global _INITIALIZED
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     if not _INITIALIZED:
@@ -102,6 +107,118 @@ def _init(conn: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL,
             FOREIGN KEY(task_id) REFERENCES history(task_id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS evidence_manifests_v2 (
+            task_id TEXT PRIMARY KEY,
+            report_id TEXT NOT NULL UNIQUE,
+            manifest_json TEXT NOT NULL,
+            manifest_sha256 TEXT NOT NULL,
+            signature TEXT NOT NULL,
+            algorithm TEXT NOT NULL,
+            key_id TEXT NOT NULL,
+            public_key TEXT NOT NULL,
+            signed_at TEXT NOT NULL,
+            FOREIGN KEY(task_id) REFERENCES history(task_id) ON DELETE RESTRICT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_evidence_manifests_v2_hash
+            ON evidence_manifests_v2(manifest_sha256);
+
+        CREATE TABLE IF NOT EXISTS report_artifacts_v2 (
+            report_id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL UNIQUE,
+            filename TEXT NOT NULL,
+            media_type TEXT NOT NULL,
+            artifact_bytes BLOB NOT NULL,
+            artifact_sha256 TEXT NOT NULL,
+            artifact_size INTEGER NOT NULL,
+            report_payload_json TEXT NOT NULL,
+            report_payload_sha256 TEXT NOT NULL,
+            statement_json TEXT NOT NULL,
+            statement_sha256 TEXT NOT NULL,
+            signature TEXT NOT NULL,
+            algorithm TEXT NOT NULL,
+            key_id TEXT NOT NULL,
+            public_key TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(task_id) REFERENCES evidence_manifests_v2(task_id) ON DELETE RESTRICT,
+            FOREIGN KEY(report_id) REFERENCES evidence_manifests_v2(report_id) ON DELETE RESTRICT
+        );
+
+        CREATE TRIGGER IF NOT EXISTS history_signed_evidence_immutable
+        BEFORE UPDATE OF task_id, report_id, created_at, sha256, file_type,
+                         file_name, file_size, resolution, result_json,
+                         developer_user_id, developer_account_uuid, developer_key_id
+        ON history
+        WHEN EXISTS (
+            SELECT 1 FROM evidence_manifests_v2 manifest
+            WHERE manifest.task_id = OLD.task_id
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'signed history evidence is immutable');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS evidence_manifest_v2_immutable
+        BEFORE UPDATE ON evidence_manifests_v2
+        BEGIN
+            SELECT RAISE(ABORT, 'signed evidence manifest is immutable');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS evidence_manifest_v2_binding_insert
+        BEFORE INSERT ON evidence_manifests_v2
+        WHEN NOT EXISTS (
+            SELECT 1 FROM history
+            WHERE task_id = NEW.task_id AND report_id = NEW.report_id
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'evidence manifest binding does not match history');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS report_artifact_v2_immutable
+        BEFORE UPDATE ON report_artifacts_v2
+        BEGIN
+            SELECT RAISE(ABORT, 'signed report artifact is immutable');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS report_artifact_v2_binding_insert
+        BEFORE INSERT ON report_artifacts_v2
+        WHEN NOT EXISTS (
+            SELECT 1 FROM evidence_manifests_v2
+            WHERE task_id = NEW.task_id AND report_id = NEW.report_id
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'report artifact binding does not match evidence manifest');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS history_artifacts_frozen_insert
+        BEFORE INSERT ON history_artifacts
+        WHEN EXISTS (
+            SELECT 1 FROM report_artifacts_v2 report
+            WHERE report.task_id = NEW.task_id
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'report evidence attachments are frozen');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS history_artifacts_frozen_update
+        BEFORE UPDATE ON history_artifacts
+        WHEN EXISTS (
+            SELECT 1 FROM report_artifacts_v2 report
+            WHERE report.task_id = OLD.task_id
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'report evidence attachments are frozen');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS history_artifacts_frozen_delete
+        BEFORE DELETE ON history_artifacts
+        WHEN EXISTS (
+            SELECT 1 FROM report_artifacts_v2 report
+            WHERE report.task_id = OLD.task_id
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'report evidence attachments are frozen');
+        END;
 
         CREATE TABLE IF NOT EXISTS request_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -224,6 +341,11 @@ def cache_key(file_type: str, sha256: str) -> str:
     return f"{ANALYSIS_CACHE_VERSION}:{file_type}:{sha256}"
 
 
+def _account_cache_scope(account_uuid: str) -> str:
+    raw_scope = f"account:{account_uuid}"
+    return hashlib.sha256(raw_scope.encode("utf-8")).hexdigest()[:16]
+
+
 def _is_forensics_cache(file_type: str) -> bool:
     return str(file_type or "").startswith("image-forensics:")
 
@@ -312,43 +434,169 @@ def put_cached_analysis(file_type: str, sha256: str, analysis: dict[str, Any]) -
         conn.commit()
 
 
+def _manifest_record_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "payload": json.loads(row["manifest_json"]),
+        "sha256": row["manifest_sha256"],
+        "signature": {
+            "algorithm": row["algorithm"],
+            "keyId": row["key_id"],
+            "publicKey": row["public_key"],
+            "value": row["signature"],
+        },
+    }
+
+
+def _get_manifest_record(conn: sqlite3.Connection, item_id: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT manifest_json, manifest_sha256, signature, algorithm, key_id, public_key
+        FROM evidence_manifests_v2
+        WHERE task_id = ? OR report_id = ?
+        """,
+        (item_id, item_id),
+    ).fetchone()
+    return _manifest_record_from_row(row) if row else None
+
+
+def _insert_manifest_record(conn: sqlite3.Connection, record: dict[str, Any]) -> None:
+    payload = record["payload"]
+    binding = payload["binding"]
+    signature = record["signature"]
+    conn.execute(
+        """
+        INSERT INTO evidence_manifests_v2
+            (task_id, report_id, manifest_json, manifest_sha256, signature,
+             algorithm, key_id, public_key, signed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            binding["taskId"],
+            binding["reportId"],
+            evidence_manifest_v2.canonical_json(payload).decode("utf-8"),
+            record["sha256"],
+            signature["value"],
+            signature["algorithm"],
+            signature["keyId"],
+            signature["publicKey"],
+            payload.get("sealedAt") or payload["frozenAt"],
+        ),
+    )
+
+
+def get_evidence_manifest(item_id: str) -> dict[str, Any] | None:
+    with _connect() as conn:
+        return _get_manifest_record(conn, item_id)
+
+
 def put_history(
     result: dict[str, Any],
     sha256: str,
     file_size: int,
     thumbnail: str | None,
     actor: dict[str, Any] | None = None,
-) -> None:
+) -> dict[str, Any]:
     meta = result.get("fileMeta", {})
     developer_user_id = str((actor or {}).get("userId") or "") or None
     developer_account_uuid = str((actor or {}).get("accountUuid") or "") or None
     developer_key_id = str((actor or {}).get("keyId") or "") or None
+    result_json = evidence_manifest_v2.canonical_json(result).decode("utf-8")
+    manifest = evidence_manifest_v2.build_manifest(
+        result,
+        original_sha256=sha256,
+        file_size=file_size,
+        actor=actor,
+    )
+    signed_manifest = evidence_manifest_v2.seal_manifest(manifest)
     with _connect() as conn:
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO history
-                (task_id, report_id, created_at, sha256, file_type, file_name, file_size,
-                 resolution, result_json, thumbnail, developer_user_id,
-                 developer_account_uuid, developer_key_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                result["taskId"],
-                result["reportId"],
-                result["createdAt"],
-                sha256,
-                meta.get("type", "unknown"),
-                meta.get("name", "unknown"),
-                file_size,
-                meta.get("resolution"),
-                json.dumps(result, ensure_ascii=False),
-                thumbnail,
-                developer_user_id,
-                developer_account_uuid,
-                developer_key_id,
-            ),
-        )
-        conn.commit()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                """
+                SELECT task_id, report_id, created_at, sha256, file_type, file_name,
+                       file_size, resolution, result_json, thumbnail, developer_user_id,
+                       developer_account_uuid, developer_key_id
+                FROM history
+                WHERE task_id = ? OR report_id = ?
+                """,
+                (result["taskId"], result["reportId"]),
+            ).fetchone()
+            expected_values = {
+                "task_id": result["taskId"],
+                "report_id": result["reportId"],
+                "created_at": result["createdAt"],
+                "sha256": sha256,
+                "file_type": meta.get("type", "unknown"),
+                "file_name": meta.get("name", "unknown"),
+                "file_size": int(file_size),
+                "resolution": meta.get("resolution"),
+                "thumbnail": thumbnail,
+                "developer_user_id": developer_user_id,
+                "developer_account_uuid": developer_account_uuid,
+                "developer_key_id": developer_key_id,
+            }
+            if existing:
+                same_metadata = all(existing[key] == value for key, value in expected_values.items())
+                try:
+                    same_result = evidence_manifest_v2.canonical_json(
+                        json.loads(existing["result_json"])
+                    ).decode("utf-8") == result_json
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    same_result = False
+                if not same_metadata or not same_result:
+                    raise EvidenceConflictError(
+                        "taskId or reportId already belongs to different immutable evidence"
+                    )
+                persisted = _get_manifest_record(conn, result["taskId"])
+                if persisted is None:
+                    _insert_manifest_record(conn, signed_manifest)
+                    persisted = signed_manifest
+                verification = evidence_manifest_v2.verify_signed_record(
+                    persisted,
+                    domain=evidence_manifest_v2.MANIFEST_SIGNATURE_DOMAIN,
+                    trusted_public_keys=evidence_manifest_v2.configured_verification_keys(),
+                )
+                if verification["status"] != "valid" or not evidence_manifest_v2.manifest_matches_history(
+                    persisted["payload"],
+                    result,
+                    original_sha256=sha256,
+                    file_size=file_size,
+                    actor=actor,
+                ):
+                    raise EvidenceIntegrityError("persisted manifest does not match immutable history")
+                conn.commit()
+                return persisted
+
+            conn.execute(
+                """
+                INSERT INTO history
+                    (task_id, report_id, created_at, sha256, file_type, file_name, file_size,
+                     resolution, result_json, thumbnail, developer_user_id,
+                     developer_account_uuid, developer_key_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    result["taskId"],
+                    result["reportId"],
+                    result["createdAt"],
+                    sha256,
+                    meta.get("type", "unknown"),
+                    meta.get("name", "unknown"),
+                    file_size,
+                    meta.get("resolution"),
+                    result_json,
+                    thumbnail,
+                    developer_user_id,
+                    developer_account_uuid,
+                    developer_key_id,
+                ),
+            )
+            _insert_manifest_record(conn, signed_manifest)
+            conn.commit()
+            return signed_manifest
+        except (sqlite3.Error, EvidenceConflictError, EvidenceIntegrityError):
+            conn.rollback()
+            raise
 
 
 def _history_summary_from_row(
@@ -604,7 +852,343 @@ def get_history(item_id: str) -> dict[str, Any] | None:
     return result
 
 
+def _raw_history_row(conn: sqlite3.Connection, item_id: str) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT task_id, report_id, created_at, sha256, file_type, file_name,
+               file_size, resolution, result_json, thumbnail, developer_user_id,
+               developer_account_uuid, developer_key_id
+        FROM history
+        WHERE task_id = ? OR report_id = ?
+        """,
+        (item_id, item_id),
+    ).fetchone()
+
+
+def _actor_from_history_row(row: sqlite3.Row, manifest: dict[str, Any] | None = None) -> dict[str, Any]:
+    actor: dict[str, Any] = {
+        "userId": row["developer_user_id"],
+        "accountUuid": row["developer_account_uuid"],
+        "keyId": row["developer_key_id"],
+    }
+    if not actor["accountUuid"]:
+        tenant = (((manifest or {}).get("payload") or {}).get("binding") or {}).get("tenant") or {}
+        actor["mode"] = tenant.get("scope") or "unowned"
+    return actor
+
+
+def _verify_manifest_against_row(record: dict[str, Any], row: sqlite3.Row) -> dict[str, Any]:
+    verification = evidence_manifest_v2.verify_signed_record(
+        record,
+        domain=evidence_manifest_v2.MANIFEST_SIGNATURE_DOMAIN,
+        trusted_public_keys=evidence_manifest_v2.configured_verification_keys(),
+    )
+    if verification["status"] != "valid":
+        raise EvidenceIntegrityError("evidence manifest signature is invalid")
+    try:
+        result = json.loads(row["result_json"])
+    except json.JSONDecodeError as exc:
+        raise EvidenceIntegrityError("history result JSON is invalid") from exc
+    if not evidence_manifest_v2.manifest_matches_history(
+        record["payload"],
+        result,
+        original_sha256=row["sha256"],
+        file_size=row["file_size"],
+        actor=_actor_from_history_row(row, record),
+    ):
+        raise EvidenceIntegrityError("evidence manifest does not match history")
+    return verification
+
+
+def ensure_evidence_manifest(item_id: str, *, origin: str = "legacy_backfill") -> dict[str, Any]:
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = _raw_history_row(conn, item_id)
+            if not row:
+                raise KeyError(item_id)
+            existing = _get_manifest_record(conn, item_id)
+            if existing is not None:
+                _verify_manifest_against_row(existing, row)
+                conn.commit()
+                return existing
+            try:
+                result = json.loads(row["result_json"])
+            except json.JSONDecodeError as exc:
+                raise EvidenceIntegrityError("legacy history result JSON is invalid") from exc
+            manifest = evidence_manifest_v2.build_manifest(
+                result,
+                original_sha256=row["sha256"],
+                file_size=row["file_size"],
+                actor=_actor_from_history_row(row),
+                origin=origin,
+            )
+            signed = evidence_manifest_v2.seal_manifest(manifest)
+            _insert_manifest_record(conn, signed)
+            conn.commit()
+            return signed
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def backfill_evidence_manifests(*, limit: int = 1000) -> dict[str, int]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT h.task_id
+            FROM history h
+            LEFT JOIN evidence_manifests_v2 manifest ON manifest.task_id = h.task_id
+            WHERE manifest.task_id IS NULL
+            ORDER BY h.created_at ASC
+            LIMIT ?
+            """,
+            (max(1, min(int(limit), 10_000)),),
+        ).fetchall()
+    completed = 0
+    for row in rows:
+        ensure_evidence_manifest(row["task_id"])
+        completed += 1
+    return {"discovered": len(rows), "completed": completed}
+
+
+def _artifact_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    signed_record = {
+        "payload": json.loads(row["statement_json"]),
+        "sha256": row["statement_sha256"],
+        "signature": {
+            "algorithm": row["algorithm"],
+            "keyId": row["key_id"],
+            "publicKey": row["public_key"],
+            "value": row["signature"],
+        },
+    }
+    return {
+        "taskId": row["task_id"],
+        "reportId": row["report_id"],
+        "filename": row["filename"],
+        "mediaType": row["media_type"],
+        "bytes": bytes(row["artifact_bytes"]),
+        "artifactSha256": row["artifact_sha256"],
+        "artifactSize": int(row["artifact_size"]),
+        "reportPayload": json.loads(row["report_payload_json"]),
+        "reportPayloadSha256": row["report_payload_sha256"],
+        "signedRecord": signed_record,
+        "createdAt": row["created_at"],
+    }
+
+
+def _get_report_artifact(conn: sqlite3.Connection, item_id: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT report_id, task_id, filename, media_type, artifact_bytes,
+               artifact_sha256, artifact_size, report_payload_json,
+               report_payload_sha256, statement_json, statement_sha256,
+               signature, algorithm, key_id, public_key, created_at
+        FROM report_artifacts_v2
+        WHERE report_id = ? OR task_id = ?
+        """,
+        (item_id, item_id),
+    ).fetchone()
+    return _artifact_from_row(row) if row else None
+
+
+def get_report_artifact(item_id: str) -> dict[str, Any] | None:
+    with _connect() as conn:
+        return _get_report_artifact(conn, item_id)
+
+
+def put_report_artifact(
+    item_id: str,
+    *,
+    artifact_bytes: bytes,
+    filename: str,
+    media_type: str,
+    report_payload: dict[str, Any],
+) -> dict[str, Any]:
+    if not artifact_bytes.startswith(b"%PDF-"):
+        raise EvidenceIntegrityError("report artifact is not a PDF")
+    manifest_record = ensure_evidence_manifest(item_id)
+    statement = evidence_manifest_v2.build_artifact_statement(
+        manifest_record,
+        report_payload=report_payload,
+        artifact_bytes=artifact_bytes,
+        filename=filename,
+        media_type=media_type,
+    )
+    report_payload_json = evidence_manifest_v2.canonical_json(report_payload).decode("utf-8")
+    artifact_meta = statement["artifact"]
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            existing = _get_report_artifact(conn, item_id)
+            if existing is not None:
+                existing_payload = dict(existing["signedRecord"]["payload"])
+                existing_payload.pop("sealedAt", None)
+                existing_payload.pop("signing", None)
+                existing_payload.pop("timeEvidence", None)
+                existing_bundle = {
+                    "schema": evidence_manifest_v2.BUNDLE_SCHEMA,
+                    "manifest": manifest_record,
+                    "artifact": existing["signedRecord"],
+                }
+                existing_verification = evidence_manifest_v2.verify_bundle(
+                    existing_bundle,
+                    artifact_bytes=existing["bytes"],
+                    report_payload=existing["reportPayload"],
+                    trusted_public_keys=evidence_manifest_v2.configured_verification_keys(),
+                )
+                if existing_verification["status"] != "valid":
+                    raise EvidenceIntegrityError("persisted PDF artifact is invalid")
+                same = bool(
+                    existing["bytes"] == artifact_bytes
+                    and existing["filename"] == filename
+                    and existing["mediaType"] == media_type
+                    and evidence_manifest_v2.canonical_json(existing["reportPayload"]).decode("utf-8")
+                    == report_payload_json
+                    and evidence_manifest_v2.canonical_json(existing_payload)
+                    == evidence_manifest_v2.canonical_json(statement)
+                )
+                if not same:
+                    raise EvidenceConflictError(
+                        "a different immutable PDF artifact already exists for this report"
+                    )
+                conn.commit()
+                return existing
+
+            snapshot_row = conn.execute(
+                """
+                SELECT h.result_json, a.forensics_json, a.provenance_json
+                FROM history h
+                LEFT JOIN history_artifacts a ON a.task_id = h.task_id
+                WHERE h.task_id = ? AND h.report_id = ?
+                """,
+                (
+                    manifest_record["payload"]["binding"]["taskId"],
+                    manifest_record["payload"]["binding"]["reportId"],
+                ),
+            ).fetchone()
+            if snapshot_row is None:
+                raise EvidenceIntegrityError("history disappeared before report freeze")
+            current_result = json.loads(snapshot_row["result_json"])
+            for field, column in (
+                ("forensics", "forensics_json"),
+                ("provenance", "provenance_json"),
+            ):
+                current_value = (
+                    json.loads(snapshot_row[column])
+                    if snapshot_row[column] is not None
+                    else current_result.get(field)
+                )
+                if (
+                    evidence_manifest_v2.canonical_json(report_payload.get(field))
+                    != evidence_manifest_v2.canonical_json(current_value)
+                ):
+                    raise EvidenceConflictError(
+                        f"report payload {field} does not match current evidence attachments"
+                    )
+
+            signed_statement = evidence_manifest_v2.seal_artifact_statement(statement)
+            binding = manifest_record["payload"]["binding"]
+            signature = signed_statement["signature"]
+            conn.execute(
+                """
+                INSERT INTO report_artifacts_v2
+                    (report_id, task_id, filename, media_type, artifact_bytes,
+                     artifact_sha256, artifact_size, report_payload_json,
+                     report_payload_sha256, statement_json, statement_sha256,
+                     signature, algorithm, key_id, public_key, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    binding["reportId"],
+                    binding["taskId"],
+                    filename,
+                    media_type,
+                    sqlite3.Binary(artifact_bytes),
+                    artifact_meta["sha256"],
+                    artifact_meta["sizeBytes"],
+                    report_payload_json,
+                    statement["reportPayloadSha256"],
+                    evidence_manifest_v2.canonical_json(signed_statement["payload"]).decode("utf-8"),
+                    signed_statement["sha256"],
+                    signature["value"],
+                    signature["algorithm"],
+                    signature["keyId"],
+                    signature["publicKey"],
+                    signed_statement["payload"].get("sealedAt") or now_iso(),
+                ),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    artifact = get_report_artifact(item_id)
+    if artifact is None:
+        raise EvidenceIntegrityError("report artifact was not persisted")
+    return artifact
+
+
+def get_evidence_bundle(item_id: str) -> dict[str, Any] | None:
+    with _connect() as conn:
+        manifest = _get_manifest_record(conn, item_id)
+        if manifest is None:
+            return None
+        artifact = _get_report_artifact(conn, item_id)
+    return {
+        "schema": evidence_manifest_v2.BUNDLE_SCHEMA,
+        "manifest": manifest,
+        "artifact": artifact["signedRecord"] if artifact else None,
+    }
+
+
+def verify_evidence(item_id: str) -> dict[str, Any]:
+    with _connect() as conn:
+        row = _raw_history_row(conn, item_id)
+        manifest = _get_manifest_record(conn, item_id)
+        artifact = _get_report_artifact(conn, item_id)
+    if row is None:
+        return {
+            "status": "missing",
+            "complete": False,
+            "packageIntegrityVerified": False,
+            "manifest": {"status": "missing", "errors": ["history_missing"]},
+            "artifact": {"status": "missing", "errors": ["history_missing"]},
+        }
+    bundle = {
+        "schema": evidence_manifest_v2.BUNDLE_SCHEMA,
+        "manifest": manifest,
+        "artifact": artifact["signedRecord"] if artifact else None,
+    }
+    verification = evidence_manifest_v2.verify_bundle(
+        bundle,
+        artifact_bytes=artifact["bytes"] if artifact else None,
+        report_payload=artifact["reportPayload"] if artifact else None,
+        trusted_public_keys=evidence_manifest_v2.configured_verification_keys(),
+    )
+    if manifest is not None:
+        try:
+            _verify_manifest_against_row(manifest, row)
+        except EvidenceIntegrityError:
+            errors = list(verification["manifest"].get("errors") or [])
+            errors.append("history_binding_mismatch")
+            verification["manifest"] = {
+                **verification["manifest"],
+                "status": "invalid",
+                "errors": list(dict.fromkeys(errors)),
+            }
+            verification["status"] = "invalid"
+            verification["complete"] = False
+    return verification
+
+
 def delete_history(item_id: str) -> dict[str, Any] | None:
+    """Erase tenant-identifying report content while retaining anonymous usage totals.
+
+    Signed rows are removed leaf-first because their RESTRICT relationships are
+    intentional: ordinary writes cannot replace evidence, while this explicit
+    privacy path may erase it without leaving a content-bearing tombstone.
+    """
     item = get_history(item_id)
     if not item:
         return None
@@ -613,15 +1197,38 @@ def delete_history(item_id: str) -> dict[str, Any] | None:
     file_meta = item.get("fileMeta") or {}
     sha256 = str(file_meta.get("sha256") or "")
     file_type = str(file_meta.get("type") or "")
+    owner_account_uuid = str(item.get("_developerAccountUuid") or "")
+    privacy_erasure_ledger.record_tombstone(
+        "jianzhen-v2",
+        "history",
+        task_id,
+        report_id,
+        resource_fingerprint_value=privacy_erasure_ledger.resource_fingerprint({
+            "taskId": task_id,
+            "reportId": report_id,
+            "sha256": sha256,
+            "fileType": file_type,
+            "accountUuid": owner_account_uuid,
+        }),
+    )
     with _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(
             """
-            UPDATE report_shares
-            SET revoked_at = COALESCE(revoked_at, ?)
+            DELETE FROM report_share_access_events
             WHERE report_id = ?
+               OR share_id IN (SELECT share_id FROM report_shares WHERE report_id = ?)
             """,
-            (now_iso(), report_id),
+            (report_id, report_id),
+        )
+        conn.execute("DELETE FROM report_shares WHERE report_id = ?", (report_id,))
+        conn.execute(
+            "DELETE FROM report_artifacts_v2 WHERE task_id = ? OR report_id = ?",
+            (task_id, report_id),
+        )
+        conn.execute(
+            "DELETE FROM evidence_manifests_v2 WHERE task_id = ? OR report_id = ?",
+            (task_id, report_id),
         )
         conn.execute(
             "DELETE FROM history_artifacts WHERE task_id = ?",
@@ -631,22 +1238,70 @@ def delete_history(item_id: str) -> dict[str, Any] | None:
             "DELETE FROM history WHERE task_id = ? OR report_id = ?",
             (task_id, report_id),
         )
-        # Usage rows are retained for billing/audit totals but no longer point
-        # back to deleted content or a downloadable report.
+        # Keep only de-identified aggregate inputs for operational totals. A
+        # deleted report must not remain linkable to a task, user, or API key.
         conn.execute(
             """
             UPDATE token_usage_events
-            SET task_id = NULL, report_id = NULL
+            SET developer_user_id = NULL,
+                developer_key_id = NULL,
+                task_id = NULL,
+                report_id = NULL
             WHERE task_id = ? OR report_id = ?
             """,
             (task_id, report_id),
         )
+        conn.execute(
+            """
+            UPDATE request_events
+            SET client_ip = NULL,
+                user_agent = NULL,
+                path = '[erased-resource-route]'
+            WHERE (path IS NOT NULL AND instr(path, ?) > 0)
+               OR (path IS NOT NULL AND instr(path, ?) > 0)
+            """,
+            (task_id, report_id),
+        )
         if sha256 and file_type:
-            remaining = conn.execute(
+            if owner_account_uuid:
+                remaining_for_tenant = conn.execute(
+                    """
+                    SELECT 1
+                    FROM history
+                    WHERE developer_account_uuid = ? AND sha256 = ? AND file_type = ?
+                    LIMIT 1
+                    """,
+                    (owner_account_uuid, sha256, file_type),
+                ).fetchone()
+                if not remaining_for_tenant:
+                    cache_scope = _account_cache_scope(owner_account_uuid)
+                    if file_type == "image":
+                        conn.execute(
+                            """
+                            DELETE FROM analysis_cache
+                            WHERE sha256 = ?
+                              AND (
+                                  file_type = ?
+                                  OR file_type LIKE ?
+                              )
+                            """,
+                            (
+                                sha256,
+                                f"image:tenant:{cache_scope}",
+                                f"image-forensics:%:{cache_scope}",
+                            ),
+                        )
+                    else:
+                        conn.execute(
+                            "DELETE FROM analysis_cache WHERE sha256 = ? AND file_type = ?",
+                            (sha256, f"{file_type}:tenant:{cache_scope}"),
+                        )
+
+            remaining_global = conn.execute(
                 "SELECT 1 FROM history WHERE sha256 = ? AND file_type = ? LIMIT 1",
                 (sha256, file_type),
             ).fetchone()
-            if not remaining:
+            if not remaining_global:
                 conn.execute(
                     "DELETE FROM analysis_cache WHERE sha256 = ? AND file_type = ?",
                     (sha256, file_type),
@@ -679,9 +1334,18 @@ def create_report_share(
     created_by_mode: str,
     legacy: bool = False,
     signature_fingerprint: str | None = None,
+    require_existing_report: bool = False,
 ) -> dict[str, Any]:
     created_at = now_iso()
     with _connect() as conn:
+        if require_existing_report:
+            conn.execute("BEGIN IMMEDIATE")
+            if conn.execute(
+                "SELECT 1 FROM history WHERE report_id = ? LIMIT 1",
+                (report_id,),
+            ).fetchone() is None:
+                conn.rollback()
+                raise RuntimeError("report does not exist")
         conn.execute(
             """
             INSERT INTO report_shares
@@ -715,8 +1379,17 @@ def register_legacy_report_share(
     expires_at: int,
     owner_user_id: str,
     signature_fingerprint: str,
+    require_existing_report: bool = False,
 ) -> dict[str, Any]:
     with _connect() as conn:
+        if require_existing_report:
+            conn.execute("BEGIN IMMEDIATE")
+            if conn.execute(
+                "SELECT 1 FROM history WHERE report_id = ? LIMIT 1",
+                (report_id,),
+            ).fetchone() is None:
+                conn.rollback()
+                raise RuntimeError("report does not exist")
         conn.execute(
             """
             INSERT INTO report_shares
@@ -848,25 +1521,58 @@ def put_history_artifacts(
     forensics: dict[str, Any] | None = None,
     provenance: dict[str, Any] | None = None,
 ) -> None:
+    incoming_forensics = None if forensics is None else json.dumps(forensics, ensure_ascii=False)
+    incoming_provenance = None if provenance is None else json.dumps(provenance, ensure_ascii=False)
     with _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO history_artifacts
-                (task_id, forensics_json, provenance_json, updated_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(task_id) DO UPDATE SET
-                forensics_json = COALESCE(excluded.forensics_json, history_artifacts.forensics_json),
-                provenance_json = COALESCE(excluded.provenance_json, history_artifacts.provenance_json),
-                updated_at = excluded.updated_at
-            """,
-            (
-                task_id,
-                None if forensics is None else json.dumps(forensics, ensure_ascii=False),
-                None if provenance is None else json.dumps(provenance, ensure_ascii=False),
-                now_iso(),
-            ),
-        )
-        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            existing = conn.execute(
+                """
+                SELECT forensics_json, provenance_json
+                FROM history_artifacts
+                WHERE task_id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+            frozen = conn.execute(
+                "SELECT 1 FROM report_artifacts_v2 WHERE task_id = ? LIMIT 1",
+                (task_id,),
+            ).fetchone()
+            if frozen:
+                current_forensics = existing["forensics_json"] if existing else None
+                current_provenance = existing["provenance_json"] if existing else None
+                desired_forensics = incoming_forensics if incoming_forensics is not None else current_forensics
+                desired_provenance = incoming_provenance if incoming_provenance is not None else current_provenance
+
+                def canonical_optional(raw: str | None) -> bytes:
+                    return evidence_manifest_v2.canonical_json(None if raw is None else json.loads(raw))
+
+                if (
+                    canonical_optional(desired_forensics) != canonical_optional(current_forensics)
+                    or canonical_optional(desired_provenance) != canonical_optional(current_provenance)
+                ):
+                    raise EvidenceConflictError(
+                        "report evidence attachments cannot change after the PDF is frozen"
+                    )
+                conn.commit()
+                return
+
+            conn.execute(
+                """
+                INSERT INTO history_artifacts
+                    (task_id, forensics_json, provenance_json, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(task_id) DO UPDATE SET
+                    forensics_json = COALESCE(excluded.forensics_json, history_artifacts.forensics_json),
+                    provenance_json = COALESCE(excluded.provenance_json, history_artifacts.provenance_json),
+                    updated_at = excluded.updated_at
+                """,
+                (task_id, incoming_forensics, incoming_provenance, now_iso()),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
 
 def next_sequence(prefix_date: str) -> int:

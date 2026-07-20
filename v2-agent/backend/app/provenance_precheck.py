@@ -190,6 +190,9 @@ def _remote_inspect(data: bytes, filename: str, *, timeout: float) -> dict[str, 
 
 def _local_source_decision(report: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]] | None:
     """Gate only explicit AI declarations from the original file."""
+    if str(report.get("error") or "").strip().lower().startswith("parse_error"):
+        return None
+
     source_types = [
         str(action.get("digitalSourceType") or "")
         for action in report.get("actions") or []
@@ -203,8 +206,9 @@ def _local_source_decision(report: dict[str, Any]) -> tuple[dict[str, Any], dict
     validation_state = str(report.get("validationState") or "").strip().lower()
     c2pa_trusted = (
         report.get("credentialTrusted") is True
-        or validation_state == "trusted"
+        and validation_state == "trusted"
     )
+    c2pa_integrity_invalid = validation_state == "invalid"
 
     if report.get("isAiGenerated") is True:
         enhanced = source_kind == "enhanced"
@@ -214,9 +218,16 @@ def _local_source_decision(report: dict[str, Any]) -> tuple[dict[str, Any], dict
             "verdict": None if not c2pa_trusted else "suspected_fake" if enhanced else "highly_suspected_fake",
             "confidence": 0.0 if not c2pa_trusted else 0.94 if enhanced else 0.99,
             "reason": "untrusted_ai_provenance" if not c2pa_trusted else "c2pa_ai_enhanced" if enhanced else "c2pa_ai_generated",
-            "evidenceKinds": ["c2pa", "integrity_clash"] if not c2pa_trusted else ["c2pa"],
+            "evidenceKinds": [
+                "c2pa",
+                *(["integrity_clash"] if c2pa_integrity_invalid else []),
+            ],
             "summary": (
-                "C2PA 包含 AI 来源声明，但凭证未处于可信校验状态；该线索仅作上下文并继续运行像素模型。"
+                "C2PA 签名结构有效，但签名者信任链未建立；其中的 AI 来源声明保持中性并继续运行像素模型。"
+                if validation_state == "valid"
+                else "C2PA 校验失败；凭证内容不受信，仅将校验失败作为完整性异常并继续运行像素模型。"
+                if c2pa_integrity_invalid
+                else "C2PA 包含 AI 来源声明，但凭证未处于可信校验状态；该线索仅作上下文并继续运行像素模型。"
                 if not c2pa_trusted
                 else "C2PA 内容凭证声明该文件包含 AI 生成或合成内容，已直接形成结论。"
             ),
@@ -226,15 +237,16 @@ def _local_source_decision(report: dict[str, Any]) -> tuple[dict[str, Any], dict
             "isAiGenerated": True,
             "aiSourceKind": source_kind,
             "c2paTrusted": c2pa_trusted,
+            "c2paValidationState": validation_state or "unknown",
             "platform": report.get("generator"),
             "signals": [
                 {
                     "name": "c2pa",
-                    "confidence": "high",
+                    "confidence": "high" if c2pa_trusted else "unverified",
                     "detail": report.get("generator") or "AI digitalSourceType",
                 }
             ],
-            "integrityClashes": [f"c2pa_not_trusted:{validation_state or 'unknown'}"] if not c2pa_trusted else [],
+            "integrityClashes": ["c2pa_validation_invalid"] if c2pa_integrity_invalid else [],
         }
         return decision, compact
 
@@ -405,6 +417,7 @@ def _reconcile_probability(
             report["isAiGenerated"] = True
         report["aiSourceKind"] = report.get("aiSourceKind") or compact.get("aiSourceKind")
         report["c2paTrusted"] = compact.get("c2paTrusted") is True
+        report["c2paValidationState"] = compact.get("c2paValidationState")
         report["platform"] = report.get("platform") or compact.get("platform")
         report["signals"] = [*(report.get("signals") or []), *(compact.get("signals") or [])]
         report["integrityClashes"] = list(dict.fromkeys([

@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+sudo install -m 600 -o ubuntu -g ubuntu /dev/null /var/lock/realguard-public-release.lock
 sudo install -m 600 -o ubuntu -g ubuntu /dev/null /var/lock/huijian-v2-deploy.lock
+exec 8>/var/lock/realguard-public-release.lock
+flock -w 900 8 || { printf 'Another public release transaction is still running.\n' >&2; exit 75; }
 exec 9>/var/lock/huijian-v2-deploy.lock
 flock -n 9 || { printf 'Another V2 activation is already running.\n' >&2; exit 75; }
 
@@ -19,6 +22,7 @@ unit_switched=0
 rollback() {
   status=$?
   trap - ERR
+  set +e
   printf 'V2 activation failed; restoring the previous application.\n' >&2
   if [[ "$frontend_switched" == "1" && -d /var/www/v2.previous ]]; then
     sudo rm -rf /var/www/v2
@@ -47,6 +51,10 @@ rollback() {
 trap rollback ERR
 
 sudo install -d -m 700 /etc/realguard
+# The service user owns the signing key but must be able to traverse the
+# secrets directory. Keep directory listing disabled; individual secret files
+# retain their own restrictive modes.
+sudo chmod 711 /etc/realguard
 sudo touch /etc/realguard/jianzhen-v2.env
 if ! sudo grep -q '^JIANZHEN_REPORT_SHARE_SECRET=' /etc/realguard/jianzhen-v2.env; then
   report_share_secret="$(openssl rand -hex 32)"
@@ -64,6 +72,38 @@ if ! sudo grep -q '^JIANZHEN_PUBLIC_BASE_URL=' /etc/realguard/jianzhen-v2.env; t
 fi
 if ! sudo grep -q '^JIANZHEN_DATA_DIR=' /etc/realguard/jianzhen-v2.env; then
   printf 'JIANZHEN_DATA_DIR=/opt/jianzhen-v2/data\n' \
+    | sudo tee -a /etc/realguard/jianzhen-v2.env >/dev/null
+fi
+if ! sudo grep -q '^REALGUARD_PRIVACY_ERASURE_LEDGER_PATH=' /etc/realguard/jianzhen-v2.env; then
+  printf 'REALGUARD_PRIVACY_ERASURE_LEDGER_PATH=/opt/realguard-data/privacy-erasure/privacy-erasure-tombstones.sqlite3\n' \
+    | sudo tee -a /etc/realguard/jianzhen-v2.env >/dev/null
+fi
+sudo install -d -m 700 -o ubuntu -g ubuntu /opt/realguard-data/privacy-erasure
+evidence_key_file=/etc/realguard/jianzhen-v2-evidence-signing-ed25519.pem
+evidence_inline="$(sudo awk -F= '/^JIANZHEN_EVIDENCE_SIGNING_PRIVATE_KEY=/{print substr($0, index($0, "=") + 1); exit}' /etc/realguard/jianzhen-v2.env)"
+evidence_configured_file="$(sudo awk -F= '/^JIANZHEN_EVIDENCE_SIGNING_PRIVATE_KEY_FILE=/{print substr($0, index($0, "=") + 1); exit}' /etc/realguard/jianzhen-v2.env)"
+if [[ -n "$evidence_inline" && -n "$evidence_configured_file" ]]; then
+  echo "V2 evidence signing has both inline and file private keys configured." >&2
+  exit 1
+fi
+if [[ -z "$evidence_inline" && -z "$evidence_configured_file" ]]; then
+  if [[ ! -f "$evidence_key_file" ]]; then
+    sudo openssl genpkey -algorithm ED25519 -out "$evidence_key_file"
+  fi
+  sudo chown ubuntu:ubuntu "$evidence_key_file"
+  sudo chmod 600 "$evidence_key_file"
+  sudo openssl pkey -in "$evidence_key_file" -pubout -noout >/dev/null
+  sudo sed -i \
+    -e '/^JIANZHEN_EVIDENCE_SIGNING_PRIVATE_KEY=/d' \
+    -e '/^JIANZHEN_EVIDENCE_SIGNING_PRIVATE_KEY_FILE=/d' \
+    /etc/realguard/jianzhen-v2.env
+  printf 'JIANZHEN_EVIDENCE_SIGNING_PRIVATE_KEY_FILE=%s\n' "$evidence_key_file" \
+    | sudo tee -a /etc/realguard/jianzhen-v2.env >/dev/null
+  evidence_configured_file="$evidence_key_file"
+fi
+if ! sudo grep -Eq '^JIANZHEN_EVIDENCE_SIGNING_KEY_ID=[A-Za-z0-9][A-Za-z0-9._:-]{2,63}$' /etc/realguard/jianzhen-v2.env; then
+  sudo sed -i '/^JIANZHEN_EVIDENCE_SIGNING_KEY_ID=/d' /etc/realguard/jianzhen-v2.env
+  printf 'JIANZHEN_EVIDENCE_SIGNING_KEY_ID=huijian-evidence-v1\n' \
     | sudo tee -a /etc/realguard/jianzhen-v2.env >/dev/null
 fi
 sudo chmod 600 /etc/realguard/jianzhen-v2.env
@@ -141,8 +181,9 @@ fi
 sudo mv /var/www/v2.next /var/www/v2
 frontend_switched=1
 
-curl -fsS -o /dev/null http://127.0.0.1/
-curl -fsS http://127.0.0.1/v2-api/ready >/dev/null
+# The direct backend readiness check above is the atomic release gate. Public
+# Nginx checks happen after this pointer switch; a transient proxy connection
+# during file promotion must not roll back a healthy backend release.
 sudo install -m 644 /tmp/jianzhen-v2.DEPLOYED_COMMIT /opt/jianzhen-v2/DEPLOYED_COMMIT
 sudo rm -rf /var/www/v2.previous
 frontend_switched=0

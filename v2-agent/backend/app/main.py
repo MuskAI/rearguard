@@ -15,6 +15,7 @@ import io
 import ipaddress
 import logging
 import uuid
+import zipfile
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from urllib import error as urlerror
@@ -28,7 +29,9 @@ from starlette.responses import JSONResponse, Response
 
 from . import (
     detector,
+    evidence_manifest_v2,
     evidence_probability,
+    privacy_erasure_ledger,
     provenance,
     provenance_precheck,
     reporting,
@@ -57,6 +60,10 @@ DEVELOPER_AUTH_SECRET = (
 ).strip()
 ALLOW_ANONYMOUS_DETECT = str(os.getenv("JIANZHEN_ALLOW_ANONYMOUS_DETECT", "0")).lower() in {"1", "true", "yes"}
 ALLOW_DIRECT_DEVELOPER_KEYS = str(os.getenv("JIANZHEN_ALLOW_DIRECT_DEVELOPER_KEYS", "0")).lower() in {"1", "true", "yes"}
+ALLOW_LEGACY_REPORT_SHARES = str(os.getenv("JIANZHEN_ALLOW_LEGACY_REPORT_SHARES", "0")).lower() in {"1", "true", "yes"}
+RUNTIME_ENV = str(os.getenv("JIANZHEN_ENV", os.getenv("REALGUARD_ENV", "production"))).strip().lower()
+SESSION_CSRF_COOKIE = "huijian_csrf"
+SESSION_CSRF_HEADER = "x-huijian-csrf"
 DEVELOPER_AUTH_CONFIGURED = bool(DEVELOPER_AUTH_URL and DEVELOPER_AUTH_SECRET)
 REPORT_SHARE_SECRET = os.getenv("JIANZHEN_REPORT_SHARE_SECRET", "").strip()
 CONSENT_AUDIT_SALT = os.getenv("JIANZHEN_CONSENT_AUDIT_SALT", "").strip()
@@ -97,6 +104,14 @@ _TELEMETRY_MAINTENANCE: asyncio.Task | None = None
 
 @asynccontextmanager
 async def _app_lifespan(_app: FastAPI):
+    signing_status = evidence_manifest_v2.signing_status()
+    if signing_status.get("configured"):
+        try:
+            await run_in_threadpool(storage.backfill_evidence_manifests)
+        except Exception:
+            logger.exception("legacy V2 evidence manifest backfill failed")
+    else:
+        logger.error("V2 evidence signing is not configured; readiness will fail closed")
     await start_telemetry_worker()
     try:
         yield
@@ -112,7 +127,9 @@ PROTECTED_ENDPOINTS = [
     "/api/history/{task_id}/artifacts",
     "/api/report/{report_id}",
     "/api/report/{report_id}/download",
+    "/api/report/{report_id}/evidence-package",
     "/api/report/{report_id}/export",
+    "/api/report/{report_id}/verify",
     "/api/report/{report_id}/share",
     "/api/report/{report_id}/share/{share_id}",
     "/api/metrics",
@@ -353,6 +370,43 @@ def _session_access_granted(request: Request) -> dict | None:
     return _verify_session_user_sync(request)
 
 
+def _session_csrf_required() -> bool:
+    configured = os.getenv("JIANZHEN_REQUIRE_SESSION_CSRF", "").strip().lower()
+    if configured in {"0", "false", "no", "off"}:
+        return False
+    if configured in {"1", "true", "yes", "on"}:
+        return True
+    return RUNTIME_ENV in {"production", "prod", "staging"}
+
+
+def _request_origin_is_same_site(request: Request) -> bool:
+    fetch_site = request.headers.get("sec-fetch-site", "").strip().lower()
+    if fetch_site and fetch_site not in {"same-origin", "same-site"}:
+        return False
+    origin = request.headers.get("origin", "").strip().rstrip("/").lower()
+    if not origin:
+        # Some native clients omit Origin; the unguessable double-submit token
+        # remains mandatory for this compatibility path.
+        return True
+    allowed = {item.strip().rstrip("/").lower() for item in _allowed_origins() if item.strip()}
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip()
+    host = request.headers.get("host", "").strip()
+    if forwarded_proto and host:
+        allowed.add(f"{forwarded_proto}://{host}".rstrip("/").lower())
+    return origin in allowed
+
+
+def _require_session_csrf(request: Request, actor: dict) -> None:
+    if actor.get("mode") != "session" or not _session_csrf_required():
+        return
+    expected = request.cookies.get(SESSION_CSRF_COOKIE, "").strip()
+    supplied = request.headers.get(SESSION_CSRF_HEADER, "").strip()
+    if not expected or not supplied or not secrets.compare_digest(expected, supplied):
+        raise HTTPException(status_code=403, detail="会话写请求缺少有效的 CSRF 令牌")
+    if not _request_origin_is_same_site(request):
+        raise HTTPException(status_code=403, detail="会话写请求来源不受信任")
+
+
 def _session_auth_reachable() -> bool:
     """Verify that the configured account service is live, not merely named."""
     if not SESSION_AUTH_URL:
@@ -460,6 +514,8 @@ async def _require_developer_access(request: Request) -> dict:
         return actor
     api_key = _request_developer_key(request)
     if api_key:
+        if ALLOW_DIRECT_DEVELOPER_KEYS and RUNTIME_ENV in {"production", "prod", "staging"}:
+            raise HTTPException(status_code=503, detail="生产环境已禁用 V2 API Key 直连，请使用统一计费网关")
         if not ALLOW_DIRECT_DEVELOPER_KEYS:
             raise HTTPException(
                 status_code=410,
@@ -653,10 +709,20 @@ def _build_public_report_link(
     query = f"{share_query}expires={expires}&sig={signature}"
     api_path = f"/api/report/{quote(report_id, safe='')}/public?{query}"
     public_path = f"{_public_api_prefix(request).rstrip('/')}/report/{quote(report_id, safe='')}/public?{query}"
+    evidence_api_path = (
+        f"/api/report/{quote(report_id, safe='')}/public/evidence-package?{query}"
+    )
+    evidence_public_path = (
+        f"{_public_api_prefix(request).rstrip('/')}/report/{quote(report_id, safe='')}"
+        f"/public/evidence-package?{query}"
+    )
     return {
         "url": f"{_request_origin(request)}{public_path}",
         "publicPath": public_path,
         "apiPath": api_path,
+        "evidencePackageUrl": f"{_request_origin(request)}{evidence_public_path}",
+        "evidencePackagePublicPath": evidence_public_path,
+        "evidencePackageApiPath": evidence_api_path,
     }
 
 
@@ -795,13 +861,20 @@ async def collect_request_metrics(request: Request, call_next) -> Response:
         status = response.status_code
         return response
     finally:
+        route = request.scope.get("route")
+        route_template = getattr(route, "path", None)
+        metric_path = (
+            str(route_template)
+            if isinstance(route_template, str) and route_template.startswith("/")
+            else "[unmatched-route]"
+        )
         _enqueue_telemetry(
             storage.record_event,
             "request",
             client_ip=_client_ip(request),
             user_agent=request.headers.get("user-agent"),
             method=request.method,
-            path=request.url.path,
+            path=metric_path,
             status=status,
             elapsed_ms=int((time.perf_counter() - started) * 1000),
         )
@@ -1011,7 +1084,16 @@ def _build_result(
         result["provenance"] = provenance_report
     watermark_verdict.apply(result, result.get("visibleWatermark"))
     result["unifiedForensics"] = unified_forensics.build(result)
-    storage.put_history(result, sha256=sha256, file_size=len(data), thumbnail=thumbnail, actor=actor)
+    try:
+        storage.put_history(result, sha256=sha256, file_size=len(data), thumbnail=thumbnail, actor=actor)
+    except evidence_manifest_v2.EvidenceConfigurationError as exc:
+        logger.error("evidence signing unavailable: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="报告证据签名服务未安全配置") from exc
+    except evidence_manifest_v2.EvidenceConflictError as exc:
+        raise HTTPException(status_code=409, detail="任务或报告编号与已有证据冲突") from exc
+    except evidence_manifest_v2.EvidenceIntegrityError as exc:
+        logger.error("evidence manifest persistence failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="报告证据链写入失败") from exc
     return result
 
 
@@ -1029,11 +1111,31 @@ def health() -> dict:
     return _public_capabilities()
 
 
+@app.get("/api/csrf")
+def csrf_token(request: Request) -> Response:
+    token = request.cookies.get(SESSION_CSRF_COOKIE, "").strip()
+    if len(token) < 32:
+        token = secrets.token_urlsafe(32)
+    response = JSONResponse({"csrfToken": token})
+    response.set_cookie(
+        SESSION_CSRF_COOKIE,
+        token,
+        max_age=12 * 60 * 60,
+        httponly=False,
+        secure=RUNTIME_ENV in {"production", "prod", "staging"},
+        samesite="lax",
+        path="/",
+    )
+    return response
+
+
 @app.get("/api/ready")
 def ready() -> Response:
     capabilities = _public_capabilities()
     storage_status = storage.healthcheck()
     session_auth_reachable = _session_auth_reachable()
+    evidence_signing = evidence_manifest_v2.signing_status()
+    privacy_erasure_ledger_status = privacy_erasure_ledger.healthcheck()
     checks = {
         "imageModelConfigured": capabilities["capabilities"]["image"] == "available",
         "visibleWatermarkAvailable": bool(
@@ -1048,6 +1150,14 @@ def ready() -> Response:
         "consentAuditConfigured": (
             not ALLOW_ANONYMOUS_DETECT or len(CONSENT_AUDIT_SALT) >= 32
         ),
+        "directDeveloperKeysDisabled": not (
+            ALLOW_DIRECT_DEVELOPER_KEYS and RUNTIME_ENV in {"production", "prod", "staging"}
+        ),
+        "evidenceSigningConfigured": bool(evidence_signing.get("configured")),
+        "privacyErasureLedgerAvailable": bool(
+            privacy_erasure_ledger_status.get("available")
+            and privacy_erasure_ledger_status.get("writable")
+        ),
     }
     is_ready = all(checks.values())
     return JSONResponse(
@@ -1056,6 +1166,8 @@ def ready() -> Response:
             "status": "ready" if is_ready else "not_ready",
             "checks": checks,
             "capabilities": capabilities["capabilities"],
+            "evidenceSigning": evidence_signing,
+            "privacyErasureLedger": privacy_erasure_ledger_status,
         },
         headers={"Cache-Control": "no-store"},
     )
@@ -1071,6 +1183,7 @@ def admin_health(request: Request) -> dict:
         "synthid": synthid_detector.status(),
         "visibleWatermark": visible_watermark_detector.status(),
         "provenancePrecheck": provenance_precheck.status(),
+        "evidenceSigning": evidence_manifest_v2.signing_status(),
         "storage": str(storage.DB_PATH),
     }
 
@@ -1086,6 +1199,7 @@ async def detect(
     privacy_sha256: str | None = Form(default=None),
 ) -> dict:
     actor = await _require_developer_access(request)
+    _require_session_csrf(request, actor)
     try:
         await asyncio.wait_for(
             _DETECTION_SEMAPHORE.acquire(),
@@ -1247,6 +1361,7 @@ async def forensics(
     taskId: str | None = Form(default=None),
 ) -> dict:
     actor = await _require_developer_access(request)
+    _require_session_csrf(request, actor)
     await _acquire_forensics_slot()
     try:
         data = await _read_upload(file)
@@ -1341,6 +1456,7 @@ async def provenance_check(
     taskId: str | None = Form(default=None),
 ) -> dict:
     actor = await _require_developer_access(request)
+    _require_session_csrf(request, actor)
     await _acquire_forensics_slot()
     try:
         data = await _read_upload(file)
@@ -1443,7 +1559,8 @@ def delete_item(task_id: str, request: Request) -> dict:
     item = storage.get_history(task_id)
     if not item:
         raise HTTPException(status_code=404, detail="记录不存在")
-    _require_owned_item(request, item, missing_detail="记录不存在", required_scope="reports")
+    actor = _require_owned_item(request, item, missing_detail="记录不存在", required_scope="reports")
+    _require_session_csrf(request, actor)
     storage.delete_history(task_id)
     return {"deleted": task_id}
 
@@ -1457,31 +1574,247 @@ def report(report_id: str, request: Request) -> dict:
     return _strip_internal_history_fields(item)
 
 
+def _frozen_report_artifact(report_id: str, item: dict) -> dict:
+    try:
+        manifest = storage.ensure_evidence_manifest(report_id)
+        existing = storage.get_report_artifact(report_id)
+        if existing is not None:
+            verification = storage.verify_evidence(report_id)
+            if verification.get("status") != "valid" or not verification.get("packageIntegrityVerified"):
+                raise evidence_manifest_v2.EvidenceIntegrityError(
+                    "stored report artifact failed verification"
+                )
+            return existing
+
+        clean_item = _strip_internal_history_fields(item)
+        signature = manifest["signature"]
+        clean_item["evidenceIntegrity"] = {
+            "schema": manifest["payload"].get("schema"),
+            "manifestSha256": manifest["sha256"],
+            "algorithm": signature.get("algorithm"),
+            "keyId": signature.get("keyId"),
+            "publicKey": signature.get("publicKey"),
+            "verifyPath": f"/api/report/{report_id}/verify",
+        }
+        filename = reporting.download_filename(clean_item)
+        pdf = reporting.build_report_pdf(
+            clean_item,
+            forensics=clean_item.get("forensics"),
+            provenance=clean_item.get("provenance"),
+        )
+        artifact = storage.put_report_artifact(
+            report_id,
+            artifact_bytes=pdf,
+            filename=filename,
+            media_type="application/pdf",
+            report_payload=clean_item,
+        )
+        verification = storage.verify_evidence(report_id)
+        if verification.get("status") != "valid" or not verification.get("packageIntegrityVerified"):
+            raise evidence_manifest_v2.EvidenceIntegrityError(
+                "new report artifact failed verification"
+            )
+        return artifact
+    except evidence_manifest_v2.EvidenceConfigurationError as exc:
+        logger.error("evidence signing configuration invalid: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="报告证据签名服务未安全配置") from exc
+    except evidence_manifest_v2.EvidenceConflictError as exc:
+        logger.error("immutable report artifact conflict for %s", report_id)
+        raise HTTPException(status_code=409, detail="报告已存在不一致的冻结版本") from exc
+    except evidence_manifest_v2.EvidenceIntegrityError as exc:
+        logger.error("report evidence integrity failure for %s: %s", report_id, type(exc).__name__)
+        raise HTTPException(status_code=409, detail="报告证据完整性验证失败") from exc
+
+
+def _report_artifact_response(artifact: dict) -> Response:
+    statement = artifact["signedRecord"]["payload"]
+    signature = artifact["signedRecord"]["signature"]
+    return Response(
+        content=artifact["bytes"],
+        media_type=artifact["mediaType"],
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(artifact['filename'])}",
+            "X-Evidence-Manifest-SHA256": str(statement["manifestSha256"]),
+            "X-Report-Artifact-SHA256": str(statement["artifact"]["sha256"]),
+            "X-Evidence-Key-Id": str(signature["keyId"]),
+        },
+    )
+
+
+def _json_export(value: object) -> bytes:
+    return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+
+
+def _zip_write(archive: zipfile.ZipFile, name: str, content: bytes) -> None:
+    entry = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+    entry.compress_type = zipfile.ZIP_DEFLATED
+    entry.external_attr = 0o600 << 16
+    archive.writestr(entry, content)
+
+
+def _build_evidence_package(report_id: str, artifact: dict) -> bytes:
+    bundle = storage.get_evidence_bundle(report_id)
+    if not bundle:
+        raise evidence_manifest_v2.EvidenceIntegrityError("evidence bundle is missing")
+    trusted_keys = evidence_manifest_v2.configured_verification_keys()
+    verification = evidence_manifest_v2.verify_bundle(
+        bundle,
+        artifact_bytes=artifact["bytes"],
+        report_payload=artifact["reportPayload"],
+        trusted_public_keys=trusted_keys,
+    )
+    if verification.get("status") != "valid" or not verification.get("packageIntegrityVerified"):
+        raise evidence_manifest_v2.EvidenceIntegrityError(
+            "evidence package inputs failed verification"
+        )
+
+    registry = evidence_manifest_v2.verification_key_registry()
+    manifest_payload = bundle["manifest"]["payload"]
+    subject = manifest_payload["binding"]["subject"]
+    signature = artifact["signedRecord"]["signature"]
+    key_id = str(signature["keyId"])
+    package_key = next(
+        (entry for entry in registry["keys"] if entry["keyId"] == key_id),
+        None,
+    )
+    if package_key is None:
+        raise evidence_manifest_v2.EvidenceIntegrityError(
+            "artifact verification key is absent from the key registry"
+        )
+    readme = f"""慧鉴 AI 离线证据包
+====================
+
+内容
+----
+- report.pdf: 已冻结并签名绑定的 PDF 报告
+- evidence-bundle.json: Ed25519 签名的证据清单与 PDF 制品声明
+- report-payload.json: 生成 PDF 时冻结的结构化报告
+- subject-metadata.json / subject.sha256: 原提交文件的名称、大小和 SHA-256
+- key-registry.json: 当前服务导出的验签公钥登记
+- verify_evidence.py: 离线验签程序（需要 Python 3.11+ 与 cryptography）
+
+验证
+----
+先通过运营方独立发布渠道核对以下公钥指纹，不能仅信任本压缩包或同域接口内的公钥：
+keyId: {key_id}
+publicKeySha256: {package_key['publicKeySha256']}
+
+验证 PDF、冻结 JSON 与签名：
+python verify_evidence.py verify --bundle evidence-bundle.json --artifact report.pdf \\
+  --report-payload report-payload.json --public-key '{package_key['publicKey']}' \\
+  --key-id '{key_id}'
+
+如持有原提交文件，再追加：--subject /path/to/original-file
+输出 subjectVerified=true 才表示原文件字节与签名清单一致。
+
+边界
+----
+1. sealedAt 来自应用服务器 UTC 系统时钟，未接入 RFC 3161 等可信时间戳服务。
+2. Ed25519 签名用于发现报告、清单或文件被更改；它不自动证明签名者法律身份。
+3. 本证据包用于工程留档与人工复核辅助，不构成司法鉴定、电子签章或监管结论。
+"""
+    verifier_path = str(evidence_manifest_v2.__file__ or "")
+    if not verifier_path:
+        raise evidence_manifest_v2.EvidenceIntegrityError("offline verifier source is unavailable")
+    try:
+        with open(verifier_path, "rb") as verifier_file:
+            verifier_source = verifier_file.read()
+    except OSError as exc:
+        raise evidence_manifest_v2.EvidenceIntegrityError(
+            "offline verifier source is unavailable"
+        ) from exc
+
+    subject_metadata = {
+        "sha256": subject["sha256"],
+        "sizeBytes": subject["sizeBytes"],
+        "fileName": subject.get("fileName"),
+        "fileType": subject.get("fileType"),
+        "resolution": subject.get("resolution"),
+    }
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, mode="w", allowZip64=True) as archive:
+        _zip_write(archive, "report.pdf", artifact["bytes"])
+        _zip_write(archive, "evidence-bundle.json", _json_export(bundle))
+        _zip_write(
+            archive,
+            "report-payload.json",
+            _json_export(artifact["reportPayload"]),
+        )
+        _zip_write(archive, "key-registry.json", _json_export(registry))
+        _zip_write(archive, "subject-metadata.json", _json_export(subject_metadata))
+        _zip_write(
+            archive,
+            "subject.sha256",
+            f"{subject['sha256']}  original-subject\n".encode("ascii"),
+        )
+        _zip_write(archive, "verify_evidence.py", verifier_source)
+        _zip_write(archive, "README.txt", readme.encode("utf-8"))
+    return output.getvalue()
+
+
+def _evidence_package_response(report_id: str, artifact: dict) -> Response:
+    try:
+        package = _build_evidence_package(report_id, artifact)
+    except evidence_manifest_v2.EvidenceConfigurationError as exc:
+        raise HTTPException(status_code=503, detail="报告证据验证公钥未安全配置") from exc
+    except evidence_manifest_v2.EvidenceIntegrityError as exc:
+        logger.error("evidence package integrity failure for %s: %s", report_id, type(exc).__name__)
+        raise HTTPException(status_code=409, detail="离线证据包完整性验证失败") from exc
+    safe_report_id = "".join(
+        character if character.isalnum() or character in "-_" else "_"
+        for character in report_id
+    )[:80] or "report"
+    return Response(
+        content=package,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename*=UTF-8''huijian-evidence-{quote(safe_report_id)}.zip"
+            ),
+            "Cache-Control": "private, no-store, max-age=0",
+            "X-Content-Type-Options": "nosniff",
+            "X-Evidence-Package-SHA256": hashlib.sha256(package).hexdigest(),
+        },
+    )
+
+
+@app.get("/api/evidence/keys")
+def evidence_verification_keys() -> dict:
+    try:
+        return evidence_manifest_v2.verification_key_registry()
+    except evidence_manifest_v2.EvidenceConfigurationError as exc:
+        raise HTTPException(status_code=503, detail="报告证据验证公钥未安全配置") from exc
+
+
 @app.get("/api/report/{report_id}/download")
 def report_download(report_id: str, request: Request) -> Response:
     item = storage.get_history(report_id)
     if not item:
         raise HTTPException(status_code=404, detail="报告不存在")
     _require_report_access(request, item)
-    clean_item = _strip_internal_history_fields(item)
-    filename = reporting.download_filename(clean_item)
-    pdf = reporting.build_report_pdf(
-        clean_item,
-        forensics=clean_item.get("forensics"),
-        provenance=clean_item.get("provenance"),
-    )
+    artifact = _frozen_report_artifact(report_id, item)
     _audit_report_share_access(
         request,
         {"shareId": f"direct:{report_id}", "reportId": report_id},
         "downloaded_authenticated",
     )
-    return Response(
-        content=pdf,
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
-        },
+    return _report_artifact_response(artifact)
+
+
+@app.get("/api/report/{report_id}/evidence-package")
+def report_evidence_package(report_id: str, request: Request) -> Response:
+    item = storage.get_history(report_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="报告不存在")
+    _require_report_access(request, item)
+    artifact = _frozen_report_artifact(report_id, item)
+    response = _evidence_package_response(report_id, artifact)
+    _audit_report_share_access(
+        request,
+        {"shareId": f"direct:{report_id}", "reportId": report_id},
+        "evidence_package_downloaded_authenticated",
     )
+    return response
 
 
 @app.post("/api/report/{report_id}/export")
@@ -1489,26 +1822,43 @@ def report_export(report_id: str, request: Request) -> Response:
     item = storage.get_history(report_id)
     if not item:
         raise HTTPException(status_code=404, detail="报告不存在")
-    _require_report_access(request, item)
-    clean_item = _strip_internal_history_fields(item)
-    filename = reporting.download_filename(clean_item)
-    pdf = reporting.build_report_pdf(
-        clean_item,
-        forensics=clean_item.get("forensics"),
-        provenance=clean_item.get("provenance"),
-    )
+    actor = _require_report_access(request, item)
+    _require_session_csrf(request, actor)
+    artifact = _frozen_report_artifact(report_id, item)
     _audit_report_share_access(
         request,
         {"shareId": f"direct:{report_id}", "reportId": report_id},
         "exported_authenticated",
     )
-    return Response(
-        content=pdf,
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+    return _report_artifact_response(artifact)
+
+
+@app.get("/api/report/{report_id}/verify")
+def report_verify(report_id: str, request: Request) -> dict:
+    item = storage.get_history(report_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="报告不存在")
+    _require_report_access(request, item)
+    try:
+        artifact = storage.get_report_artifact(report_id)
+        bundle = storage.get_evidence_bundle(report_id)
+        verification = storage.verify_evidence(report_id)
+    except evidence_manifest_v2.EvidenceConfigurationError as exc:
+        raise HTTPException(status_code=503, detail="报告证据验证公钥未安全配置") from exc
+    return {
+        "taskId": item["taskId"],
+        "reportId": item["reportId"],
+        "status": verification["status"],
+        "complete": verification["complete"],
+        "packageIntegrityVerified": verification.get("packageIntegrityVerified", False),
+        "subjectVerified": verification.get("subjectVerified", False),
+        "manifest": verification["manifest"],
+        "artifact": {
+            **verification["artifact"],
+            "downloadSha256": artifact["artifactSha256"] if artifact else None,
         },
-    )
+        "bundle": bundle,
+    }
 
 
 @app.post("/api/report/{report_id}/share")
@@ -1517,6 +1867,10 @@ def report_share(report_id: str, request: Request, payload: dict | None = Body(d
     if not item:
         raise HTTPException(status_code=404, detail="报告不存在")
     actor = _require_report_share_access(request, item)
+    _require_session_csrf(request, actor)
+    # A share link always points at one frozen, signed representation. This
+    # prevents later forensics/provenance calls from changing an issued report.
+    _frozen_report_artifact(report_id, item)
     body = payload or {}
     try:
         requested_seconds = int(body.get("expiresInSeconds") or REPORT_SHARE_DEFAULT_SECONDS)
@@ -1536,6 +1890,7 @@ def report_share(report_id: str, request: Request, payload: dict | None = Body(d
         created_by_user_id=creator_user_id,
         created_by_key_id=str(actor.get("keyId") or "") or None,
         created_by_mode=str(actor.get("mode") or "unknown"),
+        require_existing_report=True,
     )
     _audit_report_share_access(request, share, "created")
     links = _build_public_report_link(request, report_id, expires, signature, share_id=share_id)
@@ -1553,7 +1908,8 @@ def report_share_revoke(report_id: str, share_id: str, request: Request) -> dict
     item = storage.get_history(report_id)
     if not item:
         raise HTTPException(status_code=404, detail="报告不存在")
-    _require_report_share_access(request, item)
+    actor = _require_report_share_access(request, item)
+    _require_session_csrf(request, actor)
     share = storage.revoke_report_share(report_id, share_id)
     if not share:
         raise HTTPException(status_code=404, detail="分享链接不存在")
@@ -1586,8 +1942,10 @@ def report_share_list(report_id: str, request: Request) -> dict:
     }
 
 
-@app.get("/api/report/{report_id}/public")
-def report_public(report_id: str, request: Request) -> Response:
+def _resolve_public_report_share(
+    report_id: str,
+    request: Request,
+) -> tuple[dict, dict, int, str]:
     try:
         expires = int(request.query_params.get("expires", ""))
     except ValueError:
@@ -1604,44 +1962,55 @@ def report_public(report_id: str, request: Request) -> Response:
             report_id=report_id,
             expires=expires,
             signature=signature,
+            legacy=bool(share.get("legacy")),
         )
         item = storage.get_history(report_id)
         if not item:
             _audit_report_share_access(request, share, "report_missing")
             raise HTTPException(status_code=404, detail="报告不存在")
-    else:
-        # Existing v1 HMAC links cannot contain a database identifier. A valid
-        # legacy link is imported deterministically on first access, after
-        # which this and every later access is governed by the stored record.
-        _verify_report_share(report_id, expires, signature)
-        item = storage.get_history(report_id)
-        if not item:
-            raise HTTPException(status_code=404, detail="报告不存在")
-        fingerprint = hashlib.sha256(signature.encode("utf-8")).hexdigest()
-        legacy_share_id = "rgs_legacy_" + hashlib.sha256(
-            f"{report_id}:{expires}:{fingerprint}".encode("utf-8")
-        ).hexdigest()[:24]
-        share = storage.register_legacy_report_share(
-            share_id=legacy_share_id,
-            report_id=report_id,
-            expires_at=expires,
-            owner_user_id=str(item.get("_developerUserId") or "legacy-unknown"),
-            signature_fingerprint=fingerprint,
-        )
-        _validate_persisted_report_share(
-            request,
-            share=share,
-            report_id=report_id,
-            expires=expires,
-            signature=signature,
-            legacy=True,
-        )
-    clean_item = _strip_internal_history_fields(item)
-    html = reporting.build_report_html(
-        clean_item,
-        forensics=clean_item.get("forensics"),
-        provenance=clean_item.get("provenance"),
+        return item, share, expires, signature
+
+    if not ALLOW_LEGACY_REPORT_SHARES:
+        raise HTTPException(status_code=410, detail="旧版报告分享链接已停用，请重新生成分享链接")
+
+    # Existing v1 HMAC links cannot contain a database identifier. A valid
+    # legacy link is imported deterministically on first access, after which
+    # all accesses are governed by the persisted revocation record.
+    _verify_report_share(report_id, expires, signature)
+    item = storage.get_history(report_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="报告不存在")
+    fingerprint = hashlib.sha256(signature.encode("utf-8")).hexdigest()
+    legacy_share_id = "rgs_legacy_" + hashlib.sha256(
+        f"{report_id}:{expires}:{fingerprint}".encode("utf-8")
+    ).hexdigest()[:24]
+    share = storage.register_legacy_report_share(
+        share_id=legacy_share_id,
+        report_id=report_id,
+        expires_at=expires,
+        owner_user_id=str(item.get("_developerUserId") or "legacy-unknown"),
+        signature_fingerprint=fingerprint,
+        require_existing_report=True,
     )
+    _validate_persisted_report_share(
+        request,
+        share=share,
+        report_id=report_id,
+        expires=expires,
+        signature=signature,
+        legacy=True,
+    )
+    return item, share, expires, signature
+
+
+def _revalidate_public_report_share(
+    report_id: str,
+    request: Request,
+    *,
+    share: dict,
+    expires: int,
+    signature: str,
+) -> dict:
     current_share = storage.get_report_share(share["shareId"])
     if not current_share:
         raise HTTPException(status_code=404, detail="报告分享链接不存在")
@@ -1653,6 +2022,37 @@ def report_public(report_id: str, request: Request) -> Response:
         signature=signature,
         legacy=bool(current_share.get("legacy")),
     )
+    return current_share
+
+
+@app.get("/api/report/{report_id}/public")
+def report_public(report_id: str, request: Request) -> Response:
+    item, share, expires, signature = _resolve_public_report_share(report_id, request)
+    artifact = _frozen_report_artifact(report_id, item)
+    clean_item = dict(artifact["reportPayload"])
+    clean_item.pop("_developerUserId", None)
+    clean_item.pop("_developerAccountUuid", None)
+    clean_item.pop("_developerKeyId", None)
+    public_links = _build_public_report_link(
+        request,
+        report_id,
+        expires,
+        signature,
+        share_id=share["shareId"],
+    )
+    html = reporting.build_report_html(
+        clean_item,
+        forensics=clean_item.get("forensics"),
+        provenance=clean_item.get("provenance"),
+        evidence_package_url=public_links["evidencePackagePublicPath"],
+    )
+    current_share = _revalidate_public_report_share(
+        report_id,
+        request,
+        share=share,
+        expires=expires,
+        signature=signature,
+    )
     _audit_report_share_access(request, current_share, "granted")
     return Response(
         content=html,
@@ -1663,6 +2063,22 @@ def report_public(report_id: str, request: Request) -> Response:
             "Referrer-Policy": "no-referrer",
         },
     )
+
+
+@app.get("/api/report/{report_id}/public/evidence-package")
+def report_public_evidence_package(report_id: str, request: Request) -> Response:
+    item, share, expires, signature = _resolve_public_report_share(report_id, request)
+    artifact = _frozen_report_artifact(report_id, item)
+    response = _evidence_package_response(report_id, artifact)
+    current_share = _revalidate_public_report_share(
+        report_id,
+        request,
+        share=share,
+        expires=expires,
+        signature=signature,
+    )
+    _audit_report_share_access(request, current_share, "evidence_package_downloaded_public")
+    return response
 
 
 @app.get("/api/metrics")

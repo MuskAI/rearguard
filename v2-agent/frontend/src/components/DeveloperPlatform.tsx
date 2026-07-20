@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import {
   AccountUser,
+  ApiRequestError,
   DeveloperAccountResponse,
   DeveloperApiKey,
   DeveloperLedgerEntry,
@@ -44,6 +45,13 @@ import "./DeveloperPlatform.css";
 
 type DeveloperTab = "overview" | "keys" | "docs" | "usage";
 type CodeLanguage = "curl" | "python" | "typescript" | "java" | "go";
+type CreateKeyPayload = Parameters<typeof createDeveloperKey>[0];
+
+interface PendingCreateKeyOperation {
+  fingerprint: string;
+  idempotencyKey: string;
+  payload: CreateKeyPayload;
+}
 
 interface Props {
   authReady: boolean;
@@ -104,6 +112,24 @@ function expiryFromChoice(choice: string) {
   if (choice === "never") return null;
   const days = Number(choice);
   return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function hasUnknownOperationOutcome(error: unknown) {
+  if (!(error instanceof ApiRequestError)) return true;
+  return error.status === 408
+    || error.status === 425
+    || error.status === 429
+    || error.status >= 500;
+}
+
+function operationErrorMessage(error: unknown, fallback: string, retryWithSameKey: boolean) {
+  const base = error instanceof Error ? error.message : fallback;
+  const requestId = error instanceof ApiRequestError && error.requestId
+    ? `（请求 ID：${error.requestId}）`
+    : "";
+  return retryWithSameKey
+    ? `${base}${requestId}。本次结果尚未确认，再次提交将使用同一幂等键安全重试。`
+    : `${base}${requestId}`;
 }
 
 function moveTabFocus(event: ReactKeyboardEvent<HTMLElement>) {
@@ -258,6 +284,9 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
   const [newKeyScopes, setNewKeyScopes] = useState({ fast: true, swarm: false, reports: false });
   const [newKeyIps, setNewKeyIps] = useState("");
   const loadGeneration = useRef(0);
+  const createOperationRef = useRef<PendingCreateKeyOperation | null>(null);
+  const rotateOperationKeysRef = useRef(new Map<number, string>());
+  const keyMutationInFlightRef = useRef(false);
   const accountIdentity = user?.account_uuid || (user ? String(user.Userid) : "");
   const accountIdentityRef = useRef(accountIdentity);
   accountIdentityRef.current = accountIdentity;
@@ -290,6 +319,9 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
     setRevealedKey(null);
     setKeyBusy(null);
     setLoading(false);
+    createOperationRef.current = null;
+    rotateOperationKeysRef.current.clear();
+    keyMutationInFlightRef.current = false;
   }, [accountIdentity]);
 
   useEffect(() => {
@@ -316,35 +348,59 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
   }
 
   async function createKey() {
-    if (!newKeyName.trim() || (!newKeyScopes.fast && !newKeyScopes.swarm)) return;
+    if (!newKeyName.trim() || (!newKeyScopes.fast && !newKeyScopes.swarm) || keyMutationInFlightRef.current) return;
+    const scopes = [
+      ...(newKeyScopes.fast ? ["image:fast"] : []),
+      ...(newKeyScopes.swarm ? ["image:swarm"] : []),
+      ...(newKeyScopes.reports ? ["reports"] : []),
+    ];
+    const ipAllowlist = newKeyIps.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean);
+    const fingerprint = JSON.stringify({
+      name: newKeyName.trim(),
+      scopes,
+      expiryChoice: newKeyExpiry,
+      ipAllowlist,
+    });
+    let operation = createOperationRef.current;
+    if (!operation || operation.fingerprint !== fingerprint) {
+      operation = {
+        fingerprint,
+        idempotencyKey: globalThis.crypto.randomUUID(),
+        payload: {
+          name: newKeyName.trim(),
+          scopes,
+          expiresAt: expiryFromChoice(newKeyExpiry),
+          ipAllowlist,
+        },
+      };
+      createOperationRef.current = operation;
+    }
+    keyMutationInFlightRef.current = true;
     setKeyBusy("create");
     setError("");
     const operationIdentity = accountIdentity;
     try {
-      const response = await createDeveloperKey({
-        name: newKeyName.trim(),
-        scopes: [
-          ...(newKeyScopes.fast ? ["image:fast"] : []),
-          ...(newKeyScopes.swarm ? ["image:swarm"] : []),
-          ...(newKeyScopes.reports ? ["reports"] : []),
-        ],
-        expiresAt: expiryFromChoice(newKeyExpiry),
-        ipAllowlist: newKeyIps.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean),
-      });
+      const response = await createDeveloperKey(operation.payload, operation.idempotencyKey);
       if (operationIdentity !== accountIdentityRef.current) return;
+      createOperationRef.current = null;
       setKeys((current) => [response.key, ...current]);
       setCreateOpen(false);
       setRevealedKey({ value: response.apiKey, title: "API Key 已创建" });
     } catch (requestError) {
       if (operationIdentity !== accountIdentityRef.current) return;
-      setError(requestError instanceof Error ? requestError.message : "API Key 创建失败");
+      const retryWithSameKey = hasUnknownOperationOutcome(requestError);
+      if (!retryWithSameKey) createOperationRef.current = null;
+      setError(operationErrorMessage(requestError, "API Key 创建失败", retryWithSameKey));
     } finally {
+      keyMutationInFlightRef.current = false;
       if (operationIdentity === accountIdentityRef.current) setKeyBusy(null);
     }
   }
 
   async function revokeKey(key: DeveloperApiKey) {
+    if (keyMutationInFlightRef.current) return;
     if (!window.confirm(`确认撤销 ${key.name}？使用该 Key 的请求会立即失败。`)) return;
+    keyMutationInFlightRef.current = true;
     setKeyBusy(key.id);
     const operationIdentity = accountIdentity;
     try {
@@ -355,23 +411,33 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
       if (operationIdentity !== accountIdentityRef.current) return;
       setError(requestError instanceof Error ? requestError.message : "API Key 撤销失败");
     } finally {
+      keyMutationInFlightRef.current = false;
       if (operationIdentity === accountIdentityRef.current) setKeyBusy(null);
     }
   }
 
   async function rotateKey(key: DeveloperApiKey) {
+    if (keyMutationInFlightRef.current) return;
     if (!window.confirm(`轮换 ${key.name}？旧 Key 会立即撤销。`)) return;
+    const idempotencyKey = rotateOperationKeysRef.current.get(key.id) || globalThis.crypto.randomUUID();
+    rotateOperationKeysRef.current.set(key.id, idempotencyKey);
+    keyMutationInFlightRef.current = true;
     setKeyBusy(key.id);
+    setError("");
     const operationIdentity = accountIdentity;
     try {
-      const response = await rotateDeveloperKey(key.id);
+      const response = await rotateDeveloperKey(key.id, idempotencyKey);
       if (operationIdentity !== accountIdentityRef.current) return;
+      rotateOperationKeysRef.current.delete(key.id);
       setKeys((current) => [response.key, ...current.map((item) => item.id === key.id ? { ...item, status: "revoked" } : item)]);
       setRevealedKey({ value: response.apiKey, title: "API Key 已轮换" });
     } catch (requestError) {
       if (operationIdentity !== accountIdentityRef.current) return;
-      setError(requestError instanceof Error ? requestError.message : "API Key 轮换失败");
+      const retryWithSameKey = hasUnknownOperationOutcome(requestError);
+      if (!retryWithSameKey) rotateOperationKeysRef.current.delete(key.id);
+      setError(operationErrorMessage(requestError, "API Key 轮换失败", retryWithSameKey));
     } finally {
+      keyMutationInFlightRef.current = false;
       if (operationIdentity === accountIdentityRef.current) setKeyBusy(null);
     }
   }
@@ -553,10 +619,10 @@ function KeysPanel({ keys, busy, onCreate, onRotate, onRevoke }: { keys: Develop
   const activeCount = keys.filter((key) => key.status === "active").length;
   return (
     <div className="developer-page">
-      <section className="developer-section-heading"><div><p>凭据管理</p><h2>API Keys</h2><small>按环境拆分密钥，降低泄露后的影响范围。完整 Key 仅在创建或轮换时展示一次。</small></div><button type="button" className="developer-primary-action" onClick={onCreate} disabled={activeCount >= 5}><Plus size={16} /> 创建 API Key</button></section>
+      <section className="developer-section-heading"><div><p>凭据管理</p><h2>API Keys</h2><small>按环境拆分密钥，降低泄露后的影响范围。完整 Key 仅在创建或轮换时展示一次。</small></div><button type="button" className="developer-primary-action" onClick={onCreate} disabled={activeCount >= 5 || busy !== null}><Plus size={16} /> 创建 API Key</button></section>
       <section className="developer-security-rail"><ShieldCheck size={19} /><div><strong>服务端只保存 Key 哈希</strong><span>建议设置有效期与 IP 白名单，并定期轮换生产密钥。</span></div><small>{activeCount} / 5 个 active</small></section>
       <section className="developer-table-section developer-key-table"><header><div><h3>密钥列表</h3><p>撤销后立即失效，不影响账号额度和历史账单。</p></div></header><div className="developer-table-wrap"><table><thead><tr><th>名称</th><th>Key</th><th>权限</th><th>限制</th><th>最后使用</th><th aria-label="操作" /></tr></thead><tbody>
-        {keys.length ? keys.map((key) => <tr key={`${key.id}-${key.status}`}><td><strong>{key.name}</strong><span className={`developer-key-state ${key.status}`}>{keyStatusLabel(key)}</span></td><td><code>{key.preview}</code></td><td><div className="developer-scope-list">{key.scopes.map((scope) => <span key={scope}>{scope === "image:fast" ? "快速" : scope === "image:swarm" ? "Swarm" : scope === "reports" ? "报告" : scope}</span>)}</div></td><td><small>{key.expiresAt ? `到期 ${compactDate(key.expiresAt)}` : "永不过期"}</small><small>{key.ipAllowlist?.length ? `${key.ipAllowlist.length} 条 IP 规则` : "不限 IP"}</small></td><td>{compactDate(key.lastUsedAt)}</td><td><div className="developer-row-actions">{key.status === "active" && <><button type="button" title="轮换 Key" aria-label={`轮换 ${key.name}`} disabled={busy === key.id} onClick={() => onRotate(key)}>{busy === key.id ? <LoaderCircle className="spin" size={16} /> : <RotateCw size={16} />}</button><button type="button" className="danger" title="撤销 Key" aria-label={`撤销 ${key.name}`} disabled={busy === key.id} onClick={() => onRevoke(key)}><Trash2 size={16} /></button></>}</div></td></tr>) : <tr><td colSpan={6} className="developer-empty-cell">尚未创建 API Key</td></tr>}
+        {keys.length ? keys.map((key) => <tr key={`${key.id}-${key.status}`}><td><strong>{key.name}</strong><span className={`developer-key-state ${key.status}`}>{keyStatusLabel(key)}</span></td><td><code>{key.preview}</code></td><td><div className="developer-scope-list">{key.scopes.map((scope) => <span key={scope}>{scope === "image:fast" ? "快速" : scope === "image:swarm" ? "Swarm" : scope === "reports" ? "报告" : scope}</span>)}</div></td><td><small>{key.expiresAt ? `到期 ${compactDate(key.expiresAt)}` : "永不过期"}</small><small>{key.ipAllowlist?.length ? `${key.ipAllowlist.length} 条 IP 规则` : "不限 IP"}</small></td><td>{compactDate(key.lastUsedAt)}</td><td><div className="developer-row-actions">{key.status === "active" && <><button type="button" title="轮换 Key" aria-label={`轮换 ${key.name}`} disabled={busy !== null} onClick={() => onRotate(key)}>{busy === key.id ? <LoaderCircle className="spin" size={16} /> : <RotateCw size={16} />}</button><button type="button" className="danger" title="撤销 Key" aria-label={`撤销 ${key.name}`} disabled={busy !== null} onClick={() => onRevoke(key)}><Trash2 size={16} /></button></>}</div></td></tr>) : <tr><td colSpan={6} className="developer-empty-cell">尚未创建 API Key</td></tr>}
       </tbody></table></div></section>
     </div>
   );

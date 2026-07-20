@@ -328,7 +328,13 @@ def download_filename(result: dict) -> str:
     return f"huijian-report-{report_id}.pdf"
 
 
-def build_report_html(result: dict, *, forensics: dict | None = None, provenance: dict | None = None) -> str:
+def build_report_html(
+    result: dict,
+    *,
+    forensics: dict | None = None,
+    provenance: dict | None = None,
+    evidence_package_url: str | None = None,
+) -> str:
     review_only = result.get("decisionStatus") != "verdict" or result.get("reviewRequired") is True
     meta = (
         {"label": "需人工复核", "color": "#b7791f"}
@@ -351,6 +357,13 @@ def build_report_html(result: dict, *, forensics: dict | None = None, provenance
     source = escape(_safe_text(result.get("source")))
     model = escape(_safe_text(result.get("modelVersion")))
     cache_hit = "是" if result.get("cacheHit") else "否"
+    evidence_package_html = (
+        '<a class="download" href="'
+        + escape(evidence_package_url, quote=True)
+        + '">下载离线证据包</a>'
+        if evidence_package_url
+        else ""
+    )
 
     return f"""<!doctype html>
 <html lang="zh-CN">
@@ -515,6 +528,19 @@ def build_report_html(result: dict, *, forensics: dict | None = None, provenance
       color: var(--muted);
       line-height: 1.7;
     }}
+    .download {{
+      display: inline-flex;
+      align-items: center;
+      min-height: 44px;
+      margin-top: 16px;
+      padding: 10px 16px;
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      color: var(--accent);
+      font-weight: 700;
+      text-decoration: none;
+    }}
+    .download:focus-visible {{ outline: 3px solid var(--accent); outline-offset: 3px; }}
     ul {{
       margin: 0;
       padding-left: 18px;
@@ -594,6 +620,7 @@ def build_report_html(result: dict, *, forensics: dict | None = None, provenance
     <section class="card">
       <h2>使用说明与限制</h2>
       <p>{disclaimer}</p>
+      {evidence_package_html}
       <div class="footnote">
         1. 本报告用于工程留档和人工复核辅助，不构成司法或监管意义上的最终鉴定结论。<br />
         2. 无水印、无凭证或未标注区域，不足以单独证明内容真实。<br />

@@ -66,21 +66,55 @@ def test_integrity_clash_alone_cannot_create_99_percent_result():
     assert 0.5 < fused["confidence"] < 0.9
 
 
+def test_valid_untrusted_c2pa_is_probability_neutral():
+    clean = evidence_probability.build_probability_model(_report(), [])
+    model = evidence_probability.build_probability_model(
+        _report(
+            isAiGenerated=True,
+            aiFromMetadata=True,
+            aiSourceKind="generated",
+            c2paTrusted=False,
+            c2paValidationState="valid",
+            signals=[{"name": "c2pa", "confidence": "unverified"}],
+            integrityClashes=["c2pa_not_trusted:valid"],
+        ),
+        [],
+    )
+
+    assert model["factors"] == []
+    assert model["effectiveLikelihoodRatio"] == 1.0
+    assert model["posterior"] == clean["posterior"]
+
+
 def test_invalid_c2pa_declaration_and_signature_error_are_same_source():
     model = evidence_probability.build_probability_model(
         _report(
             isAiGenerated=True,
             aiFromMetadata=True,
             aiSourceKind="generated",
+            c2paValidationState="invalid",
             signals=[{"name": "c2pa", "confidence": "high"}],
-            integrityClashes=["c2pa_signature_invalid"],
         ),
         [],
     )
     assert model["corroborated"] is False
     assert {factor["group"] for factor in model["factors"]} == {"untrusted_provenance"}
+    assert {factor["kind"] for factor in model["factors"]} == {
+        "unverified_ai_declaration",
+        "metadata_integrity_clash",
+    }
     assert any(factor["correlationExponent"] < 1 for factor in model["factors"])
     assert 0.5 < model["posterior"] < 0.65
+
+
+def test_c2pa_hard_binding_failure_remains_integrity_evidence():
+    model = evidence_probability.build_probability_model(
+        _report(integrityClashes=["c2pa_hard_binding_failed"]),
+        [],
+    )
+
+    assert [factor["kind"] for factor in model["factors"]] == ["metadata_integrity_clash"]
+    assert model["factors"][0]["likelihoodRatio"] == 9.0
 
 
 def test_more_independent_positive_evidence_is_monotonic():

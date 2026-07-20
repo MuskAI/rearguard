@@ -14,8 +14,9 @@ from . import capture_evidence
 from . import metadata as metadata_reader
 
 try:
-    from c2pa import Reader
+    from c2pa import C2paError, Reader
 except Exception:
+    C2paError = None
     Reader = None
 
 EXT_TO_MIME = {
@@ -24,9 +25,14 @@ EXT_TO_MIME = {
     "mp4": "video/mp4", "mov": "video/quicktime", "avif": "image/avif",
 }
 
-# IPTC digitalSourceType → 是否 AI 生成
-AI_SOURCE_TYPES = ("trainedAlgorithmicMedia", "compositeWithTrainedAlgorithmicMedia", "algorithmicMedia")
-CAMERA_SOURCE_TYPES = ("digitalCapture", "negativeFilm", "positiveFilm", "print")
+# IPTC digitalSourceType → 是否 AI 生成。胶片、相纸与打印件描述的是
+# 介质/再数字化来源，不能等同于当前文件由数字相机直接捕获。
+AI_SOURCE_TYPES = frozenset({
+    "trainedalgorithmicmedia",
+    "compositewithtrainedalgorithmicmedia",
+    "algorithmicmedia",
+})
+DIRECT_CAMERA_SOURCE_TYPES = frozenset({"digitalcapture"})
 
 SYNTHID_NOTE = "SynthID 为 Google 专有隐形水印，无公开解码器，需 Google 授权，暂不支持检测。"
 
@@ -44,11 +50,104 @@ def mime_for(filename: str) -> str:
 def _classify_source(dst: str | None) -> bool | None:
     if not dst:
         return None
-    if any(t in dst for t in AI_SOURCE_TYPES):
+    token = str(dst).strip().rstrip("/").rsplit("/", 1)[-1].rsplit("#", 1)[-1].lower()
+    if token in AI_SOURCE_TYPES:
         return True
-    if any(t in dst for t in CAMERA_SOURCE_TYPES):
+    if token in DIRECT_CAMERA_SOURCE_TYPES:
         return False
     return None
+
+
+def _object(value: object, label: str) -> dict:
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be an object")
+    return value
+
+
+def _array(value: object, label: str) -> list:
+    if not isinstance(value, list):
+        raise ValueError(f"{label} must be an array")
+    return value
+
+
+def _parse_credentials(reader: object, capture: dict | None) -> dict:
+    """Parse into an isolated object so partial credentials are never published."""
+    doc = _object(json.loads(reader.json()), "C2PA document")
+    validation_state = str(reader.get_validation_state()).split(".")[-1]
+    parsed = {
+        "hasCredentials": True,
+        "validationState": validation_state,
+        "credentialTrusted": _is_trusted_validation_state(validation_state),
+        "generator": None,
+        "issuer": None,
+        "signatureAlg": None,
+        "signedTime": None,
+        "isAiGenerated": None,
+        "actions": [],
+        "ingredients": [],
+        "captureEvidence": capture,
+    }
+
+    manifests = _object(doc.get("manifests") or {}, "C2PA manifests")
+    active = doc.get("active_manifest")
+    am = _object(manifests.get(active, {}) if active else {}, "C2PA active manifest")
+
+    generators = _array(am.get("claim_generator_info") or [], "C2PA claim_generator_info")
+    if generators:
+        generator = _object(generators[0], "C2PA claim generator")
+        parsed["generator"] = f'{generator.get("name", "?")} {generator.get("version", "")}'.strip()
+    else:
+        parsed["generator"] = am.get("claim_generator")
+
+    signature = _object(am.get("signature_info") or {}, "C2PA signature_info")
+    parsed["issuer"] = signature.get("issuer")
+    parsed["signatureAlg"] = signature.get("alg")
+    parsed["signedTime"] = signature.get("time")
+
+    ai_flag = None
+    assertions = _array(am.get("assertions") or [], "C2PA assertions")
+    for raw_assertion in assertions:
+        assertion = _object(raw_assertion, "C2PA assertion")
+        if not str(assertion.get("label", "")).startswith("c2pa.action"):
+            continue
+        assertion_data = _object(assertion.get("data") or {}, "C2PA action assertion data")
+        actions = _array(assertion_data.get("actions") or [], "C2PA actions")
+        for raw_action in actions:
+            action = _object(raw_action, "C2PA action")
+            digital_source_type = action.get("digitalSourceType")
+            parsed["actions"].append({
+                "action": action.get("action"),
+                "softwareAgent": action.get("softwareAgent"),
+                "digitalSourceType": digital_source_type,
+            })
+            flag = _classify_source(digital_source_type)
+            if flag is not None:
+                ai_flag = flag if ai_flag is None else (ai_flag or flag)
+    parsed["isAiGenerated"] = ai_flag
+
+    ingredients = _array(am.get("ingredients") or [], "C2PA ingredients")
+    for raw_ingredient in ingredients:
+        ingredient = _object(raw_ingredient, "C2PA ingredient")
+        parsed["ingredients"].append({
+            "title": ingredient.get("title"),
+            "relationship": ingredient.get("relationship"),
+        })
+
+    source_types = {
+        str(item.get("digitalSourceType") or "")
+        for item in parsed["actions"]
+    }
+    has_camera_declaration = any(_classify_source(value) is False for value in source_types)
+    if (
+        parsed["isAiGenerated"] is False
+        and parsed["credentialTrusted"] is True
+        and has_camera_declaration
+    ):
+        parsed["captureEvidence"] = capture_evidence.add_verified_camera_credential(
+            parsed.get("captureEvidence"),
+            issuer=str(parsed.get("issuer") or parsed.get("generator") or ""),
+        )
+    return parsed
 
 
 def read_provenance(data: bytes, mime: str, filename: str = "") -> dict:
@@ -80,69 +179,31 @@ def read_provenance(data: bytes, mime: str, filename: str = "") -> dict:
 
     try:
         reader = Reader(mime, io.BytesIO(data))
-    except Exception:
-        # 没有内嵌凭证（最常见情形）或格式不支持
-        report["error"] = "no_manifest"
+    except Exception as exc:
+        if C2paError is not None and isinstance(exc, C2paError.ManifestNotFound):
+            report["error"] = "no_manifest"
+        elif C2paError is not None and isinstance(exc, C2paError.NotSupported):
+            report["error"] = "unsupported_format"
+        else:
+            report["error"] = f"c2pa_read_error:{type(exc).__name__}"
         return report
 
     try:
-        doc = json.loads(reader.json())
-        report["hasCredentials"] = True
-        report["validationState"] = str(reader.get_validation_state()).split(".")[-1]
-        report["credentialTrusted"] = _is_trusted_validation_state(report["validationState"])
-
-        active = doc.get("active_manifest")
-        am = doc.get("manifests", {}).get(active, {}) if active else {}
-
-        gi = am.get("claim_generator_info") or []
-        if gi:
-            g = gi[0]
-            report["generator"] = f'{g.get("name", "?")} {g.get("version", "")}'.strip()
-        else:
-            report["generator"] = am.get("claim_generator")
-
-        sig = am.get("signature_info", {}) or {}
-        report["issuer"] = sig.get("issuer")
-        report["signatureAlg"] = sig.get("alg")
-        report["signedTime"] = sig.get("time")
-
-        ai_flag = None
-        for asr in am.get("assertions", []) or []:
-            if str(asr.get("label", "")).startswith("c2pa.action"):
-                for a in asr.get("data", {}).get("actions", []):
-                    dst = a.get("digitalSourceType")
-                    report["actions"].append({
-                        "action": a.get("action"),
-                        "softwareAgent": a.get("softwareAgent"),
-                        "digitalSourceType": dst,
-                    })
-                    flag = _classify_source(dst)
-                    if flag is not None:
-                        ai_flag = flag if ai_flag is None else (ai_flag or flag)
-        report["isAiGenerated"] = ai_flag
-
-        for ing in am.get("ingredients", []) or []:
-            report["ingredients"].append({
-                "title": ing.get("title"),
-                "relationship": ing.get("relationship"),
-            })
-        source_types = {
-            str(item.get("digitalSourceType") or "")
-            for item in report.get("actions") or []
-            if isinstance(item, dict)
-        }
-        has_camera_declaration = any(any(kind in value for kind in CAMERA_SOURCE_TYPES) for value in source_types)
-        if (
-            report.get("hasCredentials")
-            and report.get("isAiGenerated") is False
-            and report.get("credentialTrusted") is True
-            and has_camera_declaration
-        ):
-            report["captureEvidence"] = capture_evidence.add_verified_camera_credential(
-                report.get("captureEvidence"),
-                issuer=str(report.get("issuer") or report.get("generator") or ""),
-            )
+        parsed = _parse_credentials(reader, report.get("captureEvidence"))
+        report.update(parsed)
     except Exception as e:
+        report.update({
+            "hasCredentials": False,
+            "validationState": None,
+            "credentialTrusted": False,
+            "generator": None,
+            "issuer": None,
+            "signatureAlg": None,
+            "signedTime": None,
+            "isAiGenerated": None,
+            "actions": [],
+            "ingredients": [],
+        })
         report["error"] = f"parse_error: {e}"
     finally:
         try:

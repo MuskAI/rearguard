@@ -17,6 +17,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfgen.canvas import Canvas
 from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 
@@ -284,6 +285,11 @@ def _page_footer(canvas, document) -> None:
     canvas.restoreState()
 
 
+def _invariant_canvas(*args, **kwargs) -> Canvas:
+    kwargs["invariant"] = 1
+    return Canvas(*args, **kwargs)
+
+
 def build_report_pdf(
     result: dict[str, Any],
     *,
@@ -354,6 +360,23 @@ def build_report_pdf(
         ("缓存复用", "是" if result.get("cacheHit") else "否"),
     ], styles))
     story.extend(_annotated_preview(result, styles))
+    integrity = result.get("evidenceIntegrity") or {}
+    if integrity:
+        story.extend([
+            _paragraph("可验证证据链", styles["section"]),
+            _meta_table([
+                ("清单 SHA-256", _fingerprint(integrity.get("manifestSha256"))),
+                ("签名算法", integrity.get("algorithm")),
+                ("签名密钥", integrity.get("keyId")),
+                ("验证端点", integrity.get("verifyPath")),
+            ], styles),
+            Spacer(1, 2 * mm),
+            _paragraph(
+                "本 PDF 的字节哈希通过独立 Ed25519 artifact 声明与上述证据清单绑定；"
+                "请使用验证端点或离线校验工具核验下载文件。",
+                styles["small"],
+            ),
+        ])
     story.extend([
         _paragraph("综合判定依据", styles["section"]),
         _paragraph(result.get("explanation"), styles["body"], "未提供详细判定依据。"),
@@ -463,5 +486,10 @@ def build_report_pdf(
         _paragraph("无水印、无凭证或未标注区域，不足以单独证明内容真实。", styles["small"]),
     ])
 
-    document.build(story, onFirstPage=_page_footer, onLaterPages=_page_footer)
+    document.build(
+        story,
+        onFirstPage=_page_footer,
+        onLaterPages=_page_footer,
+        canvasmaker=_invariant_canvas,
+    )
     return buffer.getvalue()

@@ -1,13 +1,16 @@
 from pathlib import Path
 import binascii
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import importlib
+import io
 import json
 import sys
 import struct
 import time
 import uuid
 import zlib
+import zipfile
 from urllib.parse import parse_qs, urlsplit
 
 from fastapi.testclient import TestClient
@@ -110,6 +113,54 @@ def test_public_detect_requires_server_verified_upload_consent(client):
     assert "隐私政策" in response.json()["detail"]
 
 
+def test_production_session_writes_require_csrf_and_same_origin(client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    monkeypatch.setattr(main, "RUNTIME_ENV", "production")
+
+    def fake_session_user(request):
+        if "session=csrf-user" in request.headers.get("cookie", ""):
+            return {
+                "mode": "session",
+                "userId": 900,
+                "accountUuid": "99999999-9999-4999-8999-999999999999",
+            }
+        return None
+
+    monkeypatch.setattr(main, "_verify_session_user_sync", fake_session_user)
+    client.cookies.set("session", "csrf-user")
+    missing = client.post(
+        "/api/detect",
+        files={"file": ("csrf.txt", b"csrf", "text/plain")},
+    )
+    assert missing.status_code == 403
+    assert "CSRF" in missing.json()["detail"]
+
+    token = "csrf-token-for-production-test-1234567890"
+    client.cookies.set(main.SESSION_CSRF_COOKIE, token)
+    cross_site = client.post(
+        "/api/detect",
+        headers={
+            "X-Huijian-CSRF": token,
+            "Origin": "https://evil.example",
+            "Sec-Fetch-Site": "cross-site",
+        },
+        files={"file": ("csrf.txt", b"csrf", "text/plain")},
+    )
+    assert cross_site.status_code == 403
+
+    same_origin = client.post(
+        "/api/detect",
+        headers={
+            "X-Huijian-CSRF": token,
+            "Origin": "https://www.rrreal.cn",
+            "Sec-Fetch-Site": "same-origin",
+        },
+        files={"file": ("csrf.txt", b"csrf", "text/plain")},
+    )
+    assert same_origin.status_code == 200
+
+
 def test_public_detect_persists_pseudonymous_upload_consent(client):
     from app import storage
 
@@ -154,9 +205,11 @@ def test_forensic_normalizer_hides_natural_language_verdicts():
 
 @pytest.fixture
 def client(monkeypatch, tmp_path):
+    monkeypatch.setenv("JIANZHEN_ENV", "test")
     monkeypatch.setenv("JIANZHEN_ACCESS_TOKEN", "internal-token")
     monkeypatch.setenv("JIANZHEN_ADMIN_ACCESS_TOKEN", "test-token")
     monkeypatch.setenv("JIANZHEN_REPORT_SHARE_SECRET", "independent-report-share-secret-32")
+    monkeypatch.setenv("JIANZHEN_ALLOW_LEGACY_REPORT_SHARES", "true")
     monkeypatch.setenv("JIANZHEN_CONSENT_AUDIT_SALT", "independent-consent-audit-secret-32")
     monkeypatch.setenv("JIANZHEN_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-dashscope-key")
@@ -176,12 +229,14 @@ def client(monkeypatch, tmp_path):
 
 @pytest.fixture
 def developer_key_client(monkeypatch, tmp_path):
+    monkeypatch.setenv("JIANZHEN_ALLOW_LEGACY_REPORT_SHARES", "true")
     monkeypatch.setenv("JIANZHEN_ACCESS_TOKEN", "internal-token")
     monkeypatch.setenv("JIANZHEN_ADMIN_ACCESS_TOKEN", "admin-token")
     monkeypatch.setenv("JIANZHEN_REPORT_SHARE_SECRET", "independent-report-share-secret-32")
     monkeypatch.setenv("JIANZHEN_CONSENT_AUDIT_SALT", "independent-consent-audit-secret-32")
     monkeypatch.setenv("JIANZHEN_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("JIANZHEN_ALLOW_DIRECT_DEVELOPER_KEYS", "true")
+    monkeypatch.setenv("JIANZHEN_ENV", "test")
     monkeypatch.setenv("JIANZHEN_DEVELOPER_AUTH_URL", "http://realguard-v1.internal/api/developer/keys/verify")
     monkeypatch.setenv("REALGUARD_DEVELOPER_AUTH_SECRET", "internal-secret")
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-dashscope-key")
@@ -284,6 +339,8 @@ def test_readiness_requires_real_image_model_and_storage(client, monkeypatch):
 
     assert ready.status_code == 200
     assert ready.json()["status"] == "ready"
+    assert ready.json()["checks"]["evidenceSigningConfigured"] is True
+    assert ready.json()["evidenceSigning"]["algorithm"] == "Ed25519"
     assert ready.headers["cache-control"] == "no-store"
     assert unavailable.status_code == 503
     assert unavailable.json()["checks"]["imageModelConfigured"] is False
@@ -293,6 +350,18 @@ def test_readiness_requires_real_image_model_and_storage(client, monkeypatch):
     auth_unavailable = client.get("/api/ready")
     assert auth_unavailable.status_code == 503
     assert auth_unavailable.json()["checks"]["sessionAuthReachable"] is False
+
+
+def test_readiness_fails_closed_without_evidence_signing_key(client, monkeypatch):
+    monkeypatch.delenv("JIANZHEN_EVIDENCE_SIGNING_PRIVATE_KEY", raising=False)
+    monkeypatch.delenv("JIANZHEN_EVIDENCE_SIGNING_PRIVATE_KEY_FILE", raising=False)
+
+    response = client.get("/api/ready")
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "not_ready"
+    assert response.json()["checks"]["evidenceSigningConfigured"] is False
+    assert response.json()["evidenceSigning"]["error"] == "evidence_signing_configuration_invalid"
 
 
 def test_forensics_cache_is_scoped_by_user_and_does_not_leak_filename(developer_key_client, monkeypatch):
@@ -729,23 +798,41 @@ def test_legacy_history_without_decision_authorization_fails_closed(client):
         files={"file": ("legacy.txt", b"legacy result", "text/plain")},
     ).json()
     legacy = dict(detected)
+    legacy["taskId"] = "legacy-unsealed-task"
+    legacy["reportId"] = "RJ-RPT-LEGACY-UNSEALED"
     legacy.update({"verdict": "real", "confidence": 0.97})
     for key in ("decisionStatus", "decisionAuthority", "reviewRequired"):
         legacy.pop(key, None)
     with storage._connect() as conn:
         conn.execute(
-            "UPDATE history SET result_json = ? WHERE task_id = ?",
-            (json.dumps(legacy, ensure_ascii=False), detected["taskId"]),
+            """
+            INSERT INTO history
+                (task_id, report_id, created_at, sha256, file_type, file_name,
+                 file_size, resolution, result_json, thumbnail)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                legacy["taskId"],
+                legacy["reportId"],
+                legacy["createdAt"],
+                "e" * 64,
+                "document",
+                "legacy.txt",
+                64,
+                None,
+                json.dumps(legacy, ensure_ascii=False),
+                None,
+            ),
         )
         conn.commit()
 
     listing = client.get("/api/history", headers={"X-Jianzhen-Token": "test-token"})
     detail = client.get(
-        f"/api/history/{detected['taskId']}",
+        f"/api/history/{legacy['taskId']}",
         headers={"X-Jianzhen-Token": "test-token"},
     )
 
-    item = next(entry for entry in listing.json()["items"] if entry["taskId"] == detected["taskId"])
+    item = next(entry for entry in listing.json()["items"] if entry["taskId"] == legacy["taskId"])
     assert item["verdict"] == "unknown"
     assert item["reviewRequired"] is True
     assert detail.json()["verdict"] == "unknown"
@@ -802,7 +889,7 @@ def test_history_delete_removes_content_unlinks_usage_and_anonymous_cache_is_dis
     storage.put_history_artifacts(first["taskId"], forensics={"summary": "private evidence"})
     storage.record_token_usage(
         actor={"userId": 7, "keyId": 9},
-        endpoint="/api/detect",
+        endpoint="/api/history-delete-privacy-test",
         file_type="document",
         result=first,
     )
@@ -820,9 +907,18 @@ def test_history_delete_removes_content_unlinks_usage_and_anonymous_cache_is_dis
             (first["taskId"],),
         ).fetchone() is None
         usage = conn.execute(
-            "SELECT task_id, report_id FROM token_usage_events WHERE developer_key_id = '9'",
+            """
+            SELECT developer_user_id, developer_key_id, task_id, report_id
+            FROM token_usage_events
+            WHERE endpoint = '/api/history-delete-privacy-test'
+            """,
         ).fetchone()
-        assert dict(usage) == {"task_id": None, "report_id": None}
+        assert dict(usage) == {
+            "developer_user_id": None,
+            "developer_key_id": None,
+            "task_id": None,
+            "report_id": None,
+        }
         assert conn.execute(
             "SELECT COUNT(*) AS n FROM analysis_cache WHERE sha256 = ?",
             (first["fileMeta"]["sha256"],),
@@ -970,6 +1066,21 @@ def test_direct_v2_developer_keys_are_retired_by_default(developer_key_client, m
     assert "/api/openapi/v1/image-detections" in response.json()["detail"]
 
 
+def test_direct_v2_developer_keys_fail_closed_in_production(developer_key_client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    monkeypatch.setattr(main, "ALLOW_DIRECT_DEVELOPER_KEYS", True)
+    monkeypatch.setattr(main, "RUNTIME_ENV", "production")
+    response = developer_key_client.post(
+        "/api/detect",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+        files={"file": ("sample.txt", b"production direct key must fail", "text/plain")},
+    )
+
+    assert response.status_code == 503
+    assert "统一计费网关" in response.json()["detail"]
+
+
 def test_v2_detection_is_not_anonymous_by_default(client, monkeypatch):
     import app.main as main  # noqa: WPS433
 
@@ -1079,8 +1190,16 @@ def test_developer_key_report_access_is_scoped_to_owner(developer_key_client):
         f"/api/report/{report_id}/download",
         headers={"X-RealGuard-Key": "rg_sk_user1"},
     )
+    owner_verify = developer_key_client.get(
+        f"/api/report/{report_id}/verify",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+    )
     other_user = developer_key_client.get(
         f"/api/report/{report_id}/download",
+        headers={"X-RealGuard-Key": "rg_sk_user2"},
+    )
+    other_user_verify = developer_key_client.get(
+        f"/api/report/{report_id}/verify",
         headers={"X-RealGuard-Key": "rg_sk_user2"},
     )
     admin = developer_key_client.get(
@@ -1090,7 +1209,15 @@ def test_developer_key_report_access_is_scoped_to_owner(developer_key_client):
 
     assert detect.status_code == 200
     assert owner.status_code == 200
+    assert owner.headers["x-evidence-manifest-sha256"] == owner_verify.json()["manifest"]["sha256"]
+    assert owner.headers["x-report-artifact-sha256"] == owner_verify.json()["artifact"]["downloadSha256"]
+    assert owner_verify.status_code == 200
+    assert owner_verify.json()["status"] == "valid"
+    assert owner_verify.json()["packageIntegrityVerified"] is True
+    assert owner_verify.json()["subjectVerified"] is False
+    assert owner_verify.json()["complete"] is False
     assert other_user.status_code == 404
+    assert other_user_verify.status_code == 404
     assert admin.status_code == 200
 
 
@@ -1410,6 +1537,156 @@ def test_report_download_returns_attachment_pdf(client):
     assert ".pdf" in response.headers["content-disposition"]
     assert response.content.startswith(b"%PDF-")
     assert len(response.content) > 1500
+
+
+def test_evidence_package_is_offline_verifiable_and_tenant_scoped(developer_key_client):
+    from app import evidence_manifest_v2
+
+    original = b"tenant-owned original for evidence package"
+    detect = developer_key_client.post(
+        "/api/detect",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+        files={"file": ("evidence.txt", original, "text/plain")},
+    )
+    report_id = detect.json()["reportId"]
+    package = developer_key_client.get(
+        f"/api/report/{report_id}/evidence-package",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+    )
+    foreign = developer_key_client.get(
+        f"/api/report/{report_id}/evidence-package",
+        headers={"X-RealGuard-Key": "rg_sk_user2"},
+    )
+
+    assert detect.status_code == 200
+    assert package.status_code == 200
+    assert package.headers["content-type"].startswith("application/zip")
+    assert package.headers["cache-control"] == "private, no-store, max-age=0"
+    assert package.headers["x-evidence-package-sha256"] == hashlib.sha256(
+        package.content
+    ).hexdigest()
+    assert foreign.status_code == 404
+
+    with zipfile.ZipFile(io.BytesIO(package.content)) as archive:
+        assert set(archive.namelist()) == {
+            "README.txt",
+            "evidence-bundle.json",
+            "key-registry.json",
+            "report-payload.json",
+            "report.pdf",
+            "subject-metadata.json",
+            "subject.sha256",
+            "verify_evidence.py",
+        }
+        bundle = json.loads(archive.read("evidence-bundle.json"))
+        report_payload = json.loads(archive.read("report-payload.json"))
+        registry = json.loads(archive.read("key-registry.json"))
+        pdf = archive.read("report.pdf")
+        readme = archive.read("README.txt").decode("utf-8")
+        subject_metadata = json.loads(archive.read("subject-metadata.json"))
+
+    key_id = bundle["manifest"]["signature"]["keyId"]
+    key = next(item for item in registry["keys"] if item["keyId"] == key_id)
+    verification = evidence_manifest_v2.verify_bundle(
+        bundle,
+        artifact_bytes=pdf,
+        report_payload=report_payload,
+        subject_bytes=original,
+        trusted_public_keys={key_id: __import__("base64").b64decode(key["publicKey"])},
+    )
+    assert verification["status"] == "valid"
+    assert verification["subjectVerified"] is True
+    assert subject_metadata["sha256"] == hashlib.sha256(original).hexdigest()
+    assert registry["externallyAnchored"] is False
+    assert "未接入 RFC 3161" in readme
+    assert "独立发布渠道" in readme
+
+
+def test_public_share_exposes_revocable_evidence_package(developer_key_client):
+    detect = developer_key_client.post(
+        "/api/detect",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+        files={"file": ("public-package.txt", b"public evidence package", "text/plain")},
+    )
+    report_id = detect.json()["reportId"]
+    created = developer_key_client.post(
+        f"/api/report/{report_id}/share",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+        json={"expiresInSeconds": 3600},
+    ).json()
+
+    public_html = developer_key_client.get(created["apiPath"])
+    public_package = developer_key_client.get(created["evidencePackageApiPath"])
+    tampered = developer_key_client.get(
+        created["evidencePackageApiPath"].replace("sig=", "sig=bad")
+    )
+    revoked = developer_key_client.delete(
+        f"/api/report/{report_id}/share/{created['shareId']}",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+    )
+    after_revoke = developer_key_client.get(created["evidencePackageApiPath"])
+
+    assert public_html.status_code == 200
+    assert "下载离线证据包" in public_html.text
+    assert "/public/evidence-package?" in public_html.text
+    assert public_package.status_code == 200
+    assert public_package.headers["content-type"].startswith("application/zip")
+    assert tampered.status_code == 403
+    assert revoked.status_code == 200
+    assert after_revoke.status_code == 410
+
+
+def test_request_metrics_store_route_templates_not_report_identifiers(client):
+    import app.storage as storage  # noqa: WPS433
+
+    detect = client.post(
+        "/api/detect",
+        files={"file": ("route-template.txt", b"route privacy", "text/plain")},
+    )
+    report_id = detect.json()["reportId"]
+    response = client.get(
+        f"/api/report/{report_id}",
+        headers={"X-Jianzhen-Token": "test-token"},
+    )
+
+    assert response.status_code == 200
+    with storage._connect() as conn:
+        paths = [row["path"] for row in conn.execute("SELECT path FROM request_events")]
+    assert "/api/report/{report_id}" in paths
+    assert all(report_id not in path for path in paths)
+
+
+def test_report_verify_is_read_only_and_reports_missing_until_pdf_is_frozen(client):
+    import app.storage as storage  # noqa: WPS433
+
+    detect = client.post(
+        "/api/detect",
+        files={"file": ("verify-first.txt", b"read-only verification", "text/plain")},
+    )
+    report_id = detect.json()["reportId"]
+    headers = {"X-Jianzhen-Token": "test-token"}
+
+    before_download = client.get(f"/api/report/{report_id}/verify", headers=headers)
+
+    assert before_download.status_code == 200
+    assert before_download.json()["status"] == "missing"
+    assert before_download.json()["manifest"]["status"] == "valid"
+    assert before_download.json()["artifact"]["status"] == "missing"
+    assert before_download.json()["artifact"]["downloadSha256"] is None
+    assert storage.get_report_artifact(report_id) is None
+
+    download = client.get(f"/api/report/{report_id}/download", headers=headers)
+    after_download = client.get(f"/api/report/{report_id}/verify", headers=headers)
+
+    assert download.status_code == 200
+    assert after_download.status_code == 200
+    assert after_download.json()["status"] == "valid"
+    assert after_download.json()["packageIntegrityVerified"] is True
+    assert after_download.json()["subjectVerified"] is False
+    assert after_download.json()["complete"] is False
+    assert after_download.json()["artifact"]["downloadSha256"] == download.headers[
+        "x-report-artifact-sha256"
+    ]
 
 
 def test_provenance_reads_tc260_aigc_metadata_without_c2pa(client):
