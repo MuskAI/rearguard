@@ -359,8 +359,10 @@ done
 test "$health_ready" = "1"
 detector_token="$(sudo awk -F= '/^REALGUARD_DETECTOR_INTERNAL_TOKEN=/{print substr($0, index($0, "=") + 1); exit}' /etc/realguard/realguard-backend.env)"
 test "${#detector_token}" -ge 32
-printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC' \
-  | base64 -d > /tmp/realguard-deployment-probe.png
+sudo -u ubuntu "$release_root/.venv/bin/python" -c '
+from PIL import Image
+Image.new("RGB", (64, 64), (240, 244, 245)).save("/tmp/realguard-deployment-probe.png")
+'
 curl -fsS --max-time 180 \
   -H "X-RealGuard-Detector-Token: $detector_token" \
   -F internal_probe=1 \

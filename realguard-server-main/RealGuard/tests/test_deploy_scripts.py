@@ -158,3 +158,5 @@ def test_v1_release_can_build_a_pinned_runtime_as_the_service_user():
     assert activate.index('.venv/bin/python -c "import run, detector_backend"') < activate.index(
         "systemctl stop realguard-developer-worker.service"
     )
+    assert 'Image.new("RGB", (64, 64)' in activate
+    assert "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB" not in activate
