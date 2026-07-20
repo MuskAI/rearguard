@@ -328,9 +328,11 @@ def verify_image_report(pdf: bytes, *, signing_key: str | bytes | None = None) -
 
 
 def video_report_content(item: dict, result: dict) -> str:
-    probability = round(float(result.get("fake_percentage", 0) or 0), 1)
+    review_only = result.get("decisionStatus") != "verdict" or result.get("reviewRequired") is True
+    raw_probability = result.get("fake_percentage")
+    probability = None if review_only or raw_probability is None else round(float(raw_probability), 1)
     confidence = _safe_text(result.get("confidence"), "")
-    requires_review = 35 < probability < 75 or confidence == "低"
+    requires_review = review_only or probability is None or 35 < probability < 75 or confidence == "低"
     final_label = "需人工复核" if requires_review else (result.get("final_label") or "视频检测结果")
     accent = "#b36a12" if requires_review else ("#d9573f" if "AI" in str(final_label) else "#1b8f7a")
     video_url = escape(_safe_text(result.get("video_url"), ""))
@@ -343,13 +345,13 @@ def video_report_content(item: dict, result: dict) -> str:
           <div class="eyebrow">Huijian AI Video Report</div>
           <h1>视频鉴伪报告</h1>
           <p>报告编号：VID-{item.get('itemid')}。该报告用于留存视频鉴伪结论、基础参数与简洁分析说明。</p>
-          <div class="pill">{escape(_safe_text(final_label))} · {probability}%</div>
+          <div class="pill">{escape(_safe_text(final_label))} · {"未发布自动概率" if requires_review else f"{probability}%"}</div>
           <div class="grid" style="margin-top:18px;">
             <div>
               <div class="meta-grid">
                 <div><span>文件名</span><strong>{escape(_safe_text(result.get("filename")))}</strong></div>
                 <div><span>时间</span><strong>{escape(_fmt_time(item.get("createtime")))}</strong></div>
-                <div><span>置信度</span><strong>{escape(_safe_text(result.get("confidence")))}</strong></div>
+                <div><span>置信度</span><strong>{"不提供" if requires_review else escape(_safe_text(result.get("confidence")))}</strong></div>
                 <div><span>时长</span><strong>{escape(_safe_text((result.get("meta") or {}).get("duration")))}</strong></div>
                 <div><span>分辨率</span><strong>{escape(_safe_text((result.get("meta") or {}).get("resolution")))}</strong></div>
                 <div><span>编码器</span><strong>{escape(_safe_text(result.get("encoder")))}</strong></div>
@@ -367,8 +369,8 @@ def video_report_content(item: dict, result: dict) -> str:
           <table>
             <thead><tr><th>字段</th><th>内容</th><th class="right">值</th></tr></thead>
             <tbody>
-              <tr><td>AI 概率</td><td>综合伪造概率</td><td class="right">{round(float(result.get("fake_percentage", 0) or 0), 1)}%</td></tr>
-              <tr><td>真实概率</td><td>综合真实概率</td><td class="right">{round(float(result.get("real_percentage", 0) or 0), 1)}%</td></tr>
+              <tr><td>AI 概率</td><td>综合伪造概率</td><td class="right">{"未发布" if requires_review else f"{probability}%"}</td></tr>
+              <tr><td>真实概率</td><td>综合真实概率</td><td class="right">{"未发布" if requires_review else f"{round(float(result.get('real_percentage')), 1)}%"}</td></tr>
               <tr><td>帧数</td><td>返回的分析帧计数</td><td class="right">{escape(_safe_text(result.get("frame_count")))}</td></tr>
             </tbody>
           </table>

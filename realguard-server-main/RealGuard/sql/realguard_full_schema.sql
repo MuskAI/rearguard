@@ -201,3 +201,66 @@ CREATE TABLE IF NOT EXISTS `video_data` (
   KEY `idx_video_data_phone_ct` (`phone`, `createtime`),
   KEY `idx_video_data_owner_uuid_ct` (`owner_account_uuid`, `createtime`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='视频鉴伪检测记录';
+
+CREATE TABLE IF NOT EXISTS `legacy_record_governance` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
+  `request_operation_id` CHAR(36) NOT NULL,
+  `record_type` VARCHAR(16) NOT NULL,
+  `record_id` BIGINT NOT NULL,
+  `record_fingerprint` CHAR(64) NOT NULL,
+  `media_sha256` CHAR(64) NOT NULL,
+  `active_record_key` VARCHAR(64) NULL,
+  `status` VARCHAR(24) NOT NULL DEFAULT 'claim_pending',
+  `target_account_uuid` CHAR(36) NOT NULL,
+  `target_user_id` BIGINT NOT NULL,
+  `target_account_fingerprint` CHAR(64) NOT NULL,
+  `evidence_reference` VARCHAR(512) NOT NULL,
+  `evidence_sha256` CHAR(64) NOT NULL,
+  `reason` VARCHAR(1000) NOT NULL,
+  `requester_admin_id` BIGINT NOT NULL,
+  `requester_username` VARCHAR(64) NOT NULL,
+  `requester_identity_hash` CHAR(64) NOT NULL,
+  `request_integrity_hmac` CHAR(64) NOT NULL,
+  `requested_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `approval_operation_id` CHAR(36) NULL,
+  `approver_admin_id` BIGINT NULL,
+  `approver_username` VARCHAR(64) NULL,
+  `approver_identity_hash` CHAR(64) NULL,
+  `approval_integrity_hmac` CHAR(64) NULL,
+  `decision_reason` VARCHAR(1000) NULL,
+  `audit_key_id` VARCHAR(64) NOT NULL,
+  `approved_at` DATETIME NULL,
+  `version` INT NOT NULL DEFAULT 1,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_legacy_request_operation` (`request_operation_id`),
+  UNIQUE KEY `uk_legacy_active_record` (`active_record_key`),
+  UNIQUE KEY `uk_legacy_approval_operation` (`approval_operation_id`),
+  KEY `idx_legacy_status_requested` (`status`, `requested_at`),
+  KEY `idx_legacy_target_account` (`target_account_uuid`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='历史遗留记录双人认领治理台账';
+
+CREATE TABLE IF NOT EXISTS `security_audit_chain_head` (
+  `id` TINYINT NOT NULL,
+  `last_event_hash` CHAR(64) NOT NULL,
+  `updated_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='安全审计哈希链并发锁';
+
+CREATE TABLE IF NOT EXISTS `security_audit_events` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
+  `event_id` CHAR(36) NOT NULL,
+  `occurred_at` VARCHAR(32) NOT NULL,
+  `actor_type` VARCHAR(32) NOT NULL,
+  `actor_id` VARCHAR(64) NOT NULL,
+  `action` VARCHAR(96) NOT NULL,
+  `target` VARCHAR(191) NOT NULL,
+  `meta_json` LONGTEXT NOT NULL,
+  `previous_hash` CHAR(64) NOT NULL,
+  `event_hash` CHAR(64) NOT NULL,
+  `key_id` VARCHAR(64) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_security_audit_event_id` (`event_id`),
+  UNIQUE KEY `uk_security_audit_event_hash` (`event_hash`),
+  KEY `idx_security_audit_actor_time` (`actor_type`, `actor_id`, `occurred_at`),
+  KEY `idx_security_audit_action_time` (`action`, `occurred_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='带 HMAC 哈希链的敏感操作审计';

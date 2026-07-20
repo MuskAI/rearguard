@@ -1,5 +1,6 @@
 import os
 import secrets
+import time
 from datetime import timedelta
 from urllib.parse import urlsplit
 
@@ -16,9 +17,26 @@ from .views import developer_platform
 from .views import utils
 
 
+def _session_secret():
+    value = (os.environ.get('SECRET_KEY') or os.environ.get('REALGUARD_SECRET_KEY') or '').strip()
+    if value:
+        lowered = value.lower()
+        if (
+            len(value.encode('utf-8')) < 32
+            or lowered in {'change-me', 'changeme', 'secret', 'test', 'development'}
+            or lowered.startswith(('change-', 'replace-', 'example-', 'your-'))
+        ):
+            raise RuntimeError('Flask session signing key is weak or uses a template value')
+        return value
+    allow_ephemeral = os.environ.get('REALGUARD_ALLOW_EPHEMERAL_SECRET', '0').strip().lower()
+    if allow_ephemeral in {'1', 'true', 'yes', 'on'}:
+        return secrets.token_urlsafe(48)
+    raise RuntimeError('Flask session signing key is required')
+
+
 def creat_app():
     app = Flask(__name__)
-    app.secret_key = os.environ.get('SECRET_KEY') or os.environ.get('REALGUARD_SECRET_KEY') or secrets.token_urlsafe(48)
+    app.secret_key = _session_secret()
     app.config.update(
         PERMANENT_SESSION_LIFETIME=timedelta(days=30),
         SESSION_COOKIE_HTTPONLY=True,
@@ -136,6 +154,47 @@ def creat_app():
         changed = admin_state.reconcile_interrupted_detection_jobs(preserve_ids=preserved)
         click.echo(f"durable detection jobs preserved: {len(preserved)}")
         click.echo(f"interrupted detection jobs reconciled: {changed}")
+
+    @app.cli.command("alert-worker")
+    @click.option("--once", is_flag=True, help="Run one alert cycle and exit.")
+    def alert_worker(once):
+        """Run alert delivery independently from Web request workers."""
+        interval = max(15, int(os.environ.get("REALGUARD_ALERT_INTERVAL_SECONDS", "30")))
+        while True:
+            try:
+                admin.write_alert_worker_heartbeat("running")
+                deliveries = admin.run_alert_cycle()
+                admin.write_alert_worker_heartbeat("running")
+                click.echo(f"alert cycle complete: {len(deliveries)} deliveries")
+            except Exception as exc:
+                try:
+                    admin.write_alert_worker_heartbeat("error", str(exc))
+                except Exception:
+                    pass
+                if once:
+                    raise click.ClickException(f"alert cycle failed: {exc}") from exc
+                click.echo(f"alert cycle failed: {exc}", err=True)
+            if once:
+                return
+            time.sleep(interval)
+
+    @app.cli.command("alert-watchdog")
+    def alert_watchdog():
+        """Check the independent alert worker's heartbeat once."""
+        try:
+            deliveries = admin.run_alert_watchdog_cycle()
+        except Exception as exc:
+            raise click.ClickException(f"alert watchdog failed: {exc}") from exc
+        click.echo(f"alert watchdog complete: {len(deliveries)} deliveries")
+
+    @app.cli.command("security-audit-verify")
+    @click.option("--bootstrap", is_flag=True, help="Create the first monotonic checkpoint.")
+    def security_audit_verify(bootstrap):
+        """Verify the HMAC audit chain and monotonic checkpoint."""
+        result = api.verify_security_audit_chain(allow_bootstrap=bootstrap)
+        click.echo(f"security audit verification: {result.get('state')}")
+        if result.get("state") != "passed":
+            raise click.ClickException(result.get("lastError") or "security audit verification failed")
 
     @app.cli.command("repair-detection-owners")
     def repair_detection_owners():

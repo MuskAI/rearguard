@@ -222,7 +222,6 @@ def test_developer_api_key_lifecycle(client, monkeypatch):
         raise AssertionError(f"unexpected SQL: {normalized}")
 
     monkeypatch.setattr(api, "excute_sql", fake_sql)
-    monkeypatch.setattr(api, "excute_sql_lastid", fake_lastid)
     def fake_create_with_limit(user_id, options):
         api_key = f"{api.DEVELOPER_API_KEY_PREFIX}created-test-secret"
         row_id = fake_lastid(
@@ -241,6 +240,16 @@ def test_developer_api_key_lifecycle(client, monkeypatch):
         return api_key, next(row for row in rows if row["id"] == row_id), None
 
     monkeypatch.setattr(api, "_create_developer_key_with_limit", fake_create_with_limit)
+
+    def fake_revoke_atomic(user_id, key_id):
+        for row in rows:
+            if row["id"] == key_id and row["user_id"] == user_id and row["status"] == "active":
+                row["status"] = "revoked"
+                row["revoked_at"] = "2026-06-02 10:03:00"
+                return True, None, 200
+        return False, "API Key 不存在或已撤销", 404
+
+    monkeypatch.setattr(api, "_revoke_developer_key_atomic", fake_revoke_atomic)
 
     created = client.post("/api/developer/keys", json={"name": "Agent key"})
     payload = created.get_json()
@@ -684,6 +693,28 @@ def test_image_report_marks_borderline_result_for_human_review(tmp_path, monkeyp
     assert "需人工复核 · 未发布自动风险分数" in html
     assert "缺失本身不代表伪造" in html
     assert reporting.image_report_filename(9) == "huijian-image-report-9.pdf"
+
+
+def test_video_review_only_report_never_fabricates_zero_probability():
+    html = reporting.video_report_content(
+        {"itemid": 17, "createtime": "2026-07-20 10:00:00"},
+        {
+            "filename": "sample.mp4",
+            "decisionStatus": "review_only",
+            "decisionAuthority": "none",
+            "reviewRequired": True,
+            "fake_percentage": None,
+            "real_percentage": None,
+            "confidence": "低",
+            "final_label": "需人工复核",
+            "explanation": "模型尚未获得自动结论授权。",
+        },
+    )
+
+    assert "需人工复核 · 未发布自动概率" in html
+    assert "<td class=\"right\">未发布</td>" in html
+    assert "AI 概率 0.0%" not in html
+    assert "真实概率 0.0%" not in html
 
 
 def test_image_detect_can_use_aliyun_primary_and_records_backend_model(client, monkeypatch, tmp_path):

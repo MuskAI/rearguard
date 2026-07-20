@@ -275,13 +275,18 @@ def model_health():
         _response_hmac_key() is not None
         and status["responseIntegrityKeyId"] is not None
     )
-    ready = (
+    runtime_ready = (
         bool(status.get("initialized"))
         and status.get("activeProvider") == "CUDAExecutionProvider"
         and status["visiblePrecheckReady"]
         and status["responseIntegrityReady"]
     )
-    return jsonify({"code": 200 if ready else 503, "data": status}), 200 if ready else 503
+    decision_policy = status.get("modelDecisionPolicy") if isinstance(status.get("modelDecisionPolicy"), dict) else {}
+    status["runtimeReady"] = runtime_ready
+    status["verdictReady"] = bool(decision_policy.get("ready"))
+    status["decisionMode"] = str(decision_policy.get("mode") or "review_only")
+    status["decisionGateReasons"] = [str(item) for item in decision_policy.get("gateReasons") or []]
+    return jsonify({"code": 200 if runtime_ready else 503, "data": status}), 200 if runtime_ready else 503
 
 
 @model_inference_blueprint.post("/internal/model/predict")

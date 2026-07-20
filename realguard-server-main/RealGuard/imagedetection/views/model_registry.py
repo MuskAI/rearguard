@@ -701,6 +701,9 @@ def check_model_health(model):
                     "activeProvider": str(remote.get("activeProvider") or payload.get("activeProvider") or ""),
                     "cudaDeviceId": remote.get("cudaDeviceId", payload.get("cudaDeviceId")),
                     "remoteReady": remote.get("ready"),
+                    "verdictReady": remote.get("verdictReady", payload.get("verdictReady")),
+                    "decisionMode": str(remote.get("decisionMode") or payload.get("decisionMode") or "review_only"),
+                    "decisionGateReasons": list(remote.get("decisionGateReasons") or payload.get("decisionGateReasons") or []),
                     "remoteLatencyMs": remote.get("latencyMs"),
                     "queueDepth": payload.get("queueDepth"),
                     "gpu": payload.get("gpu") if isinstance(payload.get("gpu"), dict) else None,
@@ -721,6 +724,8 @@ def check_model_health(model):
             status["warnings"].append(warning)
     status["artifacts"] = artifacts
     status["capabilityReady"] = status["artifactReady"] and status["dependencyReady"]
+    telemetry = status.get("telemetry") if isinstance(status.get("telemetry"), dict) else {}
+    status["verdictReady"] = telemetry.get("verdictReady") is True
     status["ok"] = status["serviceOk"] and status["capabilityReady"]
     if status["serviceOk"] and not status["capabilityReady"]:
         status["message"] = "service reachable but model capability is not ready"

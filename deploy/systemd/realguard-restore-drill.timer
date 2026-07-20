@@ -1,0 +1,11 @@
+[Unit]
+Description=Run a RealGuard restore verification every week
+
+[Timer]
+OnCalendar=Sun *-*-* 04:30:00 Asia/Shanghai
+RandomizedDelaySec=30m
+Persistent=true
+Unit=realguard-restore-drill.service
+
+[Install]
+WantedBy=timers.target

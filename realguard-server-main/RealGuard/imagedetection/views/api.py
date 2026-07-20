@@ -9,7 +9,7 @@ import secrets
 import time
 import uuid
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 
@@ -29,6 +29,7 @@ from imagedetection.views.login import (
     _is_valid_phone,
     _reserve_password_login_attempt,
     _record_terms_acceptance as _append_terms_acceptance,
+    revoke_current_user_sessions,
     _session_version,
     _sync_detection_user,
     _user_session_payload,
@@ -39,7 +40,6 @@ from imagedetection.views.utils import (
     detection_owner_where,
     excute_detection_sql,
     excute_sql,
-    excute_sql_lastid,
     format_createtime,
     get_db_connection,
     get_detection_db_connection,
@@ -93,6 +93,7 @@ TERMS_VERSION = os.environ.get("REALGUARD_TERMS_VERSION", "2026-07-15")
 PASSWORD_MIN_LENGTH = int(os.environ.get("REALGUARD_PASSWORD_MIN_LENGTH", "8"))
 _DEVELOPER_KEY_TABLE_READY = False
 _DEVELOPER_USAGE_TABLE_READY = False
+_SECURITY_AUDIT_TABLES_READY = False
 _USER_ACCOUNT_COLUMNS_READY = False
 
 
@@ -226,6 +227,231 @@ def _developer_key_payload(row):
         "expiresAt": format_createtime(row.get("expires_at", "")),
         "ipAllowlist": _developer_ip_allowlist(row.get("ip_allowlist")),
     }
+
+
+def _security_audit_key():
+    raw = str(os.environ.get("REALGUARD_SECURITY_AUDIT_HMAC_KEY") or "").strip().lower()
+    if len(raw) != 64 or any(char not in "0123456789abcdef" for char in raw):
+        raise RuntimeError("dedicated security audit HMAC key must be 64 hexadecimal characters")
+    return bytes.fromhex(raw)
+
+
+def _append_security_audit(cursor, actor_type, actor_id, action, target, meta=None):
+    event_id = str(uuid.uuid4())
+    occurred_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    key_id = str(os.environ.get("REALGUARD_SECURITY_AUDIT_HMAC_KEY_ID") or "session-v1")[:64]
+    metadata = json.dumps(meta or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    cursor.execute(
+        "INSERT IGNORE INTO security_audit_chain_head (id, last_event_hash) VALUES (1, %s)",
+        ("0" * 64,),
+    )
+    cursor.execute("SELECT last_event_hash FROM security_audit_chain_head WHERE id = 1 FOR UPDATE")
+    head = cursor.fetchone() or {}
+    previous_hash = str(head.get("last_event_hash") or "0" * 64)
+    canonical = json.dumps(
+        {
+            "eventId": event_id,
+            "occurredAt": occurred_at,
+            "actorType": str(actor_type),
+            "actorId": str(actor_id),
+            "action": str(action),
+            "target": str(target),
+            "meta": json.loads(metadata),
+            "previousHash": previous_hash,
+            "keyId": key_id,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    event_hash = hmac.new(_security_audit_key(), canonical.encode("utf-8"), hashlib.sha256).hexdigest()
+    cursor.execute(
+        """
+        INSERT INTO security_audit_events (
+            event_id, occurred_at, actor_type, actor_id, action, target,
+            meta_json, previous_hash, event_hash, key_id
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            event_id, occurred_at, str(actor_type)[:32], str(actor_id)[:64],
+            str(action)[:96], str(target)[:191], metadata, previous_hash, event_hash, key_id,
+        ),
+    )
+    cursor.execute(
+        "UPDATE security_audit_chain_head SET last_event_hash = %s, updated_at = NOW(6) WHERE id = 1",
+        (event_hash,),
+    )
+    if cursor.rowcount != 1:
+        raise RuntimeError("security audit chain head update failed")
+    return event_id
+
+
+def _security_audit_keyring():
+    current_id = str(os.environ.get("REALGUARD_SECURITY_AUDIT_HMAC_KEY_ID") or "").strip()
+    if not current_id:
+        raise RuntimeError("security audit HMAC key id is missing")
+    keys = {current_id: _security_audit_key()}
+    raw = str(os.environ.get("REALGUARD_SECURITY_AUDIT_HMAC_KEYS_JSON") or "{}").strip()
+    try:
+        historical = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("security audit HMAC keyring is invalid") from exc
+    if not isinstance(historical, dict):
+        raise RuntimeError("security audit HMAC keyring must be an object")
+    for key_id, value in historical.items():
+        encoded = str(value or "").strip().lower()
+        if len(encoded) != 64 or any(char not in "0123456789abcdef" for char in encoded):
+            raise RuntimeError(f"security audit historical key is invalid: {key_id}")
+        keys[str(key_id)] = bytes.fromhex(encoded)
+    return keys
+
+
+def _security_audit_checkpoint_hmac(payload):
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hmac.new(_security_audit_key(), canonical.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def verify_security_audit_chain(*, allow_bootstrap=False):
+    """Verify the full chain and a filesystem checkpoint outside the database."""
+    status_path = Path(os.environ.get(
+        "REALGUARD_SECURITY_AUDIT_STATUS_FILE", "/opt/realguard-data/security-audit-status.json"
+    ))
+    checkpoint_path = Path(os.environ.get(
+        "REALGUARD_SECURITY_AUDIT_CHECKPOINT_FILE", "/opt/realguard-audit-checkpoint/checkpoint.json"
+    ))
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        keys = _security_audit_keyring()
+        rows = excute_sql(
+            "SELECT id, event_id, occurred_at, actor_type, actor_id, action, target, meta_json, "
+            "previous_hash, event_hash, key_id FROM security_audit_events ORDER BY id ASC"
+        )
+        heads = excute_sql("SELECT last_event_hash FROM security_audit_chain_head WHERE id = 1 LIMIT 1")
+        if rows is None or heads is None:
+            raise RuntimeError("security audit storage unavailable")
+        previous = "0" * 64
+        event_hashes = set()
+        for row in rows:
+            if not hmac.compare_digest(str(row.get("previous_hash") or ""), previous):
+                raise RuntimeError(f"audit chain link mismatch at event {row.get('id')}")
+            key = keys.get(str(row.get("key_id") or ""))
+            if key is None:
+                raise RuntimeError(f"unknown audit key id at event {row.get('id')}")
+            try:
+                meta = json.loads(row.get("meta_json") or "{}")
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(f"invalid audit metadata at event {row.get('id')}") from exc
+            canonical = json.dumps({
+                "eventId": str(row.get("event_id") or ""),
+                "occurredAt": str(row.get("occurred_at") or ""),
+                "actorType": str(row.get("actor_type") or ""),
+                "actorId": str(row.get("actor_id") or ""),
+                "action": str(row.get("action") or ""),
+                "target": str(row.get("target") or ""),
+                "meta": meta,
+                "previousHash": previous,
+                "keyId": str(row.get("key_id") or ""),
+            }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            expected = hmac.new(key, canonical.encode("utf-8"), hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(expected, str(row.get("event_hash") or "")):
+                raise RuntimeError(f"audit event HMAC mismatch at event {row.get('id')}")
+            previous = expected
+            event_hashes.add(expected)
+        database_head = str((heads[0] if heads else {}).get("last_event_hash") or "0" * 64)
+        if not hmac.compare_digest(database_head, previous):
+            raise RuntimeError("audit chain head mismatch")
+        checkpoint = {}
+        if checkpoint_path.exists() and (not checkpoint_path.is_file() or checkpoint_path.is_symlink()):
+            raise RuntimeError("audit checkpoint is not a safe regular file")
+        if checkpoint_path.is_file():
+            checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+            signature = checkpoint.pop("hmacSha256", "")
+            if not hmac.compare_digest(_security_audit_checkpoint_hmac(checkpoint), str(signature)):
+                raise RuntimeError("audit checkpoint HMAC mismatch")
+            if len(rows) < int(checkpoint.get("eventCount") or 0):
+                raise RuntimeError("audit event count moved backwards")
+            old_hash = str(checkpoint.get("lastEventHash") or "")
+            if old_hash and old_hash not in event_hashes:
+                raise RuntimeError("audit checkpoint event disappeared")
+        elif not allow_bootstrap:
+            raise RuntimeError("audit checkpoint is missing; explicit bootstrap is required")
+        checkpoint = {
+            "schemaVersion": 1,
+            "eventCount": len(rows),
+            "lastEventId": int(rows[-1].get("id")) if rows else 0,
+            "lastEventHash": previous,
+            "updatedAt": now,
+        }
+        checkpoint["hmacSha256"] = _security_audit_checkpoint_hmac(checkpoint)
+        _write_security_audit_json(checkpoint_path, checkpoint, 0o600)
+        result = {"schemaVersion": 1, "state": "passed", "updatedAt": now, **checkpoint}
+        result.pop("hmacSha256", None)
+        _write_security_audit_json(status_path, result, 0o644)
+        return result
+    except Exception as exc:
+        result = {
+            "schemaVersion": 1,
+            "state": "failed",
+            "updatedAt": now,
+            "lastError": str(exc)[:1000],
+        }
+        _write_security_audit_json(status_path, result, 0o644)
+        return result
+
+
+def _write_security_audit_json(path, payload, mode):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=True, separators=(",", ":"))
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, mode)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _ensure_security_audit_tables():
+    global _SECURITY_AUDIT_TABLES_READY
+    if _SECURITY_AUDIT_TABLES_READY:
+        return True
+    statements = (
+        """
+        CREATE TABLE IF NOT EXISTS security_audit_chain_head (
+          id TINYINT NOT NULL,
+          last_event_hash CHAR(64) NOT NULL,
+          updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+          PRIMARY KEY (id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS security_audit_events (
+          id BIGINT NOT NULL AUTO_INCREMENT,
+          event_id CHAR(36) NOT NULL,
+          occurred_at VARCHAR(32) NOT NULL,
+          actor_type VARCHAR(32) NOT NULL,
+          actor_id VARCHAR(64) NOT NULL,
+          action VARCHAR(96) NOT NULL,
+          target VARCHAR(191) NOT NULL,
+          meta_json LONGTEXT NOT NULL,
+          previous_hash CHAR(64) NOT NULL,
+          event_hash CHAR(64) NOT NULL,
+          key_id VARCHAR(64) NOT NULL,
+          PRIMARY KEY (id),
+          UNIQUE KEY uk_security_audit_event_id (event_id),
+          UNIQUE KEY uk_security_audit_event_hash (event_hash),
+          KEY idx_security_audit_actor_time (actor_type, actor_id, occurred_at),
+          KEY idx_security_audit_action_time (action, occurred_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """,
+    )
+    _SECURITY_AUDIT_TABLES_READY = all(
+        excute_sql(statement, fetch=False) is not None for statement in statements
+    )
+    return _SECURITY_AUDIT_TABLES_READY
 
 
 def _developer_ip_allowlist(raw):
@@ -364,28 +590,6 @@ def _developer_key_options(payload, *, fallback_name="Default key", fallback_sco
     }, None
 
 
-def _issue_developer_key(user_id, options):
-    api_key = f"{DEVELOPER_API_KEY_PREFIX}{secrets.token_urlsafe(32)}"
-    row_id = excute_sql_lastid(
-        """
-        INSERT INTO developer_api_keys
-            (user_id, name, key_hash, key_prefix, key_last4, scopes, status, expires_at, ip_allowlist)
-        VALUES (%s, %s, %s, %s, %s, %s, 'active', %s, %s)
-        """,
-        (
-            user_id,
-            options["name"],
-            _developer_key_hash(api_key),
-            DEVELOPER_API_KEY_PREFIX,
-            api_key[-4:],
-            options["scopes"],
-            options["expires_at"],
-            options["ip_allowlist"],
-        ),
-    )
-    return api_key, row_id
-
-
 def _create_developer_key_with_limit(user_id, options):
     """Serialize the active-key limit and insert on the owning account row."""
     conn = None
@@ -467,6 +671,14 @@ def _create_developer_key_with_limit(user_id, options):
             row = cursor.fetchone()
             if not row:
                 raise RuntimeError("API Key 写入后无法读取")
+            _append_security_audit(
+                cursor,
+                "account",
+                user_id,
+                "developer_api_key.create",
+                f"key:{row_id}",
+                {"name": options["name"], "scopes": options["scopes"], "last4": api_key[-4:]},
+            )
         conn.commit()
         return api_key, row, None
     except Exception as exc:
@@ -579,6 +791,14 @@ def _rotate_developer_key_atomic(user_id, key_id, payload):
                 (row_id, user_id),
             )
             row = cursor.fetchone()
+            _append_security_audit(
+                cursor,
+                "account",
+                user_id,
+                "developer_api_key.rotate",
+                f"key:{key_id}",
+                {"replacementKeyId": row_id, "scopes": options["scopes"], "last4": api_key[-4:]},
+            )
         conn.commit()
         return api_key, row, None, 200
     except Exception as exc:
@@ -586,6 +806,48 @@ def _rotate_developer_key_atomic(user_id, key_id, payload):
             conn.rollback()
         print(f"[API KEY ROTATE ERROR] {exc}")
         return None, None, "轮换 API Key 失败，请稍后重试", 500
+    finally:
+        if conn:
+            conn.close()
+
+
+def _revoke_developer_key_atomic(user_id, key_id):
+    conn = None
+    try:
+        conn = get_db_connection()
+        conn.begin()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT id, name, scopes, status FROM developer_api_keys "
+                "WHERE id = %s AND user_id = %s LIMIT 1 FOR UPDATE",
+                (key_id, user_id),
+            )
+            current = cursor.fetchone()
+            if not current or current.get("status") != "active":
+                conn.rollback()
+                return False, "API Key 不存在或已撤销", 404
+            cursor.execute(
+                "UPDATE developer_api_keys SET status = 'revoked', revoked_at = NOW() "
+                "WHERE id = %s AND user_id = %s AND status = 'active'",
+                (key_id, user_id),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("API Key 状态已变化")
+            _append_security_audit(
+                cursor,
+                "account",
+                user_id,
+                "developer_api_key.revoke",
+                f"key:{key_id}",
+                {"name": current.get("name") or "", "scopes": current.get("scopes") or ""},
+            )
+        conn.commit()
+        return True, None, 200
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        print(f"[API KEY REVOKE ERROR] {exc}")
+        return False, "撤销 API Key 失败，请稍后重试", 500
     finally:
         if conn:
             conn.close()
@@ -628,6 +890,7 @@ def _ensure_developer_api_key_table():
             _ensure_column("developer_api_keys", "expires_at", "DATETIME NULL COMMENT '密钥有效期'"),
             _ensure_column("developer_api_keys", "ip_allowlist", "TEXT NULL COMMENT '逗号分隔的 IP/CIDR 白名单'"),
             _ensure_column("developer_api_keys", "last_used_ip", "VARCHAR(64) NULL COMMENT '最近调用 IP'"),
+            _ensure_security_audit_tables(),
             admin_state.ensure_api_key_quota_storage(),
             admin_state.sync_api_key_quotas_to_db(),
         ))
@@ -1753,6 +2016,8 @@ def reset_password():
 
 @api_blueprint.route("/logout", methods=["POST"])
 def logout():
+    if not revoke_current_user_sessions():
+        return jsonify({"status": "error", "message": "退出失败，服务端会话尚未撤销"}), 503
     session.clear()
     return jsonify({"status": "success"})
 
@@ -1841,19 +2106,9 @@ def revoke_developer_api_key(key_id):
     if not _ensure_developer_api_key_table():
         return jsonify({"status": "error", "message": "API Key 存储初始化失败"}), 500
 
-    affected = excute_sql(
-        """
-        UPDATE developer_api_keys
-        SET status = 'revoked', revoked_at = NOW()
-        WHERE id = %s AND user_id = %s AND status = 'active'
-        """,
-        (key_id, user["Userid"]),
-        fetch=False,
-    )
-    if affected is None:
-        return jsonify({"status": "error", "message": "撤销 API Key 失败"}), 500
-    if affected == 0:
-        return jsonify({"status": "error", "message": "API Key 不存在或已撤销"}), 404
+    revoked, revoke_error, status = _revoke_developer_key_atomic(user["Userid"], key_id)
+    if not revoked:
+        return jsonify({"status": "error", "message": revoke_error}), status
     return jsonify({"status": "success", "revoked": key_id})
 
 

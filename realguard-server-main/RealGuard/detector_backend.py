@@ -171,6 +171,9 @@ def _remote_inference_status():
                 "modelSha256": data.get("modelSha256"),
                 "deploymentCommit": data.get("deploymentCommit"),
                 "responseIntegrityReady": data.get("responseIntegrityReady") is True,
+                "verdictReady": data.get("verdictReady") is True,
+                "decisionMode": str(data.get("decisionMode") or "review_only"),
+                "decisionGateReasons": [str(item) for item in data.get("decisionGateReasons") or []],
                 "latencyMs": round((time.perf_counter() - started) * 1000.0, 2),
                 "error": "" if ready else (payload.get("msg") or f"HTTP {response.status_code}"),
             }
@@ -184,6 +187,9 @@ def _remote_inference_status():
                 "modelSha256": None,
                 "deploymentCommit": None,
                 "responseIntegrityReady": False,
+                "verdictReady": False,
+                "decisionMode": "unavailable",
+                "decisionGateReasons": ["remote_model_health_unavailable"],
                 "latencyMs": round((time.perf_counter() - started) * 1000.0, 2),
                 "error": str(exc),
             }
@@ -201,6 +207,8 @@ def _capability_status():
     warnings.extend(f"missing runtime dependency: {item}" for item in dependencies["missing"])
     if using_remote and not remote["ready"]:
         warnings.append(f"remote CUDA inference unavailable: {remote.get('error') or 'unknown error'}")
+    if using_remote and remote["ready"] and not remote.get("verdictReady"):
+        warnings.append("remote model runtime is ready but automatic verdict calibration is not authorized")
     capability_ready = dependencies["ready"] and (
         remote["ready"] if using_remote else artifacts["ready"]
     )
@@ -209,6 +217,9 @@ def _capability_status():
         "artifactReady": artifacts["ready"],
         "dependencyReady": dependencies["ready"],
         "capabilityReady": capability_ready,
+        "verdictReady": bool(remote.get("verdictReady")) if using_remote else False,
+        "decisionMode": str(remote.get("decisionMode") or "review_only") if using_remote else "review_only",
+        "decisionGateReasons": list(remote.get("decisionGateReasons") or []) if using_remote else ["local_model_not_calibrated"],
         "inferenceMode": "remote-cuda" if using_remote else "local-onnx",
         "remoteInference": remote,
         "artifacts": {

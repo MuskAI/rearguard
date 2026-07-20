@@ -363,6 +363,14 @@ def _require_protected_access(request: Request) -> dict:
     raise HTTPException(status_code=401, detail="请先登录慧鉴 AI")
 
 
+def _require_actor_scope(actor: dict, scope: str) -> None:
+    if actor.get("mode") != "developer":
+        return
+    scopes = {str(item).strip() for item in actor.get("scopes") or [] if str(item).strip()}
+    if scope not in scopes:
+        raise HTTPException(status_code=403, detail=f"API Key 缺少权限范围：{scope}")
+
+
 def _request_developer_key(request: Request) -> str:
     bearer = request.headers.get("authorization", "").strip()
     if bearer.lower().startswith("bearer "):
@@ -462,8 +470,16 @@ def _require_internal_developer_auth(request: Request) -> None:
         raise HTTPException(status_code=403, detail="内部鉴权失败")
 
 
-def _require_owned_item(request: Request, item: dict, *, missing_detail: str) -> dict:
+def _require_owned_item(
+    request: Request,
+    item: dict,
+    *,
+    missing_detail: str,
+    required_scope: str | None = None,
+) -> dict:
     actor = _require_protected_access(request)
+    if required_scope:
+        _require_actor_scope(actor, required_scope)
     return _require_actor_owns_item(actor, item, missing_detail=missing_detail)
 
 
@@ -495,7 +511,12 @@ def _require_matching_history_upload(actor: dict, task_id: str, sha256: str) -> 
 
 
 def _require_report_access(request: Request, item: dict) -> dict:
-    return _require_owned_item(request, item, missing_detail="报告不存在")
+    return _require_owned_item(
+        request,
+        item,
+        missing_detail="报告不存在",
+        required_scope="reports",
+    )
 
 
 def _require_report_share_access(request: Request, item: dict) -> dict:
@@ -1147,6 +1168,7 @@ async def forensics(
             if cached
             else await run_in_threadpool(detector.explainable, data)
         )
+        report = detector.normalize_forensic_evidence(report)
     finally:
         _FORENSICS_SEMAPHORE.release()
 
@@ -1233,6 +1255,7 @@ async def provenance_check(
 @app.get("/api/history")
 def history(request: Request) -> dict:
     actor = _require_protected_access(request)
+    _require_actor_scope(actor, "reports")
     try:
         limit = int(request.query_params.get("limit", "100"))
     except ValueError:
@@ -1287,7 +1310,7 @@ def history_item(task_id: str, request: Request) -> dict:
     item = storage.get_history(task_id)
     if not item:
         raise HTTPException(status_code=404, detail="记录不存在")
-    _require_owned_item(request, item, missing_detail="记录不存在")
+    _require_owned_item(request, item, missing_detail="记录不存在", required_scope="reports")
     return _strip_internal_history_fields(item)
 
 
@@ -1296,7 +1319,7 @@ def history_artifacts(task_id: str, request: Request) -> dict:
     item = storage.get_history(task_id)
     if not item:
         raise HTTPException(status_code=404, detail="记录不存在")
-    _require_owned_item(request, item, missing_detail="记录不存在")
+    _require_owned_item(request, item, missing_detail="记录不存在", required_scope="reports")
     raise HTTPException(
         status_code=410,
         detail="客户端证据归档接口已停用；请在服务端取证请求中提交 taskId",
@@ -1308,7 +1331,7 @@ def delete_item(task_id: str, request: Request) -> dict:
     item = storage.get_history(task_id)
     if not item:
         raise HTTPException(status_code=404, detail="记录不存在")
-    _require_owned_item(request, item, missing_detail="记录不存在")
+    _require_owned_item(request, item, missing_detail="记录不存在", required_scope="reports")
     storage.delete_history(task_id)
     return {"deleted": task_id}
 

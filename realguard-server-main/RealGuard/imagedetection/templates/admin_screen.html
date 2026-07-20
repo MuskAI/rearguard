@@ -586,7 +586,7 @@
       const disk = host?.disk || {};
       const total = Number(services?.total) || 0;
       const online = Number(services?.online) || 0;
-      const algorithmStatus = algorithm?.status === 'healthy' ? '在线' : algorithm?.status === 'degraded' ? '降级' : algorithm?.status === 'offline' ? '离线' : '未知';
+      const algorithmStatus = algorithm?.status === 'healthy' ? '自动判定就绪' : algorithm?.status === 'degraded' && algorithm?.serviceReady && algorithm?.modelReady ? '人工复核' : algorithm?.status === 'degraded' ? '降级' : algorithm?.status === 'offline' ? '离线' : '未知';
       const algorithmPercent = algorithm?.status === 'healthy' ? 100 : algorithm?.status === 'degraded' ? 50 : 0;
       const provider = algorithm?.provider === 'CUDAExecutionProvider' ? 'CUDA' : (algorithm?.provider || '推理设备未知');
       const gpu = algorithm?.cudaDeviceId != null ? `GPU ${algorithm.cudaDeviceId}` : 'GPU 未识别';
@@ -596,7 +596,7 @@
         {label:'Web 服务器 · 内存',value:`${memory.usedPercent ?? '--'}%`,detail:`${formatBytes(memory.usedBytes)} / ${formatBytes(memory.totalBytes)}`,percent:memory.usedPercent,rows:[['节点','公网 Web 服务器'],['使用率',`${memory.usedPercent ?? '--'}%`],['已使用',formatBytes(memory.usedBytes)],['总容量',formatBytes(memory.totalBytes)]]},
         {label:'Web 服务器 · 系统盘',value:`${disk.usedPercent ?? '--'}%`,detail:`${formatBytes(disk.usedBytes)} / ${formatBytes(disk.totalBytes)}`,percent:disk.usedPercent,rows:[['节点','公网 Web 服务器'],['使用率',`${disk.usedPercent ?? '--'}%`],['已使用',formatBytes(disk.usedBytes)],['总容量',formatBytes(disk.totalBytes)]]},
         {label:'Web 服务器 · 运行时长',value:formatDuration(host?.uptimeSeconds),detail:`Web 进程 ${formatDuration(host?.processUptimeSeconds)}`,rows:[['节点','公网 Web 服务器'],['系统运行',formatDuration(host?.uptimeSeconds)],['Web 进程',formatDuration(host?.processUptimeSeconds)]]},
-        {label:'算法服务器 · 主鉴伪',value:algorithmStatus,detail:algorithm?.modelName || '未配置主模型',percent:algorithmPercent,inverse:true,rows:[['节点','后端算法服务器'],['运行状态',algorithmStatus],['主模型',algorithm?.modelName || '-'],['模型服务',`${online}/${total || '--'} 在线`],['降级 / 离线',`${services?.degraded ?? 0} / ${services?.offline ?? 0}`]]},
+        {label:'算法服务器 · 主鉴伪',value:algorithmStatus,detail:algorithm?.modelName || '未配置主模型',percent:algorithmPercent,inverse:true,rows:[['节点','后端算法服务器'],['运行状态',algorithmStatus],['主模型',algorithm?.modelName || '-'],['结论模式',algorithm?.decisionMode || 'review_only'],['校准门禁',algorithm?.verdictReady ? '已通过' : '未通过'],['门禁原因',(algorithm?.decisionGateReasons || []).join('；') || '-'],['模型服务',`${online}/${total || '--'} 在线`],['降级 / 离线',`${services?.degraded ?? 0} / ${services?.offline ?? 0}`]]},
         {label:'算法服务器 · GPU 推理',value:`${provider} · ${gpu}`,detail:`探测 ${remoteLatency}`,percent:algorithmPercent,inverse:true,rows:[['节点','后端算法服务器'],['推理设备',provider],['GPU',gpu],['远端探测',remoteLatency],['队列深度',algorithm?.queueDepth ?? '--']]},
       ];
       $('runtime').innerHTML = ui.runtimeItems.map(runtimeItem).join('');

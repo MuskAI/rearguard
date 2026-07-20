@@ -889,21 +889,9 @@ def _record_model_run(itemid, data, user_info):
             else {}
         )
         if model_run:
-            meta['inferenceAudit'] = {
-                'model': str(model_run.get('model') or '')[:160],
-                'rawModelScore': model_run.get('rawModelScore'),
-                'publishedProbability': model_run.get('fakeProbability'),
-                'fakeProbability': model_run.get('fakeProbability'),
-                'finalLabel': str(model_run.get('finalLabel') or '')[:64],
-                'originalSize': copy.deepcopy(model_run.get('originalSize')),
-                'processedSize': copy.deepcopy(model_run.get('processedSize')),
-                'downsample': copy.deepcopy(model_run.get('downsample')),
-                'chunkCount': model_run.get('chunkCount'),
-                'parameters': copy.deepcopy(model_run.get('parameters')),
-                'runtime': copy.deepcopy(model_run.get('runtime')),
-                'inputImageSha256': str(model_run.get('inputImageSha256') or '')[:64],
-                'responseIntegrity': copy.deepcopy(model_run.get('responseIntegrity')),
-            }
+            # The HMAC seal covers this exact object. Reconstructing or renaming
+            # fields here would make a valid persisted audit unverifiable.
+            meta['inferenceAudit'] = copy.deepcopy(model_run)
         admin_state.append_model_run(
             itemid,
             model,

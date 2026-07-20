@@ -569,9 +569,16 @@ sudo /usr/local/sbin/realguard-restore-verify /var/backups/realguard/latest
 ```bash
 REALGUARD_BACKUP_RETENTION_DAYS=14
 REALGUARD_BACKUP_RCLONE_REMOTE=remote-name:realguard-backups
+REALGUARD_BACKUP_REQUIRE_OFFSITE=1
+REALGUARD_BACKUP_REQUIRE_ALL_SOURCES=1
+REALGUARD_BACKUP_STATUS_FILE=/opt/realguard-data/backup-status.json
+REALGUARD_BACKUP_MAX_AGE_SECONDS=129600
 ```
 
 备份脚本会在异地上传后执行 `rclone check --one-way`，校验失败则整次备份任务失败。
+商用环境必须启用两个 `REQUIRE_*` 开关；此时异地目标缺失、任一数据库/上传目录/证据目录
+缺失或远端校验失败都会阻止 `latest` 指针更新。后台读取不含密钥的备份状态凭证，超过
+36 小时未成功或异地副本未验证会触发关键告警。
 每季度应先把异地快照下载到服务器上的隔离目录，再执行
 `realguard-restore-verify /path/to/snapshot`。该命令会把两份 MySQL 备份恢复到随机临时库，
 运行扩展表检查和 SQLite 完整性检查，安全解包上传原件与证据清单，写入
@@ -693,12 +700,24 @@ WHERE owner_account_uuid IS NULL OR owner_account_uuid = '';
 
 ## 已知问题和待办
 
-- 生产库当前有 699 条旧图像记录尚未绑定 `account_uuid`。它们默认对用户不可见，不能按手机号或 openid 自动猜测归属，需人工核实映射或按留存策略归档。
+- 生产库当前有 699 条旧图像和 58 条旧视频记录尚未绑定 `account_uuid`。它们默认对用户不可见，不能按手机号或 openid 自动猜测归属。认领必须经过 `operator` 申请、`reviewer` 审批，校验原媒体 SHA-256、治理证据文件 SHA-256、目标账号锁和 HMAC 完整性；错误申请应先驳回释放，再重新提交。
 - 当前 66 主模型在少量已知实拍样本上存在系统性高分误判，自动真假结论已由 `model_decision_policy.py` 关闭。必须完成独立校准集的标签/预处理/FP32-INT8 对齐、FPR/FNR 和阈值验收后，才能配置校准记录并开放自动判定。
 - 网页端快速检测、Swarm 与开发者 API 已由独立持久 worker 执行。当前单机总执行并发固定为 2；扩展到多 worker 或多 GPU 前必须重新验证通道公平、租约恢复和容量报告。
 - V1 图像 PDF 已有首次固化签名清单；视频报告和 V2 深度取证报告还没有统一到同一套证据签名、密钥轮换和验签策略，不能宣称达到司法取证级。
 - Umami 监控后台不在 `deploy_v1.sh` / `deploy_v2.sh` 自动发布范围内。
-- 自动备份已提供，但异地 `rclone`、KMS/HSM 或 WORM 存储以及季度恢复演练仍需由运维配置并留档。
+- 本地自动备份、每周隔离恢复演练、独立告警 worker、dead-man watchdog 和安全审计链校验 timer 已纳入部署。异地 `rclone`、KMS/HSM、WORM/对象锁检查点及双机容灾仍需由运维配置并留档；未配置时后台必须保持红色告警，不得宣称完成商用灾备。
+
+遗留历史认领使用精确记录接口，不提供批量猜测或按手机号自动回填：
+
+```text
+GET  /api/admin/legacy-history/{data|video_data}/{itemid}
+GET  /api/admin/legacy-history/target-account/{user_id}
+POST /api/admin/legacy-history/claims
+POST /api/admin/legacy-history/claims/{claim_id}/approve
+POST /api/admin/legacy-history/claims/{claim_id}/reject
+```
+
+证据文件须由运维先放入 `/opt/realguard-data/legacy-governance-evidence/`，接口只接受该目录内的相对路径和匹配的 SHA-256。`super_admin` 与普通 `admin` 均不能申请或审批，避免管理权限与数据认领权限合并。
 
 ## Git 工作流
 
@@ -788,6 +807,10 @@ DEPLOY_SSH_KEY=/path/to/private_key ./scripts/check_deploy_status.sh
 ```bash
 systemctl is-active realguard-backend.service
 systemctl is-active realguard-detector-backend.service
+systemctl is-active realguard-alert-worker.service
+systemctl is-active realguard-alert-watchdog.timer
+systemctl is-active realguard-restore-drill.timer
+systemctl is-active realguard-security-audit-verify.timer
 systemctl is-active jianzhen-v2-backend.service
 sudo nginx -t
 ```

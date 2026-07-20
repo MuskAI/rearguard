@@ -183,13 +183,19 @@ def _render_forensics_block(forensics: dict | None) -> str:
         items.append('<tr><td colspan="3" class="muted">未附带取证分析条目</td></tr>')
     source = _safe_text(forensics.get("source"))
     model = _safe_text(forensics.get("modelVersion"))
+    authorized = (
+        forensics.get("decisionStatus") == "verdict"
+        and forensics.get("decisionAuthority") not in (None, "", "none", "evidence_only")
+    )
+    conclusion = _safe_text(forensics.get("verdict")) if authorized else "仅供人工复核"
+    confidence = _fmt_percent(forensics.get("confidence")) if authorized else "不提供"
     return f"""
     <section class="card">
       <h2>可解释性取证分析</h2>
       <p>{escape(_safe_text(forensics.get("summary"), "未附带综合取证总结"))}</p>
       <div class="meta-grid compact">
-        <div><span>结论</span><strong>{escape(_safe_text(forensics.get("verdict")))}</strong></div>
-        <div><span>置信度</span><strong>{_fmt_percent(forensics.get("confidence"))}</strong></div>
+        <div><span>结论权限</span><strong>{escape(conclusion)}</strong></div>
+        <div><span>自动置信度</span><strong>{confidence}</strong></div>
         <div><span>来源</span><strong>{escape(model if source == 'vlm' else source)}</strong></div>
       </div>
       <table>
@@ -198,6 +204,7 @@ def _render_forensics_block(forensics: dict | None) -> str:
         </thead>
         <tbody>{''.join(items)}</tbody>
       </table>
+      <p class="footnote">取证图谱用于展示可复核现象，本模块未获得自动真假判定权限。</p>
     </section>
     """
 

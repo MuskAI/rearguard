@@ -359,6 +359,31 @@ def validate_current_user_session(*, allow_legacy=False):
     return True
 
 
+def revoke_current_user_sessions():
+    """Invalidate every signed cookie for the current account before logout."""
+    user_info = session.get('user_info')
+    if not isinstance(user_info, dict):
+        return True
+    account_uuid = normalize_account_uuid(user_info.get('account_uuid'))
+    user_id = user_info.get('Userid') or user_info.get('userId') or user_info.get('id')
+    try:
+        session_version = int(user_info.get('session_version'))
+    except (TypeError, ValueError):
+        return False
+    if not account_uuid or user_id in (None, ''):
+        return False
+    affected = excute_sql(
+        """
+        UPDATE user
+        SET session_version = session_version + 1
+        WHERE Userid = %s AND account_uuid = %s AND session_version = %s
+        """,
+        (user_id, account_uuid, session_version),
+        fetch=False,
+    )
+    return affected == 1
+
+
 def _ensure_sms_storage():
     global _SMS_STORAGE_READY
     if _SMS_STORAGE_READY:
@@ -1109,5 +1134,7 @@ def register_verify():
 
 @login_blueprint.route('/logout', methods=['POST'])
 def logout():
+    if not revoke_current_user_sessions():
+        return render_template('login.html', error='退出失败，服务端会话尚未撤销，请稍后重试'), 503
     session.clear()
     return redirect('/login')

@@ -75,6 +75,29 @@ def _forensic_analysis() -> dict:
     }
 
 
+def test_forensic_normalizer_hides_natural_language_verdicts():
+    from app import detector
+
+    normalized = detector.normalize_forensic_evidence({
+        "items": [{
+            "key": "spectrum",
+            "status": "danger",
+            "finding": "综合判定该图为AI生成，置信度95%",
+        }],
+    })
+
+    assert normalized["decisionStatus"] == "review_only"
+    assert normalized["items"][0]["status"] == "warn"
+    assert "AI生成" not in normalized["items"][0]["finding"]
+    assert "95" not in normalized["items"][0]["finding"]
+
+    bypass = detector.normalize_forensic_evidence({
+        "items": [{"key": "spectrum", "status": "danger", "finding": "画面源自扩散模型，机器合成特征明确"}],
+    })
+    assert "扩散模型" not in bypass["items"][0]["finding"]
+    assert "机器合成" not in bypass["items"][0]["finding"]
+
+
 @pytest.fixture
 def client(monkeypatch, tmp_path):
     monkeypatch.setenv("JIANZHEN_ACCESS_TOKEN", "internal-token")
@@ -115,6 +138,14 @@ def developer_key_client(monkeypatch, tmp_path):
     monkeypatch.setattr(main.detector, "analyze", _stable_vlm_analyze)
 
     def fake_verify(api_key, request):
+        if api_key == "rg_sk_fast_only":
+            return {
+                "mode": "developer",
+                "keyId": 303,
+                "userId": 1,
+                "accountUuid": "11111111-1111-4111-8111-111111111111",
+                "scopes": ["image:fast"],
+            }
         if api_key == "rg_sk_user1":
             return {
                 "mode": "developer",
@@ -135,6 +166,22 @@ def developer_key_client(monkeypatch, tmp_path):
 
     monkeypatch.setattr(main, "_verify_developer_key_sync", fake_verify)
     return TestClient(main.app, client=("127.0.0.1", 50000))
+
+
+def test_fast_only_developer_key_cannot_read_history_or_reports(developer_key_client):
+    detection = developer_key_client.post(
+        "/api/detect",
+        headers={"X-RealGuard-Key": "rg_sk_user1"},
+        files={"file": ("sample.txt", b"scope isolation", "text/plain")},
+    )
+    assert detection.status_code == 200
+    report_id = detection.json()["reportId"]
+    headers = {"X-RealGuard-Key": "rg_sk_fast_only"}
+
+    assert developer_key_client.get("/api/history", headers=headers).status_code == 403
+    assert developer_key_client.get(f"/api/report/{report_id}", headers=headers).status_code == 403
+    assert developer_key_client.get(f"/api/report/{report_id}/download", headers=headers).status_code == 403
+    assert developer_key_client.post(f"/api/report/{report_id}/share", headers=headers).status_code == 403
 
 
 def test_metrics_requires_token(client):
@@ -225,6 +272,12 @@ def test_forensics_cache_is_scoped_by_user_and_does_not_leak_filename(developer_
     assert same_user.status_code == 200
     assert new_model.status_code == 200
     assert calls == 3
+    for response in (first, other_user, same_user, new_model):
+        assert response.json()["decisionStatus"] == "review_only"
+        assert response.json()["decisionAuthority"] == "evidence_only"
+        assert response.json()["reviewRequired"] is True
+        assert "verdict" not in response.json()
+        assert "confidence" not in response.json()
     assert "cacheHit" not in first.json()
     assert "cacheHit" not in other_user.json()
     assert "cacheHit" not in same_user.json()
@@ -1460,7 +1513,11 @@ def test_history_artifacts_are_persisted_only_by_server_analysis(client, monkeyp
     assert listing.json()["items"][0]["hasProvenance"] is True
     assert history.status_code == 200
     payload = history.json()
-    assert payload["forensics"]["summary"] == "pytest 取证判读"
+    assert payload["forensics"]["summary"].endswith("不形成内容真假的自动结论。")
+    assert payload["forensics"]["decisionStatus"] == "review_only"
+    assert payload["forensics"]["decisionAuthority"] == "evidence_only"
+    assert "verdict" not in payload["forensics"]
+    assert "confidence" not in payload["forensics"]
     assert payload["provenance"]["validationState"] == "none"
     assert download.status_code == 200
     assert download.headers["content-type"].startswith("application/pdf")

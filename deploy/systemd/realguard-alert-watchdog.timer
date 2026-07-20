@@ -1,0 +1,12 @@
+[Unit]
+Description=Check the RealGuard alert worker every minute
+
+[Timer]
+OnBootSec=2m
+OnUnitActiveSec=1m
+AccuracySec=10s
+Persistent=true
+Unit=realguard-alert-watchdog.service
+
+[Install]
+WantedBy=timers.target

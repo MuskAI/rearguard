@@ -11,9 +11,10 @@ import secrets
 import shutil
 import socket
 import ssl
+import stat
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from http.client import HTTPResponse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from urllib.parse import urlparse
@@ -30,11 +31,17 @@ from imagedetection.views import (
     traffic_geo,
 )
 from imagedetection.views.utils import (
+    LegacyGovernanceError,
+    approve_legacy_record_claim,
     detection_owner_where,
     excute_detection_sql,
     excute_sql,
     format_createtime,
     get_db_connection,
+    legacy_record_preview,
+    list_legacy_record_claims,
+    reject_legacy_record_claim,
+    request_legacy_record_claim,
 )
 
 
@@ -145,10 +152,17 @@ ALL_ADMIN_PERMISSIONS = {
     "detection.review",
     "api_key.manage",
     "data.export",
+    "legacy_history.view",
+    "legacy_history.request",
+    "legacy_history.approve",
 }
 ADMIN_ROLE_PERMISSIONS = {
-    "super_admin": {"*"},
-    "admin": ALL_ADMIN_PERMISSIONS - {"admin.manage"},
+    "super_admin": ALL_ADMIN_PERMISSIONS - {
+        "legacy_history.request", "legacy_history.approve",
+    },
+    "admin": ALL_ADMIN_PERMISSIONS - {
+        "admin.manage", "legacy_history.request", "legacy_history.approve",
+    },
     "operator": {
         "view",
         "detection.view",
@@ -160,8 +174,13 @@ ADMIN_ROLE_PERMISSIONS = {
         "routing.manage",
         "detection.review",
         "data.export",
+        "legacy_history.view",
+        "legacy_history.request",
     },
-    "reviewer": {"view", "detection.view", "detection.review", "data.export"},
+    "reviewer": {
+        "view", "detection.view", "detection.review", "data.export",
+        "legacy_history.view", "legacy_history.approve",
+    },
     "readonly": {"view"},
 }
 BIG_SCREEN_CACHE_TTL_SECONDS = int(os.environ.get("REALGUARD_BIG_SCREEN_CACHE_SECONDS", "15"))
@@ -175,6 +194,8 @@ _ALERT_WORKER_THREAD = None
 PROBE_PNG_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
 )
+BACKUP_STATUS_MAX_BYTES = 16384
+ASSURANCE_STATUS_MAX_BYTES = 16384
 
 
 def _current_user():
@@ -273,6 +294,56 @@ def _permission_error(permission):
     }), 403
 
 
+def _legacy_governance_error(exc):
+    status = {
+        "not_found": 404,
+        "account_not_found": 404,
+        "already_owned": 409,
+        "already_processed": 409,
+        "duplicate_request": 409,
+        "duplicate_approval": 409,
+        "media_mismatch": 409,
+        "evidence_mismatch": 409,
+        "account_changed": 409,
+        "exif_owner_conflict": 409,
+        "audit_integrity_failed": 409,
+        "fingerprint_mismatch": 409,
+        "version_mismatch": 409,
+        "write_conflict": 409,
+        "separation_of_duties": 403,
+        "named_admin_required": 403,
+        "verified_identity_required": 403,
+        "audit_unavailable": 503,
+        "media_unverifiable": 422,
+        "evidence_unverifiable": 422,
+    }.get(getattr(exc, "code", ""), 400)
+    return jsonify({"status": "error", "code": getattr(exc, "code", "invalid_request"), "message": str(exc)}), status
+
+
+def _named_admin_actor(actor):
+    try:
+        admin_id = int((actor or {}).get("adminId") or 0)
+    except (TypeError, ValueError):
+        admin_id = 0
+    if admin_id <= 0 or (actor or {}).get("authType") != "admin_account":
+        raise LegacyGovernanceError("遗留数据治理必须使用实名后台管理员账号", "named_admin_required")
+    raw_phone = re.sub(r"[\s()-]", "", str((actor or {}).get("phone") or "").strip())
+    if raw_phone.startswith("+86"):
+        raw_phone = raw_phone[3:]
+    elif raw_phone.startswith("0086"):
+        raw_phone = raw_phone[4:]
+    if not re.fullmatch(r"1[3-9]\d{9}", raw_phone):
+        raise LegacyGovernanceError("遗留数据治理管理员必须绑定已验证的中国大陆手机号", "verified_identity_required")
+    identities = excute_sql(
+        "SELECT account_uuid FROM `user` WHERE phone = %s LIMIT 1",
+        (raw_phone,),
+    ) or []
+    identity = str((identities[0] if identities else {}).get("account_uuid") or "")
+    if not identity:
+        raise LegacyGovernanceError("管理员手机号尚未绑定已验证用户身份", "verified_identity_required")
+    return admin_id, str((actor or {}).get("username") or ""), identity
+
+
 def _admin_required(permission="view"):
     admin_user = _current_admin_user()
     if admin_user:
@@ -317,11 +388,7 @@ def _csrf_valid():
 
 def _screen_token_from_request():
     header_token = request.headers.get("X-RealGuard-Screen-Token") or ""
-    if header_token:
-        return header_token.strip()
-    if request.path == "/admin/screen":
-        return str(request.args.get("screenToken") or request.args.get("token") or "").strip()
-    return ""
+    return header_token.strip()
 
 
 def _configured_screen_token_digest():
@@ -1177,14 +1244,216 @@ def _deliver_alert_claim(claim, webhook_url):
     )
 
 
-def _alert_conditions(registry, models, assurance):
+def _parse_status_timestamp(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _backup_assurance(now=None):
+    path = os.environ.get(
+        "REALGUARD_BACKUP_STATUS_FILE",
+        "/opt/realguard-data/backup-status.json",
+    )
+    max_age_seconds = max(
+        3600,
+        int(os.environ.get("REALGUARD_BACKUP_MAX_AGE_SECONDS", "129600")),
+    )
+    payload = {}
+    read_error = ""
+    try:
+        file_stat = os.lstat(path)
+        if not stat.S_ISREG(file_stat.st_mode) or file_stat.st_nlink != 1:
+            raise ValueError("backup status must be a regular single-link file")
+        if file_stat.st_size > BACKUP_STATUS_MAX_BYTES:
+            raise ValueError("backup status exceeds size limit")
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if not isinstance(payload, dict) or payload.get("schemaVersion") != 1:
+            raise ValueError("unsupported backup status schema")
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        payload = {}
+        read_error = str(exc)
+
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    current = current.astimezone(timezone.utc)
+
+    def age_seconds(value):
+        parsed = _parse_status_timestamp(value)
+        if parsed is None:
+            return None
+        return max(0, int((current - parsed).total_seconds()))
+
+    state = str(payload.get("state") or "missing")
+    last_success_at = str(payload.get("lastSuccessAt") or "")
+    last_offsite_success_at = str(payload.get("lastOffsiteSuccessAt") or "")
+    local_age = age_seconds(last_success_at)
+    offsite_age = age_seconds(last_offsite_success_at)
+    offsite_configured = payload.get("offsiteConfigured") is True
+    offsite_verified = payload.get("offsiteVerified") is True
+    return {
+        "state": state,
+        "updatedAt": str(payload.get("updatedAt") or ""),
+        "snapshot": str(payload.get("snapshot") or ""),
+        "lastSuccessAt": last_success_at,
+        "lastOffsiteSuccessAt": last_offsite_success_at,
+        "localAgeSeconds": local_age,
+        "offsiteAgeSeconds": offsite_age,
+        "maxAgeSeconds": max_age_seconds,
+        "localFresh": bool(local_age is not None and local_age <= max_age_seconds),
+        "offsiteConfigured": offsite_configured,
+        "offsiteVerified": offsite_verified,
+        "offsiteFresh": bool(
+            offsite_configured
+            and offsite_verified
+            and offsite_age is not None
+            and offsite_age <= max_age_seconds
+        ),
+        "readError": read_error,
+    }
+
+
+def _read_assurance_status(path, schema_version=1):
+    try:
+        file_stat = os.lstat(path)
+        if not stat.S_ISREG(file_stat.st_mode) or file_stat.st_nlink != 1:
+            raise ValueError("status must be a regular single-link file")
+        if file_stat.st_size > ASSURANCE_STATUS_MAX_BYTES:
+            raise ValueError("status exceeds size limit")
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if not isinstance(payload, dict) or payload.get("schemaVersion") != schema_version:
+            raise ValueError("unsupported status schema")
+        return payload, ""
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        return {}, str(exc)
+
+
+def write_alert_worker_heartbeat(state="running", error=""):
+    path = os.environ.get(
+        "REALGUARD_ALERT_HEARTBEAT_FILE",
+        "/opt/realguard-data/alert-worker-heartbeat.json",
+    )
+    parent = os.path.dirname(path)
+    os.makedirs(parent, mode=0o755, exist_ok=True)
+    payload = {
+        "schemaVersion": 1,
+        "state": str(state or "running"),
+        "updatedAt": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "pid": os.getpid(),
+        "lastError": str(error or "")[:1000],
+    }
+    temporary = os.path.join(parent, f".{os.path.basename(path)}.{os.getpid()}.tmp")
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=True, separators=(",", ":"))
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temporary, 0o644)
+    os.replace(temporary, path)
+    return payload
+
+
+def _alert_worker_assurance(now=None):
+    path = os.environ.get(
+        "REALGUARD_ALERT_HEARTBEAT_FILE",
+        "/opt/realguard-data/alert-worker-heartbeat.json",
+    )
+    max_age = max(30, int(os.environ.get("REALGUARD_ALERT_HEARTBEAT_MAX_AGE_SECONDS", "120")))
+    payload, read_error = _read_assurance_status(path)
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    updated = _parse_status_timestamp(payload.get("updatedAt"))
+    age = max(0, int((current.astimezone(timezone.utc) - updated).total_seconds())) if updated else None
+    return {
+        "state": str(payload.get("state") or "missing"),
+        "updatedAt": str(payload.get("updatedAt") or ""),
+        "ageSeconds": age,
+        "maxAgeSeconds": max_age,
+        "fresh": bool(updated and age <= max_age and payload.get("state") == "running"),
+        "lastError": str(payload.get("lastError") or ""),
+        "readError": read_error,
+    }
+
+
+def _restore_drill_assurance(now=None):
+    path = os.environ.get(
+        "REALGUARD_RESTORE_STATUS_FILE",
+        "/opt/realguard-data/restore-drill-status.json",
+    )
+    max_age = max(86400, int(os.environ.get("REALGUARD_RESTORE_MAX_AGE_SECONDS", "691200")))
+    payload, read_error = _read_assurance_status(path)
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    last_success = _parse_status_timestamp(payload.get("lastSuccessAt"))
+    age = max(0, int((current.astimezone(timezone.utc) - last_success).total_seconds())) if last_success else None
+    return {
+        "state": str(payload.get("state") or "missing"),
+        "updatedAt": str(payload.get("updatedAt") or ""),
+        "lastSuccessAt": str(payload.get("lastSuccessAt") or ""),
+        "ageSeconds": age,
+        "maxAgeSeconds": max_age,
+        "fresh": bool(last_success and age <= max_age and payload.get("state") != "failed"),
+        "snapshot": str(payload.get("snapshot") or ""),
+        "lastError": str(payload.get("lastError") or ""),
+        "readError": read_error,
+    }
+
+
+def _security_audit_assurance(now=None):
+    path = os.environ.get(
+        "REALGUARD_SECURITY_AUDIT_STATUS_FILE",
+        "/opt/realguard-data/security-audit-status.json",
+    )
+    max_age = max(120, int(os.environ.get("REALGUARD_SECURITY_AUDIT_MAX_AGE_SECONDS", "600")))
+    payload, read_error = _read_assurance_status(path)
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    updated = _parse_status_timestamp(payload.get("updatedAt"))
+    age = max(0, int((current.astimezone(timezone.utc) - updated).total_seconds())) if updated else None
+    return {
+        "state": str(payload.get("state") or "missing"),
+        "updatedAt": str(payload.get("updatedAt") or ""),
+        "eventCount": int(payload.get("eventCount") or 0),
+        "ageSeconds": age,
+        "maxAgeSeconds": max_age,
+        "fresh": bool(updated and age <= max_age and payload.get("state") == "passed"),
+        "lastError": str(payload.get("lastError") or ""),
+        "readError": read_error,
+    }
+
+
+def _alert_conditions(
+    registry, models, assurance, backup=None, alert_worker=None,
+    restore_drill=None, security_audit=None,
+):
     routing = registry.get("routing") or {}
+    backup = backup or _backup_assurance()
+    alert_worker = alert_worker or _alert_worker_assurance()
+    restore_drill = restore_drill or _restore_drill_assurance()
+    security_audit = security_audit or _security_audit_assurance()
     enabled_models = [model for model in models if model.get("enabled") is not False]
     artifact_missing = any(
         model.get("id") == "v1-onnx-mil" and (model.get("health") or {}).get("artifactReady") is False
         for model in models
     )
     probe_failed = any(not (model.get("health") or {}).get("serviceOk") for model in enabled_models)
+    primary_id = str(routing.get("imagePrimary") or "")
+    primary_model = next((model for model in enabled_models if str(model.get("id") or "") == primary_id), {})
+    primary_health = primary_model.get("health") if isinstance(primary_model.get("health"), dict) else {}
+    primary_telemetry = primary_health.get("telemetry") if isinstance(primary_health.get("telemetry"), dict) else {}
     return {
         "v1Offline": {
             "active": not bool(assurance.get("online")),
@@ -1210,6 +1479,48 @@ def _alert_conditions(registry, models, assurance):
             "title": "模型健康探测失败",
             "message": "至少一个已启用模型的健康接口不可达或返回失败状态。",
         },
+        "verdictNotReady": {
+            "active": bool(primary_model) and primary_telemetry.get("verdictReady") is not True,
+            "level": "warning",
+            "title": "自动真假结论未授权",
+            "message": "主模型运行时在线，但独立校准门禁未通过；系统当前仅允许人工复核结论。",
+        },
+        "backupRunFailed": {
+            "active": backup.get("state") == "failed",
+            "level": "critical",
+            "title": "最近一次备份失败",
+            "message": "最近一次生产备份未完成，请检查备份服务日志并执行恢复校验。",
+        },
+        "backupStale": {
+            "active": not bool(backup.get("localFresh")),
+            "level": "critical",
+            "title": "生产备份已过期",
+            "message": "没有发现时效范围内且完成校验的生产备份。",
+        },
+        "offsiteBackupMissing": {
+            "active": not bool(backup.get("offsiteFresh")),
+            "level": "critical",
+            "title": "异地备份未验证",
+            "message": "异地备份未配置、未通过一致性校验或已经超过允许时效。",
+        },
+        "alertWorkerStale": {
+            "active": not bool(alert_worker.get("fresh")),
+            "level": "critical",
+            "title": "独立告警进程心跳异常",
+            "message": "告警工作进程没有在允许时间内更新心跳，请检查 realguard-alert-worker.service。",
+        },
+        "restoreDrillStale": {
+            "active": not bool(restore_drill.get("fresh")),
+            "level": "critical",
+            "title": "备份恢复演练未通过",
+            "message": "没有发现时效范围内通过的隔离恢复演练，当前备份可恢复性无法证明。",
+        },
+        "securityAuditInvalid": {
+            "active": not bool(security_audit.get("fresh")),
+            "level": "critical",
+            "title": "安全审计链验证失败",
+            "message": "安全审计链完整性验证失败、状态过期或事件计数发生回退。",
+        },
     }
 
 
@@ -1220,7 +1531,7 @@ def run_alert_cycle():
     registry = model_registry.load_registry()
     models = _models_payload_with_health(registry.get("models", []))
     assurance = _v1_assurance(registry=registry, models=models)
-    conditions = _alert_conditions(registry, models, assurance)
+    conditions = _alert_conditions(registry, models, assurance, backup=_backup_assurance())
     deliveries = []
     rules = config.get("rules") or {}
     for event_id, condition in conditions.items():
@@ -1238,6 +1549,22 @@ def run_alert_cycle():
         if claim:
             deliveries.append(_deliver_alert_claim(claim, config.get("webhookUrl")))
     return deliveries
+
+
+def run_alert_watchdog_cycle():
+    """Deliver the alert-worker dead-man signal from a separate timer process."""
+    config = admin_state.alerts()
+    if not config.get("enabled") or not str(config.get("webhookUrl") or "").strip():
+        return []
+    assurance = _alert_worker_assurance()
+    claim = admin_state.claim_alert_event(
+        "alertWorkerStale",
+        not bool(assurance.get("fresh")),
+        "独立告警进程心跳异常",
+        "告警工作进程没有在允许时间内更新心跳，请检查 realguard-alert-worker.service。",
+        "critical",
+    )
+    return [_deliver_alert_claim(claim, config.get("webhookUrl"))] if claim else []
 
 
 def ensure_alert_worker(app):
@@ -1373,6 +1700,10 @@ def _v1_assurance(registry=None, models=None):
         "blockers": blockers,
         "recommendations": recommendations,
         "alerts": admin_state.alerts(),
+        "backup": _backup_assurance(),
+        "alertWorker": _alert_worker_assurance(),
+        "restoreDrill": _restore_drill_assurance(),
+        "securityAudit": _security_audit_assurance(),
     }
 
 
@@ -1741,7 +2072,10 @@ def _host_telemetry():
 
 def _screen_model_payload(model):
     health = model.get("health") if isinstance(model.get("health"), dict) else {}
-    if health.get("ok"):
+    telemetry = health.get("telemetry") if isinstance(health.get("telemetry"), dict) else {}
+    if health.get("ok") and telemetry.get("verdictReady") is False:
+        message = "运行正常，自动结论未授权"
+    elif health.get("ok"):
         message = "运行正常"
     elif health.get("serviceOk"):
         message = "服务在线，模型能力未就绪"
@@ -1865,12 +2199,13 @@ def _screen_algorithm_server_payload(models, routing):
     provider = str(telemetry.get("activeProvider") or "")
     remote_model_ready = remote_ready is True and provider == "CUDAExecutionProvider"
     model_ready = bool(health.get("ok")) or remote_model_ready
+    verdict_ready = telemetry.get("verdictReady") is True
     accelerator_ready = remote_ready is not False and (
         not provider or provider == "CUDAExecutionProvider"
     )
     if not service_ready:
         status = "offline"
-    elif model_ready and accelerator_ready:
+    elif model_ready and accelerator_ready and verdict_ready:
         status = "healthy"
     else:
         status = "degraded"
@@ -1882,6 +2217,9 @@ def _screen_algorithm_server_payload(models, routing):
         "status": status,
         "serviceReady": service_ready,
         "modelReady": model_ready,
+        "verdictReady": verdict_ready,
+        "decisionMode": telemetry.get("decisionMode") or "review_only",
+        "decisionGateReasons": list(telemetry.get("decisionGateReasons") or []),
         "modelId": primary.get("id") or "",
         "modelName": primary.get("name") or primary.get("id") or "主鉴伪模型",
         "inferenceMode": telemetry.get("inferenceMode") or "",
@@ -2132,6 +2470,49 @@ def admin_logout():
     admin_user = _current_admin_user()
     legacy_user = _current_user()
     actor = admin_user or _legacy_admin_payload(legacy_user)
+    if admin_user:
+        try:
+            admin_id = int(admin_user.get("adminId") or 0)
+            session_version = int(admin_user.get("sessionVersion") or 0)
+        except (TypeError, ValueError):
+            admin_id = 0
+            session_version = 0
+        revoked = excute_sql(
+            """
+            UPDATE admin_accounts
+            SET session_version = session_version + 1
+            WHERE id = %s AND session_version = %s
+            """,
+            (admin_id, session_version),
+            fetch=False,
+        )
+        if revoked != 1:
+            return render_template(
+                "admin_auth.html",
+                **_admin_auth_context("login", error="退出失败，服务端管理员会话尚未撤销"),
+            ), 503
+    elif _is_legacy_admin(legacy_user):
+        account_uuid = str((legacy_user or {}).get("account_uuid") or "").strip()
+        try:
+            user_id = int((legacy_user or {}).get("Userid") or 0)
+            session_version = int((legacy_user or {}).get("session_version") or 0)
+        except (TypeError, ValueError):
+            user_id = 0
+            session_version = 0
+        revoked = excute_sql(
+            """
+            UPDATE user
+            SET session_version = session_version + 1
+            WHERE Userid = %s AND account_uuid = %s AND session_version = %s
+            """,
+            (user_id, account_uuid, session_version),
+            fetch=False,
+        )
+        if revoked != 1:
+            return render_template(
+                "admin_auth.html",
+                **_admin_auth_context("login", error="退出失败，服务端会话尚未撤销"),
+            ), 503
     if actor:
         _audit(actor, "admin.logout", str(actor.get("adminId") or actor.get("Userid") or "session"), meta={"ip": _client_ip()})
     session.pop(ADMIN_SESSION_KEY, None)
@@ -2151,8 +2532,6 @@ def admin_screen():
         session[ADMIN_SCREEN_SESSION_KEY] = _configured_screen_token_digest()
         session[ADMIN_SCREEN_SESSION_ISSUED_KEY] = int(time.time())
         session.modified = True
-        if request.args.get("screenToken") or request.args.get("token"):
-            return redirect(url_for("admin_blueprint.admin_screen"))
         return render_template("admin_screen.html", admin_user=_screen_token_user(), screen_token="")
     if _screen_session_valid():
         return render_template("admin_screen.html", admin_user=_screen_token_user(), screen_token="")
@@ -2534,10 +2913,12 @@ def admin_users():
         tuple(params),
     ) or []
     include_pii = _has_admin_permission(actor, "user.read_pii")
+    include_account_identity = _has_admin_permission(actor, "legacy_history.view")
     users = []
     for row in rows:
         users.append({
             "id": row.get("Userid"),
+            **({"accountUuid": row.get("account_uuid")} if include_account_identity else {}),
             "phone": row.get("phone") if include_pii else _mask_phone(row.get("phone")),
             "username": row.get("username"),
             "openid": row.get("openid") if include_pii else _mask_identifier(row.get("openid")),
@@ -2601,6 +2982,7 @@ def admin_user_detail(user_id):
     include_pii = _has_admin_permission(actor, "user.read_pii")
     user = {
         "id": row.get("Userid"),
+        **({"accountUuid": row.get("account_uuid")} if _has_admin_permission(actor, "legacy_history.view") else {}),
         "phone": phone if include_pii else _mask_phone(phone),
         "username": row.get("username"),
         "openid": openid if include_pii else _mask_identifier(openid),
@@ -2730,6 +3112,144 @@ def admin_detections():
         })
     items, page = _page_payload(items, limit)
     return jsonify({"status": "success", "detections": items, "page": page})
+
+
+@admin_blueprint.route("/api/admin/legacy-history/<record_type>/<int:itemid>")
+def admin_legacy_history_preview(record_type, itemid):
+    actor, error = _admin_required("legacy_history.view")
+    if error:
+        return error
+    try:
+        preview = legacy_record_preview(record_type, itemid)
+    except LegacyGovernanceError as exc:
+        return _legacy_governance_error(exc)
+    _audit(
+        actor,
+        "legacy_history.preview",
+        f"{record_type}:{itemid}",
+        meta={"fingerprint": preview.get("fingerprint"), "unowned": preview.get("unowned")},
+    )
+    return jsonify({"status": "success", "record": preview})
+
+
+@admin_blueprint.route("/api/admin/legacy-history/target-account/<int:user_id>")
+def admin_legacy_target_account(user_id):
+    actor, error = _admin_required("legacy_history.view")
+    if error:
+        return error
+    rows = excute_sql(
+        "SELECT Userid, account_uuid, username, phone FROM `user` WHERE Userid = %s LIMIT 1",
+        (user_id,),
+    ) or []
+    if not rows:
+        return jsonify({"status": "error", "message": "目标账号不存在"}), 404
+    row = rows[0]
+    return jsonify({
+        "status": "success",
+        "account": {
+            "id": row.get("Userid"),
+            "accountUuid": row.get("account_uuid"),
+            "username": row.get("username") or "",
+            "phone": _mask_phone(row.get("phone")),
+        },
+    })
+
+
+@admin_blueprint.route("/api/admin/legacy-history/claims", methods=["GET", "POST"])
+def admin_legacy_history_claims():
+    permission = "legacy_history.request" if request.method == "POST" else "legacy_history.view"
+    actor, error = _admin_required(permission)
+    if error:
+        return error
+    try:
+        if request.method == "GET":
+            claims = list_legacy_record_claims(
+                request.args.get("status") or "claim_pending",
+                _limit_arg(50, 200),
+            )
+            return jsonify({"status": "success", "claims": claims})
+
+        admin_id, username, identity = _named_admin_actor(actor)
+        payload = request.get_json(silent=True) or {}
+        claim = request_legacy_record_claim(
+            payload.get("recordType"),
+            payload.get("itemid"),
+            payload.get("accountUuid"),
+            payload.get("expectedFingerprint"),
+            payload.get("expectedMediaSha256"),
+            payload.get("evidenceReference"),
+            payload.get("evidenceSha256"),
+            payload.get("reason"),
+            payload.get("operationId"),
+            admin_id,
+            username,
+            identity,
+        )
+    except LegacyGovernanceError as exc:
+        return _legacy_governance_error(exc)
+    _audit(
+        actor,
+        "legacy_history.claim.request",
+        f"{claim.get('recordType')}:{claim.get('recordId')}",
+        after={"claimId": claim.get("id"), "status": claim.get("status"), "version": claim.get("version")},
+        meta={"evidenceSha256": claim.get("evidenceSha256")},
+    )
+    return jsonify({"status": "success", "claim": claim}), 201
+
+
+@admin_blueprint.route("/api/admin/legacy-history/claims/<int:claim_id>/approve", methods=["POST"])
+def admin_legacy_history_claim_approve(claim_id):
+    actor, error = _admin_required("legacy_history.approve")
+    if error:
+        return error
+    try:
+        admin_id, username, identity = _named_admin_actor(actor)
+        payload = request.get_json(silent=True) or {}
+        claim = approve_legacy_record_claim(
+            claim_id,
+            payload.get("approvalOperationId"),
+            payload.get("expectedVersion"),
+            admin_id,
+            username,
+            identity,
+        )
+    except LegacyGovernanceError as exc:
+        return _legacy_governance_error(exc)
+    _audit(
+        actor,
+        "legacy_history.claim.approve",
+        f"{claim.get('recordType')}:{claim.get('recordId')}",
+        after={"claimId": claim.get("id"), "status": claim.get("status"), "version": claim.get("version")},
+    )
+    return jsonify({"status": "success", "claim": claim})
+
+
+@admin_blueprint.route("/api/admin/legacy-history/claims/<int:claim_id>/reject", methods=["POST"])
+def admin_legacy_history_claim_reject(claim_id):
+    actor, error = _admin_required("legacy_history.approve")
+    if error:
+        return error
+    try:
+        admin_id, username, identity = _named_admin_actor(actor)
+        payload = request.get_json(silent=True) or {}
+        claim = reject_legacy_record_claim(
+            claim_id,
+            payload.get("rejectionOperationId"),
+            payload.get("expectedVersion"),
+            payload.get("reason"),
+            admin_id,
+            username,
+            identity,
+        )
+    except LegacyGovernanceError as exc:
+        return _legacy_governance_error(exc)
+    _audit(
+        actor,
+        "legacy_history.claim.reject",
+        f"{claim.get('recordType')}:{claim.get('recordId')}",
+        after={"claimId": claim.get("id"), "status": claim.get("status"), "version": claim.get("version")},
+    )
+    return jsonify({"status": "success", "claim": claim})
 
 
 @admin_blueprint.route("/api/admin/detections/<int:itemid>")

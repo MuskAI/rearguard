@@ -100,6 +100,183 @@ def test_developer_key_idempotency_fails_closed_without_dedicated_secret(monkeyp
     assert api._idempotent_developer_api_key(7, "create", "operation-1") is None
 
 
+def test_security_audit_event_extends_hmac_chain(monkeypatch):
+    monkeypatch.setenv("REALGUARD_SECURITY_AUDIT_HMAC_KEY", "a" * 64)
+    monkeypatch.setenv("REALGUARD_SECURITY_AUDIT_HMAC_KEY_ID", "audit-v1")
+
+    class Cursor:
+        rowcount = 1
+
+        def __init__(self):
+            self.calls = []
+            self.current = None
+
+        def execute(self, sql, params=None):
+            normalized = " ".join(sql.split())
+            self.calls.append((normalized, params))
+            if normalized.startswith("SELECT last_event_hash"):
+                self.current = {"last_event_hash": "b" * 64}
+            self.rowcount = 1
+
+        def fetchone(self):
+            return self.current
+
+    cursor = Cursor()
+    event_id = api._append_security_audit(
+        cursor,
+        "account",
+        7,
+        "developer_api_key.revoke",
+        "key:9",
+        {"scopes": "image:fast"},
+    )
+
+    insert = next(call for call in cursor.calls if call[0].startswith("INSERT INTO security_audit_events"))
+    update = next(call for call in cursor.calls if call[0].startswith("UPDATE security_audit_chain_head"))
+    assert len(event_id) == 36
+    assert insert[1][7] == "b" * 64
+    assert len(insert[1][8]) == 64
+    assert insert[1][8] == update[1][0]
+    assert insert[1][9] == "audit-v1"
+
+
+def test_security_audit_checkpoint_detects_tail_deletion(monkeypatch, tmp_path):
+    monkeypatch.setenv("REALGUARD_SECURITY_AUDIT_HMAC_KEY", "a" * 64)
+    monkeypatch.setenv("REALGUARD_SECURITY_AUDIT_HMAC_KEY_ID", "audit-v1")
+    monkeypatch.setenv("REALGUARD_SECURITY_AUDIT_HMAC_KEYS_JSON", "{}")
+    monkeypatch.setenv("REALGUARD_SECURITY_AUDIT_STATUS_FILE", str(tmp_path / "status.json"))
+    monkeypatch.setenv("REALGUARD_SECURITY_AUDIT_CHECKPOINT_FILE", str(tmp_path / "checkpoint.json"))
+
+    class Cursor:
+        rowcount = 1
+
+        def __init__(self):
+            self.calls = []
+            self.current = None
+
+        def execute(self, sql, params=None):
+            normalized = " ".join(sql.split())
+            self.calls.append((normalized, params))
+            if normalized.startswith("SELECT last_event_hash"):
+                self.current = {"last_event_hash": "0" * 64}
+            self.rowcount = 1
+
+        def fetchone(self):
+            return self.current
+
+    cursor = Cursor()
+    api._append_security_audit(cursor, "account", 7, "developer_api_key.create", "key:8", {})
+    values = next(params for sql, params in cursor.calls if sql.startswith("INSERT INTO security_audit_events"))
+    row = dict(zip(
+        ("event_id", "occurred_at", "actor_type", "actor_id", "action", "target", "meta_json", "previous_hash", "event_hash", "key_id"),
+        values,
+    ))
+    row["id"] = 1
+    current_rows = [row]
+
+    def fake_sql(sql, params=None, fetch=True):
+        if "FROM security_audit_events" in sql:
+            return list(current_rows)
+        if "FROM security_audit_chain_head" in sql:
+            return [{"last_event_hash": current_rows[-1]["event_hash"] if current_rows else "0" * 64}]
+        raise AssertionError(sql)
+
+    monkeypatch.setattr(api, "excute_sql", fake_sql)
+    assert api.verify_security_audit_chain(allow_bootstrap=True)["state"] == "passed"
+
+    checkpoint_path = tmp_path / "checkpoint.json"
+    checkpoint_bytes = checkpoint_path.read_bytes()
+    checkpoint_path.unlink()
+    missing = api.verify_security_audit_chain()
+    assert missing["state"] == "failed"
+    assert "explicit bootstrap" in missing["lastError"]
+    checkpoint_path.write_bytes(checkpoint_bytes)
+
+    current_rows.clear()
+    failed = api.verify_security_audit_chain()
+
+    assert failed["state"] == "failed"
+    assert "moved backwards" in failed["lastError"]
+
+
+def test_api_key_revoke_rolls_back_when_security_audit_fails(monkeypatch):
+    class Cursor:
+        rowcount = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, sql, params=None):
+            if "UPDATE developer_api_keys" in sql:
+                self.rowcount = 1
+
+        def fetchone(self):
+            return {"id": 9, "name": "primary", "scopes": "image:fast", "status": "active"}
+
+    class Connection:
+        def __init__(self):
+            self.rolled_back = False
+            self.committed = False
+
+        def begin(self):
+            return None
+
+        def cursor(self):
+            return Cursor()
+
+        def rollback(self):
+            self.rolled_back = True
+
+        def commit(self):
+            self.committed = True
+
+        def close(self):
+            return None
+
+    connection = Connection()
+    monkeypatch.setattr(api, "get_db_connection", lambda: connection)
+    monkeypatch.setattr(
+        api,
+        "_append_security_audit",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("audit unavailable")),
+    )
+
+    revoked, message, status = api._revoke_developer_key_atomic(7, 9)
+
+    assert revoked is False
+    assert status == 500
+    assert "撤销" in message
+    assert connection.rolled_back is True
+    assert connection.committed is False
+
+
+def test_model_run_persists_the_audit_integrity_seal(monkeypatch):
+    captured = {}
+    seal = {"schema": "realguard.persisted-inference-audit.v1", "keyId": "gpu-v1", "hmacSha256": "c" * 64}
+    monkeypatch.setattr(detection.model_registry, "get_model", lambda model_id: {"id": model_id})
+    monkeypatch.setattr(
+        detection.admin_state,
+        "append_model_run",
+        lambda *args, **kwargs: captured.update(kwargs),
+    )
+
+    model_run = {
+        "model": "realguard",
+        "realProbability": 0.5,
+        "fakeProbability": 0.5,
+        "persistedAuditIntegrity": seal,
+    }
+    detection._record_model_run(17, {
+        "_route_model_id": "v1-onnx-mil",
+        "remote_evidence": {"modelRun": model_run},
+    }, {"Userid": 1})
+
+    assert captured["meta"]["inferenceAudit"] == model_run
+
+
 def test_guest_capacity_groups_rotating_ipv6_addresses_by_64(monkeypatch):
     monkeypatch.setenv("REALGUARD_CONSENT_AUDIT_SALT", "private-test-salt")
     addresses = iter(["2001:db8:1234:5678::1", "2001:db8:1234:5678::abcd", "2001:db8:1234:5679::1"])
@@ -1526,8 +1703,13 @@ def test_user_session_has_absolute_expiry_even_with_sliding_cookie(client):
 
 def test_legacy_logout_rejects_get_and_accepts_post(client, monkeypatch):
     monkeypatch.setattr(login, "validate_current_user_session", lambda **kwargs: True)
+    monkeypatch.setattr(login, "excute_sql", lambda *args, **kwargs: 1)
     with client.session_transaction() as sess:
-        sess["user_info"] = {"Userid": 7}
+        sess["user_info"] = {
+            "Userid": 7,
+            "account_uuid": ACCOUNT_UUID,
+            "session_version": 3,
+        }
 
     denied = client.get("/logout")
     response = client.post("/logout")
@@ -1536,6 +1718,30 @@ def test_legacy_logout_rejects_get_and_accepts_post(client, monkeypatch):
     assert response.status_code == 302
     with client.session_transaction() as sess:
         assert "user_info" not in sess
+
+
+def test_app_rejects_explicit_template_session_secret(monkeypatch):
+    monkeypatch.setenv("SECRET_KEY", "change-me")
+
+    with pytest.raises(RuntimeError, match="session signing key"):
+        creat_app()
+
+
+def test_logout_fails_closed_when_session_revocation_cannot_commit(client, monkeypatch):
+    monkeypatch.setattr(login, "validate_current_user_session", lambda **kwargs: True)
+    monkeypatch.setattr(login, "excute_sql", lambda *args, **kwargs: None)
+    with client.session_transaction() as sess:
+        sess["user_info"] = {
+            "Userid": 7,
+            "account_uuid": ACCOUNT_UUID,
+            "session_version": 3,
+        }
+
+    response = client.post("/logout")
+
+    assert response.status_code == 503
+    with client.session_transaction() as sess:
+        assert "user_info" in sess
 
 
 def test_valid_versioned_session_is_upgraded_with_immutable_uuid(client, monkeypatch):

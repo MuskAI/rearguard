@@ -1,0 +1,12 @@
+[Unit]
+Description=Verify the RealGuard security audit chain every five minutes
+
+[Timer]
+OnBootSec=3m
+OnUnitActiveSec=5m
+AccuracySec=30s
+Persistent=true
+Unit=realguard-security-audit-verify.service
+
+[Install]
+WantedBy=timers.target

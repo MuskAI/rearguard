@@ -11,6 +11,8 @@ import onnxruntime as ort
 import requests
 from PIL import Image
 
+from model_decision_contract import seal_inference_audit
+
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -161,7 +163,9 @@ def _verify_response_integrity(payload, data, nonce, image_sha256):
         or now - issued_at > REMOTE_RESPONSE_MAX_AGE_SECONDS
     ):
         raise RuntimeError("Remote inference response integrity verification failed")
-    return dict(integrity)
+    verified = dict(integrity)
+    verified["keyId"] = key_id
+    return verified
 
 
 def _lazy_init():
@@ -348,6 +352,14 @@ def _predict_remote(img_path):
     if isinstance(verified_integrity, dict):
         remote_evidence["modelRun"]["inputImageSha256"] = verified_integrity.get("imageSha256")
         remote_evidence["modelRun"]["responseIntegrity"] = verified_integrity
+        try:
+            remote_evidence["modelRun"] = seal_inference_audit(
+                remote_evidence["modelRun"],
+                key_id=str(verified_integrity.get("keyId") or ""),
+                key_hex=_response_hmac_keyring().get(str(verified_integrity.get("keyId") or "")),
+            )
+        except ValueError as exc:
+            raise RuntimeError("Remote inference audit could not be sealed") from exc
     if remote_evidence:
         _REMOTE_EVIDENCE.value = remote_evidence
 

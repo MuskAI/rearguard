@@ -81,6 +81,9 @@ def test_remote_model_health_accepts_cuda_and_ignores_missing_local_artifact(mon
             "activeProvider": "CUDAExecutionProvider",
             "cudaDeviceId": 0,
             "latencyMs": 2.0,
+            "verdictReady": False,
+            "decisionMode": "review_only",
+            "decisionGateReasons": ["calibration_manifest_missing"],
             "error": "",
         },
     )
@@ -90,7 +93,11 @@ def test_remote_model_health_accepts_cuda_and_ignores_missing_local_artifact(mon
     assert status["capabilityReady"] is True
     assert status["artifactReady"] is False
     assert status["inferenceMode"] == "remote-cuda"
-    assert status["warnings"] == []
+    assert status["verdictReady"] is False
+    assert status["decisionMode"] == "review_only"
+    assert status["warnings"] == [
+        "remote model runtime is ready but automatic verdict calibration is not authorized"
+    ]
 
 
 def test_remote_predict_requires_cuda_provider(monkeypatch, tmp_path):

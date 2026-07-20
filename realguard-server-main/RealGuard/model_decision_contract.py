@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import math
 import os
@@ -16,6 +17,7 @@ from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
 
 MANIFEST_SCHEMA = "cn.huijian.model-calibration-v2"
+PERSISTED_AUDIT_SCHEMA = "cn.huijian.persisted-inference-audit-v1"
 MAX_MANIFEST_BYTES = 64 * 1024
 HASH_FIELDS = (
     "datasetSha256",
@@ -37,6 +39,106 @@ def _canonical_json(value: Mapping[str, Any]) -> bytes:
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
+
+
+def _valid_key_id(value: Any) -> bool:
+    return bool(
+        isinstance(value, str)
+        and 1 <= len(value) <= 64
+        and value[0].isalnum()
+        and all(char.isalnum() or char in "._:-" for char in value)
+    )
+
+
+def _response_hmac_keyring() -> dict[str, bytes]:
+    raw = os.environ.get("REALGUARD_MODEL_RESPONSE_HMAC_KEYS_JSON", "{}").strip()
+    try:
+        decoded = json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(decoded, dict):
+        return {}
+    candidates = dict(decoded)
+    active_key = os.environ.get("REALGUARD_MODEL_RESPONSE_HMAC_KEY", "").strip().lower()
+    active_key_id = os.environ.get("REALGUARD_MODEL_RESPONSE_HMAC_KEY_ID", "v1").strip()
+    if active_key:
+        candidates[active_key_id] = active_key
+    keyring = {}
+    for raw_key_id, raw_key in candidates.items():
+        key_id = str(raw_key_id or "").strip()
+        key = str(raw_key or "").strip().lower()
+        if (
+            _valid_key_id(key_id)
+            and len(key) == 64
+            and all(char in "0123456789abcdef" for char in key)
+        ):
+            keyring[key_id] = bytes.fromhex(key)
+    return keyring
+
+
+def seal_inference_audit(
+    audit: Mapping[str, Any],
+    *,
+    key_id: str,
+    key_hex: str | None = None,
+) -> dict[str, Any]:
+    """Seal the exact audit object persisted by the Web tier."""
+    if not isinstance(audit, Mapping) or not _valid_key_id(key_id):
+        raise ValueError("inference audit cannot be sealed")
+    supplied_key = str(key_hex or "").strip().lower()
+    key = (
+        bytes.fromhex(supplied_key)
+        if len(supplied_key) == 64 and all(char in "0123456789abcdef" for char in supplied_key)
+        else _response_hmac_keyring().get(key_id)
+    )
+    if key is None:
+        raise ValueError("inference audit sealing key is unavailable")
+    sealed = dict(audit)
+    sealed.pop("persistedAuditIntegrity", None)
+    body_sha256 = hashlib.sha256(_canonical_json(sealed)).hexdigest()
+    envelope = {
+        "schema": PERSISTED_AUDIT_SCHEMA,
+        "keyId": key_id,
+        "bodySha256": body_sha256,
+    }
+    envelope["hmacSha256"] = hmac.new(
+        key,
+        _canonical_json(envelope),
+        hashlib.sha256,
+    ).hexdigest()
+    sealed["persistedAuditIntegrity"] = envelope
+    return sealed
+
+
+def _verify_persisted_inference_audit(audit: Mapping[str, Any]) -> bool:
+    integrity = audit.get("persistedAuditIntegrity")
+    if not isinstance(integrity, Mapping):
+        return False
+    key_id = str(integrity.get("keyId") or "").strip()
+    key = _response_hmac_keyring().get(key_id) if _valid_key_id(key_id) else None
+    if key is None or integrity.get("schema") != PERSISTED_AUDIT_SCHEMA:
+        return False
+    unsigned_audit = dict(audit)
+    unsigned_audit.pop("persistedAuditIntegrity", None)
+    expected_body = hashlib.sha256(_canonical_json(unsigned_audit)).hexdigest()
+    supplied_body = str(integrity.get("bodySha256") or "").strip().lower()
+    supplied_hmac = str(integrity.get("hmacSha256") or "").strip().lower()
+    signed_envelope = {
+        "schema": integrity.get("schema"),
+        "keyId": key_id,
+        "bodySha256": supplied_body,
+    }
+    expected_hmac = hmac.new(
+        key,
+        _canonical_json(signed_envelope),
+        hashlib.sha256,
+    ).hexdigest()
+    return bool(
+        _valid_sha256(supplied_body)
+        and _valid_sha256(supplied_hmac)
+        and hmac.compare_digest(supplied_body, expected_body)
+        and hmac.compare_digest(supplied_hmac, expected_hmac)
+    )
 
 
 def _valid_sha256(value: Any) -> bool:
@@ -200,7 +302,11 @@ def validate_inference_audit(
     audit: Mapping[str, Any] | None,
     decision: Mapping[str, Any] | None,
 ) -> bool:
-    if not isinstance(audit, Mapping) or not validate_model_decision(decision):
+    if (
+        not isinstance(audit, Mapping)
+        or not validate_model_decision(decision)
+        or not _verify_persisted_inference_audit(audit)
+    ):
         return False
     try:
         raw_score = float(audit.get("rawModelScore"))

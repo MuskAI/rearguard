@@ -36,8 +36,15 @@ rollback() {
       realguard-backend.service \
       realguard-detector-backend.service \
       realguard-developer-worker.service \
+      realguard-alert-worker.service \
+      realguard-alert-watchdog.service \
+      realguard-alert-watchdog.timer \
       realguard-backup.service \
-      realguard-backup.timer; do
+      realguard-backup.timer \
+      realguard-restore-drill.service \
+      realguard-restore-drill.timer \
+      realguard-security-audit-verify.service \
+      realguard-security-audit-verify.timer; do
       if [[ -f "/tmp/$unit.previous" ]]; then
         sudo cp -a "/tmp/$unit.previous" "/etc/systemd/system/$unit"
       else
@@ -77,6 +84,7 @@ rollback() {
   fi
   sudo systemctl restart realguard-detector-backend.service || true
   sudo systemctl restart realguard-developer-worker.service || true
+  sudo systemctl restart realguard-alert-worker.service || true
   sudo systemctl restart realguard-backend.service || true
   exit "$status"
 }
@@ -195,12 +203,31 @@ fi
 sudo rm -rf "$release_root/RealGuard/imagedetection/static/uploads"
 sudo ln -s /opt/realguard-data/uploads "$release_root/RealGuard/imagedetection/static/uploads"
 sudo install -d -m 755 -o ubuntu -g ubuntu /opt/realguard-data/uploads/aliyun-probes
+sudo install -d -m 750 -o root -g ubuntu /opt/realguard-data/legacy-governance-evidence
 sudo chown -R ubuntu:ubuntu /opt/realguard-data/uploads
 
 sudo install -d -m 700 /etc/realguard
-if ! sudo grep -q '^SECRET_KEY=' /etc/realguard/session.env 2>/dev/null; then
+sudo install -d -m 700 -o root -g root /opt/realguard-audit-checkpoint
+sudo touch /etc/realguard/backup.env
+sudo chmod 600 /etc/realguard/backup.env
+sudo chown root:root /etc/realguard/backup.env
+session_secret="$(sudo awk -F= '/^SECRET_KEY=/{print substr($0, index($0, "=") + 1); exit}' /etc/realguard/session.env 2>/dev/null || true)"
+session_secret_lower="$(printf '%s' "$session_secret" | tr '[:upper:]' '[:lower:]')"
+if [[ ${#session_secret} -lt 32 \
+    || "$session_secret_lower" == "change-me" \
+    || "$session_secret_lower" == "changeme" \
+    || "$session_secret_lower" == "secret" \
+    || "$session_secret_lower" == "test" \
+    || "$session_secret_lower" == change-* \
+    || "$session_secret_lower" == replace-* \
+    || "$session_secret_lower" == example-* \
+    || "$session_secret_lower" == your-* ]]; then
   secret_key="$(openssl rand -hex 48)"
-  printf 'SECRET_KEY=%s\n' "$secret_key" | sudo tee /etc/realguard/session.env >/dev/null
+  if sudo grep -q '^SECRET_KEY=' /etc/realguard/session.env 2>/dev/null; then
+    sudo sed -i "s/^SECRET_KEY=.*/SECRET_KEY=$secret_key/" /etc/realguard/session.env
+  else
+    printf 'SECRET_KEY=%s\n' "$secret_key" | sudo tee -a /etc/realguard/session.env >/dev/null
+  fi
 fi
 sudo chmod 600 /etc/realguard/session.env
 sudo chown root:root /etc/realguard/session.env
@@ -213,6 +240,25 @@ fi
 if ! sudo grep -q '^REALGUARD_DEVELOPER_IDEMPOTENCY_SECRET=' /etc/realguard/realguard-backend.env; then
   idempotency_secret="$(openssl rand -hex 32)"
   printf 'REALGUARD_DEVELOPER_IDEMPOTENCY_SECRET=%s\n' "$idempotency_secret" \
+    | sudo tee -a /etc/realguard/realguard-backend.env >/dev/null
+fi
+security_audit_key="$(sudo awk -F= '/^REALGUARD_SECURITY_AUDIT_HMAC_KEY=/{print substr($0, index($0, "=") + 1); exit}' /etc/realguard/realguard-backend.env 2>/dev/null || true)"
+if [[ ! "$security_audit_key" =~ ^[0-9a-fA-F]{64}$ ]]; then
+  security_audit_key="$(openssl rand -hex 32)"
+  if sudo grep -q '^REALGUARD_SECURITY_AUDIT_HMAC_KEY=' /etc/realguard/realguard-backend.env; then
+    sudo sed -i "s/^REALGUARD_SECURITY_AUDIT_HMAC_KEY=.*/REALGUARD_SECURITY_AUDIT_HMAC_KEY=$security_audit_key/" \
+      /etc/realguard/realguard-backend.env
+  else
+    printf 'REALGUARD_SECURITY_AUDIT_HMAC_KEY=%s\n' "$security_audit_key" \
+      | sudo tee -a /etc/realguard/realguard-backend.env >/dev/null
+  fi
+fi
+if ! sudo grep -q '^REALGUARD_SECURITY_AUDIT_HMAC_KEY_ID=' /etc/realguard/realguard-backend.env; then
+  printf 'REALGUARD_SECURITY_AUDIT_HMAC_KEY_ID=v1\n' \
+    | sudo tee -a /etc/realguard/realguard-backend.env >/dev/null
+fi
+if ! sudo grep -q '^REALGUARD_SECURITY_AUDIT_HMAC_KEYS_JSON=' /etc/realguard/realguard-backend.env; then
+  printf "REALGUARD_SECURITY_AUDIT_HMAC_KEYS_JSON='{}'\n" \
     | sudo tee -a /etc/realguard/realguard-backend.env >/dev/null
 fi
 if ! sudo grep -q '^REALGUARD_EVIDENCE_HMAC_KEY=' /etc/realguard/realguard-backend.env; then
@@ -251,8 +297,15 @@ for unit in \
   realguard-backend.service \
   realguard-detector-backend.service \
   realguard-developer-worker.service \
+  realguard-alert-worker.service \
+  realguard-alert-watchdog.service \
+  realguard-alert-watchdog.timer \
   realguard-backup.service \
-  realguard-backup.timer; do
+  realguard-backup.timer \
+  realguard-restore-drill.service \
+  realguard-restore-drill.timer \
+  realguard-security-audit-verify.service \
+  realguard-security-audit-verify.timer; do
   if [[ -f "/etc/systemd/system/$unit" ]]; then
     sudo cp -a "/etc/systemd/system/$unit" "/tmp/$unit.previous"
   else
@@ -271,8 +324,15 @@ sudo sed "s/15001/$DETECTOR_PORT/g" /tmp/realguard-detector-backend.service \
   | sudo tee /etc/systemd/system/realguard-detector-backend.service >/dev/null
 sudo sed "s/15001/$DETECTOR_PORT/g" /tmp/realguard-developer-worker.service \
   | sudo tee /etc/systemd/system/realguard-developer-worker.service >/dev/null
+sudo install -m 644 /tmp/realguard-alert-worker.service /etc/systemd/system/realguard-alert-worker.service
+sudo install -m 644 /tmp/realguard-alert-watchdog.service /etc/systemd/system/realguard-alert-watchdog.service
+sudo install -m 644 /tmp/realguard-alert-watchdog.timer /etc/systemd/system/realguard-alert-watchdog.timer
 sudo install -m 644 /tmp/realguard-backup.service /etc/systemd/system/realguard-backup.service
 sudo install -m 644 /tmp/realguard-backup.timer /etc/systemd/system/realguard-backup.timer
+sudo install -m 644 /tmp/realguard-restore-drill.service /etc/systemd/system/realguard-restore-drill.service
+sudo install -m 644 /tmp/realguard-restore-drill.timer /etc/systemd/system/realguard-restore-drill.timer
+sudo install -m 644 /tmp/realguard-security-audit-verify.service /etc/systemd/system/realguard-security-audit-verify.service
+sudo install -m 644 /tmp/realguard-security-audit-verify.timer /etc/systemd/system/realguard-security-audit-verify.timer
 sudo install -d -m 755 /etc/systemd/system/realguard-backend.service.d
 sudo tee /etc/systemd/system/realguard-backend.service.d/40-detector-backend-url.conf >/dev/null <<UNIT
 [Service]
@@ -290,6 +350,7 @@ sudo bash -lc '
   '"$release_root"'/.venv/bin/python -m flask --app run:app admin-db-upgrade
   '"$release_root"'/.venv/bin/python -m flask --app run:app developer-db-upgrade
   '"$release_root"'/.venv/bin/python -m flask --app run:app reconcile-detection-jobs
+  '"$release_root"'/.venv/bin/python -m flask --app run:app security-audit-verify --bootstrap
 '
 sudo chown ubuntu:ubuntu /opt/realguard-data/admin_state.json
 sudo chmod 600 /opt/realguard-data/admin_state.json
@@ -302,8 +363,13 @@ sudo systemctl daemon-reload
 sudo systemctl enable \
   realguard-backend.service \
   realguard-detector-backend.service \
-  realguard-developer-worker.service >/dev/null
-sudo systemctl enable --now realguard-backup.timer >/dev/null
+  realguard-developer-worker.service \
+  realguard-alert-worker.service >/dev/null
+sudo systemctl enable --now \
+  realguard-backup.timer \
+  realguard-restore-drill.timer \
+  realguard-alert-watchdog.timer \
+  realguard-security-audit-verify.timer >/dev/null
 sudo ln -sfn "$release_root/RealGuard" /opt/realguard-server/RealGuard.next
 sudo mv -Tf /opt/realguard-server/RealGuard.next /opt/realguard-server/RealGuard
 backend_switched=1
@@ -312,6 +378,7 @@ sudo mv -Tf /opt/realguard-server/.venv.next /opt/realguard-server/.venv
 runtime_switched=1
 sudo systemctl restart realguard-detector-backend.service
 sudo systemctl restart realguard-developer-worker.service
+sudo systemctl restart realguard-alert-worker.service
 sudo systemctl restart realguard-backend.service
 
 sudo rm -rf /var/www/realguard-frontend.next
@@ -377,10 +444,18 @@ curl -fsS --max-time 180 \
   | grep -q '"probe":true'
 systemctl is-active --quiet realguard-detector-backend.service
 systemctl is-active --quiet realguard-developer-worker.service
+systemctl is-active --quiet realguard-alert-worker.service
 systemctl is-active --quiet realguard-backend.service
 systemctl is-enabled --quiet realguard-developer-worker.service
+systemctl is-enabled --quiet realguard-alert-worker.service
+systemctl is-enabled --quiet realguard-alert-watchdog.timer
+systemctl is-active --quiet realguard-alert-watchdog.timer
 systemctl is-enabled --quiet realguard-backup.timer
 systemctl is-active --quiet realguard-backup.timer
+systemctl is-enabled --quiet realguard-restore-drill.timer
+systemctl is-active --quiet realguard-restore-drill.timer
+systemctl is-enabled --quiet realguard-security-audit-verify.timer
+systemctl is-active --quiet realguard-security-audit-verify.timer
 sudo systemctl start realguard-backup.service
 sudo test -L /var/backups/realguard/latest
 test -r /opt/realguard-data/ip2region_v4.xdb
@@ -421,10 +496,17 @@ rm -f \
   /tmp/realguard-backend.service \
   /tmp/realguard-detector-backend.service \
   /tmp/realguard-developer-worker.service \
+  /tmp/realguard-alert-worker.service \
+  /tmp/realguard-alert-watchdog.service \
+  /tmp/realguard-alert-watchdog.timer \
   /tmp/realguard-backup \
   /tmp/realguard-restore-verify \
   /tmp/realguard-backup.service \
   /tmp/realguard-backup.timer \
+  /tmp/realguard-restore-drill.service \
+  /tmp/realguard-restore-drill.timer \
+  /tmp/realguard-security-audit-verify.service \
+  /tmp/realguard-security-audit-verify.timer \
   /tmp/realguard-v1.DEPLOYED_COMMIT \
   /tmp/realguard-ip2region-v4.xdb \
   /tmp/realguard-frontend.nginx.conf \

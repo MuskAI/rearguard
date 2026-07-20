@@ -1,0 +1,21 @@
+[Unit]
+Description=Verify the RealGuard security audit HMAC chain
+After=mysql.service
+Requires=mysql.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/realguard-server/RealGuard
+Environment=REALGUARD_ALERT_WORKER_ENABLED=0
+EnvironmentFile=/etc/realguard/session.env
+EnvironmentFile=/etc/realguard/realguard-backend.env
+EnvironmentFile=/etc/realguard/detector-db.env
+ExecStart=/opt/realguard-server/.venv/bin/python -m flask --app run:app security-audit-verify
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/opt/realguard-data /opt/realguard-audit-checkpoint /tmp

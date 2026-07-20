@@ -52,9 +52,35 @@ v1_external="$(printf '%s\n' "$status_output" | sed -n 's/^v1_external_http=//p'
 v2_service="$(printf '%s\n' "$status_output" | sed -n 's/^v2_service=//p' | tail -1)"
 v2_internal="$(printf '%s\n' "$status_output" | sed -n 's/^v2_internal_http=//p' | tail -1)"
 v2_external="$(printf '%s\n' "$status_output" | sed -n 's/^v2_external_http=//p' | tail -1)"
-gpu_service="$(printf '%s\n' "$status_output" | sed -n 's/^gpu_service=//p' | tail -1)"
-gpu_internal="$(printf '%s\n' "$status_output" | sed -n 's/^gpu_internal_http=//p' | tail -1)"
-gpu_external="$(printf '%s\n' "$status_output" | sed -n 's/^gpu_external_http=//p' | tail -1)"
+gpu_model_service="$(printf '%s\n' "$status_output" | sed -n 's/^gpu_model_service=//p' | tail -1)"
+gpu_watermark_service="$(printf '%s\n' "$status_output" | sed -n 's/^gpu_watermark_service=//p' | tail -1)"
+gpu_yolo_service="$(printf '%s\n' "$status_output" | sed -n 's/^gpu_yolo_service=//p' | tail -1)"
+gpu_model_enabled="$(printf '%s\n' "$status_output" | sed -n 's/^gpu_model_enabled=//p' | tail -1)"
+gpu_watermark_enabled="$(printf '%s\n' "$status_output" | sed -n 's/^gpu_watermark_enabled=//p' | tail -1)"
+gpu_yolo_enabled="$(printf '%s\n' "$status_output" | sed -n 's/^gpu_yolo_enabled=//p' | tail -1)"
+gpu_model_tunnel="$(printf '%s\n' "$status_output" | sed -n 's/^gpu_model_tunnel=//p' | tail -1)"
+gpu_precheck_tunnel="$(printf '%s\n' "$status_output" | sed -n 's/^gpu_precheck_tunnel=//p' | tail -1)"
+gpu_model_runtime="$(printf '%s\n' "$status_output" | sed -n 's/^gpu_model_runtime=//p' | tail -1)"
+gpu_yolo_runtime="$(printf '%s\n' "$status_output" | sed -n 's/^gpu_yolo_runtime=//p' | tail -1)"
+gpu_watermark_http="$(printf '%s\n' "$status_output" | sed -n 's/^gpu_watermark_http=//p' | tail -1)"
+gpu_public_detector_service="$(printf '%s\n' "$status_output" | sed -n 's/^gpu_public_detector_service=//p' | tail -1)"
+gpu_public_runtime="$(printf '%s\n' "$status_output" | sed -n 's/^gpu_public_runtime=//p' | tail -1)"
+gpu_service="unhealthy"
+gpu_internal="000"
+gpu_external="000"
+if [[ "$gpu_model_service" == "active" && "$gpu_watermark_service" == "active" \
+    && "$gpu_yolo_service" == "active" && "$gpu_model_enabled" == "enabled" \
+    && "$gpu_watermark_enabled" == "enabled" && "$gpu_yolo_enabled" == "enabled" \
+    && "$gpu_model_tunnel" == "active" && "$gpu_precheck_tunnel" == "active" ]]; then
+  gpu_service="active"
+fi
+if [[ "$gpu_model_runtime" == "ready" && "$gpu_yolo_runtime" == "ready" \
+    && "$gpu_watermark_http" == "200" ]]; then
+  gpu_internal="200"
+fi
+if [[ "$gpu_public_detector_service" == "active" && "$gpu_public_runtime" == "ready" ]]; then
+  gpu_external="200"
+fi
 validate_repo_state() {
   case "$1" in
     match|mismatch|missing|dry-run) ;;

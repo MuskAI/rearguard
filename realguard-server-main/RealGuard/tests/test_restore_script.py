@@ -55,6 +55,10 @@ def test_restore_script_rehydrates_isolated_snapshot(tmp_path):
     (evidence_source / "image-1.manifest.json").write_text("{}", encoding="utf-8")
     _write_archive(snapshot / "uploads.tgz", upload_source)
     _write_archive(snapshot / "evidence-manifests.tgz", evidence_source)
+    governance_source = tmp_path / "governance-source"
+    governance_source.mkdir()
+    (governance_source / "case-1.json").write_text('{"case":1}', encoding="utf-8")
+    _write_archive(snapshot / "legacy-governance-evidence.tgz", governance_source)
 
     checksum_lines = []
     for path in sorted(snapshot.iterdir()):
@@ -88,6 +92,7 @@ esac
         "PYTHON_BIN": sys.executable,
         "REALGUARD_RESTORE_ALLOW_NON_ROOT": "1",
         "REALGUARD_RESTORE_REPORT_ROOT": str(report_root),
+        "REALGUARD_RESTORE_STATUS_FILE": str(tmp_path / "restore-status.json"),
         "REALGUARD_RESTORE_WORK_ROOT": str(tmp_path),
     }
 
@@ -107,6 +112,10 @@ esac
     assert report["mysql"]["systemTables"] == 3
     assert report["sqlite"]["v2"]["integrity"] == "ok"
     assert report["archives"]["uploads"]["files"] == 1
+    assert report["archives"]["legacyGovernanceEvidence"]["files"] == 1
+    restore_status = json.loads((tmp_path / "restore-status.json").read_text(encoding="utf-8"))
+    assert restore_status["state"] == "passed"
+    assert restore_status["lastSuccessAt"]
     restored_sql = mysql_stdin.read_text(encoding="utf-8")
     assert "CREATE DATABASE /*!32312 IF NOT EXISTS*/ `rg_restore_system_" in restored_sql
     assert "CREATE DATABASE /*!32312 IF NOT EXISTS*/ `rg_restore_detection_" in restored_sql

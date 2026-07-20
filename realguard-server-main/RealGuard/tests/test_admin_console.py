@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import datetime, timezone
 import json
 import sys
 import time
@@ -291,12 +292,14 @@ def test_admin_login_hides_account_inventory_and_sets_security_headers(client, m
 def test_admin_logout_requires_csrf_post_and_clears_session(client, monkeypatch):
     audit = []
     monkeypatch.setattr(admin, "_audit", lambda actor, action, target, **kwargs: audit.append((action, target)))
+    monkeypatch.setattr(admin, "excute_sql", lambda *args, **kwargs: 1)
     with client.session_transaction() as sess:
         sess[admin.ADMIN_SESSION_KEY] = {
             "Userid": "admin:1",
             "adminId": 1,
             "username": "ops",
             "role": "admin",
+            "sessionVersion": 4,
         }
         sess[admin.ADMIN_SCREEN_SESSION_KEY] = "screen-claim"
 
@@ -449,11 +452,13 @@ def test_screen_algorithm_server_payload_uses_primary_model_gpu_telemetry():
                 "ok": False,
                 "serviceOk": True,
                 "latencyMs": 31,
-                "telemetry": {
+                    "telemetry": {
                     "inferenceMode": "remote-cuda",
                     "activeProvider": "CUDAExecutionProvider",
                     "cudaDeviceId": 0,
-                    "remoteReady": True,
+                        "remoteReady": True,
+                        "verdictReady": True,
+                        "decisionMode": "calibrated_verdict",
                     "remoteLatencyMs": 18.4,
                     "queueDepth": 2,
                 },
@@ -466,6 +471,9 @@ def test_screen_algorithm_server_payload_uses_primary_model_gpu_telemetry():
         "status": "healthy",
         "serviceReady": True,
         "modelReady": True,
+        "verdictReady": True,
+        "decisionMode": "calibrated_verdict",
+        "decisionGateReasons": [],
         "modelId": "v1-onnx-mil",
         "modelName": "RealGuard 主模型",
         "inferenceMode": "remote-cuda",
@@ -1064,6 +1072,68 @@ def test_admin_write_requires_csrf_token(client, monkeypatch):
     assert "CSRF" in response.get_json()["message"]
 
 
+def test_operator_can_request_legacy_claim_but_cannot_approve(client, monkeypatch):
+    _login_session(client, admin_role="operator")
+    monkeypatch.setattr(admin, "excute_sql", lambda *args, **kwargs: [{"account_uuid": "operator-person"}])
+    claim = {
+        "id": 8,
+        "recordType": "data",
+        "recordId": 42,
+        "status": "claim_pending",
+        "version": 1,
+        "evidenceSha256": "a" * 64,
+    }
+    monkeypatch.setattr(admin, "request_legacy_record_claim", lambda *args: claim)
+    monkeypatch.setattr(admin, "_audit", lambda *args, **kwargs: True)
+
+    response = client.post(
+        "/api/admin/legacy-history/claims",
+        json={
+            "recordType": "data",
+            "itemid": 42,
+            "accountUuid": str(__import__("uuid").uuid4()),
+            "expectedFingerprint": "b" * 64,
+            "evidenceReference": "case/42",
+            "evidenceSha256": "a" * 64,
+            "reason": "verified account migration ledger",
+            "operationId": str(__import__("uuid").uuid4()),
+        },
+        headers=_csrf_headers(client),
+    )
+    approve = client.post(
+        "/api/admin/legacy-history/claims/8/approve",
+        json={"approvalOperationId": str(__import__("uuid").uuid4()), "expectedVersion": 1},
+        headers=_csrf_headers(client),
+    )
+
+    assert response.status_code == 201
+    assert response.get_json()["claim"]["id"] == 8
+    assert approve.status_code == 403
+
+
+def test_reviewer_can_approve_legacy_claim_but_cannot_request(client, monkeypatch):
+    _login_session(client, admin_role="reviewer")
+    monkeypatch.setattr(admin, "excute_sql", lambda *args, **kwargs: [{"account_uuid": "reviewer-person"}])
+    monkeypatch.setattr(
+        admin,
+        "approve_legacy_record_claim",
+        lambda *args: {"id": 8, "recordType": "data", "recordId": 42, "status": "claimed", "version": 2},
+    )
+    monkeypatch.setattr(admin, "_audit", lambda *args, **kwargs: True)
+    headers = _csrf_headers(client)
+
+    approve = client.post(
+        "/api/admin/legacy-history/claims/8/approve",
+        json={"approvalOperationId": str(__import__("uuid").uuid4()), "expectedVersion": 1},
+        headers=headers,
+    )
+    request_claim = client.post("/api/admin/legacy-history/claims", json={}, headers=headers)
+
+    assert approve.status_code == 200
+    assert approve.get_json()["claim"]["status"] == "claimed"
+    assert request_claim.status_code == 403
+
+
 def test_readonly_admin_cannot_create_model(client, monkeypatch):
     with client.session_transaction() as sess:
         sess["admin_user"] = {
@@ -1203,7 +1273,7 @@ def test_big_screen_readonly_token_allows_unauthenticated_fetch(client, monkeypa
     assert allowed.get_json()["metrics"]["detections"]["today"] == 11
 
 
-def test_big_screen_query_token_is_exchanged_for_signed_session(client, monkeypatch):
+def test_big_screen_query_token_is_rejected_and_header_is_exchanged_for_signed_session(client, monkeypatch):
     monkeypatch.setenv("REALGUARD_BIG_SCREEN_TOKEN", "screen-secret")
     admin._clear_big_screen_cache()
     monkeypatch.setattr(
@@ -1219,16 +1289,21 @@ def test_big_screen_query_token_is_exchanged_for_signed_session(client, monkeypa
         },
     )
 
-    exchanged = client.get("/admin/screen?token=screen-secret")
+    rejected = client.get("/admin/screen?token=screen-secret")
+    exchanged = client.get(
+        "/admin/screen",
+        headers={"X-RealGuard-Screen-Token": "screen-secret"},
+    )
 
-    assert exchanged.status_code == 302
-    assert exchanged.headers["Location"].endswith("/admin/screen")
-    assert "screen-secret" not in exchanged.headers["Location"]
+    assert rejected.status_code == 302
+    assert rejected.headers["Location"].endswith("/admin/login")
+    assert exchanged.status_code == 200
+    assert "screen-secret" not in exchanged.get_data(as_text=True)
     with client.session_transaction() as sess:
         assert sess[admin.ADMIN_SCREEN_SESSION_KEY] == admin.hashlib.sha256(b"screen-secret").hexdigest()
         assert sess[admin.ADMIN_SCREEN_SESSION_KEY] != "screen-secret"
 
-    page = client.get(exchanged.headers["Location"])
+    page = client.get("/admin/screen")
     payload = client.get("/api/admin/big-screen")
 
     assert page.status_code == 200
@@ -1606,3 +1681,63 @@ def test_csv_neutralizes_spreadsheet_formulas():
         response = admin._csv_response("audit.csv", ["value"], [["=HYPERLINK(\"https://evil.test\")"]])
 
     assert "'=HYPERLINK" in response.get_data(as_text=True)
+
+
+def test_backup_assurance_requires_fresh_verified_offsite_status(monkeypatch, tmp_path):
+    status_path = tmp_path / "backup-status.json"
+    status_path.write_text(
+        json.dumps({
+            "schemaVersion": 1,
+            "state": "success",
+            "updatedAt": "2026-07-20T01:00:00Z",
+            "snapshot": "20260720T010000Z",
+            "lastSuccessAt": "2026-07-20T01:00:00Z",
+            "lastOffsiteSuccessAt": "2026-07-20T01:00:00Z",
+            "offsiteConfigured": True,
+            "offsiteVerified": True,
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("REALGUARD_BACKUP_STATUS_FILE", str(status_path))
+    monkeypatch.setenv("REALGUARD_BACKUP_MAX_AGE_SECONDS", "7200")
+
+    result = admin._backup_assurance(datetime(2026, 7, 20, 2, 0, tzinfo=timezone.utc))
+
+    assert result["state"] == "success"
+    assert result["localFresh"] is True
+    assert result["offsiteFresh"] is True
+    assert result["localAgeSeconds"] == 3600
+    assert result["offsiteAgeSeconds"] == 3600
+
+
+def test_backup_assurance_rejects_symlink_and_raises_alerts(monkeypatch, tmp_path):
+    real_status = tmp_path / "real-status.json"
+    real_status.write_text('{"schemaVersion":1,"state":"success"}', encoding="utf-8")
+    status_path = tmp_path / "backup-status.json"
+    status_path.symlink_to(real_status)
+    monkeypatch.setenv("REALGUARD_BACKUP_STATUS_FILE", str(status_path))
+
+    backup = admin._backup_assurance(datetime(2026, 7, 20, tzinfo=timezone.utc))
+    conditions = admin._alert_conditions(
+        {"routing": {"fallbackEnabled": False}},
+        [],
+        {"online": True},
+        backup=backup,
+    )
+
+    assert backup["state"] == "missing"
+    assert backup["readError"]
+    assert conditions["backupStale"]["active"] is True
+    assert conditions["offsiteBackupMissing"]["active"] is True
+
+
+def test_failed_backup_status_triggers_distinct_critical_alert():
+    conditions = admin._alert_conditions(
+        {"routing": {"fallbackEnabled": False}},
+        [],
+        {"online": True},
+        backup={"state": "failed", "localFresh": True, "offsiteFresh": True},
+    )
+
+    assert conditions["backupRunFailed"]["active"] is True
+    assert conditions["backupRunFailed"]["level"] == "critical"

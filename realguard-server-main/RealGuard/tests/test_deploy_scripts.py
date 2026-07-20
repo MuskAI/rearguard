@@ -67,6 +67,99 @@ def test_nginx_rate_limit_response_is_machine_readable_and_retryable():
         assert '"code":"rate_limited"' in body
 
 
+def test_public_default_nginx_rejects_ip_host_and_internal_preview_is_loopback_only():
+    body = (
+        ROOT / "realguard-server-main" / "deploy" / "nginx-realguard-frontend.conf"
+    ).read_text(encoding="utf-8")
+
+    default_server = body.split("server {", 2)[1]
+    assert "listen 80 default_server;" in default_server
+    assert "server_name _;" in default_server
+    assert "return 444;" in default_server
+    assert "listen 127.0.0.1:8081;" in body
+    assert "listen 8081;" not in body
+
+
+def test_big_screen_page_disables_access_log_and_never_uses_query_token_auth():
+    for config in (
+        ROOT / "deploy" / "nginx" / "realguard.conf",
+        ROOT / "realguard-server-main" / "deploy" / "nginx-realguard-frontend.conf",
+    ):
+        body = config.read_text(encoding="utf-8")
+        location = body.split("location = /admin/screen", 1)[1].split("}", 1)[0]
+        assert "access_log off;" in location
+    admin_body = (
+        ROOT / "realguard-server-main" / "RealGuard" / "imagedetection" / "views" / "admin.py"
+    ).read_text(encoding="utf-8")
+    token_reader = admin_body.split("def _screen_token_from_request", 1)[1].split("def _configured_screen_token_digest", 1)[0]
+    assert "request.args" not in token_reader
+
+
+def test_deploy_converge_consumes_current_gpu_status_contract():
+    body = (ROOT / "scripts" / "deploy_converge.sh").read_text(encoding="utf-8")
+
+    for field in (
+        "gpu_model_service",
+        "gpu_watermark_service",
+        "gpu_yolo_service",
+        "gpu_model_tunnel",
+        "gpu_precheck_tunnel",
+        "gpu_model_runtime",
+        "gpu_public_detector_service",
+        "gpu_public_runtime",
+    ):
+        assert f"s/^{field}=//p" in body
+    assert "s/^gpu_service=//p" not in body
+    assert "s/^gpu_internal_http=//p" not in body
+    assert "s/^gpu_external_http=//p" not in body
+
+
+def test_production_services_require_critical_environment_files():
+    units = (
+        ROOT / "deploy" / "systemd" / "realguard-backend.service",
+        ROOT / "deploy" / "systemd" / "realguard-detector-backend.service",
+        ROOT / "deploy" / "systemd" / "realguard-developer-worker.service",
+        ROOT / "deploy" / "systemd" / "realguard-alert-worker.service",
+        ROOT / "deploy" / "systemd" / "realguard-alert-watchdog.service",
+        ROOT / "deploy" / "systemd" / "realguard-security-audit-verify.service",
+        ROOT / "deploy" / "systemd" / "realguard-backup.service",
+        ROOT / "deploy" / "systemd" / "realguard-restore-drill.service",
+        ROOT / "deploy" / "systemd" / "jianzhen-v2-backend.service",
+    )
+
+    for unit in units:
+        body = unit.read_text(encoding="utf-8")
+        critical_lines = [
+            line for line in body.splitlines()
+            if line.startswith("EnvironmentFile=") and "sms.env" not in line
+        ]
+        assert critical_lines
+        assert all("EnvironmentFile=-" not in line for line in critical_lines)
+
+
+def test_alert_delivery_and_restore_drills_are_independent_services():
+    web = (ROOT / "deploy" / "systemd" / "realguard-backend.service").read_text(encoding="utf-8")
+    alert = (ROOT / "deploy" / "systemd" / "realguard-alert-worker.service").read_text(encoding="utf-8")
+    restore_timer = (ROOT / "deploy" / "systemd" / "realguard-restore-drill.timer").read_text(encoding="utf-8")
+    watchdog_timer = (ROOT / "deploy" / "systemd" / "realguard-alert-watchdog.timer").read_text(encoding="utf-8")
+    audit_timer = (ROOT / "deploy" / "systemd" / "realguard-security-audit-verify.timer").read_text(encoding="utf-8")
+    deploy = (ROOT / "scripts" / "deploy_v1.sh").read_text(encoding="utf-8")
+    activate = (ROOT / "scripts" / "remote" / "activate_v1.sh").read_text(encoding="utf-8")
+
+    assert "Environment=REALGUARD_ALERT_WORKER_ENABLED=0" in web
+    assert "--app run:app alert-worker" in alert
+    assert "Restart=always" in alert
+    assert "Unit=realguard-restore-drill.service" in restore_timer
+    assert "Unit=realguard-alert-watchdog.service" in watchdog_timer
+    assert "Unit=realguard-security-audit-verify.service" in audit_timer
+    assert "realguard-alert-worker.service" in deploy
+    assert "realguard-restore-drill.timer" in deploy
+    assert "realguard-alert-worker.service" in activate
+    assert "realguard-restore-drill.timer" in activate
+    assert "realguard-alert-watchdog.timer" in activate
+    assert "realguard-security-audit-verify.timer" in activate
+
+
 def test_release_directories_are_unique_for_repeated_commit_deployments():
     scripts = (
         ROOT / "scripts" / "remote" / "activate_v1.sh",

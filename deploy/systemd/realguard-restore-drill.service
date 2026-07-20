@@ -1,6 +1,6 @@
 [Unit]
-Description=RealGuard application data backup
-After=mysql.service realguard-backend.service jianzhen-v2-backend.service
+Description=RealGuard isolated backup restore verification
+After=mysql.service realguard-backup.service
 Requires=mysql.service
 
 [Service]
@@ -8,18 +8,19 @@ Type=oneshot
 User=root
 Group=root
 UMask=0077
+Environment=REALGUARD_RESTORE_ALLOW_EVENT_PAUSE=1
 EnvironmentFile=/etc/realguard/realguard-backend.env
 EnvironmentFile=/etc/realguard/detector-db.env
 EnvironmentFile=/etc/realguard/backup.env
-ExecStart=/usr/local/sbin/realguard-backup
-Nice=10
+ExecStart=/usr/local/sbin/realguard-restore-verify
+Nice=15
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=full
-ReadWritePaths=/var/backups/realguard /opt/realguard-data
+ReadWritePaths=/var/backups/realguard /opt/realguard-data /var/tmp
 
 [Install]
 WantedBy=multi-user.target

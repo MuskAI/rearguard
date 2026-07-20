@@ -1,0 +1,24 @@
+[Unit]
+Description=RealGuard alert worker dead-man watchdog
+After=network-online.target mysql.service
+Wants=network-online.target
+Requires=mysql.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/realguard-server/RealGuard
+Environment=REALGUARD_ALERT_WORKER_ENABLED=0
+EnvironmentFile=/etc/realguard/session.env
+EnvironmentFile=/etc/realguard/realguard-backend.env
+EnvironmentFile=/etc/realguard/detector-db.env
+EnvironmentFile=/etc/realguard/agent.env
+EnvironmentFile=/etc/realguard/watermark-precheck.env
+ExecStart=/opt/realguard-server/.venv/bin/python -m flask --app run:app alert-watchdog
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/opt/realguard-server/RealGuard /opt/realguard-data /tmp

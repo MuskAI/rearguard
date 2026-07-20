@@ -22,7 +22,7 @@ load_dotenv()
 API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
 BASE_URL = os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
 VLM_MODEL = os.getenv("VLM_MODEL", "qwen3-vl-flash")
-FORENSICS_PIPELINE_VERSION = "huijian-forensics-v2-png-prompt1"
+FORENSICS_PIPELINE_VERSION = "huijian-forensics-v2-evidence-only-prompt3"
 FORENSIC_MAPS_VERSION = "huijian-forensic-maps-v2"
 IMAGE_SUSPECT_THRESHOLD = float(os.getenv("JIANZHEN_IMAGE_SUSPECT_THRESHOLD", "0.62"))
 IMAGE_HIGH_THRESHOLD = float(os.getenv("JIANZHEN_IMAGE_HIGH_THRESHOLD", "0.82"))
@@ -400,11 +400,12 @@ def analyze_text_vlm(text: str) -> dict | None:
 FORENSIC_SYSTEM = """你是「慧鉴 AI」可解释性取证分析引擎。你会收到一张原图，以及对它做的多张信号级取证可视化图
 （ELA压缩对齐、噪声成分、噪声一致性、频域谱、光照梯度、光照一致性、多次JPEG压缩曲线）。
 
-请像数字图像取证专家那样，逐张判读每幅证据图上**具体可见的异常现象**（位置、形态、颜色），
-并据此综合判断原图是否为 AI 生成 / 篡改。务必基于证据图实际内容描述，不要凭空臆造；
+请像数字图像取证专家那样，逐张判读每幅证据图上**具体可见的信号现象**（位置、形态、颜色）。
+你的职责仅限客观描述证据图，不得判断原图真假、是否 AI 生成或是否经过篡改，不得输出概率、置信度或综合结论。
+务必基于证据图实际内容描述，不要凭空臆造；
 真实照片也要如实说明"未见异常"。
 ELA、噪声成分、噪声一致性、多次 JPEG 曲线只作为辅助线索，容易受压缩、缩放、纹理影响；
-这些项目不能单独决定真伪，必须有语义/频域/光照等证据互相印证才上调整体结论。
+这些项目不能决定真伪，只能帮助人工复核人员定位需要查看的区域。
 只输出 JSON，不要 markdown。"""
 
 
@@ -420,21 +421,17 @@ def explainable(data: bytes) -> dict:
 
 多次JPEG压缩曲线数据点（quality→error）：{jpeg_points}
 
-请逐项判读并严格输出 JSON：
+请逐项判读并严格输出 JSON。你只负责描述证据图中可复核的现象，不得输出真假结论、概率或置信度：
 {{
-  "verdict": "real | suspected_fake | highly_suspected_fake",
-  "confidence": 0.0-1.0,
   "items": [
     {{"key":"ela","status":"ok|warn|danger","finding":"在该证据图上看到的具体异常（位置/形态），无异常则写未见明显异常"}},
     ... 对全部 7 个 key 各一条，key 必须与上面一致 ...
-  ],
-  "summary": "综合判定，3-6 句：指出哪几项构成核心伪造指纹，给出结论与建议（中文）"
+  ]
 }}
-status 含义：ok=正常 / warn=可疑 / danger=高危。confidence 与 verdict 自洽。"""
+status 含义：ok=未见明显异常 / warn=需要关注 / danger=存在明显异常现象。status 仍只是证据图观察，不能等同于内容真假。"""
 
     client = _get_client()
     findings: dict[str, dict] = {}
-    verdict, confidence, summary = None, None, ""
     source = "maps-only"
     token_usage = {"promptTokens": 0, "completionTokens": 0, "totalTokens": 0}
     model_ms = 0
@@ -470,9 +467,6 @@ status 含义：ok=正常 / warn=可疑 / danger=高危。confidence 与 verdict
             if parsed:
                 source = "vlm"
                 token_usage = _token_usage(resp)
-                verdict = parsed.get("verdict")
-                confidence = parsed.get("confidence")
-                summary = str(parsed.get("summary", ""))
                 for item in parsed.get("items", []):
                     if isinstance(item, dict) and item.get("key"):
                         findings[item["key"]] = item
@@ -498,29 +492,14 @@ status 含义：ok=正常 / warn=可疑 / danger=高危。confidence 与 verdict
             "image": "data:image/png;base64," + base64.b64encode(it["png"]).decode(),
         })
 
-    if confidence is None:
-        confidence = 0.5
-    confidence = round(min(max(float(confidence), 0.0), 1.0), 3)
     core_alerts = [it for it in items if it["key"] not in FORENSIC_AUXILIARY_KEYS and it["status"] in ("warn", "danger")]
     core_dangers = [it for it in core_alerts if it["status"] == "danger"]
-    if not core_alerts:
-        confidence = min(confidence, 0.49)
-        verdict = "real"
-        if summary:
-            summary = f"{summary}\nELA/噪声/压缩曲线仅作为辅助提示，未见非辅助证据互相印证，整体结论已降权处理。"
-    elif not core_dangers:
-        confidence = min(confidence, 0.68)
-        if verdict == "highly_suspected_fake":
-            verdict = "suspected_fake"
-    if verdict not in ("real", "suspected_fake", "highly_suspected_fake"):
-        verdict = _verdict_from_score(confidence)
-    if not summary:
-        summary = "已生成 7 项取证可视化证据图，请结合各图异常综合判断。"
-
-    return {
-        "verdict": verdict,
-        "confidence": confidence,
-        "summary": summary,
+    report = {
+        "summary": (
+            f"已生成 {len(items)} 项取证可视化，非辅助证据图中发现 "
+            f"{len(core_alerts)} 项需关注现象，其中 {len(core_dangers)} 项为明显异常现象。"
+            "这些结果仅描述可复核线索，不形成内容真假的自动结论。"
+        ),
         "items": items,
         "jpegPoints": jpeg_points,
         "modelVersion": VLM_MODEL if source == "vlm" else FORENSIC_MAPS_VERSION,
@@ -532,14 +511,58 @@ status 含义：ok=正常 / warn=可疑 / danger=高危。confidence 与 verdict
             "totalMs": int((time.perf_counter() - started) * 1000),
         },
     }
+    return normalize_forensic_evidence(report)
+
+
+def normalize_forensic_evidence(report: dict | None) -> dict:
+    """Remove verdict-shaped fields from current and legacy forensic artifacts."""
+    normalized = dict(report or {})
+    normalized.pop("verdict", None)
+    normalized.pop("confidence", None)
+    items = []
+    for source_item in normalized.get("items", []):
+        if not isinstance(source_item, dict):
+            continue
+        item = dict(source_item)
+        if item.get("status") == "danger":
+            item["status"] = "warn"
+        item["finding"] = (
+            "该证据图被标记为需要关注，请直接查看可视化中的局部信号并人工复核。"
+            if item.get("status") == "warn"
+            else "该证据图未被标记为需要关注；此结果不代表内容真实。"
+        )
+        items.append(item)
+    normalized["items"] = items
+    core_alerts = [
+        item for item in items
+        if item.get("key") not in FORENSIC_AUXILIARY_KEYS
+        and item.get("status") in ("warn", "danger")
+    ]
+    core_dangers = [item for item in core_alerts if item.get("status") == "danger"]
+    normalized.update({
+        "summary": (
+            f"已生成 {len(items)} 项取证可视化，非辅助证据图中发现 "
+            f"{len(core_alerts)} 项需关注现象，其中 {len(core_dangers)} 项为明显异常现象。"
+            "这些结果仅描述可复核线索，不形成内容真假的自动结论。"
+        ),
+        "decisionStatus": "review_only",
+        "decisionAuthority": "evidence_only",
+        "reviewRequired": True,
+    })
+    return normalized
 
 
 def compact_explainable_for_cache(report: dict) -> dict:
     """Keep model findings in SQLite while leaving regenerated PNG maps out of the cache."""
-    compact = {key: value for key, value in report.items() if key not in {"fileMeta", "elapsedMs"}}
+    normalized = normalize_forensic_evidence(report)
+    compact = {
+        key: value
+        for key, value in normalized.items()
+        if key not in {"fileMeta", "elapsedMs"}
+    }
     compact["items"] = [
         {key: value for key, value in item.items() if key != "image"}
-        for item in report.get("items", [])
+        for item in normalized.get("items", [])
         if isinstance(item, dict)
     ]
     return compact
@@ -566,13 +589,13 @@ def attach_forensic_images(data: bytes, cached_report: dict) -> dict:
             "image": "data:image/png;base64," + base64.b64encode(item["png"]).decode(),
         })
 
-    report = dict(cached_report)
+    report = normalize_forensic_evidence(cached_report)
     report["items"] = items
     report["jpegPoints"] = jpeg_points
     timings = dict(report.get("timings") or {})
     timings["cacheMapsMs"] = int((time.perf_counter() - started) * 1000)
     report["timings"] = timings
-    return report
+    return normalize_forensic_evidence(report)
 
 
 def _normalize(parsed: dict, file_type: str, source: str, model: str, token_usage: dict | None = None) -> dict:
