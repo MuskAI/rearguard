@@ -119,6 +119,21 @@ sudo -u ubuntu "$release_root/.venv/bin/python" -m pip install \
   --no-cache-dir --quiet --upgrade -r "$release_root/RealGuard/requirements.lock"
 sudo -u ubuntu "$release_root/.venv/bin/python" -m pip install \
   --no-cache-dir --quiet --no-deps 'invisible-watermark==0.2.0'
+sudo bash -lc '
+  set -euo pipefail
+  set -a
+  for env_file in \
+    /etc/realguard/session.env \
+    /etc/realguard/realguard-backend.env \
+    /etc/realguard/detector-db.env \
+    /etc/realguard/agent.env \
+    /etc/realguard/model-inference.env; do
+    [ ! -f "$env_file" ] || . "$env_file"
+  done
+  set +a
+  cd '"$release_root"'/RealGuard
+  '"$release_root"'/.venv/bin/python -c "import run, detector_backend"
+'
 
 trap rollback ERR
 sudo systemctl stop realguard-developer-worker.service 2>/dev/null || true
