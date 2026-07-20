@@ -110,6 +110,33 @@ class FakeConnection:
         self.closed = True
 
 
+class SchemaCursor:
+    def __init__(self):
+        self.current = None
+        self.rowcount = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def execute(self, sql, params=None):
+        normalized = " ".join(sql.split())
+        self.rowcount = 0
+        if normalized.startswith("SHOW COLUMNS"):
+            self.current = {"Null": "NO"}
+        elif normalized.startswith("SHOW INDEX"):
+            self.current = {"Key_name": params[0]}
+        elif normalized.startswith("SELECT COUNT(*)"):
+            self.current = {"count": 0}
+        else:
+            self.current = None
+
+    def fetchone(self):
+        return self.current
+
+
 def _claim(record, account, requester=11):
     media_sha256 = "d" * 64
     requester_identity_hash = __import__("hashlib").sha256(b"13800000001").hexdigest()
@@ -161,6 +188,20 @@ def _prepare_approval(monkeypatch, claim, account, connection):
     monkeypatch.setattr(utils, "_verify_evidence_reference", lambda *args: True)
     monkeypatch.setattr(utils, "_legacy_hmac", lambda payload, *args: "request-seal" if "operationId" in payload else "approval-seal")
     return account_connection
+
+
+def test_identity_schema_upgrade_does_not_depend_on_claim_context(monkeypatch):
+    account_connection = FakeConnection(SchemaCursor())
+    detection_connection = FakeConnection(SchemaCursor())
+    monkeypatch.setattr(utils, "get_db_connection", lambda: account_connection)
+    monkeypatch.setattr(utils, "get_detection_db_connection", lambda: detection_connection)
+
+    changes = utils.apply_account_identity_schema()
+
+    assert changes["unowned_data"] == 0
+    assert changes["unowned_video_data"] == 0
+    assert account_connection.committed is True
+    assert detection_connection.committed is True
 
 
 def test_legacy_claim_approval_requires_a_different_admin(monkeypatch):

@@ -160,14 +160,6 @@ def _index_exists(cursor, table, index_name):
 
 def apply_account_identity_schema():
     """Create immutable ownership columns without guessing legacy ownership."""
-    pre_claim_rows = excute_detection_sql(
-        "SELECT target_account_uuid, target_account_fingerprint "
-        "FROM legacy_record_governance WHERE id = %s LIMIT 1",
-        (claim_id,),
-    ) or []
-    if not pre_claim_rows:
-        raise LegacyGovernanceError('治理申请不存在', 'not_found')
-    pre_claim = pre_claim_rows[0]
     account_conn = get_db_connection()
     detection_conn = get_detection_db_connection()
     changes = {'accounts': 0, 'detection_users': 0, 'data': 0, 'video_data': 0}
