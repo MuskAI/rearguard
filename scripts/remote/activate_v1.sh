@@ -82,6 +82,11 @@ rollback() {
 }
 
 printf '%s  %s\n' "$IP2REGION_XDB_SHA256" /tmp/realguard-ip2region-v4.xdb | sha256sum -c -
+if sudo nginx -T 2>/dev/null \
+  | grep -Eq '^[[:space:]]*listen[[:space:]]+([^;[:space:]]*:)?5000([[:space:]]|;)'; then
+  echo "Nginx must not listen on the internal V1 application port 5000" >&2
+  exit 1
+fi
 sudo install -m 700 /tmp/realguard-backup /usr/local/sbin/realguard-backup
 sudo install -m 700 /tmp/realguard-restore-verify /usr/local/sbin/realguard-restore-verify
 sudo bash -lc '

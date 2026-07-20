@@ -150,6 +150,8 @@ def test_v1_release_can_build_a_pinned_runtime_as_the_service_user():
     assert "requirements.txt requirements.lock imagedetection" in deploy
     assert "--retry-all-errors" in deploy
     assert "--connect-timeout 15" in deploy
+    assert "Nginx must not listen on the internal V1 application port 5000" in activate
+    assert "nginx -T" in activate
     assert (
         'sudo install -d -m 755 -o ubuntu -g ubuntu "$release_root" '
         '"$release_root/RealGuard"'
