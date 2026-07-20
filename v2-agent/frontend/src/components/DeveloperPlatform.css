@@ -148,6 +148,19 @@
   font-size: 11px;
 }
 
+.developer-page-error,
+.developer-modal-error {
+  color: #8f3025;
+  background: #fff1ee;
+  border: 1px solid #efc0b7;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.developer-page-error { margin: 14px auto 0; padding: 10px 12px; width: min(100% - 24px, 1240px); }
+.developer-modal-error { margin: 15px 0 0; padding: 9px 10px; }
+
 .developer-primary-action,
 .developer-secondary-action,
 .developer-icon-button {

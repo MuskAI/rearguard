@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+sudo install -m 600 -o ubuntu -g ubuntu /dev/null /var/lock/huijian-v2-deploy.lock
+exec 9>/var/lock/huijian-v2-deploy.lock
+flock -n 9 || { printf 'Another V2 activation is already running.\n' >&2; exit 75; }
+
 commit_sha="$(tr -d '[:space:]' </tmp/jianzhen-v2.DEPLOYED_COMMIT)"
 [[ "$commit_sha" =~ ^[0-9a-f]{7,40}$ ]]
 release_id="${commit_sha}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 release_root="/opt/jianzhen-v2/releases/$release_id"
 current_app=""
+current_runtime=""
 frontend_switched=0
 app_switched=0
+runtime_switched=0
 unit_switched=0
 
 rollback() {
@@ -21,6 +27,10 @@ rollback() {
   if [[ "$app_switched" == "1" && -n "$current_app" && -e "$current_app" ]]; then
     sudo ln -sfn "$current_app" /opt/jianzhen-v2/app.next
     sudo mv -Tf /opt/jianzhen-v2/app.next /opt/jianzhen-v2/app
+  fi
+  if [[ "$runtime_switched" == "1" && -n "$current_runtime" && -e "$current_runtime" ]]; then
+    sudo ln -sfn "$current_runtime" /opt/jianzhen-v2/.venv.next
+    sudo mv -Tf /opt/jianzhen-v2/.venv.next /opt/jianzhen-v2/.venv
   fi
   if [[ "$unit_switched" == "1" ]]; then
     if [[ -f /tmp/jianzhen-v2-backend.service.previous ]]; then
@@ -41,6 +51,11 @@ sudo touch /etc/realguard/jianzhen-v2.env
 if ! sudo grep -q '^JIANZHEN_REPORT_SHARE_SECRET=' /etc/realguard/jianzhen-v2.env; then
   report_share_secret="$(openssl rand -hex 32)"
   printf 'JIANZHEN_REPORT_SHARE_SECRET=%s\n' "$report_share_secret" \
+    | sudo tee -a /etc/realguard/jianzhen-v2.env >/dev/null
+fi
+if ! sudo grep -q '^JIANZHEN_CONSENT_AUDIT_SALT=' /etc/realguard/jianzhen-v2.env; then
+  consent_audit_salt="$(openssl rand -hex 32)"
+  printf 'JIANZHEN_CONSENT_AUDIT_SALT=%s\n' "$consent_audit_salt" \
     | sudo tee -a /etc/realguard/jianzhen-v2.env >/dev/null
 fi
 if ! sudo grep -q '^JIANZHEN_PUBLIC_BASE_URL=' /etc/realguard/jianzhen-v2.env; then
@@ -71,7 +86,18 @@ elif [[ -d /opt/jianzhen-v2/app ]]; then
   sudo ln -s "$current_app" /opt/jianzhen-v2/app
 fi
 
-sudo -u ubuntu /opt/jianzhen-v2/.venv/bin/python -m pip install \
+if [[ -L /opt/jianzhen-v2/.venv ]]; then
+  current_runtime="$(readlink -f /opt/jianzhen-v2/.venv)"
+elif [[ -d /opt/jianzhen-v2/.venv ]]; then
+  legacy_runtime_root="/opt/jianzhen-v2/releases/legacy-runtime-$(date -u +%Y%m%dT%H%M%SZ)"
+  sudo install -d -m 755 -o ubuntu -g ubuntu "$legacy_runtime_root"
+  sudo mv /opt/jianzhen-v2/.venv "$legacy_runtime_root/.venv"
+  current_runtime="$legacy_runtime_root/.venv"
+  sudo ln -s "$current_runtime" /opt/jianzhen-v2/.venv
+fi
+
+sudo -u ubuntu /usr/bin/python3 -m venv "$release_root/.venv"
+sudo -u ubuntu "$release_root/.venv/bin/python" -m pip install \
   --disable-pip-version-check --no-cache-dir --quiet --require-hashes \
   -r "$release_root/requirements.lock"
 
@@ -88,6 +114,9 @@ sudo systemctl enable jianzhen-v2-backend.service >/dev/null
 sudo ln -sfn "$release_root/app" /opt/jianzhen-v2/app.next
 sudo mv -Tf /opt/jianzhen-v2/app.next /opt/jianzhen-v2/app
 app_switched=1
+sudo ln -sfn "$release_root/.venv" /opt/jianzhen-v2/.venv.next
+sudo mv -Tf /opt/jianzhen-v2/.venv.next /opt/jianzhen-v2/.venv
+runtime_switched=1
 sudo systemctl restart jianzhen-v2-backend.service
 
 health_ready=0
@@ -118,6 +147,7 @@ sudo install -m 644 /tmp/jianzhen-v2.DEPLOYED_COMMIT /opt/jianzhen-v2/DEPLOYED_C
 sudo rm -rf /var/www/v2.previous
 frontend_switched=0
 app_switched=0
+runtime_switched=0
 unit_switched=0
 trap - ERR
 

@@ -10,6 +10,7 @@ import os
 import secrets
 import sys
 import time
+import uuid
 from pathlib import Path
 from urllib import error, request
 
@@ -156,7 +157,8 @@ def detect(args: argparse.Namespace) -> int:
         raise ApiError(f"Image does not exist: {image_path}")
     if image_path.stat().st_size > MAX_IMAGE_BYTES:
         raise ApiError("Image exceeds the 25 MB API limit")
-    task = create_task(image_path, args.mode, args.idempotency_key, args.request_timeout)
+    idempotency_key = args.idempotency_key or str(uuid.uuid4())
+    task = create_task(image_path, args.mode, idempotency_key, args.request_timeout)
     if not args.no_wait:
         task = wait_for_task(task, args.timeout, args.poll_interval)
     if args.report:
@@ -173,7 +175,10 @@ def parser() -> argparse.ArgumentParser:
     command = commands.add_parser("detect", help="Create and optionally wait for an image detection")
     command.add_argument("image")
     command.add_argument("--mode", choices=("fast", "swarm"), default="fast")
-    command.add_argument("--idempotency-key")
+    command.add_argument(
+        "--idempotency-key",
+        help="Stable key for retrying the same request; defaults to a UUID for this invocation",
+    )
     command.add_argument("--no-wait", action="store_true")
     command.add_argument("--report")
     command.add_argument("--timeout", type=float, default=240.0)

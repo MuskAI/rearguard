@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
 import { Check, KeyRound, LoaderCircle, MessageSquareText, Smartphone, UserRound, X } from "lucide-react";
 import {
   AccountUser,
@@ -135,6 +135,21 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
     setCode("");
   }
 
+  function movePanelFocus(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    const tabs = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+    const current = tabs.indexOf(document.activeElement as HTMLButtonElement);
+    if (current < 0) return;
+    event.preventDefault();
+    const next = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? tabs.length - 1
+        : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+    tabs[next]?.focus();
+    tabs[next]?.click();
+  }
+
   return (
     <div className="dialog-layer" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !busy && onClose()}>
       <section ref={dialogRef} className="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-title" aria-describedby="auth-description">
@@ -147,23 +162,24 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
           <p id="auth-description">{panel === "login" ? "登录后，任务与报告只对你本人可见。" : "注册后即可保存个人鉴伪记录。"}</p>
         </div>
 
-        <div className="segmented auth-panels" role="tablist" aria-label="登录或注册">
-          <button type="button" role="tab" aria-selected={panel === "login"} className={panel === "login" ? "active" : ""} onClick={() => switchPanel("login")}>登录</button>
-          <button type="button" role="tab" aria-selected={panel === "register"} className={panel === "register" ? "active" : ""} onClick={() => switchPanel("register")}>注册</button>
+        <div className="segmented auth-panels" role="tablist" aria-label="登录或注册" onKeyDown={movePanelFocus}>
+          <button id="auth-tab-login" type="button" role="tab" aria-selected={panel === "login"} aria-controls="auth-panel" tabIndex={panel === "login" ? 0 : -1} className={panel === "login" ? "active" : ""} onClick={() => switchPanel("login")}>登录</button>
+          <button id="auth-tab-register" type="button" role="tab" aria-selected={panel === "register"} aria-controls="auth-panel" tabIndex={panel === "register" ? 0 : -1} className={panel === "register" ? "active" : ""} onClick={() => switchPanel("register")}>注册</button>
         </div>
 
-        {panel === "login" && (
-          <div className="auth-mode-switch">
-            <button type="button" className={loginMode === "password" ? "active" : ""} onClick={() => { setLoginMode("password"); setMessage(""); }}>
-              <KeyRound size={15} /> 密码登录
-            </button>
-            <button type="button" className={loginMode === "sms" ? "active" : ""} onClick={() => { setLoginMode("sms"); setMessage(""); }}>
-              <MessageSquareText size={15} /> 验证码登录
-            </button>
-          </div>
-        )}
+        <div id="auth-panel" role="tabpanel" aria-labelledby={`auth-tab-${panel}`} tabIndex={0}>
+          {panel === "login" && (
+            <div className="auth-mode-switch" role="group" aria-label="登录方式">
+              <button type="button" aria-pressed={loginMode === "password"} className={loginMode === "password" ? "active" : ""} onClick={() => { setLoginMode("password"); setMessage(""); }}>
+                <KeyRound size={15} /> 密码登录
+              </button>
+              <button type="button" aria-pressed={loginMode === "sms"} className={loginMode === "sms" ? "active" : ""} onClick={() => { setLoginMode("sms"); setMessage(""); }}>
+                <MessageSquareText size={15} /> 验证码登录
+              </button>
+            </div>
+          )}
 
-        <form className="auth-form" onSubmit={submit}>
+          <form className="auth-form" onSubmit={submit}>
           {panel === "register" && (
             <label>
               <span>昵称</span>
@@ -203,7 +219,8 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
             {busy && <LoaderCircle size={17} className="spin" />}
             {busy ? "处理中" : panel === "login" ? "安全登录" : "创建账号"}
           </button>
-        </form>
+          </form>
+        </div>
       </section>
     </div>
   );

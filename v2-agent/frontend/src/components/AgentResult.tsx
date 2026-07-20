@@ -5,6 +5,7 @@ import {
   Camera,
   CheckCircle2,
   CircleDashed,
+  Copy,
   Download,
   FileSearch,
   FileText,
@@ -560,11 +561,13 @@ export default function AgentResult(props: Props) {
   const [shareBusy, setShareBusy] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [shareMessage, setShareMessage] = useState("");
+  const [createdShareUrl, setCreatedShareUrl] = useState("");
   const [shares, setShares] = useState<ReportShareItem[]>([]);
   useEffect(() => {
     setTab("summary");
     setShareOpen(false);
     setShareMessage("");
+    setCreatedShareUrl("");
     setShares([]);
   }, [props.outcome.id]);
   const verdict = useMemo(() => verdictFor(props.outcome), [props.outcome]);
@@ -603,18 +606,14 @@ export default function AgentResult(props: Props) {
 
   async function createShare() {
     if (props.outcome.kind !== "evidence" || shareBusy) return;
+    if (!window.confirm("将创建一个 7 天有效的访问链接。任何获得该链接的人都能查看这份报告，无需登录；请勿发送到公开群聊或不可信渠道。确认继续？")) return;
     setShareBusy(true);
     setShareMessage("");
     try {
       const link = await createReportShareLink(props.outcome.result.reportId);
       await refreshShares();
-      try {
-        await navigator.clipboard.writeText(link.url);
-        setShareMessage("链接已复制；持有链接的人可在 7 天内查看报告");
-      } catch {
-        window.prompt("复制报告分享链接", link.url);
-        setShareMessage("链接已创建；持有链接的人可在 7 天内查看报告");
-      }
+      setCreatedShareUrl(link.url);
+      setShareMessage("链接已创建；确认接收方后再复制，持有者可在 7 天内查看报告");
     } catch (error) {
       setShareMessage(error instanceof Error ? error.message : "生成分享链接失败");
     } finally {
@@ -767,6 +766,25 @@ export default function AgentResult(props: Props) {
           {props.outcome.kind === "evidence" && (shareMessage || shareOpen) && (
             <section className="report-share-panel" aria-label="报告分享管理">
               {shareMessage && <p role="status">{shareMessage}</p>}
+              {createdShareUrl && (
+                <div className="report-share-created">
+                  <code>{`${createdShareUrl.slice(0, 28)}...${createdShareUrl.slice(-8)}`}</code>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(createdShareUrl);
+                        setShareMessage("分享链接已复制，请仅发送给可信接收方");
+                      } catch {
+                        window.prompt("复制报告分享链接", createdShareUrl);
+                      }
+                    }}
+                  >
+                    <Copy size={15} /> 复制链接
+                  </button>
+                </div>
+              )}
               {shareOpen && (
                 <div className="report-share-list">
                   <div><strong>已创建的链接</strong><span>{shares.filter((item) => item.active).length} 个有效</span></div>

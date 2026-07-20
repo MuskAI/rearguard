@@ -1741,3 +1741,62 @@ def test_failed_backup_status_triggers_distinct_critical_alert():
 
     assert conditions["backupRunFailed"]["active"] is True
     assert conditions["backupRunFailed"]["level"] == "critical"
+
+
+def test_admin_login_failure_uses_identity_and_ip_buckets_with_window(monkeypatch):
+    buckets = (("identity", "ip", 5), ("identity", "wild", 5), ("wild", "ip", 20))
+    existing = {
+        ("identity", "ip"): {"failure_count": 4, "locked_until_epoch": 0, "last_failed_epoch": 990},
+        ("identity", "wild"): {"failure_count": 4, "locked_until_epoch": 0, "last_failed_epoch": 1},
+        ("wild", "ip"): {"failure_count": 19, "locked_until_epoch": 0, "last_failed_epoch": 995},
+    }
+    inserts = []
+
+    class Cursor:
+        row = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params=None):
+            if "SELECT failure_count" in sql:
+                self.row = existing.get(tuple(params))
+            elif "INSERT INTO admin_login_attempts" in sql:
+                inserts.append(tuple(params))
+
+        def fetchone(self):
+            return self.row
+
+    class Connection:
+        def begin(self):
+            pass
+
+        def cursor(self):
+            return Cursor()
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(admin, "_login_attempt_table_ready", lambda: True)
+    monkeypatch.setattr(admin, "_login_attempt_buckets", lambda _identity: buckets)
+    monkeypatch.setattr(admin, "get_db_connection", Connection)
+    monkeypatch.setattr(admin.time, "time", lambda: 1000)
+    monkeypatch.setattr(admin, "ADMIN_LOGIN_WINDOW_SECONDS", 300)
+    monkeypatch.setattr(admin, "ADMIN_LOGIN_LOCK_SECONDS", 600)
+
+    admin._record_admin_login_failure("root")
+
+    assert inserts == [
+        ("identity", "ip", 5, 1600),
+        ("identity", "wild", 1, 0),
+        ("wild", "ip", 20, 1600),
+    ]

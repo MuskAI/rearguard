@@ -40,7 +40,8 @@ import {
   publicExpertReviewEvidence,
   publicExpertReviewJobSummary,
 } from "./swarmPublic";
-import { trackConfirmedPageview } from "./analytics";
+import { analyticsConsent, resetAnalyticsConsent, setAnalyticsConsent, trackConfirmedPageview } from "./analytics";
+import { LEGAL_CONSENT } from "./legalConsent";
 
 type PageKey = "home" | "image" | "video" | "history";
 type Status = { tone: "ok" | "error" | "info"; text: string } | null;
@@ -57,7 +58,7 @@ const emptyCounters: Counters = {
 };
 const HISTORY_PAGE_SIZE = 100;
 const HUIJIAN_V2_CONSOLE_URL = "/v2/";
-const HUIJIAN_TERMS_VERSION = "2026-07-15";
+const HUIJIAN_TERMS_VERSION = LEGAL_CONSENT.version;
 const SWARM_CANCELLED_ERROR = "__HUIJIAN_SWARM_CANCELLED__";
 const SWARM_PLACEHOLDER_EXPERTS: PublicExpertReviewExpert[] = Array.from({ length: 8 }, (_, index) => ({
   id: `placeholder-${index}`,
@@ -505,6 +506,7 @@ function App() {
   const [guestDetections, setGuestDetections] = useState(() => getGuestDetections());
   const [dark, setDark] = useState(() => getStorage()?.getItem("theme") === "dark");
   const [lang, setLang] = useState<Lang>(() => getInitialLang());
+  const [analyticsChoice, setAnalyticsChoice] = useState(() => analyticsConsent());
   const deviceType = useDeviceType();
   const text = UI_TEXT[lang];
   const lastTrackedPage = useRef<PageKey | null>(null);
@@ -576,10 +578,10 @@ function App() {
   }, [loading, page]);
 
   useEffect(() => {
-    if (loading || lastTrackedPage.current === page) return;
+    if (loading || analyticsChoice !== "granted" || lastTrackedPage.current === page) return;
     lastTrackedPage.current = page;
     trackConfirmedPageview(page);
-  }, [loading, page]);
+  }, [analyticsChoice, loading, page]);
 
   useEffect(() => {
     if (isDemoMode()) {
@@ -690,7 +692,50 @@ function App() {
       )}
       {page === "history" && <HistoryPage setPage={setPage} lang={lang} />}
 
-      <Footer lang={lang} />
+      <Footer
+        lang={lang}
+        onAnalyticsChoice={() => {
+          resetAnalyticsConsent();
+          lastTrackedPage.current = null;
+          setAnalyticsChoice(null);
+        }}
+      />
+
+      {analyticsChoice === null && (
+        <section className="analytics-consent" aria-label={lang === "zh" ? "匿名访问统计选择" : "Anonymous analytics choice"}>
+          <div>
+            <strong>{lang === "zh" ? "匿名访问统计" : "Anonymous analytics"}</strong>
+            <p>
+              {lang === "zh"
+                ? "经你允许后，我们会使用随机访客标识和脱敏 IP 统计省级访问量；不关联登录账号。"
+                : "With permission, we use a random visitor ID and masked IP for province-level traffic totals, without linking your account."}
+              {" "}<a href="/legal/privacy.html" target="_blank" rel="noreferrer">{lang === "zh" ? "隐私政策" : "Privacy policy"}</a>
+            </p>
+          </div>
+          <div className="analytics-consent-actions">
+            <button
+              type="button"
+              onClick={() => {
+                setAnalyticsConsent("denied");
+                setAnalyticsChoice("denied");
+              }}
+            >
+              {lang === "zh" ? "仅必要功能" : "Necessary only"}
+            </button>
+            <button
+              type="button"
+              className="primary"
+              onClick={() => {
+                setAnalyticsConsent("granted");
+                lastTrackedPage.current = null;
+                setAnalyticsChoice("granted");
+              }}
+            >
+              {lang === "zh" ? "允许匿名统计" : "Allow analytics"}
+            </button>
+          </div>
+        </section>
+      )}
 
       {authOpen && (
         <AuthModal
@@ -2700,7 +2745,7 @@ function AuthInput({
   );
 }
 
-function Footer({ lang }: { lang: Lang }) {
+function Footer({ lang, onAnalyticsChoice }: { lang: Lang; onAnalyticsChoice: () => void }) {
   const text = UI_TEXT[lang].footer;
   return (
     <footer className="footer">
@@ -2711,6 +2756,9 @@ function Footer({ lang }: { lang: Lang }) {
           {text.icp}
         </a>
       </p>
+      <button type="button" className="footer-privacy-choice" onClick={onAnalyticsChoice}>
+        {lang === "zh" ? "匿名统计偏好" : "Analytics preferences"}
+      </button>
     </footer>
   );
 }

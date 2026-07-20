@@ -118,6 +118,10 @@ def _read_manifest(image_bytes: bytes, mime: str) -> Tuple[Optional[Dict[str, An
         parsed = json.loads(raw)
     except Exception as exc:
         return None, f"manifest JSON 解析失败: {_truncate(str(exc), 160)}"
+    try:
+        parsed["_local_validation_state"] = str(reader.get_validation_state()).split(".")[-1]
+    except Exception:
+        parsed["_local_validation_state"] = "Unknown"
     return parsed, None
 
 
@@ -174,6 +178,11 @@ def _collect_digital_source_types(manifest: Dict[str, Any]) -> List[str]:
 
 def _validation_summary(manifest_envelope: Dict[str, Any]) -> Tuple[str, List[str]]:
     """Return (severity, issues) where missing validation is never trusted."""
+    validation_state = str(
+        manifest_envelope.get("_local_validation_state")
+        if isinstance(manifest_envelope, dict)
+        else ""
+    ).strip().lower()
     results = manifest_envelope.get("validation_results") if isinstance(manifest_envelope, dict) else None
     issues: List[str] = []
     severity = "unknown"
@@ -199,7 +208,13 @@ def _validation_summary(manifest_envelope: Dict[str, Any]) -> Tuple[str, List[st
                             issues.append(f"信任链警告: {_truncate(explanation, 80)}")
                     elif level == "success":
                         saw_success = True
-    if saw_success and severity == "unknown":
+    if validation_state == "invalid":
+        severity = "error"
+        issues.append("C2PA 本地验证状态为 Invalid。")
+    elif validation_state != "trusted" and severity != "error":
+        severity = "warning"
+        issues.append("C2PA 签名结构可读，但本地信任链未建立。")
+    elif saw_success and severity == "unknown":
         severity = "ok"
     if severity == "unknown":
         issues.append("C2PA 未返回可验证的签名校验结果。")

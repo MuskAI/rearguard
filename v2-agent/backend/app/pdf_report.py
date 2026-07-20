@@ -427,7 +427,8 @@ def build_report_pdf(
         story.append(_paragraph("内容凭证与来源", styles["section"]))
         story.append(_meta_table([
             ("内容凭证", "已发现" if provenance.get("hasCredentials") else "未发现"),
-            ("签名状态", provenance.get("validationState")),
+            ("签名结构", provenance.get("validationState")),
+            ("可信链", "已建立" if provenance.get("credentialTrusted") is True else "未建立"),
             ("生成工具", provenance.get("generator")),
             ("签发者", provenance.get("issuer")),
             ("AI 声明", "有" if provenance.get("isAiGenerated") is True else "无" if provenance.get("isAiGenerated") is False else "未声明"),

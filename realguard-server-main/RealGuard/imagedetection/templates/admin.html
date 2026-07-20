@@ -1282,6 +1282,7 @@
         {name:'note',label:'调整原因',value:'管理员设置调用额度'},
       ]});
       if(!values) return;
+      values.operationId=(globalThis.crypto?.randomUUID?.() || `quota-${Date.now()}-${Math.random().toString(36).slice(2)}`);
       const data=await api(`/api/admin/developer/accounts/${encodeURIComponent(id)}/quota`,{method:'POST',body:JSON.stringify(values)});
       state.selectedUser.developerAccount=data.account;renderUserDetail();toast(`剩余调用次数已设置为 ${data.account.freeRemaining}`);await loadAudit();
     }

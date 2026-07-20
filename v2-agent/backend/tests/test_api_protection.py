@@ -6,6 +6,7 @@ import json
 import sys
 import struct
 import time
+import uuid
 import zlib
 from urllib.parse import parse_qs, urlsplit
 
@@ -62,6 +63,27 @@ def _stable_vlm_analyze(file_type: str, _filename: str, _data: bytes) -> dict:
     return _vlm_analysis(file_type=file_type)
 
 
+class ConsentTestClient(TestClient):
+    def post(self, url, *args, **kwargs):
+        if url == "/api/detect":
+            data = dict(kwargs.pop("data", {}) or {})
+            data.setdefault("upload_consent", "1")
+            data.setdefault("consent_version", "2026-07-15+2026-07-20")
+            data.setdefault(
+                "terms_sha256",
+                "09707ba3b915db9904cc6f8b4951b5c9bbfff7e768fd237c04eedf90fef89ff3",
+            )
+            data.setdefault(
+                "privacy_sha256",
+                "5c505aaf82abe1af5cac83fef81c60ec66e89a76377110fba6348ed0567d8935",
+            )
+            headers = dict(kwargs.pop("headers", {}) or {})
+            headers.setdefault("Idempotency-Key", str(uuid.uuid4()))
+            kwargs["data"] = data
+            kwargs["headers"] = headers
+        return super().post(url, *args, **kwargs)
+
+
 def _forensic_analysis() -> dict:
     return {
         "verdict": "real",
@@ -73,6 +95,38 @@ def _forensic_analysis() -> dict:
         "source": "vlm",
         "tokenUsage": {"promptTokens": 12, "completionTokens": 5, "totalTokens": 17},
     }
+
+
+def test_public_detect_requires_server_verified_upload_consent(client):
+    raw_client = TestClient(client.app, client=("127.0.0.1", 50001))
+
+    response = raw_client.post(
+        "/api/detect",
+        files={"file": ("sample.txt", b"consent required", "text/plain")},
+        headers={"Idempotency-Key": "missing-consent-001"},
+    )
+
+    assert response.status_code == 428
+    assert "隐私政策" in response.json()["detail"]
+
+
+def test_public_detect_persists_pseudonymous_upload_consent(client):
+    from app import storage
+
+    response = client.post(
+        "/api/detect",
+        files={"file": ("sample.txt", b"consent recorded", "text/plain")},
+        headers={"Idempotency-Key": "record-consent-001"},
+    )
+
+    assert response.status_code == 200
+    with storage._connect() as conn:
+        row = conn.execute(
+            "SELECT subject_hash, upload_sha256, channel FROM guest_upload_consents"
+        ).fetchone()
+    assert len(row["subject_hash"]) == 64
+    assert len(row["upload_sha256"]) == 64
+    assert row["channel"] == "v2_public_detect"
 
 
 def test_forensic_normalizer_hides_natural_language_verdicts():
@@ -103,6 +157,7 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setenv("JIANZHEN_ACCESS_TOKEN", "internal-token")
     monkeypatch.setenv("JIANZHEN_ADMIN_ACCESS_TOKEN", "test-token")
     monkeypatch.setenv("JIANZHEN_REPORT_SHARE_SECRET", "independent-report-share-secret-32")
+    monkeypatch.setenv("JIANZHEN_CONSENT_AUDIT_SALT", "independent-consent-audit-secret-32")
     monkeypatch.setenv("JIANZHEN_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-dashscope-key")
     monkeypatch.setenv("JIANZHEN_ALLOW_ANONYMOUS_DETECT", "true")
@@ -115,7 +170,8 @@ def client(monkeypatch, tmp_path):
     importlib.reload(main)
     monkeypatch.setattr(main.detector, "API_KEY", "test-dashscope-key")
     monkeypatch.setattr(main.detector, "analyze", _stable_vlm_analyze)
-    return TestClient(main.app, client=("127.0.0.1", 50000))
+    monkeypatch.setattr(main, "_session_auth_reachable", lambda: True)
+    return ConsentTestClient(main.app, client=("127.0.0.1", 50000))
 
 
 @pytest.fixture
@@ -123,6 +179,7 @@ def developer_key_client(monkeypatch, tmp_path):
     monkeypatch.setenv("JIANZHEN_ACCESS_TOKEN", "internal-token")
     monkeypatch.setenv("JIANZHEN_ADMIN_ACCESS_TOKEN", "admin-token")
     monkeypatch.setenv("JIANZHEN_REPORT_SHARE_SECRET", "independent-report-share-secret-32")
+    monkeypatch.setenv("JIANZHEN_CONSENT_AUDIT_SALT", "independent-consent-audit-secret-32")
     monkeypatch.setenv("JIANZHEN_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("JIANZHEN_ALLOW_DIRECT_DEVELOPER_KEYS", "true")
     monkeypatch.setenv("JIANZHEN_DEVELOPER_AUTH_URL", "http://realguard-v1.internal/api/developer/keys/verify")
@@ -230,6 +287,12 @@ def test_readiness_requires_real_image_model_and_storage(client, monkeypatch):
     assert ready.headers["cache-control"] == "no-store"
     assert unavailable.status_code == 503
     assert unavailable.json()["checks"]["imageModelConfigured"] is False
+
+    monkeypatch.setattr(main.detector, "API_KEY", "test-dashscope-key")
+    monkeypatch.setattr(main, "_session_auth_reachable", lambda: False)
+    auth_unavailable = client.get("/api/ready")
+    assert auth_unavailable.status_code == 503
+    assert auth_unavailable.json()["checks"]["sessionAuthReachable"] is False
 
 
 def test_forensics_cache_is_scoped_by_user_and_does_not_leak_filename(developer_key_client, monkeypatch):
@@ -827,12 +890,70 @@ def test_unified_forensics_uncertainty_tracks_distance_from_boundary(risk, expec
     unified = unified_forensics.build({
         "verdict": "real" if risk < 0.5 else "highly_suspected_fake",
         "confidence": risk,
+        "decisionStatus": "verdict",
+        "decisionAuthority": "calibrated_model",
+        "reviewRequired": False,
         "fileMeta": {"type": "image"},
         "dimensions": [],
         "regions": [],
     })
 
     assert unified["uncertainty"]["score"] == expected_uncertainty
+
+
+@pytest.mark.parametrize(
+    ("decision_status", "decision_authority"),
+    [("review_only", "none"), ("review_only", "evidence_only"), ("verdict", "none")],
+)
+def test_unified_forensics_keeps_non_authoritative_results_uncertain(
+    decision_status,
+    decision_authority,
+):
+    from app import unified_forensics  # noqa: WPS433
+
+    unified = unified_forensics.build({
+        "verdict": "unknown",
+        "confidence": 0.0,
+        "decisionStatus": decision_status,
+        "decisionAuthority": decision_authority,
+        "fileMeta": {"type": "image"},
+        "regions": [],
+    })
+
+    assert unified["uncertainty"]["score"] == 1.0
+    assert "unauthorized_decision_contract" in unified["uncertainty"]["factors"]
+
+
+def test_unified_forensics_distinguishes_valid_from_trusted_c2pa():
+    from app import unified_forensics  # noqa: WPS433
+
+    base = {
+        "verdict": "unknown",
+        "confidence": 0.5,
+        "fileMeta": {"type": "image"},
+        "regions": [],
+        "provenance": {
+            "hasCredentials": True,
+            "isAiGenerated": True,
+            "generator": "Example AI",
+        },
+    }
+    valid = unified_forensics.build({
+        **base,
+        "provenance": {**base["provenance"], "validationState": "Valid"},
+    })
+    trusted = unified_forensics.build({
+        **base,
+        "provenance": {**base["provenance"], "validationState": "Trusted"},
+    })
+
+    assert valid["provenance_signals"]["c2pa"]["status"] == "credentials_untrusted"
+    assert valid["provenance_signals"]["c2pa"]["credential_trusted"] is False
+    assert valid["generator_attribution"]["status"] == "unverified_claim"
+    assert valid["generator_attribution"]["confidence"] == 0.0
+    assert trusted["provenance_signals"]["c2pa"]["status"] == "trusted"
+    assert trusted["provenance_signals"]["c2pa"]["credential_trusted"] is True
+    assert trusted["generator_attribution"]["confidence"] == 0.95
 
 
 def test_direct_v2_developer_keys_are_retired_by_default(developer_key_client, monkeypatch):

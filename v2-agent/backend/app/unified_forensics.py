@@ -20,6 +20,13 @@ def _float01(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _trusted_provenance(provenance: dict[str, Any]) -> bool:
+    return (
+        provenance.get("credentialTrusted") is True
+        or str(provenance.get("validationState") or "").strip().lower() == "trusted"
+    )
+
+
 def _cost(result: dict[str, Any]) -> dict[str, Any]:
     usage = result.get("tokenUsage") or {}
     return {
@@ -105,14 +112,20 @@ def _generator_attribution(result: dict[str, Any]) -> dict[str, Any]:
     ai_metadata = provenance.get("aiMetadata") or {}
     evidence: list[str] = []
     candidates: list[dict[str, Any]] = []
+    unverified_claim: dict[str, Any] | None = None
 
     if provenance.get("isAiGenerated") is True:
-        evidence.append("c2pa_ai_declaration")
-        candidates.append({
+        trusted = _trusted_provenance(provenance)
+        evidence.append("c2pa_ai_declaration" if trusted else "untrusted_c2pa_ai_declaration")
+        claim = {
             "family": provenance.get("generator") or "c2pa-ai-declaration",
             "model": provenance.get("generator") or "c2pa-ai-declaration",
-            "confidence": 0.95 if provenance.get("hasCredentials") else 0.75,
-        })
+            "confidence": 0.95 if trusted else 0.0,
+        }
+        if trusted:
+            candidates.append(claim)
+        else:
+            unverified_claim = claim
     if ai_metadata.get("isAiLikely"):
         evidence.append("metadata_ai_signal")
         matched = ai_metadata.get("matchedTools") or []
@@ -138,6 +151,14 @@ def _generator_attribution(result: dict[str, Any]) -> dict[str, Any]:
         })
 
     if not candidates:
+        if unverified_claim:
+            return {
+                "status": "unverified_claim",
+                "family": unverified_claim["family"],
+                "model": unverified_claim["model"],
+                "confidence": 0.0,
+                "evidence": evidence,
+            }
         return {
             "status": "unknown",
             "family": None,
@@ -167,8 +188,12 @@ def _provenance_signals(result: dict[str, Any]) -> dict[str, Any]:
     c2pa_note = "Call /api/provenance for signed credential validation."
     if provenance:
         if provenance.get("hasCredentials"):
-            c2pa_status = "credentials_present"
-            c2pa_note = "C2PA content credentials were checked during detection."
+            if _trusted_provenance(provenance):
+                c2pa_status = "trusted"
+                c2pa_note = "C2PA content credentials were validated against a trusted chain."
+            else:
+                c2pa_status = "credentials_untrusted"
+                c2pa_note = "C2PA credentials were found, but no trusted chain was established."
         elif provenance.get("error") == "no_manifest":
             c2pa_status = "no_manifest"
             c2pa_note = "No embedded C2PA manifest was found; metadata was still inspected."
@@ -182,6 +207,7 @@ def _provenance_signals(result: dict[str, Any]) -> dict[str, Any]:
         "c2pa": {
             "status": c2pa_status,
             "has_credentials": bool(provenance.get("hasCredentials")) if provenance else None,
+            "credential_trusted": _trusted_provenance(provenance) if provenance else None,
             "validation_state": provenance.get("validationState") if provenance else None,
             "is_ai_generated": provenance.get("isAiGenerated") if provenance else None,
             "generator": provenance.get("generator") if provenance else None,
@@ -251,10 +277,20 @@ def build(result: dict[str, Any]) -> dict[str, Any]:
     )
 
     # `confidence` is the probability/risk of synthetic content, not
-    # confidence in the categorical verdict. Values near either 0 or 1 are
-    # low-uncertainty; values near the decision boundary are high-uncertainty.
+    # confidence in the categorical verdict. A non-authoritative result stays
+    # epistemically uncertain even when its current risk estimate is near 0/1.
     uncertainty_score = round(1.0 - abs(confidence - 0.5) * 2.0, 3)
     uncertainty_factors = []
+    decision_status = str(result.get("decisionStatus") or "").strip().lower()
+    decision_authority = str(result.get("decisionAuthority") or "").strip().lower()
+    authorized = (
+        decision_status == "verdict"
+        and decision_authority in {"decisive_provenance", "calibrated_model"}
+        and result.get("reviewRequired") is False
+    )
+    if not authorized:
+        uncertainty_score = 1.0
+        uncertainty_factors.append("unauthorized_decision_contract")
     if result.get("source") == "mock":
         uncertainty_factors.append("mock_fallback")
     if attribution["status"] == "unknown":

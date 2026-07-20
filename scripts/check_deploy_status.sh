@@ -219,7 +219,9 @@ if [[ "$TARGET" == "all" || "$TARGET" == "v2" ]]; then
     "https://www.rrreal.cn/v2-api/ready" \
     "v2-agent/backend" \
     "v2-agent/frontend" \
+    "deploy/systemd/jianzhen-v2-backend.service" \
     "scripts/deploy_v2.sh" \
+    "scripts/remote/activate_v2.sh" \
     "scripts/deploy_common.sh"
 fi
 
@@ -239,7 +241,12 @@ if [[ "$TARGET" == "all" || "$TARGET" == "gpu" ]]; then
     scripts/remote/rollback_public_gpu_deploy.sh
   )
   gpu_expected="${EXPECTED_COMMIT:-$(git -C "$ROOT_DIR" log -1 --format=%h -- "${gpu_paths[@]}")}"
-  gpu_ssh=(-p "$gpu_port" -o StrictHostKeyChecking=accept-new)
+  gpu_known_hosts="${GPU_DEPLOY_KNOWN_HOSTS_FILE:-${HOME:+$HOME/.ssh/known_hosts}}"
+  if [[ -z "$gpu_known_hosts" || ! -f "$gpu_known_hosts" || ! -r "$gpu_known_hosts" ]]; then
+    printf 'GPU known-hosts file is missing or unreadable: %s\n' "$gpu_known_hosts" >&2
+    exit 2
+  fi
+  gpu_ssh=(-p "$gpu_port" -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$gpu_known_hosts")
   if [[ -n "$gpu_key" ]]; then
     gpu_ssh+=(-i "$gpu_key" -o IdentitiesOnly=yes)
   fi

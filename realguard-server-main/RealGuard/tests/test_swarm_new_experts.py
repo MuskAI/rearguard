@@ -122,11 +122,25 @@ def test_c2pa_missing_validation_cannot_lower_camera_risk():
         validation_issues=issues,
     )
 
-    assert severity == "unknown"
+    assert severity == "warning"
     assert score == 0.5
     assert "未验证" in verdict
     assert confidence == "低"
     assert any("保持中性" in item for item in evidence)
+
+
+def test_c2pa_valid_signature_without_trusted_chain_stays_unverified():
+    severity, issues = swarm_c2pa_expert._validation_summary({
+        "_local_validation_state": "Valid",
+        "validation_results": {
+            "activeManifest": {
+                "success": [{"code": "claimSignature.validated"}],
+            },
+        },
+    })
+
+    assert severity == "warning"
+    assert any("信任链未建立" in item for item in issues)
 
 
 def test_c2pa_minor_human_edits_is_not_camera_capture():

@@ -21,4 +21,4 @@ ENV PATH="/app/.venv/bin:$PATH"
 # 运行期环境变量由 docker-compose 的 env_file 注入（见 backend/.env）
 EXPOSE 8848
 
-CMD ["uv", "run", "--no-dev", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8848"]
+CMD ["uv", "run", "--no-dev", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8848", "--no-access-log"]

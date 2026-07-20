@@ -31,6 +31,11 @@ CAMERA_SOURCE_TYPES = ("digitalCapture", "negativeFilm", "positiveFilm", "print"
 SYNTHID_NOTE = "SynthID 为 Google 专有隐形水印，无公开解码器，需 Google 授权，暂不支持检测。"
 
 
+def _is_trusted_validation_state(value: object) -> bool:
+    """C2PA `Valid` verifies structure/signature; only `Trusted` verifies the trust chain."""
+    return str(value or "").strip().lower() == "trusted"
+
+
 def mime_for(filename: str) -> str:
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     return EXT_TO_MIME.get(ext, "image/jpeg")
@@ -52,6 +57,7 @@ def read_provenance(data: bytes, mime: str, filename: str = "") -> dict:
     report: dict = {
         "hasCredentials": False,
         "validationState": None,
+        "credentialTrusted": False,
         "generator": None,
         "issuer": None,
         "signatureAlg": None,
@@ -83,6 +89,7 @@ def read_provenance(data: bytes, mime: str, filename: str = "") -> dict:
         doc = json.loads(reader.json())
         report["hasCredentials"] = True
         report["validationState"] = str(reader.get_validation_state()).split(".")[-1]
+        report["credentialTrusted"] = _is_trusted_validation_state(report["validationState"])
 
         active = doc.get("active_manifest")
         am = doc.get("manifests", {}).get(active, {}) if active else {}
@@ -124,12 +131,11 @@ def read_provenance(data: bytes, mime: str, filename: str = "") -> dict:
             for item in report.get("actions") or []
             if isinstance(item, dict)
         }
-        validation_state = str(report.get("validationState") or "").lower()
         has_camera_declaration = any(any(kind in value for kind in CAMERA_SOURCE_TYPES) for value in source_types)
         if (
             report.get("hasCredentials")
             and report.get("isAiGenerated") is False
-            and validation_state in {"valid", "trusted"}
+            and report.get("credentialTrusted") is True
             and has_camera_declaration
         ):
             report["captureEvidence"] = capture_evidence.add_verified_camera_credential(

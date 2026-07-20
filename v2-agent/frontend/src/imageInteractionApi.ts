@@ -1,5 +1,6 @@
-import { ApiRequestError } from "./api";
+import { ApiRequestError, notifySessionExpired } from "./api";
 import type { ImageAgentJob } from "./api";
+import { appendUploadConsent } from "./legalConsent";
 
 function retryAfterMs(response: Response): number {
   const value = response.headers.get("Retry-After")?.trim();
@@ -20,6 +21,7 @@ async function requestJson<T>(path: string, init: RequestInit, fallback: string)
     headers,
   });
   if (!response.ok) {
+    if (response.status === 401) notifySessionExpired();
     let message = fallback;
     try {
       const body = await response.json();
@@ -36,12 +38,13 @@ async function requestJson<T>(path: string, init: RequestInit, fallback: string)
   }
 }
 
-export function startFastImageAgent(file: File, signal?: AbortSignal) {
+export function startFastImageAgent(file: File, idempotencyKey: string, signal?: AbortSignal) {
   const body = new FormData();
   body.append("image", file);
+  appendUploadConsent(body);
   return requestJson<{ status: string; job: ImageAgentJob }>(
     "/image_upload/detect_async",
-    { method: "POST", body, signal },
+    { method: "POST", body, signal, headers: { "Idempotency-Key": idempotencyKey } },
     "快速检测任务启动失败",
   );
 }

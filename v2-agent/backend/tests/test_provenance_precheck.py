@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import sys
 
@@ -8,7 +9,68 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app import metadata, provenance_precheck
+from app import metadata, provenance, provenance_precheck
+
+
+class _FakeC2paReader:
+    validation_state = "Valid"
+
+    def __init__(self, *_args, **_kwargs):
+        pass
+
+    def json(self):
+        return json.dumps({
+            "active_manifest": "manifest",
+            "manifests": {
+                "manifest": {
+                    "claim_generator": "Example AI",
+                    "assertions": [{
+                        "label": "c2pa.actions",
+                        "data": {"actions": [{
+                            "action": "c2pa.created",
+                            "digitalSourceType": "trainedAlgorithmicMedia",
+                        }]},
+                    }],
+                },
+            },
+        })
+
+    def get_validation_state(self):
+        return self.validation_state
+
+    def close(self):
+        pass
+
+
+def test_provenance_reader_marks_valid_signature_as_untrusted(monkeypatch):
+    monkeypatch.setattr(provenance, "Reader", _FakeC2paReader)
+    monkeypatch.setattr(
+        provenance.metadata_reader,
+        "inspect_metadata",
+        lambda *_args, **_kwargs: {},
+    )
+
+    report = provenance.read_provenance(b"payload", "image/png", "sample.png")
+
+    assert report["validationState"] == "Valid"
+    assert report["credentialTrusted"] is False
+
+
+def test_provenance_reader_marks_trusted_chain_as_trusted(monkeypatch):
+    class TrustedReader(_FakeC2paReader):
+        validation_state = "Trusted"
+
+    monkeypatch.setattr(provenance, "Reader", TrustedReader)
+    monkeypatch.setattr(
+        provenance.metadata_reader,
+        "inspect_metadata",
+        lambda *_args, **_kwargs: {},
+    )
+
+    report = provenance.read_provenance(b"payload", "image/png", "sample.png")
+
+    assert report["validationState"] == "Trusted"
+    assert report["credentialTrusted"] is True
 
 
 def test_no_decision_does_not_build_analysis():
@@ -65,6 +127,27 @@ def test_remote_visual_result_reconciles_without_verdict_or_name_error():
     assert result["decision"]["shortCircuit"] is False
     assert result["decision"]["modelRequired"] is True
     assert result["decision"]["reason"] == "no_decisive_ai_provenance"
+
+
+def test_remote_c2pa_trust_claim_cannot_short_circuit_without_local_validation():
+    result = {
+        "available": True,
+        "report": {
+            "isAiGenerated": True,
+            "aiFromMetadata": True,
+            "aiSourceKind": "generated",
+            "c2paTrusted": True,
+            "signals": [{"name": "c2pa", "kind": "valid_ai_c2pa"}],
+            "integrityClashes": [],
+        },
+        "visibleHits": [],
+    }
+
+    provenance_precheck._reconcile_probability(result, None)
+
+    assert result["report"]["c2paTrusted"] is False
+    assert result["decision"]["shortCircuit"] is False
+    assert result["decision"]["modelRequired"] is True
 
 
 def test_visible_watermark_short_circuit_rejects_missing_coordinate_contract():
@@ -159,11 +242,28 @@ def test_unknown_ai_c2pa_state_cannot_short_circuit_pixel_model():
     assert report["c2paTrusted"] is False
 
 
-def test_valid_ai_c2pa_can_short_circuit_pixel_model():
+def test_valid_ai_c2pa_cannot_short_circuit_without_trusted_chain():
     local = provenance_precheck._local_source_decision(
         {
             "isAiGenerated": True,
             "validationState": "valid",
+            "generator": "Example AI",
+            "actions": [{"digitalSourceType": "trainedAlgorithmicMedia"}],
+        }
+    )
+    assert local is not None
+    decision, report = local
+    assert decision["shortCircuit"] is False
+    assert decision["modelRequired"] is True
+    assert report["c2paTrusted"] is False
+
+
+def test_trusted_ai_c2pa_can_short_circuit_pixel_model():
+    local = provenance_precheck._local_source_decision(
+        {
+            "isAiGenerated": True,
+            "validationState": "Trusted",
+            "credentialTrusted": True,
             "generator": "Example AI",
             "actions": [{"digitalSourceType": "trainedAlgorithmicMedia"}],
         }

@@ -277,7 +277,8 @@ def _render_provenance_block(provenance: dict | None) -> str:
       <h2>内容凭证验证（C2PA）与元数据检测</h2>
       <div class="meta-grid compact">
         <div><span>凭证</span><strong>{'检测到' if provenance.get('hasCredentials') else '未检测到'}</strong></div>
-        <div><span>签名校验</span><strong>{escape(_safe_text(provenance.get('validationState')))}</strong></div>
+        <div><span>签名结构</span><strong>{escape(_safe_text(provenance.get('validationState')))}</strong></div>
+        <div><span>可信链</span><strong>{'已建立' if provenance.get('credentialTrusted') is True else '未建立'}</strong></div>
         <div><span>AI 声明</span><strong>{escape(_safe_text(provenance.get('isAiGenerated')))}</strong></div>
         <div><span>元数据 AI 线索</span><strong>{escape(_safe_text(provenance.get('metadataAiGenerated')))}</strong></div>
         <div><span>元数据评分</span><strong>{escape(_safe_text(ai_metadata.get('score'), '0'))}/100</strong></div>

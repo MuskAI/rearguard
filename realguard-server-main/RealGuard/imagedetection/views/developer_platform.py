@@ -659,6 +659,7 @@ def _enqueue_web_detection_task(
     user_info,
     is_guest,
     guest_subject="",
+    idempotency_key="",
 ):
     if not _ensure_developer_platform_tables():
         raise TaskRecoveryError("detection queue schema is unavailable")
@@ -675,10 +676,47 @@ def _enqueue_web_detection_task(
     ).strip().lower()
     if not owner_key:
         raise TaskRecoveryError("Web detection owner capacity key is unavailable")
+    idempotency_key = str(idempotency_key or "").strip()
+    if not (
+        8 <= len(idempotency_key) <= 128
+        and all(33 <= ord(char) <= 126 for char in idempotency_key)
+    ):
+        raise TaskRecoveryError("Web detection idempotency key is invalid")
+    request_sha256 = hashlib.sha256(image_bytes).hexdigest()
     spool_name = None
     guest_usage_reserved = False
     try:
+        existing = excute_sql(
+            """
+            SELECT job_id, mode, request_sha256
+            FROM web_detection_tasks
+            WHERE owner_type = %s AND owner_key = %s AND idempotency_key = %s
+            LIMIT 1
+            """,
+            (owner_type, owner_key, idempotency_key),
+        )
+        if existing:
+            row = existing[0]
+            if str(row.get("mode") or "") != mode or str(row.get("request_sha256") or "") != request_sha256:
+                raise TaskRecoveryError("Web detection idempotency key was reused for different input")
+            return str(row["job_id"]), True
         with _queue_submission_guard(len(image_bytes), owner_type, owner_key):
+            # Recheck under the cross-process admission lock to close the race
+            # between two first submissions carrying the same key.
+            existing = excute_sql(
+                """
+                SELECT job_id, mode, request_sha256
+                FROM web_detection_tasks
+                WHERE owner_type = %s AND owner_key = %s AND idempotency_key = %s
+                LIMIT 1
+                """,
+                (owner_type, owner_key, idempotency_key),
+            )
+            if existing:
+                row = existing[0]
+                if str(row.get("mode") or "") != mode or str(row.get("request_sha256") or "") != request_sha256:
+                    raise TaskRecoveryError("Web detection idempotency key was reused for different input")
+                return str(row["job_id"]), True
             if is_guest:
                 daily_rows = excute_sql(
                     "SELECT COUNT(*) AS cnt FROM web_guest_daily_usage WHERE usage_day = CURDATE()"
@@ -706,20 +744,21 @@ def _enqueue_web_detection_task(
                 INSERT INTO web_detection_tasks (
                     job_id, mode, filename, mime_type, request_sha256,
                     spool_path, spool_size, request_context_json, owner_type,
-                    owner_key, status
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'queued')
+                    owner_key, idempotency_key, status
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'queued')
                 """,
                 (
                     job_id,
                     mode,
                     str(filename or "upload.img")[:255],
                     str(mimetype or "application/octet-stream")[:127],
-                    hashlib.sha256(image_bytes).hexdigest(),
+                    request_sha256,
                     spool_name,
                     len(image_bytes),
                     context_json,
                     owner_type,
                     owner_key,
+                    idempotency_key,
                 ),
                 fetch=False,
             )
@@ -738,7 +777,7 @@ def _enqueue_web_detection_task(
                 fetch=False,
             )
         raise
-    return True
+    return job_id, False
 
 
 def _cleanup_orphan_spool_files():
@@ -887,6 +926,7 @@ def _ensure_developer_platform_tables():
               request_context_json TEXT NULL,
               owner_type VARCHAR(16) NOT NULL,
               owner_key VARCHAR(64) NOT NULL,
+              idempotency_key VARCHAR(128) NULL,
               status VARCHAR(24) NOT NULL DEFAULT 'queued',
               next_attempt_at DATETIME(6) NULL,
               lease_owner VARCHAR(64) NULL,
@@ -902,6 +942,7 @@ def _ensure_developer_platform_tables():
               PRIMARY KEY (job_id),
               KEY idx_web_detection_tasks_lease (status, lease_expires_at),
               KEY idx_web_detection_tasks_owner (owner_type, owner_key, status),
+              UNIQUE KEY uk_web_detection_tasks_idempotency (owner_type, owner_key, idempotency_key),
               KEY idx_web_detection_tasks_created (created_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
@@ -1036,6 +1077,10 @@ def _ensure_task_lease_schema():
                 (
                     "next_attempt_at",
                     "ALTER TABLE developer_detection_tasks ADD COLUMN next_attempt_at DATETIME(6) NULL AFTER status",
+                ),
+                (
+                    "idempotency_key",
+                    "ALTER TABLE web_detection_tasks ADD COLUMN idempotency_key VARCHAR(128) NULL AFTER owner_key",
                 ),
                 (
                     "lease_expires_at",
@@ -1212,6 +1257,24 @@ def _ensure_task_lease_schema():
                     """
                     ALTER TABLE web_detection_tasks
                     ADD INDEX idx_web_detection_tasks_owner (owner_type, owner_key, status)
+                    """
+                )
+            cursor.execute(
+                """
+                SELECT INDEX_NAME
+                FROM INFORMATION_SCHEMA.STATISTICS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'web_detection_tasks'
+                  AND INDEX_NAME = 'uk_web_detection_tasks_idempotency'
+                LIMIT 1
+                """
+            )
+            if not cursor.fetchone():
+                cursor.execute(
+                    """
+                    ALTER TABLE web_detection_tasks
+                    ADD UNIQUE INDEX uk_web_detection_tasks_idempotency
+                        (owner_type, owner_key, idempotency_key)
                     """
                 )
 
@@ -1618,17 +1681,46 @@ def _release_billing(
                 return False
             if not already_released and reservation.get("source") == "free":
                 cursor.execute(
-                    "UPDATE developer_accounts SET free_reserved = GREATEST(0, free_reserved - 1) WHERE user_id = %s",
+                    """
+                    UPDATE developer_accounts
+                    SET free_reserved = free_reserved - 1
+                    WHERE user_id = %s AND free_reserved >= 1
+                    """,
                     (reservation["user_id"],),
                 )
-            elif not already_released:
+                if cursor.rowcount != 1:
+                    raise BillingError(
+                        "免费额度预占计数与释放记录不一致",
+                        code="billing_invariant_failed",
+                        status_code=503,
+                    )
+            elif not already_released and reservation.get("source") == "balance":
+                amount_fen = int(reservation.get("amount_fen") or 0)
+                if amount_fen <= 0:
+                    raise BillingError(
+                        "余额预占金额无效",
+                        code="billing_invariant_failed",
+                        status_code=503,
+                    )
                 cursor.execute(
                     """
                     UPDATE developer_accounts
-                    SET balance_reserved_fen = GREATEST(0, balance_reserved_fen - %s)
-                    WHERE user_id = %s
+                    SET balance_reserved_fen = balance_reserved_fen - %s
+                    WHERE user_id = %s AND balance_reserved_fen >= %s
                     """,
-                    (int(reservation.get("amount_fen") or 0), reservation["user_id"]),
+                    (amount_fen, reservation["user_id"], amount_fen),
+                )
+                if cursor.rowcount != 1:
+                    raise BillingError(
+                        "余额预占计数与释放记录不一致",
+                        code="billing_invariant_failed",
+                        status_code=503,
+                    )
+            elif not already_released:
+                raise BillingError(
+                    "额度预占来源无效",
+                    code="billing_invariant_failed",
+                    status_code=503,
                 )
             if not already_released:
                 cursor.execute(
@@ -1720,7 +1812,7 @@ def _release_billing(
         return True
     except Exception as exc:
         conn.rollback()
-        print(f"[DEVELOPER BILLING ERROR] release {task_id}: {exc}; {note}")
+        print(f"[DEVELOPER BILLING INVARIANT] release {task_id}: {exc}; {note}")
         return False
     finally:
         conn.close()
@@ -4078,6 +4170,22 @@ def create_image_detection():
     scope_error = _require_scope(actor, f"image:{mode}")
     if scope_error:
         return scope_error
+    idempotency_key = request.headers.get("Idempotency-Key", "").strip()
+    if not idempotency_key:
+        return _error(
+            "创建检测任务必须提供 Idempotency-Key",
+            400,
+            "idempotency_key_required",
+        )
+    if not (
+        8 <= len(idempotency_key) <= 128
+        and all(33 <= ord(char) <= 126 for char in idempotency_key)
+    ):
+        return _error(
+            "Idempotency-Key 必须是 8 到 128 位可见 ASCII 字符",
+            400,
+            "invalid_idempotency_key",
+        )
     if not _ensure_developer_platform_tables():
         return _error("开发者平台存储初始化失败", 503, "platform_unavailable")
     try:
@@ -4100,9 +4208,6 @@ def create_image_detection():
         return _error(image_error["message"], image_error["status"], image_error["code"])
 
     digest = hashlib.sha256(image_bytes).hexdigest()
-    idempotency_key = request.headers.get("Idempotency-Key", "").strip()
-    if len(idempotency_key) > 128:
-        return _error("Idempotency-Key 不能超过 128 个字符", 400, "invalid_idempotency_key")
     account_uuid = str(actor.get("account_uuid") or "").strip()
     if not account_uuid:
         return _error("开发者账号缺少不可变身份标识，请重新登录", 401, "account_identity_required")
@@ -4129,21 +4234,32 @@ def create_image_detection():
         "openid": actor.get("openid") or actor.get("phone") or f"developer-{actor.get('user_id')}",
     }
     experts = detection._swarm_initial_experts() if mode == "swarm" else []
-    try:
-        job = admin_state.create_detection_job(
-            user_info,
-            upload.filename,
-            kind="swarm" if mode == "swarm" else "image",
-            mode=mode,
-            experts=experts,
-        )
-    except Exception:
-        return _error("任务创建失败，请稍后重试", 503, "task_create_failed")
-    task_id = job["id"]
-    execution_filename = _task_execution_filename(task_id, upload.filename)
+    task_id = ""
     spool_name = None
+    inserted = None
     try:
         with _queue_submission_guard(len(image_bytes)):
+            duplicate = _idempotent_task(actor["user_id"], account_uuid, idempotency_key)
+            if duplicate:
+                if duplicate.get("mode") != mode or duplicate.get("request_sha256") != digest:
+                    return _error(
+                        "该 Idempotency-Key 已用于其他请求",
+                        409,
+                        "idempotency_conflict",
+                    )
+                return jsonify(_task_payload(duplicate)), 200
+            try:
+                job = admin_state.create_detection_job(
+                    user_info,
+                    upload.filename,
+                    kind="swarm" if mode == "swarm" else "image",
+                    mode=mode,
+                    experts=experts,
+                )
+            except Exception:
+                return _error("任务创建失败，请稍后重试", 503, "task_create_failed")
+            task_id = job["id"]
+            execution_filename = _task_execution_filename(task_id, upload.filename)
             try:
                 spool_name = _write_task_spool(task_id, image_bytes)
             except TaskSpoolError as exc:
@@ -4174,7 +4290,7 @@ def create_image_detection():
                     spool_name,
                     len(image_bytes),
                     _request_context(actor, user_info),
-                    idempotency_key or None,
+                    idempotency_key,
                 ),
                 fetch=False,
             )
@@ -4548,8 +4664,8 @@ def _openapi_document():
                     "parameters": [{
                         "name": "Idempotency-Key",
                         "in": "header",
-                        "required": False,
-                        "schema": {"type": "string", "maxLength": 128},
+                        "required": True,
+                        "schema": {"type": "string", "minLength": 8, "maxLength": 128},
                     }],
                     "requestBody": {
                         "required": True,
@@ -4812,6 +4928,14 @@ def admin_set_developer_quota(user_id):
         return jsonify({"status": "error", "message": "remainingCalls 必须是整数"}), 400
     if remaining_calls < 0 or remaining_calls > 10_000_000:
         return jsonify({"status": "error", "message": "remainingCalls 必须在 0 到 10000000 之间"}), 400
+    operation_id = str(
+        payload.get("operationId") or request.headers.get("Idempotency-Key") or ""
+    ).strip()
+    if not (
+        8 <= len(operation_id) <= 128
+        and all(char.isalnum() or char in "-_.:" for char in operation_id)
+    ):
+        return jsonify({"status": "error", "message": "operationId 必须是 8 到 128 位安全字符"}), 400
 
     users = excute_sql("SELECT Userid FROM user WHERE Userid = %s LIMIT 1", (user_id,))
     if users is None:
@@ -4822,10 +4946,30 @@ def admin_set_developer_quota(user_id):
         return jsonify({"status": "error", "message": "开发者账户初始化失败"}), 503
 
     note = str(payload.get("note") or "管理员设置剩余调用次数").strip()[:500]
+    request_fingerprint = hashlib.sha256(
+        json.dumps(
+            {
+                "userId": user_id,
+                "remainingCalls": remaining_calls,
+                "note": note,
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     conn = get_db_connection()
     try:
         conn.begin()
         with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO developer_admin_operations
+                    (operation_id, operation_type, user_id, request_sha256)
+                VALUES (%s, 'quota_set', %s, %s)
+                """,
+                (operation_id, user_id, request_fingerprint),
+            )
             cursor.execute(
                 """
                 SELECT user_id, status, free_total, free_used, free_reserved,
@@ -4864,6 +5008,35 @@ def admin_set_developer_quota(user_id):
             after_row["free_total"] = next_free_total
             after = _account_payload(after_row)
         conn.commit()
+    except pymysql.err.IntegrityError as exc:
+        conn.rollback()
+        if int(exc.args[0] or 0) != 1062:
+            return jsonify({"status": "error", "message": f"调用次数设置失败: {exc}"}), 500
+        operations = excute_sql(
+            """
+            SELECT operation_type, user_id, request_sha256
+            FROM developer_admin_operations WHERE operation_id = %s LIMIT 1
+            """,
+            (operation_id,),
+        )
+        if not operations:
+            return jsonify({"status": "error", "message": "幂等操作状态读取失败"}), 503
+        operation = operations[0]
+        if (
+            str(operation.get("operation_type") or "") != "quota_set"
+            or int(operation.get("user_id") or 0) != int(user_id)
+            or str(operation.get("request_sha256") or "") != request_fingerprint
+        ):
+            return jsonify({"status": "error", "message": "operationId 已被其他操作使用"}), 409
+        replay_account = _account_payload(_account_row(user_id))
+        return jsonify(
+            {
+                "status": "success",
+                "account": replay_account,
+                "operationId": operation_id,
+                "idempotentReplay": True,
+            }
+        )
     except BillingError as exc:
         conn.rollback()
         return jsonify({"status": "error", "message": str(exc)}), exc.status_code
@@ -4879,6 +5052,13 @@ def admin_set_developer_quota(user_id):
         str(user_id),
         before=before,
         after=after,
-        meta={"note": note},
+        meta={"note": note, "operationId": operation_id or None},
     )
-    return jsonify({"status": "success", "account": after})
+    return jsonify(
+        {
+            "status": "success",
+            "account": after,
+            "operationId": operation_id or None,
+            "idempotentReplay": False,
+        }
+    )

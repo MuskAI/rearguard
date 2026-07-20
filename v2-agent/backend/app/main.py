@@ -59,6 +59,10 @@ ALLOW_ANONYMOUS_DETECT = str(os.getenv("JIANZHEN_ALLOW_ANONYMOUS_DETECT", "0")).
 ALLOW_DIRECT_DEVELOPER_KEYS = str(os.getenv("JIANZHEN_ALLOW_DIRECT_DEVELOPER_KEYS", "0")).lower() in {"1", "true", "yes"}
 DEVELOPER_AUTH_CONFIGURED = bool(DEVELOPER_AUTH_URL and DEVELOPER_AUTH_SECRET)
 REPORT_SHARE_SECRET = os.getenv("JIANZHEN_REPORT_SHARE_SECRET", "").strip()
+CONSENT_AUDIT_SALT = os.getenv("JIANZHEN_CONSENT_AUDIT_SALT", "").strip()
+LEGAL_CONSENT_VERSION = "2026-07-15+2026-07-20"
+LEGAL_TERMS_SHA256 = "09707ba3b915db9904cc6f8b4951b5c9bbfff7e768fd237c04eedf90fef89ff3"
+LEGAL_PRIVACY_SHA256 = "5c505aaf82abe1af5cac83fef81c60ec66e89a76377110fba6348ed0567d8935"
 PUBLIC_BASE_URL = os.getenv("JIANZHEN_PUBLIC_BASE_URL", "").strip().rstrip("/")
 REPORT_SHARE_DEFAULT_SECONDS = int(os.getenv("JIANZHEN_REPORT_SHARE_DEFAULT_SECONDS", str(7 * 24 * 60 * 60)))
 REPORT_SHARE_MAX_SECONDS = int(os.getenv("JIANZHEN_REPORT_SHARE_MAX_SECONDS", str(30 * 24 * 60 * 60)))
@@ -347,6 +351,25 @@ def _verify_session_user_sync(request: Request) -> dict | None:
 
 def _session_access_granted(request: Request) -> dict | None:
     return _verify_session_user_sync(request)
+
+
+def _session_auth_reachable() -> bool:
+    """Verify that the configured account service is live, not merely named."""
+    if not SESSION_AUTH_URL:
+        return False
+    probe = urlrequest.Request(
+        SESSION_AUTH_URL,
+        headers={"Accept": "application/json", "User-Agent": "huijian-readiness/1"},
+        method="GET",
+    )
+    try:
+        with urlrequest.urlopen(probe, timeout=1.5) as response:
+            return 200 <= int(response.status) < 500
+    except urlerror.HTTPError as exc:
+        # An unauthenticated 401/403 proves the identity service is reachable.
+        return exc.code in {400, 401, 403, 405}
+    except (urlerror.URLError, TimeoutError, OSError):
+        return False
 
 
 def _require_protected_access(request: Request) -> dict:
@@ -642,6 +665,54 @@ async def _read_upload(file: UploadFile) -> bytes:
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail=f"文件超过 {MAX_UPLOAD_BYTES // (1024 * 1024)}MB 上限")
     return data
+
+
+def _record_public_upload_consent(
+    request: Request,
+    data: bytes,
+    *,
+    idempotency_key: str,
+    upload_consent: str | None,
+    consent_version: str | None,
+    terms_sha256: str | None,
+    privacy_sha256: str | None,
+) -> None:
+    accepted = str(upload_consent or "").strip().lower() in {
+        "1", "true", "yes", "on", "agree", "accepted"
+    }
+    submitted = (
+        str(consent_version or "").strip(),
+        str(terms_sha256 or "").strip().lower(),
+        str(privacy_sha256 or "").strip().lower(),
+    )
+    expected = (LEGAL_CONSENT_VERSION, LEGAL_TERMS_SHA256, LEGAL_PRIVACY_SHA256)
+    if not accepted or submitted != expected:
+        raise HTTPException(
+            status_code=428,
+            detail="请确认当前用户协议与隐私政策后再上传文件",
+        )
+    key = str(idempotency_key or "").strip()
+    if not (8 <= len(key) <= 128 and all(33 <= ord(char) <= 126 for char in key)):
+        raise HTTPException(status_code=400, detail="请提供有效的 Idempotency-Key")
+    if len(CONSENT_AUDIT_SALT) < 32:
+        raise HTTPException(status_code=503, detail="授权记录服务暂不可用")
+    subject_material = f"{_client_ip(request) or ''}\0{request.headers.get('user-agent', '')}"
+    subject_hash = hmac.new(
+        CONSENT_AUDIT_SALT.encode("utf-8"),
+        subject_material.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    storage.record_guest_upload_consent(
+        subject_hash=subject_hash,
+        document_version=LEGAL_CONSENT_VERSION,
+        terms_sha256=LEGAL_TERMS_SHA256,
+        privacy_sha256=LEGAL_PRIVACY_SHA256,
+        upload_sha256=hashlib.sha256(data).hexdigest(),
+        idempotency_key_hash=hmac.new(
+            CONSENT_AUDIT_SALT.encode("utf-8"), key.encode("utf-8"), hashlib.sha256
+        ).hexdigest(),
+        channel="v2_public_detect",
+    )
 
 
 async def _acquire_forensics_slot() -> None:
@@ -962,11 +1033,20 @@ def health() -> dict:
 def ready() -> Response:
     capabilities = _public_capabilities()
     storage_status = storage.healthcheck()
+    session_auth_reachable = _session_auth_reachable()
     checks = {
         "imageModelConfigured": capabilities["capabilities"]["image"] == "available",
+        "visibleWatermarkAvailable": bool(
+            capabilities.get("visibleWatermark", {}).get("enabled")
+            and capabilities.get("visibleWatermark", {}).get("available")
+        ),
         "storageAvailable": bool(storage_status.get("available")),
         "accessProtectionConfigured": bool(
             ACCESS_TOKEN or SESSION_AUTH_URL or DEVELOPER_AUTH_CONFIGURED
+        ),
+        "sessionAuthReachable": session_auth_reachable,
+        "consentAuditConfigured": (
+            not ALLOW_ANONYMOUS_DETECT or len(CONSENT_AUDIT_SALT) >= 32
         ),
     }
     is_ready = all(checks.values())
@@ -996,7 +1076,15 @@ def admin_health(request: Request) -> dict:
 
 
 @app.post("/api/detect")
-async def detect(request: Request, file: UploadFile = File(...), fileType: str | None = Form(default=None)) -> dict:
+async def detect(
+    request: Request,
+    file: UploadFile = File(...),
+    fileType: str | None = Form(default=None),
+    upload_consent: str | None = Form(default=None),
+    consent_version: str | None = Form(default=None),
+    terms_sha256: str | None = Form(default=None),
+    privacy_sha256: str | None = Form(default=None),
+) -> dict:
     actor = await _require_developer_access(request)
     try:
         await asyncio.wait_for(
@@ -1010,7 +1098,16 @@ async def detect(request: Request, file: UploadFile = File(...), fileType: str |
             headers={"Retry-After": "5"},
         ) from exc
     try:
-        return await _detect_with_slot(request, file, fileType, actor)
+        return await _detect_with_slot(
+            request,
+            file,
+            fileType,
+            actor,
+            upload_consent=upload_consent,
+            consent_version=consent_version,
+            terms_sha256=terms_sha256,
+            privacy_sha256=privacy_sha256,
+        )
     finally:
         _DETECTION_SEMAPHORE.release()
 
@@ -1020,10 +1117,25 @@ async def _detect_with_slot(
     file: UploadFile,
     file_type: str | None,
     actor: dict,
+    *,
+    upload_consent: str | None = None,
+    consent_version: str | None = None,
+    terms_sha256: str | None = None,
+    privacy_sha256: str | None = None,
 ) -> dict:
     data = await _read_upload(file)
     if not data:
         raise HTTPException(status_code=400, detail="空文件")
+    if actor.get("mode") == "public":
+        _record_public_upload_consent(
+            request,
+            data,
+            idempotency_key=request.headers.get("idempotency-key", ""),
+            upload_consent=upload_consent,
+            consent_version=consent_version,
+            terms_sha256=terms_sha256,
+            privacy_sha256=privacy_sha256,
+        )
     filename = file.filename or "unknown"
     ftype = _detect_type(filename, file_type)
     if ftype in {"video", "audio"}:

@@ -33,6 +33,7 @@ import {
   deleteImageHistory,
   deleteVideoHistory,
   detectVideoWithAgent,
+  downloadAccountReport,
   downloadReport,
   fetchCurrentUser,
   fetchHealth,
@@ -43,13 +44,12 @@ import {
   fetchImageHistory,
   fetchVideoAgentResult,
   fetchVideoHistory,
-  imageReportUrl,
   isRateLimitedError,
   logoutAccount,
   runForensics,
   runProvenance,
+  SESSION_EXPIRED_EVENT,
   startImageAgent,
-  videoReportUrl,
 } from "./api";
 import type { AgentHistoryEntry, AgentOutcome, AgentProgress, ImageAnalysisMode, PendingFile } from "./agentTypes";
 import { generateForensicPreview } from "./clientForensics";
@@ -72,6 +72,7 @@ const ACCEPTED_FILES = "image/jpeg,image/png,image/webp,image/bmp,image/gif,vide
 
 type UploadKind = "image" | "video" | "audio" | "document" | "unknown";
 type AppView = "home" | "workspace" | "developer";
+type HealthCheckState = "checking" | "ready" | "failed";
 type FallbackOffer = {
   file: File;
   previewUrl?: string;
@@ -202,6 +203,7 @@ export default function App() {
   const [authReady, setAuthReady] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
   const [health, setHealth] = useState<HealthStatus | null>(null);
+  const [healthCheckState, setHealthCheckState] = useState<HealthCheckState>("checking");
   const [history, setHistory] = useState<AgentHistoryEntry[]>([]);
   const [historyQuery, setHistoryQuery] = useState("");
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -242,6 +244,20 @@ export default function App() {
   const retryModeRef = useRef<ImageAnalysisMode>("fast");
   const feedbackTokenRef = useRef(0);
   const pendingSwarmFileRef = useRef<File | null>(null);
+  const activeJobIdRef = useRef<string | null>(null);
+  const webRequestKeysRef = useRef(new WeakMap<File, Partial<Record<ImageAnalysisMode, string>>>());
+
+  const refreshHealth = useCallback(async () => {
+    setHealthCheckState("checking");
+    try {
+      const value = await fetchHealth();
+      setHealth(value);
+      setHealthCheckState("ready");
+    } catch {
+      setHealth(null);
+      setHealthCheckState("failed");
+    }
+  }, []);
 
   const loadHistoryForUser = useCallback(async (account: AccountUser) => {
     const requestToken = ++historyTokenRef.current;
@@ -262,13 +278,25 @@ export default function App() {
     if (videoResult.status === "fulfilled") merged.push(...(videoResult.value.records || []).map(videoHistoryEntry));
     merged.sort((a, b) => timestamp(b.createdAt) - timestamp(a.createdAt));
     setHistory(merged);
-    if (results.every((result) => result.status === "rejected")) setHistoryMessage("个人历史暂时无法读取，请稍后刷新");
+    const failedSources = results.filter((result) => result.status === "rejected").length;
+    const truncatedSources = [
+      evidenceResult.status === "fulfilled" && evidenceResult.value.total > evidenceResult.value.items.length,
+      imageResult.status === "fulfilled" && imageResult.value.total > imageResult.value.records.length,
+      videoResult.status === "fulfilled" && videoResult.value.total > videoResult.value.records.length,
+    ].filter(Boolean).length;
+    if (failedSources === results.length) {
+      setHistoryMessage("个人历史暂时无法读取，请稍后刷新");
+    } else if (failedSources > 0) {
+      setHistoryMessage(`部分记录未加载（${failedSources} 个数据源失败），当前列表不完整，请稍后刷新`);
+    } else if (truncatedSources > 0) {
+      setHistoryMessage("当前仅显示各数据源最近 100 条记录，较早记录尚未加载");
+    }
     setHistoryLoading(false);
   }, []);
 
   useEffect(() => {
     let active = true;
-    fetchHealth().then((value) => active && setHealth(value)).catch(() => active && setHealth(null));
+    void refreshHealth();
     fetchCurrentUser()
       .then((response) => {
         if (!active) return;
@@ -295,7 +323,7 @@ export default function App() {
       forensicsControllerRef.current?.preview.abort();
       if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
     };
-  }, [loadHistoryForUser]);
+  }, [loadHistoryForUser, refreshHealth]);
 
   useEffect(() => {
     const syncViewFromUrl = () => setView(initialAppView());
@@ -350,7 +378,26 @@ export default function App() {
     setFeedbackError("");
     setFallbackOffer(null);
     setActiveKey(undefined);
+    activeJobIdRef.current = null;
   }, []);
+
+  useEffect(() => {
+    const handleSessionExpired = () => {
+      if (userIdRef.current == null) return;
+      resetTask();
+      historyTokenRef.current += 1;
+      userIdRef.current = null;
+      setUser(null);
+      setHistory([]);
+      setHistoryMessage("登录状态已过期，请重新登录后查看个人历史");
+      setHistoryQuery("");
+      setMobileHistoryOpen(false);
+      setErrorMessage("登录状态已过期，请重新登录后继续");
+      setAuthOpen(true);
+    };
+    window.addEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
+  }, [resetTask]);
 
   const navigateToView = useCallback((nextView: AppView) => {
     const url = new URL(window.location.href);
@@ -411,13 +458,18 @@ export default function App() {
     existingJobId?: string,
   ) {
     try {
+      const keys = webRequestKeysRef.current.get(file) || {};
+      const idempotencyKey = keys[mode] || globalThis.crypto.randomUUID();
+      keys[mode] = idempotencyKey;
+      webRequestKeysRef.current.set(file, keys);
       const started = existingJobId
         ? await fetchImageAgentJob(existingJobId, controller.signal)
         : mode === "swarm"
-          ? await startImageAgent(file, controller.signal)
-          : await startFastImageAgent(file, controller.signal);
+          ? await startImageAgent(file, idempotencyKey, controller.signal)
+          : await startFastImageAgent(file, idempotencyKey, controller.signal);
       if (runTokenRef.current !== token) return;
       let job = started.job;
+      activeJobIdRef.current = job.id;
       setProgress(progressFromJob(job, mode));
       const startedAt = Date.now();
       let pollDelay = AGENT_POLL_INITIAL_MS;
@@ -435,9 +487,13 @@ export default function App() {
             analysisMode: mode,
           });
           setOutcome({ kind: "image", id: `image:${result.itemid}`, result, file, previewUrl, analysisMode: mode });
+          activeJobIdRef.current = null;
           return;
         }
-        if (job.status === "failed") throw new Error(job.error || (mode === "swarm" ? "Swarm 复核暂不可用" : "快速检测暂不可用"));
+        if (job.status === "failed") {
+          activeJobIdRef.current = null;
+          throw new Error(job.error || (mode === "swarm" ? "Swarm 复核暂不可用" : "快速检测暂不可用"));
+        }
         await wait(pollDelay, controller.signal);
         let polled: Awaited<ReturnType<typeof fetchImageAgentJob>>;
         try {
@@ -469,6 +525,7 @@ export default function App() {
         jobId: job.id,
         reason: `服务器任务 ${job.id} 仍在运行，页面已暂停高频刷新`,
       });
+      activeJobIdRef.current = null;
       return;
     } catch (error) {
       if (isAbort(error) || runTokenRef.current !== token) throw error;
@@ -478,8 +535,34 @@ export default function App() {
         throw new Error("当前提交任务较多，请稍候几秒后重试当前文件");
       }
       setProgress(null);
-      setFallbackOffer({ file, previewUrl, mode, reason: message });
+      const jobId = activeJobIdRef.current || undefined;
+      activeJobIdRef.current = null;
+      setFallbackOffer({ file, previewUrl, mode, jobId, reason: jobId ? `${message}；服务器任务 ${jobId} 可能仍在运行` : message });
     }
+  }
+
+  function stopWaitingForTask() {
+    const jobId = activeJobIdRef.current;
+    const file = retryFileRef.current;
+    const previewUrl = previewUrlRef.current || undefined;
+    const mode = retryModeRef.current;
+    runTokenRef.current += 1;
+    runControllerRef.current?.abort();
+    runControllerRef.current = null;
+    activeJobIdRef.current = null;
+    setBusy(false);
+    setProgress(null);
+    if (jobId && file) {
+      setFallbackOffer({
+        file,
+        previewUrl,
+        mode,
+        jobId,
+        reason: `已停止等待；服务器任务 ${jobId} 可能仍在运行`,
+      });
+      return;
+    }
+    setErrorMessage("已停止等待。服务器端若已接收文件，任务仍可能继续运行。当前服务暂不支持真正取消任务。");
   }
 
   async function analyzeFile(file: File, modeOverride = imageAnalysisMode, accountOverride?: AccountUser) {
@@ -845,12 +928,7 @@ export default function App() {
       if (outcome.kind === "evidence") {
         await downloadReport(outcome.result.reportId);
       } else {
-        const link = document.createElement("a");
-        link.href = outcome.kind === "image" ? imageReportUrl(outcome.result.itemid) : videoReportUrl(outcome.result.itemid);
-        link.rel = "noopener";
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
+        await downloadAccountReport(outcome.kind, outcome.result.itemid);
       }
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "报告下载失败");
@@ -925,6 +1003,7 @@ export default function App() {
         <OfficialHome
           authReady={authReady}
           health={health}
+          healthCheckState={healthCheckState}
           user={user}
           onEnterWorkspace={() => navigateToView("workspace")}
           onDeveloper={() => {
@@ -975,9 +1054,9 @@ export default function App() {
             </div>
           </div>
           <div className="topbar-actions">
-            <span className={`service-pill ${health == null ? "checking" : serviceAvailable ? "online" : "limited"}`} role="status" aria-label={health == null ? "服务检查中" : serviceAvailable ? "检测服务可用" : "部分能力受限"} title={health == null ? "服务检查中" : serviceAvailable ? "检测服务可用" : "部分能力受限"}>
-              <i /> {health == null ? "服务检查中" : serviceAvailable ? "检测服务可用" : "部分能力受限"}
-            </span>
+            <button className={`service-pill ${healthCheckState === "checking" ? "checking" : healthCheckState === "failed" ? "limited" : serviceAvailable ? "online" : "limited"}`} type="button" onClick={() => void refreshHealth()} aria-label={healthCheckState === "checking" ? "服务检查中" : healthCheckState === "failed" ? "服务状态读取失败，点击重试" : serviceAvailable ? "检测服务可用，点击刷新" : "部分能力受限，点击刷新"} title="点击刷新服务状态">
+              <i /> {healthCheckState === "checking" ? "服务检查中" : healthCheckState === "failed" ? "服务状态不可用" : serviceAvailable ? "检测服务可用" : "部分能力受限"}
+            </button>
             {authReady && (user ? (
               <button type="button" className="user-pill" onClick={() => setMobileHistoryOpen(true)} aria-label={`打开${user.username || "慧鉴用户"}的个人任务`}><UserRound size={16} /><span>{user.username || "慧鉴用户"}</span></button>
             ) : (
@@ -1015,7 +1094,7 @@ export default function App() {
                 <div className="file-message-copy"><span>请帮我鉴别这份内容</span><strong>{pendingFile.name}</strong><small>{pendingFile.typeLabel}{pendingFile.size ? ` · ${formatBytes(pendingFile.size)}` : " · 已归档任务"}{pendingFile.analysisMode ? <span className="pending-mode-chip">{pendingFile.analysisMode === "swarm" ? "Swarm 复核" : "快速检测"}</span> : null}</small></div>
                 {pendingFile.previewUrl ? <img src={pendingFile.previewUrl} alt="待检测文件预览" /> : <span className="file-message-icon"><Paperclip size={20} /></span>}
               </div>
-              {(progress || busy) && !outcome && <AgentProgressPanel progress={progress} onCancel={resetTask} />}
+              {(progress || busy) && !outcome && <AgentProgressPanel progress={progress} onStopWaiting={stopWaitingForTask} />}
               {fallbackOffer && !busy && (
                 <div className="fallback-choice" role="alert" aria-live="polite">
                   <span><ShieldCheck size={19} /></span>
@@ -1184,7 +1263,7 @@ function WelcomeWorkspace({
   );
 }
 
-function AgentProgressPanel({ progress, onCancel }: { progress: AgentProgress | null; onCancel: () => void }) {
+function AgentProgressPanel({ progress, onStopWaiting }: { progress: AgentProgress | null; onStopWaiting: () => void }) {
   const current = progress || { title: "正在准备鉴伪任务", detail: "请稍候", percent: 8, stage: "validate" as const };
   const stages = current.analysisMode === "fast" ? [
     { key: "validate", label: "文件校验" },
@@ -1218,7 +1297,8 @@ function AgentProgressPanel({ progress, onCancel }: { progress: AgentProgress | 
           </div>
         )}
         {current.fallback && <div className="fallback-note"><ShieldCheck size={14} /> 已切换至可用的可信检测链路，不会返回模拟结论。</div>}
-        <button type="button" className="cancel-analysis-button" onClick={onCancel}>取消检测</button>
+        <button type="button" className="cancel-analysis-button" onClick={onStopWaiting}>停止等待</button>
+        <small className="stop-waiting-note">仅停止当前页面查询；服务器任务可能继续运行。</small>
       </div>
     </div>
   );

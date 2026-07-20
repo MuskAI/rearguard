@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from imagedetection import creat_app  # noqa: E402
+from imagedetection import creat_app, legal_documents  # noqa: E402
 from imagedetection.views import api, detection, evidence_manifest, historical_record, reporting  # noqa: E402
 import detector_backend  # noqa: E402
 
@@ -364,17 +364,25 @@ def test_developer_v1_detect_is_retired_after_key_validation(client, monkeypatch
 
 def test_legacy_guest_image_detect_uses_durable_queue_and_then_blocks(client, monkeypatch, tmp_path):
     monkeypatch.setattr(detection.admin_state, "STATE_PATH", tmp_path / "admin_state.json")
+    monkeypatch.setattr(detection, "_record_guest_upload_consent", lambda *_args, **_kwargs: None)
     queued = []
     monkeypatch.setattr(
         detection,
         "_enqueue_persistent_web_job",
-        lambda *args, **kwargs: queued.append(args) or (True, "", ""),
+        lambda job, *args, **kwargs: queued.append(args) or (True, "", "", job["id"], False),
     )
 
     first = client.post(
         "/image_upload/detect",
-        data={"image": (BytesIO(VALID_PNG_BYTES), "demo.png")},
+        data={
+            "image": (BytesIO(VALID_PNG_BYTES), "demo.png"),
+            "upload_consent": "1",
+            "consent_version": legal_documents.CONSENT_VERSION,
+            "terms_sha256": legal_documents.TERMS.sha256,
+            "privacy_sha256": legal_documents.PRIVACY.sha256,
+        },
         content_type="multipart/form-data",
+        headers={"Idempotency-Key": "guest-detection-001"},
     )
 
     assert first.status_code == 202
@@ -387,10 +395,32 @@ def test_legacy_guest_image_detect_uses_durable_queue_and_then_blocks(client, mo
         "/image_upload/detect",
         data={"image": (BytesIO(VALID_PNG_BYTES), "demo.png")},
         content_type="multipart/form-data",
+        headers={"Idempotency-Key": "guest-detection-002"},
     )
 
     assert second.status_code == 401
     assert "请登录后继续检测" in second.get_json()["message"]
+
+
+def test_guest_image_detection_requires_current_upload_consent(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(detection.admin_state, "STATE_PATH", tmp_path / "admin_state.json")
+    queued = []
+    monkeypatch.setattr(
+        detection,
+        "_enqueue_persistent_web_job",
+        lambda *args, **kwargs: queued.append(args) or (True, "", "", "unexpected", False),
+    )
+
+    response = client.post(
+        "/image_upload/detect_async",
+        data={"image": (BytesIO(VALID_PNG_BYTES), "demo.png")},
+        content_type="multipart/form-data",
+        headers={"Idempotency-Key": "guest-no-consent-001"},
+    )
+
+    assert response.status_code == 428
+    assert response.get_json()["code"] == "upload_consent_required"
+    assert queued == []
 
 
 def test_remote_primary_result_is_imported_into_local_user_history(monkeypatch):
@@ -587,7 +617,10 @@ def test_image_detect_falls_back_to_v2_when_v1_backend_is_down(client, monkeypat
                 "verdict": "suspected_fake",
                 "confidence": 0.76,
                 "modelVersion": "qwen3-vl-flash",
-                "source": "vlm",
+                "source": "provenance",
+                "decisionStatus": "verdict",
+                "decisionAuthority": "decisive_provenance",
+                "reviewRequired": False,
                 "explanation": "V2 evidence summary",
                 "dimensions": [
                     {"key": "aigc", "label": "AIGC生成检测", "score": 0.76, "result": "疑似生成"},
@@ -620,6 +653,27 @@ def test_image_detect_falls_back_to_v2_when_v1_backend_is_down(client, monkeypat
         {"source": "mock", "verdict": "suspected_fake", "confidence": 0.8},
         {"source": "unknown", "verdict": "unknown", "confidence": 0.5},
         {"source": "vlm", "verdict": "unknown", "confidence": 0.5},
+        {
+            "source": "provenance",
+            "verdict": "suspected_fake",
+            "decisionStatus": "review_only",
+            "decisionAuthority": "none",
+            "reviewRequired": True,
+        },
+        {
+            "source": "provenance",
+            "verdict": "suspected_fake",
+            "decisionStatus": "verdict",
+            "decisionAuthority": "none",
+            "reviewRequired": False,
+        },
+        {
+            "source": "vlm",
+            "verdict": "suspected_fake",
+            "decisionStatus": "verdict",
+            "decisionAuthority": "decisive_provenance",
+            "reviewRequired": False,
+        },
     ],
 )
 def test_v2_fallback_rejects_results_without_a_publishable_model_verdict(payload):
@@ -662,6 +716,9 @@ def test_v2_publishable_contract_accepts_verified_provenance_source():
         "source": "provenance",
         "verdict": "highly_suspected_fake",
         "confidence": 0.99,
+        "decisionStatus": "verdict",
+        "decisionAuthority": "decisive_provenance",
+        "reviewRequired": False,
     })
 
 
@@ -1315,11 +1372,11 @@ def test_swarm_detect_async_job_returns_expert_consensus(client, monkeypatch, tm
 
     monkeypatch.setattr(detection, "_run_image_detection_payload", fake_primary)
 
-    def execute_persisted_job(job, image_bytes, filename, mimetype, user_info, is_guest):
+    def execute_persisted_job(job, image_bytes, filename, mimetype, user_info, is_guest, idempotency_key):
         detection._run_swarm_image_job(
             job["id"], image_bytes, filename, mimetype, user_info, is_guest
         )
-        return True, "", ""
+        return True, "", "", job["id"], False
 
     monkeypatch.setattr(detection, "_enqueue_persistent_web_job", execute_persisted_job)
     monkeypatch.setattr(
@@ -1332,6 +1389,7 @@ def test_swarm_detect_async_job_returns_expert_consensus(client, monkeypatch, tm
         "/image_upload/detect_swarm",
         data={"image": (BytesIO(VALID_PNG_BYTES), "demo.png")},
         content_type="multipart/form-data",
+        headers={"Idempotency-Key": "swarm-consensus-001"},
     )
 
     assert created.status_code == 202
@@ -1434,18 +1492,49 @@ def test_async_image_upload_returns_429_when_job_capacity_is_full(client, monkey
     monkeypatch.setattr(
         detection,
         "_enqueue_persistent_web_job",
-        lambda *args, **kwargs: (False, "server_busy", "检测队列已满，请稍后重试"),
+        lambda *args, **kwargs: (False, "server_busy", "检测队列已满，请稍后重试", None, False),
     )
 
     response = client.post(
         "/image_upload/detect_async",
         data={"image": (BytesIO(VALID_PNG_BYTES), "sample.png")},
         content_type="multipart/form-data",
+        headers={"Idempotency-Key": "capacity-full-001"},
     )
 
     assert response.status_code == 429
     assert response.headers["Retry-After"] == "5"
     assert response.get_json()["code"] == "server_busy"
+
+
+def test_async_image_replay_does_not_leave_orphan_progress_job(client, monkeypatch, tmp_path):
+    _login_session(client)
+    monkeypatch.setattr(detection.admin_state, "STATE_PATH", tmp_path / "admin_state.json")
+    existing = {
+        "id": "job_existing",
+        "kind": "image",
+        "filename": "sample.png",
+        "status": "running",
+        "actor": {"account_uuid": ACCOUNT_UUID},
+        "progress": 50,
+    }
+    monkeypatch.setattr(
+        detection,
+        "_enqueue_persistent_web_job",
+        lambda *_args, **_kwargs: (True, "", "", "job_existing", True),
+    )
+    monkeypatch.setattr(detection, "_load_persistent_web_job", lambda _job_id: existing)
+
+    response = client.post(
+        "/image_upload/detect_async",
+        data={"image": (BytesIO(VALID_PNG_BYTES), "sample.png")},
+        content_type="multipart/form-data",
+        headers={"Idempotency-Key": "replay-cleanup-001"},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["job"]["id"] == "job_existing"
+    assert detection.admin_state.list_detection_jobs() == []
 
 
 def test_legacy_image_upload_alias_never_uses_process_local_slots(client, monkeypatch, tmp_path):
@@ -1465,12 +1554,17 @@ def test_legacy_image_upload_alias_never_uses_process_local_slots(client, monkey
 
     slots = CountingSlots()
     monkeypatch.setattr(detection, "BACKGROUND_JOB_SLOTS", slots)
-    monkeypatch.setattr(detection, "_enqueue_persistent_web_job", lambda *args, **kwargs: (True, "", ""))
+    monkeypatch.setattr(
+        detection,
+        "_enqueue_persistent_web_job",
+        lambda job, *args, **kwargs: (True, "", "", job["id"], False),
+    )
 
     response = client.post(
         "/image_upload/detect",
         data={"image": (BytesIO(VALID_PNG_BYTES), "sample.png")},
         content_type="multipart/form-data",
+        headers={"Idempotency-Key": "legacy-alias-001"},
     )
 
     assert response.status_code == 202

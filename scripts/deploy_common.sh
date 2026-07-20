@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEPLOY_HOST="${DEPLOY_HOST:-124.221.92.85}"
 DEPLOY_USER="${DEPLOY_USER:-ubuntu}"
 DEPLOY_SSH_KEY="${DEPLOY_SSH_KEY:-}"
+DEPLOY_KNOWN_HOSTS_FILE="${DEPLOY_KNOWN_HOSTS_FILE:-${HOME:+$HOME/.ssh/known_hosts}}"
 DRY_RUN="${DRY_RUN:-0}"
 SSH_CONTROL_PATH="/tmp/huijian-deploy-%C"
 
@@ -35,6 +36,17 @@ require_ssh_key() {
   if [[ -z "$DEPLOY_SSH_KEY" ]]; then
     printf 'DEPLOY_SSH_KEY is required.\n' >&2
     exit 1
+  fi
+}
+
+require_known_hosts_file() {
+  if [[ -z "$DEPLOY_KNOWN_HOSTS_FILE" ]]; then
+    printf 'DEPLOY_KNOWN_HOSTS_FILE is required when HOME is not set.\n' >&2
+    return 1
+  fi
+  if [[ ! -f "$DEPLOY_KNOWN_HOSTS_FILE" || ! -r "$DEPLOY_KNOWN_HOSTS_FILE" ]]; then
+    printf 'DEPLOY_KNOWN_HOSTS_FILE must be a readable file: %s\n' "$DEPLOY_KNOWN_HOSTS_FILE" >&2
+    return 1
   fi
 }
 
@@ -104,6 +116,9 @@ run_ssh_transport() {
 }
 
 run_scp() {
+  if ! require_known_hosts_file; then
+    return 1
+  fi
   run_ssh_transport scp \
     -i "$DEPLOY_SSH_KEY" \
     -o IdentitiesOnly=yes \
@@ -112,12 +127,16 @@ run_scp() {
     -o ControlMaster=auto \
     -o ControlPersist=60 \
     -o ControlPath="$SSH_CONTROL_PATH" \
-    -o StrictHostKeyChecking=no \
+    -o StrictHostKeyChecking=yes \
+    -o "UserKnownHostsFile=$DEPLOY_KNOWN_HOSTS_FILE" \
     "$@"
 }
 
 run_remote() {
   local remote
+  if ! require_known_hosts_file; then
+    return 1
+  fi
   remote="$(remote_target)"
   run_ssh_transport ssh \
     -i "$DEPLOY_SSH_KEY" \
@@ -127,15 +146,29 @@ run_remote() {
     -o ControlMaster=auto \
     -o ControlPersist=60 \
     -o ControlPath="$SSH_CONTROL_PATH" \
-    -o StrictHostKeyChecking=no \
+    -o StrictHostKeyChecking=yes \
+    -o "UserKnownHostsFile=$DEPLOY_KNOWN_HOSTS_FILE" \
     "$remote" "$1"
 }
 
 run_remote_capture() {
   local remote
+  if ! require_known_hosts_file; then
+    return 1
+  fi
   remote="$(remote_target)"
   if [[ "$DRY_RUN" == "1" ]]; then
-    printf '+ %q %q %q %q %q %q\n' ssh -i "$DEPLOY_SSH_KEY" -o StrictHostKeyChecking=no "$remote" "$1"
+    run_cmd ssh \
+      -i "$DEPLOY_SSH_KEY" \
+      -o IdentitiesOnly=yes \
+      -o BatchMode=yes \
+      -o ConnectTimeout=15 \
+      -o ControlMaster=auto \
+      -o ControlPersist=60 \
+      -o ControlPath="$SSH_CONTROL_PATH" \
+      -o StrictHostKeyChecking=yes \
+      -o "UserKnownHostsFile=$DEPLOY_KNOWN_HOSTS_FILE" \
+      "$remote" "$1"
     return 0
   fi
   run_ssh_transport ssh \
@@ -146,7 +179,8 @@ run_remote_capture() {
     -o ControlMaster=auto \
     -o ControlPersist=60 \
     -o ControlPath="$SSH_CONTROL_PATH" \
-    -o StrictHostKeyChecking=no \
+    -o StrictHostKeyChecking=yes \
+    -o "UserKnownHostsFile=$DEPLOY_KNOWN_HOSTS_FILE" \
     "$remote" "$1"
 }
 

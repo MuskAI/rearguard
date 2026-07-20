@@ -1,6 +1,6 @@
 [Unit]
 Description=RealGuard Web Backend
-After=network.target mysql.service realguard-detector-backend.service
+After=network.target mysql.service
 Requires=mysql.service
 
 [Service]

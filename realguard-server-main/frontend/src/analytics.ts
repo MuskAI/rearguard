@@ -2,7 +2,10 @@ export type AnalyticsPage = "home" | "image" | "video" | "history";
 
 const ANALYTICS_VISITOR_KEY = "realguard_analytics_visitor";
 const ANALYTICS_EVENT_KEY = "realguard_last_page_event";
+const ANALYTICS_CONSENT_KEY = "realguard_analytics_consent_v1";
 let transientAnalyticsVisitorId = "";
+
+export type AnalyticsConsent = "granted" | "denied" | null;
 
 function randomTrackingId() {
   const cryptoApi = globalThis.crypto;
@@ -23,6 +26,25 @@ function storage() {
   } catch {
     return null;
   }
+}
+
+export function analyticsConsent(): AnalyticsConsent {
+  const value = storage()?.getItem(ANALYTICS_CONSENT_KEY);
+  return value === "granted" || value === "denied" ? value : null;
+}
+
+export function setAnalyticsConsent(value: Exclude<AnalyticsConsent, null>) {
+  storage()?.setItem(ANALYTICS_CONSENT_KEY, value);
+  if (value === "denied") {
+    storage()?.removeItem(ANALYTICS_VISITOR_KEY);
+    transientAnalyticsVisitorId = "";
+  }
+}
+
+export function resetAnalyticsConsent() {
+  storage()?.removeItem(ANALYTICS_CONSENT_KEY);
+  storage()?.removeItem(ANALYTICS_VISITOR_KEY);
+  transientAnalyticsVisitorId = "";
 }
 
 function analyticsVisitorId() {
@@ -57,6 +79,7 @@ export function initialAnalyticsPage(): AnalyticsPage {
 
 export function trackConfirmedPageview(page: AnalyticsPage) {
   if (typeof window === "undefined" || navigator.webdriver) return;
+  if (analyticsConsent() !== "granted") return;
   if (new URLSearchParams(window.location.search).get("demo") === "1") return;
   const body = JSON.stringify({
     visitorId: analyticsVisitorId(),

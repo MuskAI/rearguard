@@ -1,6 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 import copy
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from io import BytesIO
 import json
 from datetime import date
@@ -181,7 +181,11 @@ class _BillingCursor:
             return self.rowcount
         if normalized.startswith("UPDATE developer_accounts SET balance_reserved_fen = balance_reserved_fen -"):
             amount = params[0]
-            if (
+            if "balance_fen = balance_fen -" not in normalized:
+                if self.store.account["balance_reserved_fen"] >= amount:
+                    self.store.account["balance_reserved_fen"] -= amount
+                    self.rowcount = 1
+            elif (
                 self.store.account["balance_reserved_fen"] >= amount
                 and self.store.account["balance_fen"] >= amount
             ):
@@ -208,9 +212,11 @@ class _BillingCursor:
             row = self.store.reservations.get(params[0])
             self.row = dict(row) if row else None
             return int(bool(row))
-        if normalized.startswith("UPDATE developer_accounts SET free_reserved = GREATEST(0, free_reserved - 1)"):
-            self.store.account["free_reserved"] = max(0, self.store.account["free_reserved"] - 1)
-            return 1
+        if normalized.startswith("UPDATE developer_accounts SET free_reserved = free_reserved - 1"):
+            if self.store.account["free_reserved"] >= 1:
+                self.store.account["free_reserved"] -= 1
+                self.rowcount = 1
+            return self.rowcount
         if normalized.startswith("UPDATE developer_billing_reservations SET status = 'released'"):
             self.store.reservations[params[0]]["status"] = "released"
             self.rowcount = 1
@@ -431,6 +437,32 @@ def test_settlement_rejects_inconsistent_free_reservation(monkeypatch):
     assert store.account["free_used"] == 0
     assert store.reservations["task-corrupt"]["status"] == "reserved"
     assert store.ledger == []
+
+
+@pytest.mark.parametrize(
+    ("source", "amount_fen"),
+    [("free", 0), ("balance", 25)],
+)
+def test_release_rejects_inconsistent_reserved_counter(monkeypatch, source, amount_fen):
+    store = _BillingStore(free_total=1)
+    store.account["free_reserved"] = 0
+    store.account["balance_reserved_fen"] = 0
+    store.reservations["task-corrupt-release"] = {
+        "task_id": "task-corrupt-release",
+        "user_id": 1,
+        "key_id": 8,
+        "mode": "fast",
+        "source": source,
+        "amount_fen": amount_fen,
+        "status": "reserved",
+    }
+    monkeypatch.setattr(platform, "_ensure_developer_platform_tables", lambda: True)
+    monkeypatch.setattr(platform, "get_db_connection", store.connection)
+
+    assert platform._release_billing("task-corrupt-release") is False
+    assert store.reservations["task-corrupt-release"]["status"] == "reserved"
+    assert store.account["free_reserved"] == 0
+    assert store.account["balance_reserved_fen"] == 0
 
 
 def test_review_only_release_restores_daily_quota_in_same_transaction(monkeypatch):
@@ -690,6 +722,120 @@ def test_idempotency_key_rejects_different_content(client, monkeypatch):
     assert response.get_json()["error"]["code"] == "idempotency_conflict"
 
 
+def test_developer_detection_requires_idempotency_key(client, monkeypatch):
+    actor = {
+        "id": 11,
+        "user_id": 1,
+        "account_uuid": "00000000-0000-4000-8000-000000000001",
+        "scopes": ["image:fast"],
+    }
+    monkeypatch.setattr(platform, "_developer_key_required", lambda: (actor, None))
+
+    response = client.post(
+        "/api/openapi/v1/image-detections",
+        data={"mode": "fast", "image": (BytesIO(_png_bytes()), "sample.png")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == "idempotency_key_required"
+
+
+def test_concurrent_idempotent_detection_creates_and_reserves_once(client, monkeypatch, tmp_path):
+    actor = {
+        "id": 11,
+        "user_id": 7,
+        "account_uuid": "2a5f4e50-2216-4c45-b22c-232e156090d4",
+        "scopes": ["image:fast"],
+        "username": "developer",
+    }
+    rows = {}
+    admission_lock = threading.Lock()
+    created_jobs = []
+    daily_reservations = []
+    billing_reservations = []
+    monkeypatch.setattr(platform, "DEVELOPER_SPOOL_ROOT", tmp_path / "spool")
+    monkeypatch.setattr(platform, "_developer_key_required", lambda: (actor, None))
+    monkeypatch.setattr(platform, "_ensure_developer_platform_tables", lambda: True)
+    monkeypatch.setattr(platform, "_maybe_reconcile_expired_tasks", lambda: 0)
+    monkeypatch.setattr(platform, "_queue_capacity_error", lambda *_: None)
+
+    @contextmanager
+    def submission_guard(*_args):
+        with admission_lock:
+            yield
+
+    monkeypatch.setattr(platform, "_queue_submission_guard", submission_guard)
+    monkeypatch.setattr(
+        platform,
+        "_idempotent_task",
+        lambda _user_id, _account_uuid, key: copy.deepcopy(rows.get(key)),
+    )
+
+    def create_job(*_args, **_kwargs):
+        created_jobs.append("job-idempotent")
+        return {"id": "job-idempotent"}
+
+    monkeypatch.setattr(platform.admin_state, "create_detection_job", create_job)
+    monkeypatch.setattr(platform.admin_state, "update_detection_job", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        platform,
+        "_reserve_task_daily_quota",
+        lambda _actor, task_id: daily_reservations.append(task_id) or (None, None, None),
+    )
+    monkeypatch.setattr(
+        platform,
+        "_reserve_billing",
+        lambda _user_id, _key_id, task_id, _mode: billing_reservations.append(task_id)
+        or {"status": "reserved"},
+    )
+    monkeypatch.setattr(
+        platform,
+        "_task_row_for_user",
+        lambda *_args: copy.deepcopy(rows["same-network-request"]),
+    )
+    monkeypatch.setattr(
+        platform,
+        "_task_payload",
+        lambda row: {"id": row["task_id"], "status": row["status"]},
+    )
+
+    def execute(statement, params=None, fetch=True):
+        normalized = " ".join(statement.split())
+        if normalized.startswith("INSERT INTO developer_detection_tasks"):
+            rows[params[12]] = {
+                "task_id": params[0],
+                "mode": params[4],
+                "request_sha256": params[8],
+                "status": "preparing",
+            }
+            return 1
+        if normalized.startswith("UPDATE developer_detection_tasks SET status = 'queued'"):
+            rows["same-network-request"]["status"] = "queued"
+            return 1
+        raise AssertionError(f"unexpected SQL: {normalized}")
+
+    monkeypatch.setattr(platform, "excute_sql", execute)
+
+    def submit():
+        with client.application.test_client() as thread_client:
+            return thread_client.post(
+                "/api/openapi/v1/image-detections",
+                headers={"Idempotency-Key": "same-network-request"},
+                data={"mode": "fast", "image": (BytesIO(_png_bytes()), "sample.png")},
+                content_type="multipart/form-data",
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        responses = list(executor.map(lambda _: submit(), range(2)))
+
+    assert sorted(response.status_code for response in responses) == [200, 202]
+    assert {response.get_json()["id"] for response in responses} == {"job-idempotent"}
+    assert created_jobs == ["job-idempotent"]
+    assert daily_reservations == ["job-idempotent"]
+    assert billing_reservations == ["job-idempotent"]
+
+
 def test_developer_api_rejects_images_above_pixel_limit(client, monkeypatch):
     actor = {"id": 11, "user_id": 1, "account_uuid": "00000000-0000-4000-8000-000000000001", "scopes": ["image:fast"], "phone": "13800000000"}
     monkeypatch.setattr(platform, "_developer_key_required", lambda: (actor, None))
@@ -699,6 +845,7 @@ def test_developer_api_rejects_images_above_pixel_limit(client, monkeypatch):
 
     response = client.post(
         "/api/openapi/v1/image-detections",
+        headers={"Idempotency-Key": "pixel-limit-request"},
         data={"mode": "fast", "image": (BytesIO(_png_bytes()), "sample.png")},
         content_type="multipart/form-data",
     )
@@ -720,6 +867,7 @@ def test_developer_api_rejects_animated_images(client, monkeypatch):
 
     response = client.post(
         "/api/openapi/v1/image-detections",
+        headers={"Idempotency-Key": "animated-image-request"},
         data={"mode": "fast", "image": (BytesIO(_animated_gif_bytes()), "sample.gif")},
         content_type="multipart/form-data",
     )
@@ -1191,6 +1339,8 @@ def test_admin_sets_exact_remaining_calls_without_rewriting_usage(client, monkey
 
         def execute(self, sql, params=None):
             normalized = " ".join(sql.split())
+            if normalized.startswith("INSERT INTO developer_admin_operations"):
+                return 1
             if normalized.startswith("SELECT user_id, status, free_total"):
                 return 1
             if normalized.startswith("UPDATE developer_accounts SET free_total"):
@@ -1226,7 +1376,11 @@ def test_admin_sets_exact_remaining_calls_without_rewriting_usage(client, monkey
     monkeypatch.setattr(platform, "_audit", lambda *args, **kwargs: audits.append((args, kwargs)))
     monkeypatch.setattr(platform, "excute_sql", lambda *args, **kwargs: [{"Userid": 7}])
 
-    with client.application.test_request_context(json={"remainingCalls": 250, "note": "测试额度"}):
+    with client.application.test_request_context(json={
+        "remainingCalls": 250,
+        "note": "测试额度",
+        "operationId": "quota-exact-remaining-001",
+    }):
         response = platform.admin_set_developer_quota(7)
 
     payload = response.get_json()
@@ -1237,6 +1391,197 @@ def test_admin_sets_exact_remaining_calls_without_rewriting_usage(client, monkey
     assert account["free_total"] == 289
     assert ledger == [(7, 189, 0, "测试额度")]
     assert audits[0][0][1] == "developer.account.quota.set"
+
+
+def test_admin_quota_set_requires_operation_id(client, monkeypatch):
+    monkeypatch.setattr(platform, "_admin_required", lambda permission: ({"adminId": 1}, None))
+
+    with client.application.test_request_context(json={"remainingCalls": 250}):
+        response, status = platform.admin_set_developer_quota(7)
+
+    assert status == 400
+    assert "operationId" in response.get_json()["message"]
+
+
+def _install_quota_operation_store(monkeypatch, account):
+    lock = threading.RLock()
+    operations = {}
+    ledger = []
+
+    class Cursor:
+        current = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def execute(self, sql, params=None):
+            normalized = " ".join(sql.split())
+            if normalized.startswith("INSERT INTO developer_admin_operations"):
+                operation_id, user_id, fingerprint = params
+                if operation_id in operations:
+                    raise platform.pymysql.err.IntegrityError(1062, "duplicate operation")
+                operations[operation_id] = {
+                    "operation_type": "quota_set",
+                    "user_id": user_id,
+                    "request_sha256": fingerprint,
+                }
+                return 1
+            if normalized.startswith("SELECT user_id, status, free_total"):
+                self.current = dict(account)
+                return 1
+            if normalized.startswith("UPDATE developer_accounts SET free_total"):
+                account["free_total"] = params[0]
+                return 1
+            if normalized.startswith("INSERT INTO developer_billing_ledger"):
+                ledger.append(params)
+                return 1
+            raise AssertionError(f"unexpected SQL: {normalized}")
+
+        def fetchone(self):
+            return dict(self.current) if self.current is not None else None
+
+    class Connection:
+        locked = False
+
+        def begin(self):
+            lock.acquire()
+            self.locked = True
+
+        def cursor(self):
+            return Cursor()
+
+        def _release(self):
+            if self.locked:
+                self.locked = False
+                lock.release()
+
+        def commit(self):
+            self._release()
+
+        def rollback(self):
+            self._release()
+
+        def close(self):
+            self._release()
+
+    def execute(statement, params=None, fetch=True):
+        normalized = " ".join(statement.split())
+        if normalized.startswith("SELECT Userid FROM user"):
+            return [{"Userid": 7}]
+        if normalized.startswith("SELECT operation_type, user_id, request_sha256"):
+            operation = operations.get(params[0])
+            return [dict(operation)] if operation else []
+        raise AssertionError(f"unexpected SQL: {normalized}")
+
+    monkeypatch.setattr(platform, "_admin_required", lambda permission: ({"adminId": 1}, None))
+    monkeypatch.setattr(platform, "_ensure_developer_account", lambda user_id: True)
+    monkeypatch.setattr(platform, "_account_row", lambda user_id: dict(account))
+    monkeypatch.setattr(platform, "get_db_connection", Connection)
+    monkeypatch.setattr(platform, "excute_sql", execute)
+    monkeypatch.setattr(platform, "_audit", lambda *args, **kwargs: None)
+    return operations, ledger
+
+
+def test_quota_operation_replay_does_not_overwrite_calls_consumed_after_response_loss(
+    client,
+    monkeypatch,
+):
+    account = {
+        "user_id": 7,
+        "status": "active",
+        "free_total": 100,
+        "free_used": 20,
+        "free_reserved": 0,
+        "balance_fen": 0,
+        "balance_reserved_fen": 0,
+        "created_at": None,
+        "updated_at": None,
+    }
+    operations, ledger = _install_quota_operation_store(monkeypatch, account)
+    payload = {
+        "remainingCalls": 250,
+        "note": "response may be lost",
+        "operationId": "quota-response-loss-001",
+    }
+
+    with client.application.test_request_context(json=payload):
+        first = platform.admin_set_developer_quota(7)
+    assert first.get_json()["idempotentReplay"] is False
+    assert account["free_total"] == 270
+
+    account["free_used"] += 11
+    with client.application.test_request_context(json=payload):
+        replay = platform.admin_set_developer_quota(7)
+
+    assert replay.get_json()["idempotentReplay"] is True
+    assert replay.get_json()["account"]["freeRemaining"] == 239
+    assert account["free_total"] == 270
+    assert len(operations) == 1
+    assert len(ledger) == 1
+
+
+def test_concurrent_quota_operation_mutates_ledger_once(client, monkeypatch):
+    account = {
+        "user_id": 7,
+        "status": "active",
+        "free_total": 100,
+        "free_used": 0,
+        "free_reserved": 0,
+        "balance_fen": 0,
+        "balance_reserved_fen": 0,
+        "created_at": None,
+        "updated_at": None,
+    }
+    operations, ledger = _install_quota_operation_store(monkeypatch, account)
+    payload = {
+        "remainingCalls": 250,
+        "note": "concurrent retry",
+        "operationId": "quota-concurrent-retry-001",
+    }
+
+    def submit():
+        with client.application.test_request_context(json=payload):
+            return platform.admin_set_developer_quota(7)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        responses = list(executor.map(lambda _: submit(), range(2)))
+
+    assert sorted(response.get_json()["idempotentReplay"] for response in responses) == [False, True]
+    assert account["free_total"] == 250
+    assert len(operations) == 1
+    assert len(ledger) == 1
+
+
+def test_quota_operation_id_rejects_reuse_for_different_target(client, monkeypatch):
+    account = {
+        "user_id": 7,
+        "status": "active",
+        "free_total": 100,
+        "free_used": 0,
+        "free_reserved": 0,
+        "balance_fen": 0,
+        "balance_reserved_fen": 0,
+        "created_at": None,
+        "updated_at": None,
+    }
+    _install_quota_operation_store(monkeypatch, account)
+    operation_id = "quota-conflict-retry-001"
+
+    with client.application.test_request_context(
+        json={"remainingCalls": 250, "operationId": operation_id}
+    ):
+        first = platform.admin_set_developer_quota(7)
+    with client.application.test_request_context(
+        json={"remainingCalls": 300, "operationId": operation_id}
+    ):
+        conflict, status = platform.admin_set_developer_quota(7)
+
+    assert first.get_json()["status"] == "success"
+    assert status == 409
+    assert account["free_total"] == 250
 
 
 def test_admin_account_adjustment_requires_idempotency_key(client, monkeypatch):
@@ -1588,6 +1933,7 @@ def test_developer_request_reliably_enqueues_without_daemon_thread(client, monke
 
     response = client.post(
         "/api/openapi/v1/image-detections",
+        headers={"Idempotency-Key": "reliable-enqueue-request"},
         data={"mode": "fast", "image": (BytesIO(_png_bytes()), "sample.png")},
         content_type="multipart/form-data",
     )
@@ -2047,7 +2393,10 @@ def test_web_task_is_spooled_before_it_becomes_runnable(monkeypatch, tmp_path):
     inserts = []
 
     def fake_sql(sql, params=None, fetch=True):
-        if "INSERT INTO web_detection_tasks" in " ".join(sql.split()):
+        normalized = " ".join(sql.split())
+        if normalized.startswith("SELECT job_id, mode, request_sha256"):
+            return []
+        if "INSERT INTO web_detection_tasks" in normalized:
             inserts.append(params)
             assert (platform.WEB_TASK_SPOOL_ROOT / params[5]).read_bytes() == b"image-bytes"
             return 1
@@ -2074,11 +2423,48 @@ def test_web_task_is_spooled_before_it_becomes_runnable(monkeypatch, tmp_path):
     }
 
     assert platform._enqueue_web_detection_task(
-        job, b"image-bytes", "photo.png", "image/png", user_info, False
-    )
+        job, b"image-bytes", "photo.png", "image/png", user_info, False, "", "web-task-spool-001"
+    ) == ("job_test123", False)
     assert len(inserts) == 1
     assert inserts[0][0] == "job_test123"
     assert inserts[0][6] == len(b"image-bytes")
+
+
+def test_web_task_replay_bypasses_current_queue_capacity(monkeypatch):
+    monkeypatch.setattr(platform, "_ensure_developer_platform_tables", lambda: True)
+    existing_sha256 = platform.hashlib.sha256(b"image-bytes").hexdigest()
+    monkeypatch.setattr(
+        platform,
+        "excute_sql",
+        lambda sql, *_args, **_kwargs: [{
+            "job_id": "job_existing",
+            "mode": "fast",
+            "request_sha256": existing_sha256,
+        }] if "SELECT job_id, mode, request_sha256" in sql else (_ for _ in ()).throw(AssertionError(sql)),
+    )
+
+    @contextmanager
+    def full_queue(*_args):
+        raise platform.QueueCapacityError("queue full")
+        yield
+
+    monkeypatch.setattr(platform, "_queue_submission_guard", full_queue)
+    job = {
+        "id": "job_retry",
+        "mode": "fast",
+        "actor": {"account_uuid": "11111111-1111-4111-8111-111111111111"},
+    }
+
+    assert platform._enqueue_web_detection_task(
+        job,
+        b"image-bytes",
+        "photo.png",
+        "image/png",
+        {"Userid": 7},
+        False,
+        "",
+        "web-replay-001",
+    ) == ("job_existing", True)
 
 
 def test_guest_web_task_daily_allowance_is_server_side_and_released_on_failure(monkeypatch, tmp_path):
@@ -2090,6 +2476,8 @@ def test_guest_web_task_daily_allowance_is_server_side_and_released_on_failure(m
     def fake_sql(sql, params=None, fetch=True):
         normalized = " ".join(sql.split())
         calls.append((normalized, params))
+        if normalized.startswith("SELECT job_id, mode, request_sha256"):
+            return []
         if normalized.startswith("SELECT COUNT(*) AS cnt FROM web_guest_daily_usage"):
             return [{"cnt": 0}]
         if normalized.startswith("INSERT IGNORE INTO web_guest_daily_usage"):
@@ -2110,7 +2498,7 @@ def test_guest_web_task_daily_allowance_is_server_side_and_released_on_failure(m
 
     with pytest.raises(platform.TaskRecoveryError):
         platform._enqueue_web_detection_task(
-            job, b"image-bytes", "photo.png", "image/png", user_info, True, "a" * 64
+            job, b"image-bytes", "photo.png", "image/png", user_info, True, "a" * 64, "guest-failure-001"
         )
 
     assert any(sql.startswith("DELETE FROM web_guest_daily_usage") for sql, _ in calls)
@@ -2131,7 +2519,7 @@ def test_guest_web_task_rejects_reused_daily_subject(monkeypatch, tmp_path):
 
     with pytest.raises(platform.QueueCapacityError, match="免费检测次数"):
         platform._enqueue_web_detection_task(
-            job, b"image-bytes", "photo.png", "image/png", user_info, True, "b" * 64
+            job, b"image-bytes", "photo.png", "image/png", user_info, True, "b" * 64, "guest-reuse-001"
         )
 
 
@@ -2144,7 +2532,9 @@ def test_guest_web_task_enforces_global_daily_budget(monkeypatch, tmp_path):
         platform,
         "excute_sql",
         lambda sql, *_args, **_kwargs: (
-            [{"cnt": 2}]
+            []
+            if "SELECT job_id, mode, request_sha256" in sql
+            else [{"cnt": 2}]
             if "COUNT(*) AS cnt FROM web_guest_daily_usage" in sql
             else (_ for _ in ()).throw(AssertionError(sql))
         ),
@@ -2164,6 +2554,7 @@ def test_guest_web_task_enforces_global_daily_budget(monkeypatch, tmp_path):
             {"Userid": None, "account_uuid": "", "phone": "", "openid": "guest"},
             True,
             "c" * 64,
+            "guest-budget-001",
         )
 
 

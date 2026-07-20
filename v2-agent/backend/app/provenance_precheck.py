@@ -200,8 +200,11 @@ def _local_source_decision(report: dict[str, Any]) -> tuple[dict[str, Any], dict
         if any("compositeWithTrainedAlgorithmicMedia" in value for value in source_types)
         else "generated"
     )
-    validation_state = str(report.get("validationState") or "").lower()
-    c2pa_trusted = validation_state in {"valid", "trusted"}
+    validation_state = str(report.get("validationState") or "").strip().lower()
+    c2pa_trusted = (
+        report.get("credentialTrusted") is True
+        or validation_state == "trusted"
+    )
 
     if report.get("isAiGenerated") is True:
         enhanced = source_kind == "enhanced"
@@ -392,13 +395,16 @@ def _reconcile_probability(
     report = dict(result.get("report") or {})
     if isinstance(capture_evidence, dict):
         report["captureEvidence"] = capture_evidence
+    # Never accept a trust assertion from the remote visual precheck. Trust is
+    # established only by local validation over the original upload bytes.
+    report["c2paTrusted"] = False
     if local is not None:
         _, compact = local
         report["aiFromMetadata"] = bool(report.get("aiFromMetadata") or compact.get("aiFromMetadata"))
         if report.get("isAiGenerated") is not True and compact.get("isAiGenerated") is True:
             report["isAiGenerated"] = True
         report["aiSourceKind"] = report.get("aiSourceKind") or compact.get("aiSourceKind")
-        report["c2paTrusted"] = bool(report.get("c2paTrusted") or compact.get("c2paTrusted"))
+        report["c2paTrusted"] = compact.get("c2paTrusted") is True
         report["platform"] = report.get("platform") or compact.get("platform")
         report["signals"] = [*(report.get("signals") or []), *(compact.get("signals") or [])]
         report["integrityClashes"] = list(dict.fromkeys([

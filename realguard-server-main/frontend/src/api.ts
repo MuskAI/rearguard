@@ -1,9 +1,30 @@
+import { appendUploadConsent } from "./legalConsent";
+
 export type ApiResult<T> = T & {
   status?: "success" | "error";
   message?: string;
 };
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
+const IMAGE_REQUEST_KEYS = new WeakMap<File, Partial<Record<"fast" | "swarm", string>>>();
+const VIDEO_REQUEST_KEYS = new WeakMap<File, string>();
+
+function imageRequestKey(file: File, mode: "fast" | "swarm") {
+  const keys = IMAGE_REQUEST_KEYS.get(file) || {};
+  const key = keys[mode] || globalThis.crypto.randomUUID();
+  keys[mode] = key;
+  IMAGE_REQUEST_KEYS.set(file, keys);
+  return key;
+}
+
+function videoRequestKey(file?: File) {
+  if (!file) return globalThis.crypto.randomUUID();
+  const existing = VIDEO_REQUEST_KEYS.get(file);
+  if (existing) return existing;
+  const key = globalThis.crypto.randomUUID();
+  VIDEO_REQUEST_KEYS.set(file, key);
+  return key;
+}
 
 async function parseResponse<T>(response: Response): Promise<ApiResult<T>> {
   const contentType = response.headers.get("content-type") || "";
@@ -77,13 +98,25 @@ export function logout() {
 export function detectImage(file: File, signal?: AbortSignal) {
   const body = new FormData();
   body.append("image", file);
-  return jsonRequest<{ job: DetectionJob }>("/image_upload/detect_async", { method: "POST", body, signal });
+  appendUploadConsent(body);
+  return jsonRequest<{ job: DetectionJob }>("/image_upload/detect_async", {
+    method: "POST",
+    body,
+    signal,
+    headers: { "Idempotency-Key": imageRequestKey(file, "fast") },
+  });
 }
 
 export function startExpertReviewImageDetection(file: File, signal?: AbortSignal) {
   const body = new FormData();
   body.append("image", file);
-  return jsonRequest<{ job: DetectionJob }>("/image_upload/detect_swarm", { method: "POST", body, signal });
+  appendUploadConsent(body);
+  return jsonRequest<{ job: DetectionJob }>("/image_upload/detect_swarm", {
+    method: "POST",
+    body,
+    signal,
+    headers: { "Idempotency-Key": imageRequestKey(file, "swarm") },
+  });
 }
 
 export function getImageDetectionJob(jobId: string, signal?: AbortSignal) {
@@ -115,7 +148,12 @@ export function detectVideo(payload: { file?: File; videoUrl?: string; fastMode:
   if (payload.file) body.append("video_file", payload.file);
   if (payload.videoUrl) body.append("video_url", payload.videoUrl);
   body.append("fast_mode", payload.fastMode ? "1" : "0");
-  return jsonRequest<{ result: VideoDetectionResult }>("/video_upload/detect", { method: "POST", body });
+  appendUploadConsent(body);
+  return jsonRequest<{ result: VideoDetectionResult }>("/video_upload/detect", {
+    method: "POST",
+    body,
+    headers: { "Idempotency-Key": videoRequestKey(payload.file) },
+  });
 }
 
 export function downloadVideoReport(itemid: number) {

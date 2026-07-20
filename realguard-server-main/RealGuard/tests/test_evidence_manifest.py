@@ -886,6 +886,28 @@ def test_user_erasure_rejects_snapshot_symlink(tmp_path):
     assert target.read_text(encoding="utf-8") == "must remain"
 
 
+def test_user_erasure_can_stage_restore_and_finalize_snapshot(tmp_path):
+    root = tmp_path / "snapshots"
+    root.mkdir(mode=0o700)
+    snapshot = root / "image-73.manifest.json"
+    snapshot.write_bytes(b"signed snapshot")
+
+    staged = evidence_manifest.stage_signed_image_manifest_deletion(73, snapshot_root=root)
+
+    assert staged is not None
+    assert not snapshot.exists()
+    assert staged[1].read_bytes() == b"signed snapshot"
+
+    evidence_manifest.restore_staged_image_manifest_deletion(staged)
+    assert snapshot.read_bytes() == b"signed snapshot"
+    assert not staged[1].exists()
+
+    staged = evidence_manifest.stage_signed_image_manifest_deletion(73, snapshot_root=root)
+    evidence_manifest.finalize_staged_image_manifest_deletion(staged)
+    assert not snapshot.exists()
+    assert not staged[1].exists()
+
+
 def test_report_endpoint_returns_clear_422_when_historical_original_is_missing(monkeypatch, tmp_path):
     monkeypatch.setenv("REALGUARD_EVIDENCE_HMAC_KEY", SIGNING_KEY)
     monkeypatch.setenv("REALGUARD_EVIDENCE_SOURCE_ROOTS", str(tmp_path / "missing-static"))

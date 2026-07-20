@@ -17,7 +17,7 @@ Send `multipart/form-data` with:
 - `image`: JPEG, PNG, WebP, BMP, or GIF, up to 25 MB.
 - `mode`: `fast` or `swarm`.
 
-Optionally send an `Idempotency-Key` header of at most 128 characters. Reusing it with the same account, mode, and exact file returns the original task. Reusing it with different input returns `409`.
+Send a required `Idempotency-Key` header containing 8 to 128 visible ASCII characters. Generate one UUID for each new logical request and reuse it for network retries. Reusing it with the same account, mode, and exact file returns the original task. Reusing it with different input returns `409`.
 
 ## Task Lifecycle
 

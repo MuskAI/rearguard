@@ -14,6 +14,7 @@ GPU_HOST="${GPU_DEPLOY_HOST:-10.1.20.66}"
 GPU_USER="${GPU_DEPLOY_USER:-ymk}"
 GPU_PORT="${GPU_DEPLOY_PORT:-22}"
 GPU_KEY="${GPU_DEPLOY_SSH_KEY:-}"
+GPU_KNOWN_HOSTS_FILE="${GPU_DEPLOY_KNOWN_HOSTS_FILE:-${HOME:+$HOME/.ssh/known_hosts}}"
 DRY_RUN="${DRY_RUN:-0}"
 TMP_DIR="$(mktemp -d)"
 ARCHIVE="$TMP_DIR/realguard-detection-release.tgz"
@@ -22,6 +23,7 @@ STAGE_DIR="$TMP_DIR/stage"
 WEB_DRAIN_HOST="${GPU_WEB_DRAIN_HOST:-124.221.92.85}"
 WEB_DRAIN_USER="${GPU_WEB_DRAIN_USER:-ubuntu}"
 WEB_DRAIN_KEY="${GPU_WEB_DRAIN_SSH_KEY:-${DEPLOY_SSH_KEY:-}}"
+WEB_DRAIN_KNOWN_HOSTS_FILE="${GPU_WEB_DRAIN_KNOWN_HOSTS_FILE:-${HOME:+$HOME/.ssh/known_hosts}}"
 WEB_DRAIN_ENABLED="${GPU_DRAIN_WEB_WORKER:-1}"
 web_worker_drain_attempted=0
 public_config_switched=0
@@ -37,7 +39,8 @@ PUBLIC_ROLLBACK_TMP=""
 PUBLIC_ROLLBACK_SCRIPT=""
 
 public_ssh() {
-  ssh -i "$WEB_DRAIN_KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new \
+  ssh -i "$WEB_DRAIN_KEY" -o IdentitiesOnly=yes -o BatchMode=yes \
+    -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$WEB_DRAIN_KNOWN_HOSTS_FILE" \
     "$WEB_DRAIN_USER@$WEB_DRAIN_HOST" "$@"
 }
 
@@ -182,8 +185,14 @@ cp "$YOLO_DIR/realguard-yolo-watermark.service" "$STAGE_DIR/systemd/"
 cp "$GPU_ROLLBACK_SOURCE" "$STAGE_DIR/scripts/"
 tar -C "$STAGE_DIR" -czf "$ARCHIVE" model watermark yolo systemd config scripts
 
-ssh_options=(-p "$GPU_PORT" -o StrictHostKeyChecking=accept-new)
-scp_options=(-P "$GPU_PORT" -o StrictHostKeyChecking=accept-new)
+for known_hosts_file in "$GPU_KNOWN_HOSTS_FILE" "$WEB_DRAIN_KNOWN_HOSTS_FILE"; do
+  [[ -n "$known_hosts_file" && -f "$known_hosts_file" && -r "$known_hosts_file" ]] || {
+    printf 'Pinned known-hosts file is missing or unreadable: %s\n' "$known_hosts_file" >&2
+    exit 2
+  }
+done
+ssh_options=(-p "$GPU_PORT" -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$GPU_KNOWN_HOSTS_FILE")
+scp_options=(-P "$GPU_PORT" -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$GPU_KNOWN_HOSTS_FILE")
 if [[ -n "$GPU_KEY" ]]; then
   ssh_options+=(-i "$GPU_KEY" -o IdentitiesOnly=yes)
   scp_options+=(-i "$GPU_KEY" -o IdentitiesOnly=yes)
@@ -227,13 +236,13 @@ gpu_response_key_id="$(
 )"
 [[ "$public_response_key_id" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$ ]]
 test "$public_response_key_id" = "$gpu_response_key_id"
-scp -i "$WEB_DRAIN_KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new \
+scp -i "$WEB_DRAIN_KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$WEB_DRAIN_KNOWN_HOSTS_FILE" \
   "$SOURCE_DIR/public-detector-remote.conf" \
   "$WEB_DRAIN_USER@$WEB_DRAIN_HOST:$PUBLIC_CONFIG_TMP"
-scp -i "$WEB_DRAIN_KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new \
+scp -i "$WEB_DRAIN_KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$WEB_DRAIN_KNOWN_HOSTS_FILE" \
   "$PUBLIC_ACTIVATE_SOURCE" \
   "$WEB_DRAIN_USER@$WEB_DRAIN_HOST:$PUBLIC_ACTIVATE_TMP"
-scp -i "$WEB_DRAIN_KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new \
+scp -i "$WEB_DRAIN_KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$WEB_DRAIN_KNOWN_HOSTS_FILE" \
   "$PUBLIC_ROLLBACK_SOURCE" \
   "$WEB_DRAIN_USER@$WEB_DRAIN_HOST:$PUBLIC_ROLLBACK_TMP"
 if [[ "$WEB_DRAIN_ENABLED" == "1" ]]; then

@@ -1,3 +1,5 @@
+import { appendUploadConsent, LEGAL_CONSENT } from "./legalConsent";
+
 export type Verdict = "real" | "suspected_fake" | "highly_suspected_fake" | "unknown";
 export type FileType = "image" | "video" | "audio" | "document";
 
@@ -11,6 +13,12 @@ export class ApiRequestError extends Error {
     this.status = status;
     this.retryAfterMs = retryAfterMs;
   }
+}
+
+export const SESSION_EXPIRED_EVENT = "huijian:session-expired";
+
+export function notifySessionExpired(): void {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
 }
 
 export function isRateLimitedError(error: unknown): error is ApiRequestError {
@@ -40,6 +48,7 @@ function withSession(init: RequestInit = {}): RequestInit {
 
 async function parseJson<T>(res: Response, fallback: string): Promise<T> {
   if (!res.ok) {
+    if (res.status === 401) notifySessionExpired();
     let message = res.status === 429 ? "当前请求较多，系统已启动短时保护，请稍候重试" : fallback;
     try {
       const data = await res.json();
@@ -63,6 +72,72 @@ function filenameFromDisposition(disposition: string | null, fallback: string): 
   const plainMatch = value.match(/filename="?([^";]+)"?/i);
   if (plainMatch?.[1]) return plainMatch[1];
   return fallback;
+}
+
+async function downloadResponse(res: Response, fallbackName: string, fallbackMessage: string): Promise<string> {
+  if (!res.ok) await parseJson<Record<string, never>>(res, fallbackMessage);
+  const contentType = (res.headers.get("content-type") || "").toLowerCase();
+  const allowedType = contentType.includes("application/pdf")
+    || contentType.includes("image/png")
+    || contentType.includes("image/jpeg");
+  if (!allowedType) {
+    let message = fallbackMessage;
+    try {
+      const payload = await res.json();
+      message = payload.detail || payload.message || message;
+    } catch {
+      // A successful report response must still be a downloadable image or PDF.
+    }
+    throw new Error(message);
+  }
+  const blob = await res.blob();
+  if (blob.size === 0) throw new Error(`${fallbackMessage}：服务端返回了空文件`);
+  if (blob.size > 50 * 1024 * 1024) throw new Error(`${fallbackMessage}：报告文件超过 50 MB 安全限制`);
+  const header = new Uint8Array(await blob.slice(0, 8).arrayBuffer());
+  const isPdf = header.length >= 5 && String.fromCharCode(...header.slice(0, 5)) === "%PDF-";
+  const isPng = header.length >= 8 && [137, 80, 78, 71, 13, 10, 26, 10].every((value, index) => header[index] === value);
+  const isJpeg = header.length >= 3 && header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff;
+  if (
+    (contentType.includes("application/pdf") && !isPdf)
+    || (contentType.includes("image/png") && !isPng)
+    || (contentType.includes("image/jpeg") && !isJpeg)
+  ) {
+    throw new Error(`${fallbackMessage}：报告内容与文件类型不一致`);
+  }
+  const extension = contentType.includes("image/png")
+    ? ".png"
+    : contentType.includes("image/jpeg")
+      ? ".jpg"
+      : contentType.includes("application/pdf")
+        ? ".pdf"
+        : "";
+  const typedFallback = extension ? fallbackName.replace(/\.[^.]+$/, extension) : fallbackName;
+  const filename = filenameFromDisposition(res.headers.get("content-disposition"), typedFallback);
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.rel = "noopener";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
+  return filename;
+}
+
+async function fetchReport(url: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 60_000);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("下载报告超时，请稍后重试");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
 }
 
 export interface Dimension {
@@ -555,11 +630,35 @@ function normalizeHistoryPayload(raw: unknown): { items: HistoryItem[]; total: n
   };
 }
 
+const DOCUMENT_REQUEST_KEYS = new WeakMap<File, string>();
+const VIDEO_REQUEST_KEYS = new WeakMap<File, string>();
+
+function documentRequestKey(file: File) {
+  const existing = DOCUMENT_REQUEST_KEYS.get(file);
+  if (existing) return existing;
+  const key = globalThis.crypto.randomUUID();
+  DOCUMENT_REQUEST_KEYS.set(file, key);
+  return key;
+}
+
+function videoRequestKey(file: File) {
+  const existing = VIDEO_REQUEST_KEYS.get(file);
+  if (existing) return existing;
+  const key = globalThis.crypto.randomUUID();
+  VIDEO_REQUEST_KEYS.set(file, key);
+  return key;
+}
+
 export async function detect(file: File, fileType?: FileType): Promise<DetectResult> {
   const fd = new FormData();
   fd.append("file", file);
   if (fileType) fd.append("fileType", fileType);
-  const res = await fetch("/v2-api/detect", withSession({ method: "POST", body: fd }));
+  appendUploadConsent(fd);
+  const res = await fetch("/v2-api/detect", withSession({
+    method: "POST",
+    body: fd,
+    headers: { "Idempotency-Key": documentRequestKey(file) },
+  }));
   return normalizeDetectResult(await parseJson(res, `检测失败 (${res.status})`));
 }
 
@@ -867,7 +966,7 @@ export function registerAccount(payload: {
         username: payload.username,
         sms_code: payload.smsCode,
         accepted_terms: payload.acceptedTerms,
-        terms_version: "2026-07-15",
+        terms_version: LEGAL_CONSENT.version,
       }),
     },
     "注册失败",
@@ -939,12 +1038,13 @@ export function fetchDeveloperOpenApi() {
   );
 }
 
-export function startImageAgent(file: File, signal?: AbortSignal) {
+export function startImageAgent(file: File, idempotencyKey: string, signal?: AbortSignal) {
   const body = new FormData();
   body.append("image", file);
+  appendUploadConsent(body);
   return accountJson<{ status: string; job: ImageAgentJob }>(
     "/image_upload/detect_swarm",
-    { method: "POST", body, signal },
+    { method: "POST", body, signal, headers: { "Idempotency-Key": idempotencyKey } },
     "多源鉴伪任务启动失败",
   );
 }
@@ -961,9 +1061,10 @@ export function detectVideoWithAgent(file: File, signal?: AbortSignal) {
   const body = new FormData();
   body.append("video_file", file);
   body.append("fast_mode", "1");
+  appendUploadConsent(body);
   return accountJson<{ status: string; result: VideoAgentResult }>(
     "/video_upload/detect",
-    { method: "POST", body, signal },
+    { method: "POST", body, signal, headers: { "Idempotency-Key": videoRequestKey(file) } },
     "视频鉴伪失败",
   );
 }
@@ -1013,12 +1114,11 @@ export function fetchVideoAgentResult(itemId: number) {
   );
 }
 
-export function imageReportUrl(itemId: number): string {
-  return `/image_upload/report?itemid=${encodeURIComponent(String(itemId))}`;
-}
-
-export function videoReportUrl(itemId: number): string {
-  return `/video_upload/report?itemid=${encodeURIComponent(String(itemId))}`;
+export async function downloadAccountReport(kind: "image" | "video", itemId: number): Promise<string> {
+  const path = kind === "image" ? "/image_upload/report" : "/video_upload/report";
+  const fallbackName = `huijian-${kind}-report-${itemId}.pdf`;
+  const res = await fetchReport(`${path}?itemid=${encodeURIComponent(String(itemId))}`, withSession({ cache: "no-store" }));
+  return downloadResponse(res, fallbackName, "下载报告失败");
 }
 
 export type ForensicStatus = "ok" | "warn" | "danger";
@@ -1061,6 +1161,7 @@ export const STATUS_META: Record<ForensicStatus, { dot: string; color: string; l
 export interface ProvenanceReport {
   hasCredentials: boolean;
   validationState: string | null;
+  credentialTrusted?: boolean;
   generator: string | null;
   issuer: string | null;
   signatureAlg: string | null;
@@ -1199,28 +1300,11 @@ export async function fetchMetrics(days = 14): Promise<Metrics> {
 
 export async function downloadReport(reportId: string): Promise<string> {
   const fallbackName = `huijian-report-${reportId}.pdf`;
-  const res = await fetch(`/v2-api/report/${encodeURIComponent(reportId)}/download`, {
+  const res = await fetchReport(`/v2-api/report/${encodeURIComponent(reportId)}/download`, {
     credentials: "include",
     headers: withAuthHeaders(),
   });
-  if (!res.ok) {
-    await parseJson<Record<string, never>>(res, "下载报告失败");
-  }
-  const blob = await res.blob();
-  if (blob.size === 0) {
-    throw new Error("下载报告失败：服务端返回了空报告");
-  }
-  const filename = filenameFromDisposition(res.headers.get("content-disposition"), fallbackName);
-  const url = window.URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.rel = "noopener";
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
-  return filename;
+  return downloadResponse(res, fallbackName, "下载报告失败");
 }
 
 export interface ReportShareLink {

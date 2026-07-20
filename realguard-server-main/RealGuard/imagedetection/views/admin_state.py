@@ -815,6 +815,14 @@ def get_detection_job(job_id):
     return load_state().get("detectionJobs", {}).get(str(job_id))
 
 
+def delete_detection_job(job_id):
+    def mutate(state):
+        jobs = state.setdefault("detectionJobs", {})
+        return jobs.pop(str(job_id), None)
+
+    return _update_state(mutate)
+
+
 def restore_detection_job(entry):
     """Restore a durable job into the progress cache after a Web restart."""
     if not isinstance(entry, dict) or not str(entry.get("id") or "").strip():

@@ -9,6 +9,7 @@ import math
 import os
 import re
 import stat
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -935,6 +936,59 @@ def delete_signed_image_manifest(
         except OSError as exc:
             raise EvidenceManifestError("无法删除证据快照") from exc
     return True
+
+
+def stage_signed_image_manifest_deletion(
+    record_id: int | str,
+    *,
+    snapshot_root: str | os.PathLike[str] | None = None,
+) -> tuple[Path, Path] | None:
+    """Atomically hide a snapshot so database erasure can still be rolled back."""
+    normalized_id = str(record_id or "").strip()
+    if not normalized_id or not normalized_id.isdigit():
+        raise EvidenceManifestError("证据快照记录 ID 无效")
+    root = _snapshot_root(snapshot_root)
+    path = _snapshot_path(root, normalized_id)
+    with _snapshot_lock(root, normalized_id):
+        if not _snapshot_exists(path):
+            return None
+        try:
+            snapshot_stat = path.lstat()
+            if not stat.S_ISREG(snapshot_stat.st_mode) or snapshot_stat.st_nlink != 1:
+                raise EvidenceManifestError("证据快照文件类型或链接数异常")
+            staged = root / f".{path.name}.deleting-{uuid.uuid4().hex}"
+            path.replace(staged)
+        except EvidenceManifestError:
+            raise
+        except OSError as exc:
+            raise EvidenceManifestError("无法隔离证据快照") from exc
+    return path, staged
+
+
+def restore_staged_image_manifest_deletion(staged_deletion: tuple[Path, Path] | None) -> None:
+    """Restore a staged snapshot after its surrounding database transaction fails."""
+    if staged_deletion is None:
+        return
+    original, staged = staged_deletion
+    record_id = original.name.removeprefix("image-").removesuffix(".manifest.json")
+    root = original.parent
+    with _snapshot_lock(root, record_id):
+        try:
+            if staged.exists() and not original.exists():
+                staged.replace(original)
+        except OSError as exc:
+            raise EvidenceManifestError("无法恢复证据快照") from exc
+
+
+def finalize_staged_image_manifest_deletion(staged_deletion: tuple[Path, Path] | None) -> None:
+    """Physically erase a snapshot after its database transaction commits."""
+    if staged_deletion is None:
+        return
+    _original, staged = staged_deletion
+    try:
+        staged.unlink(missing_ok=True)
+    except OSError as exc:
+        raise EvidenceManifestError("无法删除已隔离证据快照") from exc
 
 
 def _valid_manifest_shape(manifest: object) -> bool:

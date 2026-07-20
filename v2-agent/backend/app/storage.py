@@ -118,6 +118,22 @@ def _init(conn: sqlite3.Connection) -> None:
             cache_hit INTEGER
         );
 
+        CREATE TABLE IF NOT EXISTS guest_upload_consents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            subject_hash TEXT NOT NULL,
+            document_version TEXT NOT NULL,
+            terms_sha256 TEXT NOT NULL,
+            privacy_sha256 TEXT NOT NULL,
+            upload_sha256 TEXT NOT NULL,
+            idempotency_key_hash TEXT NOT NULL,
+            channel TEXT NOT NULL,
+            accepted_at TEXT NOT NULL,
+            UNIQUE(subject_hash, idempotency_key_hash)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_guest_upload_consents_time
+            ON guest_upload_consents(accepted_at DESC);
+
         CREATE INDEX IF NOT EXISTS idx_events_created_at ON request_events(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_events_type ON request_events(event_type, created_at DESC);
 
@@ -789,6 +805,38 @@ def record_report_share_access(
                 (client_ip or "")[:128] or None,
                 (user_agent or "")[:512] or None,
                 outcome[:64],
+            ),
+        )
+        conn.commit()
+
+
+def record_guest_upload_consent(
+    *,
+    subject_hash: str,
+    document_version: str,
+    terms_sha256: str,
+    privacy_sha256: str,
+    upload_sha256: str,
+    idempotency_key_hash: str,
+    channel: str,
+) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO guest_upload_consents
+                (subject_hash, document_version, terms_sha256, privacy_sha256,
+                 upload_sha256, idempotency_key_hash, channel, accepted_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                subject_hash,
+                document_version,
+                terms_sha256,
+                privacy_sha256,
+                upload_sha256,
+                idempotency_key_hash,
+                channel[:64],
+                now_iso(),
             ),
         )
         conn.commit()

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   ArrowLeft,
@@ -104,6 +104,21 @@ function expiryFromChoice(choice: string) {
   if (choice === "never") return null;
   const days = Number(choice);
   return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function moveTabFocus(event: ReactKeyboardEvent<HTMLElement>) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const tabs = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+  const current = tabs.indexOf(document.activeElement as HTMLButtonElement);
+  if (current < 0) return;
+  event.preventDefault();
+  const next = event.key === "Home"
+    ? 0
+    : event.key === "End"
+      ? tabs.length - 1
+      : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+  tabs[next]?.focus();
+  tabs[next]?.click();
 }
 
 function integrationExamples(origin: string, mode: "fast" | "swarm"): Record<CodeLanguage, string> {
@@ -391,7 +406,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
             return (
-              <button key={item.key} type="button" className={tab === item.key ? "is-active" : ""} onClick={() => setTab(item.key)} aria-label={item.label} title={item.label}>
+              <button key={item.key} type="button" className={tab === item.key ? "is-active" : ""} onClick={() => setTab(item.key)} aria-current={tab === item.key ? "page" : undefined} aria-label={item.label} title={item.label}>
                 <Icon size={17} /><span>{item.label}</span><ChevronRight size={14} />
               </button>
             );
@@ -423,8 +438,9 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
         </header>
 
         <div className="developer-scroll">
+          {error && <div className="developer-page-error" role="alert">{error}</div>}
           {tab === "overview" && <Overview account={account} available={Boolean(account && !error)} endpoint={endpoint} copied={copied} onCopy={copyText} onOpenKeys={() => setTab("keys")} onOpenDocs={() => setTab("docs")} />}
-          {tab === "keys" && <KeysPanel keys={keys} busy={keyBusy} onCreate={() => setCreateOpen(true)} onRotate={rotateKey} onRevoke={revokeKey} />}
+          {tab === "keys" && <KeysPanel keys={keys} busy={keyBusy} onCreate={() => { setError(""); setCreateOpen(true); }} onRotate={rotateKey} onRevoke={revokeKey} />}
           {tab === "docs" && (
             <DocsPanel
               endpoint={endpoint}
@@ -454,6 +470,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
             </fieldset>
             <label><span>有效期</span><select value={newKeyExpiry} onChange={(event) => setNewKeyExpiry(event.target.value)}><option value="30">30 天</option><option value="90">90 天</option><option value="365">1 年</option><option value="never">永不过期</option></select></label>
             <label><span>IP 白名单 <small>可选，每行一个 IP 或 CIDR</small></span><textarea value={newKeyIps} onChange={(event) => setNewKeyIps(event.target.value)} rows={3} placeholder="203.0.113.10&#10;10.0.0.0/24" /></label>
+            {error && <p className="developer-modal-error" role="alert">{error}</p>}
             <footer><button type="button" className="developer-secondary-action" onClick={() => setCreateOpen(false)}>取消</button><button type="button" className="developer-primary-action" onClick={() => void createKey()} disabled={keyBusy === "create" || !newKeyName.trim() || (!newKeyScopes.fast && !newKeyScopes.swarm)}>{keyBusy === "create" ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />} 创建 Key</button></footer>
           </section>
         </div>
@@ -553,8 +570,8 @@ function DocsPanel({ endpoint, mode, language, code, copied, onModeChange, onLan
       <div className="developer-doc-layout">
         <aside className="developer-doc-index"><strong>图像鉴伪</strong><a href="#create-task" className="is-active">创建任务</a><a href="#poll-task">查询状态</a><a href="#download-report">下载报告</a><strong>Agent</strong><a href="#agent-skill">慧鉴AI Skill</a></aside>
         <div className="developer-doc-content">
-          <section id="create-task"><p className="developer-method-line"><span>POST</span><code>/api/openapi/v1/image-detections</code></p><h3>创建图像鉴伪任务</h3><p>使用 multipart/form-data 上传图片。相同的 Idempotency-Key 与文件可安全重试，不会重复扣费。</p><div className="developer-mode-selector" aria-label="示例检测模式"><button type="button" className={mode === "fast" ? "is-active" : ""} onClick={() => onModeChange("fast")}><Gauge size={16} /><span><strong>快速检测</strong><small>主模型 + 水印</small></span></button><button type="button" className={mode === "swarm" ? "is-active" : ""} onClick={() => onModeChange("swarm")}><ShieldCheck size={16} /><span><strong>Swarm</strong><small>多源交叉复核</small></span></button></div></section>
-          <section className="developer-code-section"><header><div className="developer-language-tabs">{(Object.keys(LANGUAGE_LABELS) as CodeLanguage[]).map((item) => <button type="button" key={item} className={language === item ? "is-active" : ""} onClick={() => onLanguageChange(item)}>{LANGUAGE_LABELS[item]}</button>)}</div><button type="button" onClick={() => void onCopy(code, "code")}>{copied === "code" ? <Check size={15} /> : <Copy size={15} />}{copied === "code" ? "已复制" : "复制"}</button></header><pre><code>{code}</code></pre></section>
+          <section id="create-task"><p className="developer-method-line"><span>POST</span><code>/api/openapi/v1/image-detections</code></p><h3>创建图像鉴伪任务</h3><p>使用 multipart/form-data 上传图片。相同的 Idempotency-Key 与文件可安全重试，不会重复扣费。</p><div className="developer-mode-selector" role="group" aria-label="示例检测模式"><button type="button" aria-pressed={mode === "fast"} className={mode === "fast" ? "is-active" : ""} onClick={() => onModeChange("fast")}><Gauge size={16} /><span><strong>快速检测</strong><small>主模型 + 水印</small></span></button><button type="button" aria-pressed={mode === "swarm"} className={mode === "swarm" ? "is-active" : ""} onClick={() => onModeChange("swarm")}><ShieldCheck size={16} /><span><strong>Swarm</strong><small>多源交叉复核</small></span></button></div></section>
+          <section className="developer-code-section"><header><div className="developer-language-tabs" role="tablist" aria-label="示例代码语言" onKeyDown={moveTabFocus}>{(Object.keys(LANGUAGE_LABELS) as CodeLanguage[]).map((item) => <button id={`developer-language-${item}`} type="button" role="tab" aria-selected={language === item} aria-controls="developer-code-panel" tabIndex={language === item ? 0 : -1} key={item} className={language === item ? "is-active" : ""} onClick={() => onLanguageChange(item)}>{LANGUAGE_LABELS[item]}</button>)}</div><button type="button" onClick={() => void onCopy(code, "code")}>{copied === "code" ? <Check size={15} /> : <Copy size={15} />}{copied === "code" ? "已复制" : "复制"}</button></header><pre id="developer-code-panel" role="tabpanel" aria-labelledby={`developer-language-${language}`} tabIndex={0}><code>{code}</code></pre></section>
           <section id="poll-task"><p className="developer-method-line"><span className="get">GET</span><code>/api/openapi/v1/image-detections/{'{task_id}'}</code></p><h3>查询任务状态</h3><p>建议从 1.5 秒间隔开始轮询，并逐步放慢；收到 429 时遵守 Retry-After。终态为 success、failed 或 rejected，只有 success 会完成额度结算。</p><div className="developer-response-grid"><div><small>status</small><code>queued · running · success · failed · rejected</code></div><div><small>billing.status</small><code>reserved · settled · released</code></div></div></section>
           <section id="download-report"><p className="developer-method-line"><span className="get">GET</span><code>/api/openapi/v1/image-detections/{'{task_id}'}/report</code></p><h3>下载 PDF 报告</h3><p>任务成功后可下载报告。报告与任务都按开发者账号隔离，轮换 Key 后仍可使用同账号的新 Key 访问。</p></section>
           <section id="agent-skill" className="developer-skill-section"><span><Code2 size={22} /></span><div><h3>慧鉴AI Agent Skill</h3><p>为 Codex 或兼容 Agent 提供图片提交、轮询、证据摘要和 PDF 下载流程。通过 HUIJIAN_API_KEY 配置密钥。</p><code>HUIJIAN_API_KEY=rg_sk_...</code></div><a href="https://github.com/MuskAI/rearguard/tree/main/skills/huijian-image-forensics" target="_blank" rel="noreferrer">查看 Skill <ExternalLink size={15} /></a></section>

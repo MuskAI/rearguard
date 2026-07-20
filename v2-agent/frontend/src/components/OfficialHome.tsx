@@ -22,14 +22,16 @@ import HuijianBrand from "./HuijianBrand";
 interface Props {
   authReady: boolean;
   health: HealthStatus | null;
+  healthCheckState: "checking" | "ready" | "failed";
   user: AccountUser | null;
   onEnterWorkspace: () => void;
   onDeveloper: () => void;
   onLogin: () => void;
 }
 
-function getServiceState(health: HealthStatus | null) {
-  if (!health) return { tone: "checking", label: "正在检查服务" };
+function getServiceState(health: HealthStatus | null, healthCheckState: Props["healthCheckState"]) {
+  if (healthCheckState === "failed") return { tone: "limited", label: "服务状态暂不可用" };
+  if (healthCheckState === "checking" || !health) return { tone: "checking", label: "正在检查服务" };
   const capabilityStates = Object.values(health.capabilities || {});
   const hasLimitedCapability = capabilityStates.some((state) => state !== "available");
   if (health.status === "ok" && health.vlmEnabled && !hasLimitedCapability) {
@@ -38,8 +40,8 @@ function getServiceState(health: HealthStatus | null) {
   return { tone: "limited", label: "部分能力受限" };
 }
 
-export default function OfficialHome({ authReady, health, user, onEnterWorkspace, onDeveloper, onLogin }: Props) {
-  const service = getServiceState(health);
+export default function OfficialHome({ authReady, health, healthCheckState, user, onEnterWorkspace, onDeveloper, onLogin }: Props) {
+  const service = getServiceState(health, healthCheckState);
 
   return (
     <div className="official-site">

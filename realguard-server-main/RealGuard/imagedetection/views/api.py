@@ -29,6 +29,7 @@ from imagedetection.views.login import (
     _is_valid_phone,
     _reserve_password_login_attempt,
     _record_terms_acceptance as _append_terms_acceptance,
+    TERMS_VERSION as CURRENT_CONSENT_VERSION,
     revoke_current_user_sessions,
     _session_version,
     _sync_detection_user,
@@ -89,7 +90,7 @@ DEVELOPER_USAGE_URL = os.environ.get(
     "REALGUARD_DEVELOPER_USAGE_URL",
     "http://127.0.0.1:8848/api/developer/token-usage",
 ).strip()
-TERMS_VERSION = os.environ.get("REALGUARD_TERMS_VERSION", "2026-07-15")
+TERMS_VERSION = CURRENT_CONSENT_VERSION
 PASSWORD_MIN_LENGTH = int(os.environ.get("REALGUARD_PASSWORD_MIN_LENGTH", "8"))
 _DEVELOPER_KEY_TABLE_READY = False
 _DEVELOPER_USAGE_TABLE_READY = False
@@ -1893,7 +1894,6 @@ def login_password():
         return jsonify({"status": "error", "message": "请输入手机号和密码"}), 400
     if not accepted_terms:
         return jsonify({"status": "error", "message": "请先阅读并同意用户协议和隐私政策"}), 400
-
     try:
         _reserve_password_login_attempt(phone)
     except PasswordLoginRateLimitError as exc:
@@ -1945,6 +1945,9 @@ def register():
     username = (payload.get("username") or "").strip() or phone
     sms_code = (payload.get("sms_code") or "").strip()
     accepted_terms = _truthy(payload.get("accepted_terms") or payload.get("acceptedTerms"))
+    submitted_terms_version = str(
+        payload.get("terms_version") or payload.get("termsVersion") or ""
+    ).strip()
 
     if not _is_valid_phone(phone) or not secret:
         return jsonify({"status": "error", "message": "请输入正确的手机号和密码"}), 400
@@ -1955,6 +1958,13 @@ def register():
         return jsonify({"status": "error", "message": "用户名不能超过 128 个字符"}), 400
     if not accepted_terms:
         return jsonify({"status": "error", "message": "请先阅读并同意用户协议和隐私政策"}), 400
+    if submitted_terms_version != TERMS_VERSION:
+        return jsonify({
+            "status": "error",
+            "code": "legal_documents_changed",
+            "message": "用户协议或隐私政策已更新，请阅读当前版本后重新确认",
+            "termsVersion": TERMS_VERSION,
+        }), 428
     ok, message = _verify_sms_code("register", phone, sms_code)
     if not ok:
         return jsonify({"status": "error", "message": message}), 400
@@ -2383,6 +2393,9 @@ def _delete_owned_history_record(kind, itemid, actor):
 
     conn = None
     quarantine_path = None
+    thumbnail_quarantine_path = None
+    thumbnail_path = None
+    staged_manifest = None
     original_path = None
     item = None
     try:
@@ -2409,6 +2422,15 @@ def _delete_owned_history_record(kind, itemid, actor):
                 original_path.replace(quarantine_path)
 
             if kind == "image":
+                thumbnail_path = _thumbnail_cache_path(item)
+                if thumbnail_path.is_file():
+                    thumbnail_quarantine_path = thumbnail_path.with_name(
+                        f".{thumbnail_path.name}.deleting-{uuid.uuid4().hex}"
+                    )
+                    thumbnail_path.replace(thumbnail_quarantine_path)
+                staged_manifest = evidence_manifest.stage_signed_image_manifest_deletion(itemid)
+
+            if kind == "image":
                 cursor.execute("DELETE FROM exif WHERE data_itemid = %s", (itemid,))
             cursor.execute(
                 f"DELETE FROM {table} WHERE itemid = %s AND ({owner_where})",
@@ -2425,6 +2447,20 @@ def _delete_owned_history_record(kind, itemid, actor):
                 quarantine_path.replace(original_path)
             except OSError:
                 pass
+        if (
+            thumbnail_quarantine_path
+            and thumbnail_quarantine_path.exists()
+            and thumbnail_path
+            and not thumbnail_path.exists()
+        ):
+            try:
+                thumbnail_quarantine_path.replace(thumbnail_path)
+            except OSError:
+                pass
+        try:
+            evidence_manifest.restore_staged_image_manifest_deletion(staged_manifest)
+        except evidence_manifest.EvidenceManifestError:
+            pass
         return False, "删除失败，请稍后重试", 500
     finally:
         if conn:
@@ -2435,16 +2471,16 @@ def _delete_owned_history_record(kind, itemid, actor):
             quarantine_path.unlink(missing_ok=True)
         except OSError:
             pass
-    if kind == "image" and item:
+    if thumbnail_quarantine_path:
         try:
-            _thumbnail_cache_path(item).unlink(missing_ok=True)
+            thumbnail_quarantine_path.unlink(missing_ok=True)
         except OSError:
             pass
+    if kind == "image" and item:
         try:
-            evidence_manifest.delete_signed_image_manifest(itemid)
+            evidence_manifest.finalize_staged_image_manifest_deletion(staged_manifest)
         except evidence_manifest.EvidenceManifestError as exc:
             print(f"[EVIDENCE DELETE ERROR] item={itemid}: {exc}")
-            return False, "记录已删除，但证据快照清理失败，请联系管理员", 500
     return True, "", 204
 
 

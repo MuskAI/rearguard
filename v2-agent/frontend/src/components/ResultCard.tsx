@@ -49,14 +49,15 @@ function sourceLabel(source?: string, reviewRequired?: boolean) {
 
 function validationLabel(value?: string | null) {
   const normalized = value?.toLowerCase();
-  if (normalized === "valid") return "校验通过";
+  if (normalized === "trusted") return "可信链已建立";
+  if (normalized === "valid") return "签名结构有效，信任链未建立";
   if (normalized === "invalid") return "需复核";
   if (normalized) return "已检测";
   return "未检测";
 }
 
 function credentialReadLabel(report: ProvenanceReport) {
-  if (report.hasCredentials) return validationLabel(report.validationState);
+  if (report.hasCredentials) return report.credentialTrusted ? "可信链已建立" : validationLabel(report.validationState);
   if (report.error === "no_manifest") return "未发现凭证清单";
   if (report.error) return "读取未完成";
   return "未检测到";
@@ -133,12 +134,12 @@ function c2paStatus(report?: ProvenanceReport | null) {
     return { label: "未读取", value: "尚未读取内容凭证", tone: "#7d6f5e" };
   }
   if (report.hasCredentials) {
-    const valid = report.validationState?.toLowerCase() === "valid";
+    const trusted = report.credentialTrusted === true || report.validationState?.toLowerCase() === "trusted";
     const aiClaim = report.isAiGenerated === true ? "声明 AI 生成" : report.isAiGenerated === false ? "声明真实拍摄" : "未声明内容类型";
     return {
-      label: valid ? "内容凭证有效" : "内容凭证需复核",
+      label: trusted ? "内容凭证可信" : "凭证签名可读，信任链未建立",
       value: `${aiClaim} · ${report.generator || report.issuer || "已检测到内容凭证"}`,
-      tone: valid ? "#238f82" : "#c78324",
+      tone: trusted ? "#238f82" : "#c78324",
     };
   }
   return { label: "无凭证", value: report.error === "no_manifest" ? "未发现内容凭证清单" : "未发现内容凭证", tone: "#7d6f5e" };

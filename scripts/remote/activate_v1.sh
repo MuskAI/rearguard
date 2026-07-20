@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+sudo install -m 600 -o ubuntu -g ubuntu /dev/null /var/lock/realguard-v1-deploy.lock
+exec 9>/var/lock/realguard-v1-deploy.lock
+flock -n 9 || { printf 'Another V1 activation is already running.\n' >&2; exit 75; }
+
 : "${IP2REGION_XDB_SHA256:?missing IP2REGION_XDB_SHA256}"
 DETECTOR_PORT="${REALGUARD_DETECTOR_PORT:-15001}"
 commit_sha="$(tr -d '[:space:]' </tmp/realguard-v1.DEPLOYED_COMMIT)"

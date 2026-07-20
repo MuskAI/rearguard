@@ -54,6 +54,8 @@ ADMIN_SCREEN_SESSION_ISSUED_KEY = "admin_screen_access_issued_at"
 ADMIN_USERNAME_RE = re.compile(r"^[a-zA-Z0-9_.-]{3,64}$")
 ADMIN_PASSWORD_MIN_LENGTH = int(os.environ.get("REALGUARD_ADMIN_PASSWORD_MIN_LENGTH", "10"))
 ADMIN_LOGIN_MAX_ATTEMPTS = int(os.environ.get("REALGUARD_ADMIN_LOGIN_MAX_ATTEMPTS", "5"))
+ADMIN_LOGIN_IP_MAX_ATTEMPTS = int(os.environ.get("REALGUARD_ADMIN_LOGIN_IP_MAX_ATTEMPTS", "20"))
+ADMIN_LOGIN_WINDOW_SECONDS = int(os.environ.get("REALGUARD_ADMIN_LOGIN_WINDOW_SECONDS", "900"))
 ADMIN_LOGIN_LOCK_SECONDS = int(os.environ.get("REALGUARD_ADMIN_LOGIN_LOCK_SECONDS", "600"))
 ADMIN_SESSION_MAX_AGE_SECONDS = int(os.environ.get("REALGUARD_ADMIN_SESSION_MAX_AGE_SECONDS", "28800"))
 ADMIN_SCHEMA_SQL = (
@@ -610,6 +612,16 @@ def _login_attempt_keys(identity):
     return _security_hash(normalized or "empty"), _security_hash(_client_ip() or "unknown")
 
 
+def _login_attempt_buckets(identity):
+    identity_hash, ip_hash = _login_attempt_keys(identity)
+    wildcard = _security_hash("*")
+    return (
+        (identity_hash, ip_hash, ADMIN_LOGIN_MAX_ATTEMPTS),
+        (identity_hash, wildcard, ADMIN_LOGIN_MAX_ATTEMPTS),
+        (wildcard, ip_hash, ADMIN_LOGIN_IP_MAX_ATTEMPTS),
+    )
+
+
 def _find_admin_account(identity):
     if not identity or not _ensure_admin_account_table():
         return None
@@ -740,18 +752,21 @@ def _session_login_lock_seconds():
 
 def _admin_login_lock_seconds(identity=None):
     if identity and _login_attempt_table_ready():
-        identity_hash, ip_hash = _login_attempt_keys(identity)
-        rows = excute_sql(
-            """
-            SELECT locked_until_epoch
-            FROM admin_login_attempts
-            WHERE identity_hash = %s AND ip_hash = %s
-            LIMIT 1
-            """,
-            (identity_hash, ip_hash),
-        ) or []
-        if rows:
-            return max(0, int(rows[0].get("locked_until_epoch") or 0) - int(time.time()))
+        locks = []
+        for identity_hash, ip_hash, _limit in _login_attempt_buckets(identity):
+            rows = excute_sql(
+                """
+                SELECT locked_until_epoch
+                FROM admin_login_attempts
+                WHERE identity_hash = %s AND ip_hash = %s
+                LIMIT 1
+                """,
+                (identity_hash, ip_hash),
+            ) or []
+            if rows:
+                locks.append(int(rows[0].get("locked_until_epoch") or 0))
+        if locks:
+            return max(0, max(locks) - int(time.time()))
     return _session_login_lock_seconds()
 
 
@@ -768,42 +783,49 @@ def _record_session_login_failure():
 
 def _record_admin_login_failure(identity=None):
     if identity and _login_attempt_table_ready():
-        identity_hash, ip_hash = _login_attempt_keys(identity)
         now = int(time.time())
         conn = None
         try:
             conn = get_db_connection()
             conn.begin()
             with conn.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT failure_count, locked_until_epoch
-                    FROM admin_login_attempts
-                    WHERE identity_hash = %s AND ip_hash = %s
-                    LIMIT 1 FOR UPDATE
-                    """,
-                    (identity_hash, ip_hash),
-                )
-                row = cursor.fetchone()
-                if row:
-                    previous_lock = int(row.get("locked_until_epoch") or 0)
-                    previous_count = int(row.get("failure_count") or 0)
-                    count = 1 if previous_lock and previous_lock <= now else previous_count + 1
-                else:
-                    count = 1
-                locked_until = now + ADMIN_LOGIN_LOCK_SECONDS if count >= ADMIN_LOGIN_MAX_ATTEMPTS else 0
-                cursor.execute(
-                    """
-                    INSERT INTO admin_login_attempts
-                        (identity_hash, ip_hash, failure_count, locked_until_epoch, last_failed_at)
-                    VALUES (%s, %s, %s, %s, NOW())
-                    ON DUPLICATE KEY UPDATE
-                        failure_count = VALUES(failure_count),
-                        locked_until_epoch = VALUES(locked_until_epoch),
-                        last_failed_at = NOW()
-                    """,
-                    (identity_hash, ip_hash, count, locked_until),
-                )
+                for identity_hash, ip_hash, limit in _login_attempt_buckets(identity):
+                    cursor.execute(
+                        """
+                        SELECT failure_count, locked_until_epoch,
+                               UNIX_TIMESTAMP(last_failed_at) AS last_failed_epoch
+                        FROM admin_login_attempts
+                        WHERE identity_hash = %s AND ip_hash = %s
+                        LIMIT 1 FOR UPDATE
+                        """,
+                        (identity_hash, ip_hash),
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        previous_lock = int(row.get("locked_until_epoch") or 0)
+                        previous_count = int(row.get("failure_count") or 0)
+                        last_failed = int(row.get("last_failed_epoch") or 0)
+                        expired = (
+                            (previous_lock and previous_lock <= now)
+                            or not last_failed
+                            or now - last_failed > ADMIN_LOGIN_WINDOW_SECONDS
+                        )
+                        count = 1 if expired else previous_count + 1
+                    else:
+                        count = 1
+                    locked_until = now + ADMIN_LOGIN_LOCK_SECONDS if count >= limit else 0
+                    cursor.execute(
+                        """
+                        INSERT INTO admin_login_attempts
+                            (identity_hash, ip_hash, failure_count, locked_until_epoch, last_failed_at)
+                        VALUES (%s, %s, %s, %s, NOW())
+                        ON DUPLICATE KEY UPDATE
+                            failure_count = VALUES(failure_count),
+                            locked_until_epoch = VALUES(locked_until_epoch),
+                            last_failed_at = NOW()
+                        """,
+                        (identity_hash, ip_hash, count, locked_until),
+                    )
             conn.commit()
             return
         except Exception as exc:
@@ -819,9 +841,10 @@ def _record_admin_login_failure(identity=None):
 def _clear_admin_login_failures(identity=None):
     if identity and _login_attempt_table_ready():
         identity_hash, ip_hash = _login_attempt_keys(identity)
+        wildcard = _security_hash("*")
         excute_sql(
-            "DELETE FROM admin_login_attempts WHERE identity_hash = %s AND ip_hash = %s",
-            (identity_hash, ip_hash),
+            "DELETE FROM admin_login_attempts WHERE identity_hash = %s AND ip_hash IN (%s, %s)",
+            (identity_hash, ip_hash, wildcard),
             fetch=False,
         )
     session.pop(ADMIN_LOGIN_ATTEMPTS_KEY, None)

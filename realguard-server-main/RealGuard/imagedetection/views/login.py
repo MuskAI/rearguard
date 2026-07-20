@@ -16,6 +16,7 @@ import requests
 from flask import Blueprint, jsonify, has_request_context, render_template, request, session, redirect, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from imagedetection.legal_documents import CONSENT_VERSION, PRIVACY, TERMS
 from imagedetection.views.utils import (
     create_folder,
     excute_detection_sql,
@@ -36,9 +37,9 @@ SMS_MAX_ATTEMPTS = max(1, int(os.environ.get('SMS_MAX_ATTEMPTS', '5')))
 SMS_IP_WINDOW = max(60, int(os.environ.get('SMS_IP_WINDOW', '3600')))
 SMS_IP_WINDOW_LIMIT = max(1, int(os.environ.get('SMS_IP_WINDOW_LIMIT', '20')))
 SMS_IP_MIN_INTERVAL = max(0, int(os.environ.get('SMS_IP_MIN_INTERVAL', '1')))
-TERMS_VERSION = os.environ.get('REALGUARD_TERMS_VERSION', '2026-07-15')
-TERMS_SHA256 = os.environ.get('REALGUARD_TERMS_SHA256', '09707ba3b915db9904cc6f8b4951b5c9bbfff7e768fd237c04eedf90fef89ff')
-PRIVACY_SHA256 = os.environ.get('REALGUARD_PRIVACY_SHA256', 'cdf839825c20ce283ed76944aba09c5c2962abfb05592244004489b73fae80bb')
+TERMS_VERSION = CONSENT_VERSION
+TERMS_SHA256 = TERMS.sha256
+PRIVACY_SHA256 = PRIVACY.sha256
 PASSWORD_MIN_LENGTH = int(os.environ.get('REALGUARD_PASSWORD_MIN_LENGTH', '8'))
 PASSWORD_LOGIN_WINDOW = max(60, int(os.environ.get('REALGUARD_PASSWORD_LOGIN_WINDOW', '900')))
 PASSWORD_LOGIN_PHONE_LIMIT = max(1, int(os.environ.get('REALGUARD_PASSWORD_LOGIN_PHONE_LIMIT', '8')))
@@ -140,6 +141,8 @@ def _ensure_consent_event_storage():
               user_id INT NOT NULL,
               phone_hash CHAR(64) NOT NULL,
               document_version VARCHAR(32) NOT NULL,
+              terms_version VARCHAR(32) NULL,
+              privacy_version VARCHAR(32) NULL,
               terms_sha256 CHAR(64) NOT NULL,
               privacy_sha256 CHAR(64) NOT NULL,
               channel VARCHAR(64) NOT NULL,
@@ -154,7 +157,40 @@ def _ensure_consent_event_storage():
             """,
             fetch=False,
         )
-        _CONSENT_STORAGE_READY = result is not None
+        if result is None:
+            return False
+        result = excute_sql(
+            """
+            CREATE TABLE IF NOT EXISTS guest_consent_events (
+              id BIGINT NOT NULL AUTO_INCREMENT,
+              subject_hash CHAR(64) NOT NULL,
+              document_version VARCHAR(32) NOT NULL,
+              terms_version VARCHAR(32) NOT NULL,
+              privacy_version VARCHAR(32) NOT NULL,
+              terms_sha256 CHAR(64) NOT NULL,
+              privacy_sha256 CHAR(64) NOT NULL,
+              channel VARCHAR(64) NOT NULL,
+              upload_sha256 CHAR(64) NOT NULL,
+              idempotency_key_hash CHAR(64) NOT NULL,
+              client_ip_hash CHAR(64) NULL,
+              user_agent_hash CHAR(64) NULL,
+              accepted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (id),
+              UNIQUE KEY uq_guest_consent_subject_request (subject_hash, idempotency_key_hash),
+              KEY idx_guest_consent_time (accepted_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """,
+            fetch=False,
+        )
+        if result is None:
+            return False
+        for column, definition in (
+            ('terms_version', "VARCHAR(32) NULL COMMENT '用户协议版本'"),
+            ('privacy_version', "VARCHAR(32) NULL COMMENT '隐私政策版本'"),
+        ):
+            if not _ensure_column('consent_events', column, definition):
+                return False
+        _CONSENT_STORAGE_READY = True
         return _CONSENT_STORAGE_READY
 
 
@@ -183,13 +219,15 @@ def _record_terms_acceptance(phone, channel='web_auth'):
             cursor.execute(
                 """
                 INSERT INTO consent_events
-                    (user_id, phone_hash, document_version, terms_sha256, privacy_sha256,
-                     channel, client_ip_hash, user_agent_hash)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    (user_id, phone_hash, document_version, terms_version, privacy_version,
+                     terms_sha256, privacy_sha256, channel, client_ip_hash, user_agent_hash)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
-                    user['Userid'], _consent_hash(phone), TERMS_VERSION, TERMS_SHA256, PRIVACY_SHA256,
-                    str(channel or 'web_auth')[:64], _consent_hash(client_ip), _consent_hash(user_agent),
+                    user['Userid'], _consent_hash(phone), TERMS_VERSION,
+                    TERMS.version, PRIVACY.version, TERMS_SHA256, PRIVACY_SHA256,
+                    str(channel or 'web_auth')[:64], _consent_hash(client_ip),
+                    _consent_hash(user_agent),
                 ),
             )
             cursor.execute(

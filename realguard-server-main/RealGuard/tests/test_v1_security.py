@@ -1369,6 +1369,25 @@ def test_register_requires_terms_acceptance(client, monkeypatch):
     assert "用户协议" in response.get_json()["message"]
 
 
+def test_register_rejects_stale_legal_document_version(client, monkeypatch):
+    monkeypatch.setattr(api, "_verify_sms_code", lambda scene, phone, code: (True, ""))
+
+    response = client.post(
+        "/api/register",
+        json={
+            "phone": "13800000000",
+            "secret": "Password123",
+            "username": "tester",
+            "sms_code": "123456",
+            "accepted_terms": True,
+            "terms_version": "2026-07-15",
+        },
+    )
+
+    assert response.status_code == 428
+    assert response.get_json()["code"] == "legal_documents_changed"
+
+
 def test_send_login_code_does_not_enumerate_registered_phone(client, monkeypatch):
     sent = []
     monkeypatch.setattr(login, "excute_sql", lambda sql, params=None, fetch=True: [])
@@ -1603,6 +1622,7 @@ def test_register_persists_terms_metadata(client, monkeypatch):
             "username": "tester",
             "sms_code": "123456",
             "accepted_terms": True,
+            "terms_version": "test-terms-v1",
         },
     )
 
@@ -1923,7 +1943,22 @@ def test_owned_image_history_delete_removes_database_media_and_thumbnail(tmp_pat
     monkeypatch.setattr(api, "get_detection_db_connection", Connection)
     monkeypatch.setattr(api, "_local_detection_media_path", lambda kind, item: (tmp_path.resolve(), original.resolve()))
     monkeypatch.setattr(api, "_thumbnail_cache_path", lambda item: thumbnail)
-    monkeypatch.setattr(api.evidence_manifest, "delete_signed_image_manifest", lambda itemid: True)
+    staged_manifest = (tmp_path / "manifest.json", tmp_path / ".manifest.deleting")
+    monkeypatch.setattr(
+        api.evidence_manifest,
+        "stage_signed_image_manifest_deletion",
+        lambda itemid: staged_manifest,
+    )
+    monkeypatch.setattr(
+        api.evidence_manifest,
+        "finalize_staged_image_manifest_deletion",
+        lambda staged: None,
+    )
+    monkeypatch.setattr(
+        api.evidence_manifest,
+        "restore_staged_image_manifest_deletion",
+        lambda staged: None,
+    )
 
     deleted, message, status = api._delete_owned_history_record(
         "image",

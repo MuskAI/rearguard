@@ -40,6 +40,7 @@ from imagedetection.views.utils import (
     detection_owner_where,
     excute_detection_sql,
     excute_detection_sql_lastid,
+    excute_sql,
     get_file_size_str,
     get_image_info,
     normalize_account_uuid,
@@ -303,12 +304,12 @@ def _guest_capacity_subject():
     return hashlib.sha256(material).hexdigest()
 
 
-def _enqueue_persistent_web_job(job, image_bytes, filename, mimetype, user_info, is_guest):
+def _enqueue_persistent_web_job(job, image_bytes, filename, mimetype, user_info, is_guest, idempotency_key):
     from imagedetection.views import developer_platform
 
     try:
         guest_subject = _guest_capacity_subject() if is_guest else ''
-        developer_platform._enqueue_web_detection_task(
+        actual_job_id, idempotent_replay = developer_platform._enqueue_web_detection_task(
             job,
             image_bytes,
             filename,
@@ -316,13 +317,14 @@ def _enqueue_persistent_web_job(job, image_bytes, filename, mimetype, user_info,
             user_info,
             is_guest,
             guest_subject,
+            idempotency_key,
         )
     except developer_platform.QueueCapacityError as exc:
-        return False, "server_busy", str(exc) or "当前检测任务较多，请稍后重试"
+        return False, "server_busy", str(exc) or "当前检测任务较多，请稍后重试", None, False
     except Exception as exc:
         print(f"[WEB TASK QUEUE ERROR] {job.get('id')}: {exc}")
-        return False, "queue_unavailable", "检测任务暂时无法入队，请稍后重试"
-    return True, "", ""
+        return False, "queue_unavailable", "检测任务暂时无法入队，请稍后重试", None, False
+    return True, "", "", actual_job_id, idempotent_replay
 
 
 def _load_persistent_web_job(job_id):
@@ -341,6 +343,25 @@ def _seekable_upload_size(file_storage):
         size = stream.tell()
         stream.seek(position)
         return int(size)
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def _seekable_upload_sha256(file_storage):
+    stream = getattr(file_storage, 'stream', None)
+    if stream is None:
+        return None
+    try:
+        position = stream.tell()
+        stream.seek(0)
+        digest = hashlib.sha256()
+        while True:
+            chunk = stream.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+        stream.seek(position)
+        return digest.hexdigest()
     except (AttributeError, OSError, ValueError):
         return None
 
@@ -605,6 +626,82 @@ def _mark_guest_detection_used(is_guest):
         return
     session[GUEST_DETECTION_SESSION_KEY] = int(session.get(GUEST_DETECTION_SESSION_KEY, 0) or 0) + 1
     session.modified = True
+
+
+def _record_guest_upload_consent(user_info, upload_source, idempotency_key, channel):
+    from imagedetection import legal_documents
+    from imagedetection.views import login
+
+    accepted = login._truthy(request.form.get('upload_consent'))
+    submitted = {
+        'document_version': str(request.form.get('consent_version') or '').strip(),
+        'terms_sha256': str(request.form.get('terms_sha256') or '').strip().lower(),
+        'privacy_sha256': str(request.form.get('privacy_sha256') or '').strip().lower(),
+    }
+    expected = {
+        'document_version': legal_documents.CONSENT_VERSION,
+        'terms_sha256': legal_documents.TERMS.sha256,
+        'privacy_sha256': legal_documents.PRIVACY.sha256,
+    }
+    if not accepted or submitted != expected:
+        return jsonify({
+            'status': 'error',
+            'code': 'upload_consent_required',
+            'message': '请确认当前用户协议与隐私政策后再上传文件',
+            'consent': {
+                'version': legal_documents.CONSENT_VERSION,
+                'termsVersion': legal_documents.TERMS.version,
+                'privacyVersion': legal_documents.PRIVACY.version,
+            },
+        }), 428
+    if not login._ensure_consent_event_storage():
+        return jsonify({
+            'status': 'error',
+            'code': 'consent_audit_unavailable',
+            'message': '授权记录服务暂不可用，请稍后重试',
+        }), 503
+    guest_openid = str((user_info or {}).get('openid') or '').strip()
+    if not guest_openid:
+        return jsonify({
+            'status': 'error',
+            'code': 'guest_identity_unavailable',
+            'message': '访客身份暂不可用，请刷新页面后重试',
+        }), 503
+    client_ip = login._trusted_client_ip()
+    user_agent = request.headers.get('User-Agent', '')
+    if (
+        isinstance(upload_source, str)
+        and len(upload_source) == 64
+        and all(char in '0123456789abcdef' for char in upload_source.lower())
+    ):
+        upload_sha256 = upload_source.lower()
+    else:
+        upload_sha256 = hashlib.sha256(bytes(upload_source or b'')).hexdigest()
+    inserted = excute_sql(
+        """
+        INSERT IGNORE INTO guest_consent_events
+            (subject_hash, document_version, terms_version, privacy_version,
+             terms_sha256, privacy_sha256, channel, upload_sha256,
+             idempotency_key_hash, client_ip_hash, user_agent_hash)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            login._consent_hash(guest_openid), legal_documents.CONSENT_VERSION,
+            legal_documents.TERMS.version, legal_documents.PRIVACY.version,
+            legal_documents.TERMS.sha256, legal_documents.PRIVACY.sha256,
+            str(channel or 'web_upload')[:64], upload_sha256,
+            login._consent_hash(idempotency_key), login._consent_hash(client_ip),
+            login._consent_hash(user_agent),
+        ),
+        fetch=False,
+    )
+    if inserted is None:
+        return jsonify({
+            'status': 'error',
+            'code': 'consent_audit_unavailable',
+            'message': '授权记录服务暂不可用，请稍后重试',
+        }), 503
+    return None
 
 
 def _backend_static_url(kind, record):
@@ -1295,7 +1392,15 @@ def _fake_percentage_from_v2(payload):
 def _assert_v2_publishable(payload):
     source = str(payload.get('source') or '').strip().lower()
     verdict = str(payload.get('verdict') or '').strip().lower()
-    if source not in ('vlm', 'provenance') or verdict in ('', 'unknown'):
+    decision_status = str(payload.get('decisionStatus') or '').strip().lower()
+    decision_authority = str(payload.get('decisionAuthority') or '').strip().lower()
+    authority_matches_source = source == 'provenance' and decision_authority == 'decisive_provenance'
+    if (
+        not authority_matches_source
+        or verdict not in ('real', 'suspected_fake', 'highly_suspected_fake')
+        or decision_status != 'verdict'
+        or payload.get('reviewRequired') is not False
+    ):
         raise RuntimeError('备用检测服务未产生可发布的真实模型结论')
 
 
@@ -3213,14 +3318,24 @@ def image_detect_async():
     image_bytes, upload_error = _read_image_upload(file)
     if upload_error:
         return upload_error
+    idempotency_key = request.headers.get('Idempotency-Key', '').strip()
+    if not (8 <= len(idempotency_key) <= 128 and all(33 <= ord(char) <= 126 for char in idempotency_key)):
+        return jsonify({'status': 'error', 'code': 'idempotency_key_required', 'message': '请提供有效的 Idempotency-Key'}), 400
+    if is_guest:
+        consent_error = _record_guest_upload_consent(
+            user_info, image_bytes, idempotency_key, 'web_image_fast'
+        )
+        if consent_error:
+            return consent_error
     job = admin_state.create_detection_job(user_info, file.filename, kind='image')
-    started, error_code, error_message = _enqueue_persistent_web_job(
+    started, error_code, error_message, actual_job_id, idempotent_replay = _enqueue_persistent_web_job(
         job,
         image_bytes,
         file.filename,
         mimetype,
         dict(user_info or {}),
         is_guest,
+        idempotency_key,
     )
     if not started:
         admin_state.update_detection_job(job['id'], {
@@ -3233,8 +3348,12 @@ def image_detect_async():
             'code': error_code,
             'message': error_message,
         }), 503
-    _mark_guest_detection_used(is_guest)
-    return jsonify({'status': 'success', 'job': _public_detection_job(job)}), 202
+    if not idempotent_replay:
+        _mark_guest_detection_used(is_guest)
+    else:
+        admin_state.delete_detection_job(job['id'])
+    actual_job = _load_persistent_web_job(actual_job_id) if actual_job_id != job['id'] else job
+    return jsonify({'status': 'success', 'job': _public_detection_job(actual_job), 'idempotentReplay': idempotent_replay}), 200 if idempotent_replay else 202
 
 
 @image_upload_blueprint.route('/image_upload/detect_swarm', methods=['GET', 'POST'])
@@ -3265,15 +3384,19 @@ def image_detect_swarm():
     image_bytes, upload_error = _read_image_upload(file)
     if upload_error:
         return upload_error
+    idempotency_key = request.headers.get('Idempotency-Key', '').strip()
+    if not (8 <= len(idempotency_key) <= 128 and all(33 <= ord(char) <= 126 for char in idempotency_key)):
+        return jsonify({'status': 'error', 'code': 'idempotency_key_required', 'message': '请提供有效的 Idempotency-Key'}), 400
     experts = _swarm_initial_experts()
     job = admin_state.create_detection_job(user_info, file.filename, kind='swarm', mode='swarm', experts=experts)
-    started, error_code, error_message = _enqueue_persistent_web_job(
+    started, error_code, error_message, actual_job_id, idempotent_replay = _enqueue_persistent_web_job(
         job,
         image_bytes,
         file.filename,
         mimetype,
         dict(user_info or {}),
         is_guest,
+        idempotency_key,
     )
     if not started:
         admin_state.update_detection_job(job['id'], {
@@ -3286,8 +3409,12 @@ def image_detect_swarm():
             'code': error_code,
             'message': error_message,
         }), 503
-    _mark_guest_detection_used(is_guest)
-    return jsonify({'status': 'success', 'job': _public_detection_job(job)}), 202
+    if not idempotent_replay:
+        _mark_guest_detection_used(is_guest)
+    else:
+        admin_state.delete_detection_job(job['id'])
+    actual_job = _load_persistent_web_job(actual_job_id) if actual_job_id != job['id'] else job
+    return jsonify({'status': 'success', 'job': _public_detection_job(actual_job), 'idempotentReplay': idempotent_replay}), 200 if idempotent_replay else 202
 
 
 @image_upload_blueprint.route('/image_upload/jobs/<job_id>')
@@ -3528,6 +3655,42 @@ def video_detect():
         return jsonify({'status': 'error', 'message': '远程视频 URL 已禁用，请直接上传视频文件'}), 400
     if video_url and not _validate_public_video_url(video_url):
         return jsonify({'status': 'error', 'message': '视频 URL 必须是可公开访问的 HTTP(S) 地址'}), 400
+
+    if is_guest:
+        idempotency_key = request.headers.get('Idempotency-Key', '').strip()
+        if not (
+            8 <= len(idempotency_key) <= 128
+            and all(33 <= ord(char) <= 126 for char in idempotency_key)
+        ):
+            return jsonify({
+                'status': 'error',
+                'code': 'idempotency_key_required',
+                'message': '请提供有效的 Idempotency-Key',
+            }), 400
+        if file and file.filename:
+            if not allowed_video_file(file.filename):
+                return jsonify({'status': 'error', 'message': '不支持的视频格式'}), 400
+            upload_size = _seekable_upload_size(file)
+            if upload_size is not None and upload_size > MAX_VIDEO_UPLOAD_BYTES:
+                return jsonify({
+                    'status': 'error',
+                    'code': 'video_too_large',
+                    'message': f'视频不能超过 {max(1, MAX_VIDEO_UPLOAD_BYTES // (1024 * 1024))} MB',
+                }), 413
+            upload_sha256 = _seekable_upload_sha256(file)
+            if not upload_sha256:
+                return jsonify({
+                    'status': 'error',
+                    'code': 'upload_validation_failed',
+                    'message': '无法校验上传视频，请重新选择文件',
+                }), 400
+        else:
+            upload_sha256 = hashlib.sha256(video_url.encode('utf-8')).hexdigest()
+        consent_error = _record_guest_upload_consent(
+            user_info, upload_sha256, idempotency_key, 'web_video'
+        )
+        if consent_error:
+            return consent_error
 
     try:
         form_data = {

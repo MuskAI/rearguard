@@ -322,6 +322,8 @@ GET  /api/openapi/v1/image-detections/{task_id}
 GET  /api/openapi/v1/image-detections/{task_id}/report
 ```
 
+创建任务必须携带 `Idempotency-Key`（建议 UUID）。同一次业务请求的网络重试应复用该值，避免重复建任务或扣费。
+
 平台提供 API Key 创建、轮换和撤销，支持模式权限、有效期与 IP/CIDR 白名单。完整 Key 只在创建或轮换时显示一次，服务端只保存 SHA-256 派生哈希。所有 Key 共享账号级额度，轮换或重建 Key 不会重置赠送次数。
 
 每个开发者账号首次初始化赠送 100 次成功检测额度。提交时先原子预占，只有任务成功落库后才结算；参数错误、模型失败、调度失败和超时不会消费额度。赠送额度耗尽后，快速与 Swarm 分别按 `developer_pricing` 配置计价；一期不开在线支付，由管理员手工调整余额并写入审计账本。

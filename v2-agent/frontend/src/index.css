@@ -1417,6 +1417,14 @@ video {
   border-color: #e1aea3;
 }
 
+.stop-waiting-note {
+  display: block;
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
 .progress-experts span i {
   width: 6px;
   height: 6px;

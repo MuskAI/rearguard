@@ -1,6 +1,6 @@
 [Unit]
 Description=HuiJian AI unified agent backend
-After=network-online.target realguard-backend.service
+After=network-online.target
 Wants=network-online.target
 
 [Service]
@@ -9,7 +9,7 @@ User=ubuntu
 Group=ubuntu
 WorkingDirectory=/opt/jianzhen-v2
 EnvironmentFile=/etc/realguard/jianzhen-v2.env
-ExecStart=/opt/jianzhen-v2/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8848 --workers 1 --proxy-headers --forwarded-allow-ips=127.0.0.1,::1
+ExecStart=/opt/jianzhen-v2/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8848 --workers 1 --proxy-headers --forwarded-allow-ips=127.0.0.1,::1 --no-access-log
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=30
