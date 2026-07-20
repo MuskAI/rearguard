@@ -2467,6 +2467,81 @@ def test_web_task_replay_bypasses_current_queue_capacity(monkeypatch):
     ) == ("job_existing", True)
 
 
+def test_web_task_schema_adds_idempotency_column_before_unique_index(monkeypatch):
+    operations = []
+
+    class Cursor:
+        rows = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, sql, params=None):
+            normalized = " ".join(sql.split())
+            operations.append(normalized)
+            if "INFORMATION_SCHEMA.COLUMNS" in normalized and "developer_detection_tasks" in normalized:
+                self.rows = [{"COLUMN_NAME": name} for name in (
+                    "account_uuid", "mime_type", "execution_filename", "spool_path",
+                    "spool_size", "request_context_json", "idempotency_key", "lease_owner",
+                    "next_attempt_at", "lease_expires_at", "attempt_count", "last_heartbeat_at",
+                    "effect_item_id", "effect_result_json", "daily_quota_reserved",
+                    "daily_quota_day", "prompt_tokens", "completion_tokens", "total_tokens",
+                )]
+            elif "uk_developer_task_idempotency" in normalized and normalized.startswith("SELECT COLUMN_NAME"):
+                self.rows = [
+                    {"COLUMN_NAME": "account_uuid"},
+                    {"COLUMN_NAME": "idempotency_key"},
+                ]
+            elif "idx_developer_tasks_lease" in normalized and normalized.startswith("SELECT INDEX_NAME"):
+                self.rows = [{"INDEX_NAME": "idx_developer_tasks_lease"}]
+            elif "INFORMATION_SCHEMA.COLUMNS" in normalized and "web_detection_tasks" in normalized:
+                self.rows = [{"COLUMN_NAME": name} for name in (
+                    "owner_type", "owner_key", "next_attempt_at", "effect_item_id",
+                    "effect_result_json",
+                )]
+            elif "idx_web_detection_tasks_owner" in normalized and normalized.startswith("SELECT INDEX_NAME"):
+                self.rows = [{"INDEX_NAME": "idx_web_detection_tasks_owner"}]
+            elif "uk_web_detection_tasks_idempotency" in normalized and normalized.startswith("SELECT INDEX_NAME"):
+                self.rows = []
+            else:
+                self.rows = []
+
+        def fetchall(self):
+            return self.rows
+
+        def fetchone(self):
+            return self.rows[0] if self.rows else None
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+        def commit(self):
+            return None
+
+        def rollback(self):
+            raise AssertionError("migration should not roll back")
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(platform, "get_db_connection", Connection)
+
+    assert platform._ensure_task_lease_schema() is True
+    add_column = next(
+        index for index, sql in enumerate(operations)
+        if "ADD COLUMN idempotency_key" in sql and "web_detection_tasks" in sql
+    )
+    add_index = next(
+        index for index, sql in enumerate(operations)
+        if "ADD UNIQUE INDEX uk_web_detection_tasks_idempotency" in sql
+    )
+    assert add_column < add_index
+
+
 def test_guest_web_task_daily_allowance_is_server_side_and_released_on_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(platform, "WEB_TASK_SPOOL_ROOT", tmp_path / "web-spool")
     monkeypatch.setattr(platform, "_ensure_developer_platform_tables", lambda: True)

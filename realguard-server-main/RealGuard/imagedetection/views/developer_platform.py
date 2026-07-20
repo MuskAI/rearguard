@@ -1079,10 +1079,6 @@ def _ensure_task_lease_schema():
                     "ALTER TABLE developer_detection_tasks ADD COLUMN next_attempt_at DATETIME(6) NULL AFTER status",
                 ),
                 (
-                    "idempotency_key",
-                    "ALTER TABLE web_detection_tasks ADD COLUMN idempotency_key VARCHAR(128) NULL AFTER owner_key",
-                ),
-                (
                     "lease_expires_at",
                     "ALTER TABLE developer_detection_tasks ADD COLUMN lease_expires_at DATETIME(6) NULL AFTER lease_owner",
                 ),
@@ -1227,6 +1223,11 @@ def _ensure_task_lease_schema():
                     "NOT NULL DEFAULT '' AFTER owner_type",
                 ),
                 (
+                    "idempotency_key",
+                    "ALTER TABLE web_detection_tasks ADD COLUMN idempotency_key "
+                    "VARCHAR(128) NULL AFTER owner_key",
+                ),
+                (
                     "next_attempt_at",
                     "ALTER TABLE web_detection_tasks ADD COLUMN next_attempt_at DATETIME(6) NULL AFTER status",
                 ),
@@ -1242,6 +1243,7 @@ def _ensure_task_lease_schema():
             for column, statement in web_additions:
                 if column not in web_columns:
                     cursor.execute(statement)
+                    web_columns.add(column)
             cursor.execute(
                 """
                 SELECT INDEX_NAME
