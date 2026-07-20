@@ -140,6 +140,31 @@ def test_gpu_rollout_watchdogs_validate_the_tunnel_without_new_web_code():
     assert "http://127.0.0.1:15001/health" not in public_rollback
 
 
+def test_gpu_status_does_not_require_persistent_sudo_access():
+    status = (ROOT / "scripts" / "check_deploy_status.sh").read_text(encoding="utf-8")
+
+    assert "systemctl show realguard-detection.service -p MainPID" in status
+    assert '"/proc/$model_pid/environ"' in status
+    gpu_block = status.split("gpu_output=", 1)[1].split("public_gpu_output=", 1)[0]
+    assert "sudo awk" not in gpu_block
+
+
+def test_v1_deployment_identity_tracks_release_inputs_not_tests():
+    deploy = (ROOT / "scripts" / "deploy_v1.sh").read_text(encoding="utf-8")
+    status = (ROOT / "scripts" / "check_deploy_status.sh").read_text(encoding="utf-8")
+
+    for path in (
+        "realguard-server-main/RealGuard/model_decision_contract.py",
+        "realguard-server-main/RealGuard/requirements.lock",
+        "realguard-server-main/RealGuard/imagedetection",
+        "scripts/remote/activate_v1.sh",
+        "deploy/systemd",
+    ):
+        assert path in deploy
+        assert path in status
+    assert "realguard-server-main/RealGuard\n" not in deploy
+
+
 def test_v1_release_can_build_a_pinned_runtime_as_the_service_user():
     deploy = (ROOT / "scripts" / "deploy_v1.sh").read_text(encoding="utf-8")
     activate = (ROOT / "scripts" / "remote" / "activate_v1.sh").read_text(

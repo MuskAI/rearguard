@@ -43,7 +43,12 @@ BACKUP_SCRIPT="$ROOT_DIR/scripts/remote/backup_realguard.sh"
 RESTORE_VERIFY_SCRIPT="$ROOT_DIR/scripts/remote/verify_restore_realguard.sh"
 ACTIVATE_SCRIPT="$ROOT_DIR/scripts/remote/activate_v1.sh"
 DEPLOY_PATHS=(
-  realguard-server-main/RealGuard
+  realguard-server-main/RealGuard/run.py
+  realguard-server-main/RealGuard/detector_backend.py
+  realguard-server-main/RealGuard/model_decision_contract.py
+  realguard-server-main/RealGuard/requirements.txt
+  realguard-server-main/RealGuard/requirements.lock
+  realguard-server-main/RealGuard/imagedetection
   realguard-server-main/frontend
   realguard-server-main/deploy/nginx-realguard-frontend.conf
   deploy/nginx

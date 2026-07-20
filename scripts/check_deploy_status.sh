@@ -193,11 +193,21 @@ if [[ "$TARGET" == "all" || "$TARGET" == "v1" ]]; then
     "realguard-backend.service" \
     "http://127.0.0.1:5000/api/ready" \
     "https://www.rrreal.cn/api/ready" \
-    "realguard-server-main/RealGuard" \
+    "realguard-server-main/RealGuard/run.py" \
+    "realguard-server-main/RealGuard/detector_backend.py" \
+    "realguard-server-main/RealGuard/model_decision_contract.py" \
+    "realguard-server-main/RealGuard/requirements.txt" \
+    "realguard-server-main/RealGuard/requirements.lock" \
+    "realguard-server-main/RealGuard/imagedetection" \
     "realguard-server-main/frontend" \
     "realguard-server-main/deploy/nginx-realguard-frontend.conf" \
     "deploy/nginx/realguard.conf" \
+    "deploy/nginx/snippets" \
+    "deploy/systemd" \
     "scripts/deploy_v1.sh" \
+    "scripts/remote/backup_realguard.sh" \
+    "scripts/remote/verify_restore_realguard.sh" \
+    "scripts/remote/activate_v1.sh" \
     "scripts/deploy_common.sh"
 fi
 
@@ -247,8 +257,14 @@ if [[ "$TARGET" == "all" || "$TARGET" == "gpu" ]]; then
       yolo_enabled=$(systemctl is-enabled realguard-yolo-watermark.service 2>/dev/null || printf unknown)
       model_tunnel=$(systemctl is-active realguard-web-tunnel.service 2>/dev/null || printf unknown)
       precheck_tunnel=$(systemctl is-active realguard-v2-precheck-tunnel.service 2>/dev/null || printf unknown)
-      model_token=$(sudo awk -F= '\''/^REALGUARD_MODEL_INTERNAL_TOKEN=/{print substr($0, index($0, "=") + 1); exit}'\'' /etc/realguard/model-inference.env 2>/dev/null)
-      response_key_id=$(sudo awk -F= '\''/^REALGUARD_MODEL_RESPONSE_HMAC_KEY_ID=/{print substr($0, index($0, "=") + 1); exit}'\'' /etc/realguard/model-inference.env 2>/dev/null)
+      model_pid=$(systemctl show realguard-detection.service -p MainPID --value 2>/dev/null || printf 0)
+      if [[ "$model_pid" =~ ^[1-9][0-9]*$ && -r "/proc/$model_pid/environ" ]]; then
+        model_token=$(tr '\''\0'\'' '\''\n'\'' < "/proc/$model_pid/environ" | sed -n '\''s/^REALGUARD_MODEL_INTERNAL_TOKEN=//p'\'' | head -1)
+        response_key_id=$(tr '\''\0'\'' '\''\n'\'' < "/proc/$model_pid/environ" | sed -n '\''s/^REALGUARD_MODEL_RESPONSE_HMAC_KEY_ID=//p'\'' | head -1)
+      else
+        model_token=""
+        response_key_id=""
+      fi
       response_key_id=${response_key_id:-v1}
       expected_model_revision=$(sed -n '\''s/^Environment=REALGUARD_V2_MODEL_REVISION=//p'\'' /etc/systemd/system/realguard-detection.service.d/gpu.conf | tail -1)
       expected_model_sha256=$(sed -n '\''s/^Environment=REALGUARD_V2_MODEL_SHA256=//p'\'' /etc/systemd/system/realguard-detection.service.d/gpu.conf | tail -1)
