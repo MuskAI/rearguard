@@ -80,6 +80,7 @@ type FallbackOffer = {
   previewUrl?: string;
   mode: ImageAnalysisMode;
   reason: string;
+  submitted: boolean;
   jobId?: string;
 };
 
@@ -483,6 +484,8 @@ export default function App() {
     mode: ImageAnalysisMode,
     existingJobId?: string,
   ) {
+    let submitted = Boolean(existingJobId);
+    let terminalFailure = false;
     try {
       const keys = webRequestKeysRef.current.get(file) || {};
       const idempotencyKey = keys[mode] || globalThis.crypto.randomUUID();
@@ -494,6 +497,7 @@ export default function App() {
           ? await startImageAgent(file, idempotencyKey, controller.signal)
           : await startFastImageAgent(file, idempotencyKey, controller.signal);
       if (runTokenRef.current !== token) return;
+      submitted = true;
       let job = started.job;
       activeJobIdRef.current = job.id;
       setProgress(progressFromJob(job, mode));
@@ -517,6 +521,7 @@ export default function App() {
           return;
         }
         if (job.status === "failed") {
+          terminalFailure = true;
           activeJobIdRef.current = null;
           throw new Error(job.error || (mode === "swarm" ? "Swarm 复核暂不可用" : "快速检测暂不可用"));
         }
@@ -549,6 +554,7 @@ export default function App() {
         previewUrl,
         mode,
         jobId: job.id,
+        submitted: true,
         reason: `服务器任务 ${job.id} 仍在运行，页面已暂停高频刷新`,
       });
       activeJobIdRef.current = null;
@@ -561,9 +567,18 @@ export default function App() {
         throw new Error("当前提交任务较多，请稍候几秒后重试当前文件");
       }
       setProgress(null);
-      const jobId = activeJobIdRef.current || undefined;
+      const jobId = terminalFailure ? undefined : activeJobIdRef.current || undefined;
       activeJobIdRef.current = null;
-      setFallbackOffer({ file, previewUrl, mode, jobId, reason: jobId ? `${message}；服务器任务 ${jobId} 可能仍在运行` : message });
+      setFallbackOffer({
+        file,
+        previewUrl,
+        mode,
+        jobId,
+        submitted,
+        reason: submitted
+          ? (terminalFailure ? `文件已提交，但服务器处理失败：${message}` : `${message}；服务器任务 ${jobId} 可能仍在运行`)
+          : message,
+      });
     }
   }
 
@@ -584,6 +599,7 @@ export default function App() {
         previewUrl,
         mode,
         jobId,
+        submitted: Boolean(jobId),
         reason: `已停止等待；服务器任务 ${jobId} 可能仍在运行`,
       });
       return;
@@ -1130,7 +1146,7 @@ export default function App() {
                   <span><ShieldCheck size={19} /></span>
                   <div>
                     <strong>{fallbackOffer.jobId ? "任务仍在服务器运行" : fallbackOffer.mode === "swarm" ? "Swarm 复核未完成" : "快速检测未完成"}</strong>
-                    <p>{fallbackOffer.reason}。{fallbackOffer.jobId ? "继续查询不会重复提交，也不会重复扣减额度。" : "文件尚未提交到备用模型，你可以重试原模式，或明确选择备用证据链。"}</p>
+                    <p>{fallbackOffer.reason}。{fallbackOffer.jobId ? "继续查询不会重复提交，也不会重复扣减额度。" : fallbackOffer.submitted ? "文件已经提交到服务器，本次未形成可用结论；你可以重试原模式，或明确选择备用证据链。" : "文件尚未提交到备用模型，你可以重试原模式，或明确选择备用证据链。"}</p>
                     <div className="fallback-choice-actions">
                       {fallbackOffer.jobId ? (
                         <button type="button" className="primary-button" onClick={() => void resumePendingImageJob()}><RefreshCw size={15} /> 继续查询原任务</button>
