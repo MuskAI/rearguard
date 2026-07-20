@@ -199,6 +199,26 @@ def test_security_audit_checkpoint_detects_tail_deletion(monkeypatch, tmp_path):
     assert "moved backwards" in failed["lastError"]
 
 
+def test_security_audit_checkpoint_accepts_repeated_empty_chain(monkeypatch, tmp_path):
+    monkeypatch.setenv("REALGUARD_SECURITY_AUDIT_HMAC_KEY", "a" * 64)
+    monkeypatch.setenv("REALGUARD_SECURITY_AUDIT_HMAC_KEY_ID", "audit-v1")
+    monkeypatch.setenv("REALGUARD_SECURITY_AUDIT_HMAC_KEYS_JSON", "{}")
+    monkeypatch.setenv("REALGUARD_SECURITY_AUDIT_STATUS_FILE", str(tmp_path / "status.json"))
+    monkeypatch.setenv("REALGUARD_SECURITY_AUDIT_CHECKPOINT_FILE", str(tmp_path / "checkpoint.json"))
+
+    def fake_sql(sql, params=None, fetch=True):
+        if "FROM security_audit_events" in sql:
+            return []
+        if "FROM security_audit_chain_head" in sql:
+            return [{"last_event_hash": "0" * 64}]
+        raise AssertionError(sql)
+
+    monkeypatch.setattr(api, "excute_sql", fake_sql)
+
+    assert api.verify_security_audit_chain(allow_bootstrap=True)["state"] == "passed"
+    assert api.verify_security_audit_chain()["state"] == "passed"
+
+
 def test_api_key_revoke_rolls_back_when_security_audit_fails(monkeypatch):
     class Cursor:
         rowcount = 0

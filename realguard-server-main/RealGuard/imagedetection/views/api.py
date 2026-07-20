@@ -368,10 +368,13 @@ def verify_security_audit_chain(*, allow_bootstrap=False):
             signature = checkpoint.pop("hmacSha256", "")
             if not hmac.compare_digest(_security_audit_checkpoint_hmac(checkpoint), str(signature)):
                 raise RuntimeError("audit checkpoint HMAC mismatch")
-            if len(rows) < int(checkpoint.get("eventCount") or 0):
+            checkpoint_count = int(checkpoint.get("eventCount") or 0)
+            if len(rows) < checkpoint_count:
                 raise RuntimeError("audit event count moved backwards")
             old_hash = str(checkpoint.get("lastEventHash") or "")
-            if old_hash and old_hash not in event_hashes:
+            if checkpoint_count == 0 and old_hash != "0" * 64:
+                raise RuntimeError("empty audit checkpoint has an invalid chain head")
+            if checkpoint_count > 0 and old_hash not in event_hashes:
                 raise RuntimeError("audit checkpoint event disappeared")
         elif not allow_bootstrap:
             raise RuntimeError("audit checkpoint is missing; explicit bootstrap is required")
