@@ -1138,7 +1138,10 @@ def _local_detection_record(itemid):
     if itemid in (None, ''):
         return None
     rows = excute_detection_sql(
-        "SELECT itemid, filename, Userid, owner_account_uuid, phone, openid FROM data WHERE itemid = %s LIMIT 1",
+        """
+        SELECT itemid, filename, Userid, owner_account_uuid, phone, openid, developer_task_id
+        FROM data WHERE itemid = %s LIMIT 1
+        """,
         (itemid,),
     )
     return rows[0] if rows else None
@@ -1297,7 +1300,7 @@ def _ensure_local_primary_record(
     if _record_matches_detection_actor(local_record, remote_filename, backend_openid, phone, account_uuid):
         if account_uuid and not claim_detection_record_owner('data', remote_itemid, account_uuid):
             raise RuntimeError('检测结果不可验证为当前账号所有')
-        if source_task_id:
+        if source_task_id and str(local_record.get('developer_task_id') or '').strip() != source_task_id:
             owner_where, owner_params = _detection_owner_where(
                 user_info.get('Userid'), phone, backend_openid, account_uuid
             )

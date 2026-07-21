@@ -206,6 +206,24 @@ def test_partial_visible_scan_accepts_valid_registry_positive(monkeypatch):
                 "coordinateSpace": "display_normalized_v1",
                 "displaySize": {"width": 640, "height": 480},
                 "genericVisibleWatermark": {"available": False},
+                "explicitWatermark": {
+                    "detected": True,
+                    "sourcePlatform": "doubao",
+                },
+                "pipelineTrace": {
+                    "schemaVersion": "watermark_pipeline_trace_v1",
+                    "totalElapsedMs": 321,
+                    "stages": [
+                        {
+                            "id": "decode",
+                            "label": "图像解码",
+                            "status": "success",
+                            "elapsedMs": 4,
+                            "summary": "640 x 480",
+                            "details": {},
+                        }
+                    ],
+                },
                 "visibleHits": [{
                     "provider": "gemini",
                     "confidence": 0.95,
@@ -232,6 +250,9 @@ def test_partial_visible_scan_accepts_valid_registry_positive(monkeypatch):
 
     assert payload["positiveEvidenceAvailable"] is True
     assert payload["completeVisibleScan"] is False
+    assert payload["explicitWatermark"]["sourcePlatform"] == "doubao"
+    assert payload["pipelineTrace"]["schemaVersion"] == "watermark_pipeline_trace_v1"
+    assert payload["pipelineTrace"]["stages"][0]["id"] == "decode"
 
 
 def test_partial_visible_scan_rejects_invalid_registry_box(monkeypatch):
