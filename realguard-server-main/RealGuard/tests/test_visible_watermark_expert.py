@@ -111,6 +111,59 @@ def test_visible_watermark_expert_reports_clean_scan(monkeypatch):
     assert result["visibleWatermark"]["detected"] is False
 
 
+def test_visible_watermark_expert_preserves_versioned_pipeline_trace():
+    trace = {
+        "schemaVersion": "watermark_pipeline_trace_v1",
+        "totalElapsedMs": 321,
+        "parallelGroups": {"visible_scan": ["registry", "yolo"]},
+        "stages": [
+            {
+                "id": "decode",
+                "label": "解码与标准化",
+                "status": "success",
+                "elapsedMs": 12,
+                "summary": "800x600 -> 800x600",
+                "parallelGroup": None,
+                "details": {"displaySize": {"width": 800, "height": 600}},
+            },
+            {
+                "id": "verdict",
+                "label": "最终判定",
+                "status": "clean",
+                "elapsedMs": 1,
+                "summary": "未发现水印",
+                "details": {"verdict": {"verdict": "no"}},
+            },
+        ],
+    }
+    visible = expert._visible_result({
+        "status": "ok",
+        "coordinateSpace": "display_normalized_v1",
+        "displaySize": {"width": 800, "height": 600},
+        "genericVisibleWatermark": {"available": True},
+        "visibleHits": [],
+        "pipelineTrace": trace,
+    })
+
+    assert visible["pipelineTrace"]["schemaVersion"] == "watermark_pipeline_trace_v1"
+    assert visible["pipelineTrace"]["totalElapsedMs"] == 321
+    assert [stage["id"] for stage in visible["pipelineTrace"]["stages"]] == ["decode", "verdict"]
+    assert visible["pipelineTrace"]["stages"][0]["details"]["displaySize"]["width"] == 800
+
+
+def test_visible_watermark_expert_rejects_unversioned_pipeline_trace():
+    visible = expert._visible_result({
+        "status": "ok",
+        "coordinateSpace": "display_normalized_v1",
+        "displaySize": {"width": 800, "height": 600},
+        "genericVisibleWatermark": {"available": True},
+        "visibleHits": [],
+        "pipelineTrace": {"schemaVersion": "unknown", "stages": []},
+    })
+
+    assert visible["pipelineTrace"] is None
+
+
 def test_visible_watermark_expert_rejects_missing_coordinate_protocol(monkeypatch):
     monkeypatch.setenv("WATERMARK_PRECHECK_TOKEN", "test-token")
     monkeypatch.setattr(

@@ -215,6 +215,23 @@ export type CaptureEvidence = {
   groups?: string[];
 };
 
+export type WatermarkPipelineStage = {
+  id: "decode" | "metadata" | "registry" | "yolo" | "ocr" | "retrieval" | "fusion" | "verdict" | string;
+  label: string;
+  status: "success" | "hit" | "clean" | "warning" | "error" | "skipped" | string;
+  elapsedMs: number;
+  summary: string;
+  parallelGroup?: string | null;
+  details: Record<string, any>;
+};
+
+export type WatermarkPipelineTrace = {
+  schemaVersion: "watermark_pipeline_trace_v1" | string;
+  totalElapsedMs: number;
+  parallelGroups?: Record<string, string[]>;
+  stages: WatermarkPipelineStage[];
+};
+
 export type ImageDetectionResult = {
   itemid: number;
   final_label: string;
@@ -245,7 +262,12 @@ export type ImageDetectionResult = {
     confidence?: number;
     evidenceLevel?: string;
     note?: string;
-    hits?: Array<{ label?: string; confidence?: number }>;
+    hits?: Array<{
+      label?: string;
+      confidence?: number;
+      bbox?: { x?: number; y?: number; w?: number; h?: number };
+    }>;
+    pipelineTrace?: WatermarkPipelineTrace | null;
   };
   llm_used?: boolean;
   feedback?: 1 | -1 | null;

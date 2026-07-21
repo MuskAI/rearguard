@@ -37,6 +37,7 @@ import {
   type VisibleWatermarkResult,
 } from "../api";
 import { buildEvidenceExplanation, hasDecisiveAiWatermark } from "../evidenceExplanation";
+import WatermarkPipeline from "./WatermarkPipeline";
 
 type ResultTab = "summary" | "evidence" | "file";
 type ForensicsPreviewState = "idle" | "running" | "complete" | "skipped";
@@ -460,6 +461,7 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
         </div>
       )}
       <div className="watermark-note"><Info size={15} /><p>{displayNote}</p></div>
+      <WatermarkPipeline trace={report.pipelineTrace} />
     </section>
   );
 }

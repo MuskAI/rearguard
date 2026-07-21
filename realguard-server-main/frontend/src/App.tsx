@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import BrandMark from "./components/BrandMark";
 import IconfontIcon from "./components/IconfontIcon";
+import WatermarkPipeline from "./components/WatermarkPipeline";
 import type { IconfontName } from "./components/IconfontIcon";
 import {
   Counters,
@@ -2226,6 +2227,7 @@ function ImageResult({
           <p className="capture-evidence-limit"><IconfontIcon name="info" size={14} />{capture.limitations[0] || tr("元数据仅作为辅助证据。", "Metadata remains supporting evidence only.")}</p>
         </section>
       )}
+      <WatermarkPipeline trace={visibleWatermark?.pipelineTrace} lang={lang} />
       <div className="case-kv">
         <Info label={tr("置信度", "Confidence")} value={result.confidence || "-"} />
         <Info label={tr("文件名", "Filename")} value={result.filename || "-"} />

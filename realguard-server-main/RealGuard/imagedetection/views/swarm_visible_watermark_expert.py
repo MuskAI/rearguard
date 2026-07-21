@@ -21,6 +21,10 @@ SERVICE_TIMEOUT_ENV = "REALGUARD_VISIBLE_WATERMARK_TIMEOUT"
 DEFAULT_SERVICE_URL = "http://127.0.0.1:15066/v1/precheck"
 DEFAULT_TIMEOUT_SECONDS = 12.0
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+PIPELINE_TRACE_SCHEMA = "watermark_pipeline_trace_v1"
+PIPELINE_STAGE_IDS = (
+    "decode", "metadata", "registry", "yolo", "ocr", "retrieval", "fusion", "verdict",
+)
 REGISTRY_MODEL = "wiltodelta/remove-ai-watermarks"
 REGISTRY_PROVIDERS = frozenset({"gemini", "doubao", "jimeng", "jimeng_pill", "samsung"})
 YOLO_PROVIDER = "yolo11x_watermark"
@@ -112,6 +116,41 @@ def _timeout() -> float:
         return max(1.0, float(os.environ.get(SERVICE_TIMEOUT_ENV, DEFAULT_TIMEOUT_SECONDS)))
     except (TypeError, ValueError):
         return DEFAULT_TIMEOUT_SECONDS
+
+
+def _pipeline_trace(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Expose only the bounded, versioned trace emitted by the trusted service."""
+    trace = payload.get("pipelineTrace")
+    if not isinstance(trace, dict) or trace.get("schemaVersion") != PIPELINE_TRACE_SCHEMA:
+        return None
+    stages = trace.get("stages")
+    if not isinstance(stages, list) or not stages or len(stages) > len(PIPELINE_STAGE_IDS):
+        return None
+    normalized = []
+    seen = set()
+    for raw in stages:
+        if not isinstance(raw, dict):
+            return None
+        stage_id = str(raw.get("id") or "")
+        if stage_id not in PIPELINE_STAGE_IDS or stage_id in seen:
+            return None
+        seen.add(stage_id)
+        normalized.append({
+            "id": stage_id,
+            "label": str(raw.get("label") or stage_id)[:80],
+            "status": str(raw.get("status") or "unknown")[:24],
+            "elapsedMs": _nonnegative_int(raw.get("elapsedMs")),
+            "summary": str(raw.get("summary") or "")[:500],
+            "parallelGroup": str(raw.get("parallelGroup") or "")[:48] or None,
+            "details": raw.get("details") if isinstance(raw.get("details"), dict) else {},
+        })
+    parallel_groups = trace.get("parallelGroups")
+    return {
+        "schemaVersion": PIPELINE_TRACE_SCHEMA,
+        "totalElapsedMs": _nonnegative_int(trace.get("totalElapsedMs")),
+        "parallelGroups": parallel_groups if isinstance(parallel_groups, dict) else {},
+        "stages": normalized,
+    }
 
 
 def _unavailable(note: str) -> Dict[str, Any]:
@@ -286,6 +325,7 @@ def _visible_result(payload: Dict[str, Any]) -> Dict[str, Any]:
         "temporal": {"sampledFrames": 1, "positiveFrames": 1 if hits else 0, "moving": False},
         "note": " ".join(notes),
         "elapsedMs": int(payload.get("elapsedMs") or detector.get("elapsedMs") or 0),
+        "pipelineTrace": _pipeline_trace(payload),
         "detector": {
             "available": available,
             "model": REGISTRY_MODEL if registry_available else YOLO_MODEL,

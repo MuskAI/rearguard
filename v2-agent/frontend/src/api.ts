@@ -523,6 +523,23 @@ export interface VisibleWatermarkEngine {
   role?: "provenance" | "localization" | "corroboration" | string;
 }
 
+export interface WatermarkPipelineStage {
+  id: "decode" | "metadata" | "registry" | "yolo" | "ocr" | "retrieval" | "fusion" | "verdict" | string;
+  label: string;
+  status: "success" | "hit" | "clean" | "warning" | "error" | "skipped" | string;
+  elapsedMs: number;
+  summary: string;
+  parallelGroup?: string | null;
+  details: Record<string, unknown>;
+}
+
+export interface WatermarkPipelineTrace {
+  schemaVersion: "watermark_pipeline_trace_v1" | string;
+  totalElapsedMs: number;
+  parallelGroups?: Record<string, string[]>;
+  stages: WatermarkPipelineStage[];
+}
+
 export interface VisibleWatermarkResult {
   enabled: boolean;
   supported: boolean;
@@ -534,6 +551,7 @@ export interface VisibleWatermarkResult {
   temporal: { sampledFrames: number; positiveFrames: number; moving: boolean };
   note: string;
   elapsedMs?: number;
+  pipelineTrace?: WatermarkPipelineTrace | null;
   reanalysis?: {
     reused: boolean;
     basis: string;
