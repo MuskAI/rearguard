@@ -57,6 +57,13 @@ The web backends expose only confirmed AI-platform marks in `visibleWatermark`:
 count, and role for both engines. The YOLO engine count means corroborated
 platform regions, not all generic Logo candidates.
 
+## Pipeline trace
+
+`POST /v1/precheck` also returns `pipelineTrace` with schema
+`watermark_pipeline_trace_v1`. It records actual stage timings and structured
+results for normalization, metadata, registry, YOLO, OCR, FAISS retrieval,
+fusion, and final verdict. The trace is request-scoped and is not persisted.
+
 The service binds to `127.0.0.1:5066`. Production reaches it through a
 loopback-only reverse SSH tunnel at `127.0.0.1:15066` on the public web server.
 The tunnel key is restricted with `permitlisten="127.0.0.1:15066"` on the

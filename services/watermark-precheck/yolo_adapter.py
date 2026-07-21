@@ -29,6 +29,10 @@ YOLO_EXPECTED_SHA256 = os.getenv(
     "YOLO_WATERMARK_MODEL_SHA256",
     "6ac71b6ab8db27ec7928b5176e60a359c65e1579a5c1d58cf2f98df30cf3085e",
 )
+ENSEMBLE_URL = os.getenv("WATERMARK_ENSEMBLE_URL", "http://127.0.0.1:5068/v1/analyze")
+ENSEMBLE_HEALTH_URL = os.getenv("WATERMARK_ENSEMBLE_HEALTH_URL", "http://127.0.0.1:5068/health")
+ENSEMBLE_TOKEN = os.getenv("WATERMARK_ENSEMBLE_TOKEN", "")
+ENSEMBLE_TIMEOUT_SECONDS = float(os.getenv("WATERMARK_ENSEMBLE_TIMEOUT_SECONDS", "45"))
 VISIBLE_BRANCH_WORKERS = max(
     2,
     min(16, int(os.getenv("WATERMARK_VISIBLE_BRANCH_WORKERS", "8"))),
@@ -247,6 +251,32 @@ def _timed_registry_hits(
     return hits, int((time.perf_counter() - started) * 1000)
 
 
+def _ensemble_analyze(
+    path: Path,
+    registry_hits: list[dict[str, Any]],
+    yolo_candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not ENSEMBLE_URL or not ENSEMBLE_TOKEN:
+        return {"available": False, "error": "not_configured", "mode": "ocr_clip_rule_fusion"}
+    with path.open("rb") as image_file:
+        response = requests.post(
+            ENSEMBLE_URL,
+            headers={"Authorization": f"Bearer {ENSEMBLE_TOKEN}"},
+            files={"file": (path.name, image_file, "application/octet-stream")},
+            data={
+                "candidates": __import__("json").dumps(yolo_candidates),
+                "registryHits": __import__("json").dumps(registry_hits),
+            },
+            timeout=(2, ENSEMBLE_TIMEOUT_SECONDS),
+        )
+    response.raise_for_status()
+    payload = response.json()
+    explicit = payload.get("explicitWatermark")
+    if not isinstance(explicit, dict):
+        raise ValueError("ensemble_response_schema_invalid")
+    return {"available": True, **explicit, "serviceElapsedMs": explicit.get("elapsedMs")}
+
+
 def _visible_hits_with_yolo(
     path: Path,
     provenance_path: Path | None = None,
@@ -263,7 +293,36 @@ def _visible_hits_with_yolo(
         status["registryElapsedMs"] = registry_elapsed_ms
         status["branchesParallel"] = True
         status["branchWorkerLimit"] = VISIBLE_BRANCH_WORKERS
+        try:
+            ensemble = _ensemble_analyze(path, registry_hits, yolo_candidates)
+            g.explicit_watermark_result = ensemble
+            status["ensemble"] = {
+                "available": bool(ensemble.get("available")),
+                "detected": ensemble.get("detected"),
+                "type": ensemble.get("type"),
+                "elapsedMs": ensemble.get("serviceElapsedMs"),
+                "fusion": ensemble.get("fusion"),
+            }
+        except (requests.RequestException, ValueError, TypeError) as exc:
+            base.app.logger.warning("watermark ensemble unavailable: %s", type(exc).__name__)
+            g.explicit_watermark_result = {
+                "available": False,
+                "detected": False,
+                "type": "none",
+                "confidence": 0.0,
+                "confidenceBand": "low",
+                "hits": [],
+                "mode": "ocr_clip_rule_fusion",
+                "error": type(exc).__name__,
+            }
+            status["ensemble"] = {"available": False, "error": type(exc).__name__}
         g.generic_visible_watermark_status = status
+        g.watermark_pipeline_branches = {
+            "registryHits": registry_hits,
+            "yoloCandidates": yolo_candidates,
+            "yoloStatus": status,
+            "ensemble": g.explicit_watermark_result,
+        }
     except (requests.RequestException, ValueError, TypeError) as exc:
         base.app.logger.warning("YOLO watermark detector unavailable: %s", type(exc).__name__)
         g.generic_visible_watermark_status = {
@@ -275,8 +334,186 @@ def _visible_hits_with_yolo(
             "branchesParallel": True,
             "branchWorkerLimit": VISIBLE_BRANCH_WORKERS,
         }
+        g.explicit_watermark_result = {
+            "available": False,
+            "detected": bool(registry_hits),
+            "type": "none",
+            "confidence": 0.0,
+            "confidenceBand": "low",
+            "hits": [],
+            "mode": "ocr_clip_rule_fusion",
+            "error": "yolo_unavailable",
+        }
+        g.watermark_pipeline_branches = {
+            "registryHits": registry_hits,
+            "yoloCandidates": [],
+            "yoloStatus": g.generic_visible_watermark_status,
+            "ensemble": g.explicit_watermark_result,
+        }
         hits = [dict(hit, yoloCorroborated=False) for hit in registry_hits]
     return hits
+
+
+def _pipeline_stage(
+    stage_id: str,
+    label: str,
+    status: str,
+    elapsed_ms: int,
+    summary: str,
+    details: dict[str, Any],
+    *,
+    parallel_group: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": stage_id,
+        "label": label,
+        "status": status,
+        "elapsedMs": max(0, int(elapsed_ms or 0)),
+        "summary": summary,
+        "parallelGroup": parallel_group,
+        "details": details,
+    }
+
+
+def _build_pipeline_trace(response: dict[str, Any]) -> dict[str, Any]:
+    timings = response.get("pipelineTimings") or {}
+    branches = getattr(g, "watermark_pipeline_branches", {}) or {}
+    registry_hits = branches.get("registryHits") or []
+    yolo_candidates = branches.get("yoloCandidates") or []
+    yolo_status = branches.get("yoloStatus") or response.get("genericVisibleWatermark") or {}
+    explicit = response.get("explicitWatermark") or branches.get("ensemble") or {}
+    hits = explicit.get("hits") if isinstance(explicit.get("hits"), list) else []
+    fusion = explicit.get("fusion") or {}
+    fusion_timings = fusion.get("timings") or {}
+    report = response.get("report") or {}
+    metadata_signals = report.get("signals") if isinstance(report.get("signals"), list) else []
+
+    ocr_results = []
+    retrieval_results = []
+    for index, hit in enumerate(hits):
+        hit_timings = hit.get("pipelineTimings") or {}
+        ocr_results.append({
+            "candidate": index + 1,
+            "text": hit.get("text"),
+            "confidence": hit.get("ocrConfidence"),
+            "items": hit.get("ocrItems") or [],
+            "analysis": hit.get("textAnalysis") or {},
+            "elapsedMs": hit_timings.get("ocrMs", 0),
+        })
+        retrieval_results.append({
+            "candidate": index + 1,
+            "accepted": hit.get("retrievalAccepted") is True,
+            "candidatePlatform": hit.get("retrievalCandidatePlatform"),
+            "sourcePlatform": hit.get("sourcePlatform"),
+            "similarity": hit.get("retrievalSimilarity"),
+            "threshold": hit.get("retrievalThreshold"),
+            "margin": hit.get("retrievalMargin"),
+            "minimumMargin": hit.get("retrievalMinimumMargin"),
+            "reason": hit.get("retrievalReason"),
+            "referenceId": hit.get("retrievalReferenceId"),
+            "referenceSource": hit.get("retrievalReferenceSource"),
+            "topMatches": hit.get("retrievalTopMatches") or [],
+            "elapsedMs": hit_timings.get("retrievalMs", 0),
+        })
+
+    accepted_retrieval = sum(1 for item in retrieval_results if item["accepted"])
+    recognized_text = sum(1 for item in ocr_results if item["text"])
+    yolo_available = yolo_status.get("available") is True
+    ensemble_available = explicit.get("available") is not False
+    verdict = explicit.get("aiWatermarkVerdict") or {}
+    verdict_value = verdict.get("verdict") or "inconclusive"
+
+    stages = [
+        _pipeline_stage(
+            "decode", "解码与标准化", "success",
+            int(timings.get("decodeMs") or 0) + int(timings.get("normalizeMs") or 0),
+            f"{(response.get('encodedSize') or {}).get('width', 0)}×{(response.get('encodedSize') or {}).get('height', 0)} → {(response.get('displaySize') or {}).get('width', 0)}×{(response.get('displaySize') or {}).get('height', 0)}",
+            {
+                "input": response.get("input") or {},
+                "encodedSize": response.get("encodedSize") or {},
+                "displaySize": response.get("displaySize") or {},
+                "sourceOrientation": response.get("sourceOrientation"),
+                "decodeMs": timings.get("decodeMs", 0),
+                "normalizeMs": timings.get("normalizeMs", 0),
+            },
+        ),
+        _pipeline_stage(
+            "metadata", "元数据来源", "hit" if report.get("isAiGenerated") else "clean",
+            timings.get("metadataMs", 0),
+            f"{len(metadata_signals)} 项来源信号" if metadata_signals else "未读取到可用 AI 来源信号",
+            {"report": report, "policyDecision": response.get("decision") or {}},
+            parallel_group="source_scan",
+        ),
+        _pipeline_stage(
+            "registry", "平台注册表", "hit" if registry_hits else "clean",
+            yolo_status.get("registryElapsedMs", 0),
+            f"命中 {len(registry_hits)} 个已知平台标记" if registry_hits else "未命中已知平台模板",
+            {"count": len(registry_hits), "hits": registry_hits},
+            parallel_group="visible_scan",
+        ),
+        _pipeline_stage(
+            "yolo", "YOLO 候选定位", "error" if not yolo_available else "hit" if yolo_candidates else "clean",
+            yolo_status.get("roundTripMs") or yolo_status.get("elapsedMs") or 0,
+            f"定位 {len(yolo_candidates)} 个候选区域" if yolo_available else f"定位服务不可用：{yolo_status.get('error') or 'unknown'}",
+            {
+                "count": len(yolo_candidates),
+                "candidates": yolo_candidates,
+                "runtime": {key: yolo_status.get(key) for key in (
+                    "model", "modelRevision", "modelSha256", "device", "gpu",
+                    "cudaReady", "confidenceThreshold", "elapsedMs", "roundTripMs",
+                )},
+            },
+            parallel_group="visible_scan",
+        ),
+        _pipeline_stage(
+            "ocr", "OCR 文字识别", "skipped" if not hits else "hit" if recognized_text else "clean",
+            fusion_timings.get("ocrMaxMs", 0),
+            f"{recognized_text}/{len(ocr_results)} 个候选识别到文字" if hits else "没有候选区域，未运行 OCR",
+            {"candidateCount": len(ocr_results), "recognizedCount": recognized_text, "results": ocr_results},
+            parallel_group="candidate_analysis",
+        ),
+        _pipeline_stage(
+            "retrieval", "FAISS 平台检索", "skipped" if not hits else "hit" if accepted_retrieval else "warning",
+            fusion_timings.get("retrievalMaxMs", 0),
+            f"{accepted_retrieval}/{len(retrieval_results)} 个候选通过检索门槛" if hits else "没有候选区域，未运行检索",
+            {
+                "backend": (fusion.get("retrieval") or {}).get("backend"),
+                "model": (fusion.get("retrieval") or {}).get("model"),
+                "galleryCount": (fusion.get("retrieval") or {}).get("galleryCount"),
+                "results": retrieval_results,
+            },
+            parallel_group="candidate_analysis",
+        ),
+        _pipeline_stage(
+            "fusion", "规则融合", "error" if not ensemble_available else "hit" if explicit.get("detected") else "clean",
+            fusion_timings.get("totalMs") or explicit.get("serviceElapsedMs") or explicit.get("elapsedMs") or 0,
+            f"融合得到 {len(hits)} 条证据，类型 {explicit.get('type') or 'none'}",
+            {
+                "candidateCount": fusion.get("candidateCount", 0),
+                "registryCount": fusion.get("registryCount", 0),
+                "rule": fusion.get("rule"),
+                "timings": fusion_timings,
+                "hits": hits,
+            },
+        ),
+        _pipeline_stage(
+            "verdict", "最终判定",
+            "hit" if verdict_value == "yes" else "clean" if verdict_value == "no" else "warning",
+            fusion_timings.get("verdictMs") or timings.get("decisionMs") or 0,
+            verdict.get("reason") or "尚未形成结论",
+            {"verdict": verdict, "sourcePlatform": explicit.get("sourcePlatform"), "confidence": explicit.get("confidence")},
+        ),
+    ]
+    return {
+        "schemaVersion": "watermark_pipeline_trace_v1",
+        "totalElapsedMs": timings.get("totalMs") or response.get("elapsedMs") or 0,
+        "parallelGroups": {
+            "source_scan": ["metadata", "registry", "yolo"],
+            "visible_scan": ["registry", "yolo"],
+            "candidate_analysis": ["ocr", "retrieval"],
+        },
+        "stages": stages,
+    }
 
 
 def precheck_with_yolo():
@@ -292,6 +529,21 @@ def precheck_with_yolo():
                 "mode": "visible_watermark_detection_with_platform_attribution",
             },
         )
+        response["explicitWatermark"] = getattr(
+            g,
+            "explicit_watermark_result",
+            {
+                "available": False,
+                "detected": False,
+                "type": "none",
+                "confidence": 0.0,
+                "confidenceBand": "low",
+                "hits": [],
+                "mode": "ocr_clip_rule_fusion",
+                "error": "not_run",
+            },
+        )
+        response["pipelineTrace"] = _build_pipeline_trace(response)
     return response
 
 
@@ -314,8 +566,19 @@ def health_with_yolo():
     except (requests.RequestException, ValueError, TypeError) as exc:
         yolo["error"] = type(exc).__name__
     payload["genericVisibleWatermark"] = yolo
+    ensemble = {
+        "available": False,
+        "mode": "ocr_clip_rule_fusion",
+    }
+    try:
+        response = requests.get(ENSEMBLE_HEALTH_URL, headers={"Authorization": f"Bearer {ENSEMBLE_TOKEN}"}, timeout=(1, 4))
+        response.raise_for_status()
+        ensemble.update(response.json())
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        ensemble["error"] = type(exc).__name__
+    payload["explicitWatermarkEnsemble"] = ensemble
     payload["visibleBranchWorkers"] = VISIBLE_BRANCH_WORKERS
-    if not yolo.get("available") or payload.get("status") != "ok":
+    if not yolo.get("available") or not ensemble.get("available") or payload.get("status") != "ok":
         payload["status"] = "degraded"
     return payload
 

@@ -190,3 +190,38 @@ def test_yolo_detection_validation_rejects_invalid_box(monkeypatch):
     }
 
     assert yolo_adapter._yolo_detection_error(payload) == "detection_box_invalid"
+
+
+def test_pipeline_trace_exposes_each_analysis_stage():
+    response = {
+        "elapsedMs": 120,
+        "pipelineTimings": {"decodeMs": 2, "normalizeMs": 3, "metadataMs": 8, "decisionMs": 1, "totalMs": 120},
+        "encodedSize": {"width": 100, "height": 80},
+        "displaySize": {"width": 100, "height": 80},
+        "sourceOrientation": 1,
+        "report": {"isAiGenerated": False, "signals": []},
+        "decision": {"verdict": None},
+        "explicitWatermark": {
+            "available": True,
+            "detected": False,
+            "type": "none",
+            "hits": [],
+            "aiWatermarkVerdict": {"verdict": "no", "reason": "no candidate"},
+            "fusion": {"timings": {"totalMs": 9, "ocrMaxMs": 0, "retrievalMaxMs": 0}},
+        },
+    }
+    with yolo_adapter.base.app.test_request_context("/v1/precheck"):
+        yolo_adapter.g.watermark_pipeline_branches = {
+            "registryHits": [],
+            "yoloCandidates": [],
+            "yoloStatus": {"available": True, "count": 0, "registryElapsedMs": 5, "elapsedMs": 7},
+            "ensemble": response["explicitWatermark"],
+        }
+        trace = yolo_adapter._build_pipeline_trace(response)
+
+    assert trace["schemaVersion"] == "watermark_pipeline_trace_v1"
+    assert [stage["id"] for stage in trace["stages"]] == [
+        "decode", "metadata", "registry", "yolo", "ocr", "retrieval", "fusion", "verdict",
+    ]
+    assert trace["stages"][4]["status"] == "skipped"
+    assert trace["stages"][-1]["status"] == "clean"

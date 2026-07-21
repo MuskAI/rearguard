@@ -1,0 +1,19 @@
+[Unit]
+Description=Huijian AI standalone explicit watermark review lab
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ymk
+WorkingDirectory=/home/ymk/services/watermark-lab
+EnvironmentFile=-/home/ymk/services/watermark-lab/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/ymk/services/watermark-lab/.venv/bin/python -m gunicorn --bind 0.0.0.0:5070 --workers 1 --threads 4 --timeout 120 --access-logfile - --error-logfile - app:app
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -49,6 +49,16 @@ def _authorized() -> bool:
     return bool(supplied) and hmac.compare_digest(supplied, API_TOKEN)
 
 
+def _keep_visible_detection(
+    provider: str,
+    detected_keys: set[str],
+    provenance: frozenset[str],
+) -> bool:
+    if provider != "jimeng_pill":
+        return True
+    return "jimeng" in detected_keys or "jimeng" in provenance
+
+
 def _visible_hits(path: Path, provenance_path: Path | None = None) -> list[dict[str, Any]]:
     from remove_ai_watermarks import visible_provenance
     from remove_ai_watermarks.image_io import imread
@@ -60,8 +70,16 @@ def _visible_hits(path: Path, provenance_path: Path | None = None) -> list[dict[
     height, width = image.shape[:2]
     provenance = visible_provenance(provenance_path or path)
     hits = []
-    for detection in detect_marks(image, provenance=provenance):
-        if not detection.detected:
+    detections = [
+        detection
+        for detection in detect_marks(image, provenance=provenance)
+        if detection.detected
+    ]
+    detected_keys = {detection.key for detection in detections}
+    for detection in detections:
+        # The capture-less Jimeng pill detector has a documented raw false-fire
+        # rate and must not be used without same-product or provenance evidence.
+        if not _keep_visible_detection(detection.key, detected_keys, provenance):
             continue
         x, y, box_width, box_height = detection.region
         normalized = (
@@ -128,10 +146,20 @@ def _report(path: Path) -> dict[str, Any]:
 def _collect_evidence(
     path: Path,
     visible_path: Path | None = None,
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    report_future = _PRECHECK_EXECUTOR.submit(_report, path)
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, int]]:
+    def timed_report() -> tuple[dict[str, Any], int]:
+        started = time.perf_counter()
+        return _report(path), int((time.perf_counter() - started) * 1000)
+
+    report_future = _PRECHECK_EXECUTOR.submit(timed_report)
+    visible_started = time.perf_counter()
     visible_hits = _visible_hits(visible_path or path, provenance_path=path)
-    return report_future.result(), visible_hits
+    visible_elapsed_ms = int((time.perf_counter() - visible_started) * 1000)
+    report, metadata_elapsed_ms = report_future.result()
+    return report, visible_hits, {
+        "metadataMs": metadata_elapsed_ms,
+        "visiblePipelineMs": visible_elapsed_ms,
+    }
 
 
 @app.get("/health")
@@ -179,6 +207,7 @@ def precheck():
             temporary.write(data)
             temporary.flush()
             path = Path(temporary.name)
+            decode_started = time.perf_counter()
             with Image.open(path) as encoded_image:
                 if bool(getattr(encoded_image, "is_animated", False)) and int(
                     getattr(encoded_image, "n_frames", 1)
@@ -189,6 +218,8 @@ def precheck():
                     "height": int(encoded_image.height),
                 }
                 source_orientation = int(encoded_image.getexif().get(274, 1) or 1)
+                decode_elapsed_ms = int((time.perf_counter() - decode_started) * 1000)
+                normalize_started = time.perf_counter()
                 normalized_image = ImageOps.exif_transpose(encoded_image).convert("RGB")
                 display_size = {
                     "width": int(normalized_image.width),
@@ -196,18 +227,22 @@ def precheck():
                 }
                 normalized_image.save(normalized_temporary, format="PNG")
                 normalized_temporary.flush()
+                normalize_elapsed_ms = int((time.perf_counter() - normalize_started) * 1000)
             normalized_path = Path(normalized_temporary.name)
-            report, visible_hits = _collect_evidence(path, normalized_path)
+            report, visible_hits, evidence_timings = _collect_evidence(path, normalized_path)
+        decision_started = time.perf_counter()
         decision = build_decision(report, visible_hits)
+        decision_elapsed_ms = int((time.perf_counter() - decision_started) * 1000)
     except Exception as exc:
         app.logger.exception("provenance precheck failed")
         return jsonify({"detail": "precheck failed", "errorType": type(exc).__name__}), 422
 
+    total_elapsed_ms = int((time.perf_counter() - started) * 1000)
     return {
         "status": "ok",
         "engine": "remove-ai-watermarks.identify",
         "engineVersion": _package_version(),
-        "elapsedMs": int((time.perf_counter() - started) * 1000),
+        "elapsedMs": total_elapsed_ms,
         "decision": decision,
         "report": report,
         "visibleHits": visible_hits,
@@ -215,9 +250,22 @@ def precheck():
         "displaySize": display_size,
         "encodedSize": encoded_size,
         "sourceOrientation": source_orientation,
+        "input": {
+            "filename": uploaded.filename,
+            "bytes": len(data),
+            "suffix": suffix,
+        },
         "parallelism": {
             "enabled": True,
             "workers": PRECHECK_BRANCH_WORKERS,
+        },
+        "pipelineTimings": {
+            "decodeMs": decode_elapsed_ms,
+            "normalizeMs": normalize_elapsed_ms,
+            "metadataMs": evidence_timings["metadataMs"],
+            "visiblePipelineMs": evidence_timings["visiblePipelineMs"],
+            "decisionMs": decision_elapsed_ms,
+            "totalMs": total_elapsed_ms,
         },
     }
 

@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#18352f" />
+    <title>水印检测实验室 · 慧鉴 AI</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20260721-pipeline2" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="masthead">
+        <div>
+          <p class="eyebrow">HUIJIAN AI / WATERMARK LAB</p>
+          <h1>显式水印<br /><em>现场判读</em></h1>
+        </div>
+        <div class="header-note">
+          <span class="live-dot"></span>
+          <span>独立测试入口</span>
+          <span class="slash">/</span>
+          <span>不写入主系统记录</span>
+        </div>
+      </header>
+
+      <section class="intro-row">
+        <p>上传图片或视频，观察检测框、文字识别、图库检索和最终融合结论。视频会均匀抽帧，并行复用 66 服务器真实模型链路。</p>
+        <div class="legend" aria-label="结果类型">
+          <span><i class="swatch text"></i>文字</span>
+          <span><i class="swatch logo"></i>Logo</span>
+          <span><i class="swatch unknown"></i>未知</span>
+        </div>
+      </section>
+
+      <section class="workspace">
+        <aside class="control-panel">
+          <div class="section-kicker">01 / INPUT</div>
+          <h2>放入测试素材</h2>
+          <div class="media-switch" role="tablist" aria-label="素材类型">
+            <button class="media-tab active" data-media-mode="image" type="button">图片</button>
+            <button class="media-tab" data-media-mode="video" type="button">视频</button>
+          </div>
+          <label class="dropzone" id="dropzone" for="file-input">
+            <input id="file-input" type="file" accept="image/*" />
+            <span class="drop-mark">+</span>
+            <strong id="drop-title">拖拽图片到这里</strong>
+            <small id="drop-subtitle">或点击选择 · JPG / PNG / WEBP</small>
+          </label>
+          <div class="file-meta" id="file-meta">尚未选择文件</div>
+          <label class="sample-control" id="sample-control" hidden for="sample-count">
+            <span>均匀抽帧数量</span>
+            <input id="sample-count" type="number" min="3" max="24" value="8" />
+            <small>数量越多，时间越长，但更容易捕捉短暂水印。</small>
+          </label>
+          <div class="control-actions">
+            <button class="button primary" id="analyze-button" type="button" disabled>开始分析 <span>→</span></button>
+            <button class="button ghost" id="clear-button" type="button">清除</button>
+          </div>
+          <div class="method-note">
+            <span class="note-mark">i</span>
+            <p>只做检测，不修改原图。图片候选框来自 YOLO11x，文字由 RapidOCR 复核；视频逐帧检测后汇总，图库未命中时保留为“未知水印”。</p>
+          </div>
+        </aside>
+
+        <section class="canvas-panel">
+          <div class="panel-head">
+            <div>
+              <div class="section-kicker">02 / EVIDENCE CANVAS</div>
+              <h2>原图与定位框</h2>
+            </div>
+            <span class="coordinate-label">DISPLAY_NORMALIZED_V1</span>
+          </div>
+          <div class="image-stage" id="image-stage">
+            <div class="empty-stage" id="empty-stage">
+              <span class="empty-cross">+</span>
+              <strong id="empty-stage-title">等待图像证据</strong>
+              <span id="empty-stage-subtitle">选择图片后，定位框会叠加在原图上</span>
+            </div>
+            <img id="preview" alt="待检测图片" hidden />
+            <video id="video-preview" controls muted playsinline hidden></video>
+            <div id="overlay" class="overlay" aria-live="polite"></div>
+            <div class="stage-caption" id="stage-caption" hidden></div>
+          </div>
+          <section class="frame-review" id="frame-review" hidden>
+            <div class="subhead"><span>抽帧回看</span><span id="frame-summary">—</span></div>
+            <div class="frame-grid" id="frame-grid"></div>
+          </section>
+        </section>
+
+        <aside class="result-panel">
+          <div class="panel-head">
+            <div>
+              <div class="section-kicker">03 / FUSED READING</div>
+              <h2>融合判读</h2>
+            </div>
+            <span class="status-pill idle" id="status-pill">待开始</span>
+          </div>
+          <div class="verdict-block" id="verdict-block">
+            <div class="verdict-label">AI 生成水印</div>
+            <div class="verdict-main" id="verdict-main">—</div>
+            <div class="verdict-detail" id="verdict-detail">上传图片后显示 AI 生成水印判断</div>
+          </div>
+          <div class="text-signal" id="text-signal">
+            <div class="text-signal-head"><span>文字内容判读</span><span class="signal-tag" id="text-signal-tag">等待 OCR</span></div>
+            <strong id="text-signal-title">尚未形成文字语义证据</strong>
+            <p id="text-signal-detail">检测到文字后，会判断其是否包含 AI 生成或平台水印语义。</p>
+          </div>
+          <div class="metric-grid">
+            <div class="metric"><span>综合置信度</span><strong id="confidence">—</strong></div>
+            <div class="metric"><span>候选数量</span><strong id="hit-count">—</strong></div>
+            <div class="metric wide"><span>可能来源</span><strong id="platform">—</strong></div>
+          </div>
+          <div class="evidence-section">
+            <div class="subhead"><span>证据明细</span><span id="engine-time">—</span></div>
+            <div class="evidence-list" id="evidence-list">
+              <div class="empty-list">分析完成后，这里会列出每一处候选的证据。</div>
+            </div>
+          </div>
+          <details class="raw-details">
+            <summary>查看原始 JSON</summary>
+            <pre id="raw-json">尚未产生结果</pre>
+          </details>
+        </aside>
+      </section>
+
+      <section class="pipeline-console" id="pipeline-console">
+        <div class="pipeline-head">
+          <div>
+            <div class="section-kicker">04 / PIPELINE TRACE</div>
+            <h2>流水线监控</h2>
+          </div>
+          <div class="trace-meta">
+            <span id="trace-scope">等待任务</span>
+            <strong id="trace-total">— ms</strong>
+          </div>
+        </div>
+        <div class="pipeline-rail" id="pipeline-stage-list" role="tablist" aria-label="检测阶段">
+          <div class="pipeline-placeholder">完成一次分析后显示各阶段结果</div>
+        </div>
+        <div class="pipeline-inspector">
+          <div class="waterfall-panel">
+            <div class="subhead"><span>阶段耗时</span><span>并行分支按实际耗时显示</span></div>
+            <div class="waterfall" id="pipeline-waterfall">
+              <div class="pipeline-placeholder">尚无耗时数据</div>
+            </div>
+          </div>
+          <article class="stage-detail" id="pipeline-stage-detail">
+            <div class="stage-detail-head">
+              <div>
+                <span class="stage-sequence" id="stage-sequence">STAGE —</span>
+                <h3 id="stage-detail-title">等待流水线结果</h3>
+              </div>
+              <span class="stage-status idle" id="stage-detail-status">未运行</span>
+            </div>
+            <p class="stage-summary" id="stage-detail-summary">选择一个阶段后查看输入、输出、阈值与拒绝原因。</p>
+            <div class="stage-detail-body" id="stage-detail-body"></div>
+            <details class="stage-json-details">
+              <summary>阶段 JSON</summary>
+              <pre id="stage-json">尚未产生结果</pre>
+            </details>
+          </article>
+        </div>
+      </section>
+
+      <footer class="footer-line">
+        <span>HUIJIAN AI · EXPLICIT WATERMARK REVIEW</span>
+        <span>用于模型效果确认，确认后再接入 rrreal.cn</span>
+      </footer>
+    </main>
+    <script src="/static/app.js?v=20260721-pipeline2"></script>
+  </body>
+</html>

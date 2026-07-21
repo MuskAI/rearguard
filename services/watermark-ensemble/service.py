@@ -536,6 +536,11 @@ def _ai_watermark_verdict(hits: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _timed_call(function: Any, *args: Any) -> tuple[Any, int]:
+    started = time.perf_counter()
+    return function(*args), int((time.perf_counter() - started) * 1000)
+
+
 def _fuse_candidate(image: Image.Image, raw: dict[str, Any], registry: bool = False) -> dict[str, Any] | None:
     box = _bbox(raw.get("bbox"))
     if box is None:
@@ -545,10 +550,10 @@ def _fuse_candidate(image: Image.Image, raw: dict[str, Any], registry: bool = Fa
         return None
     crop = _crop(image, box)
     position = _position(box)
-    ocr_future = _evidence_executor.submit(_ocr, crop)
-    retrieval_future = _evidence_executor.submit(_retrieve, crop, position)
-    text, ocr_confidence, ocr_items = ocr_future.result()
-    retrieval = retrieval_future.result()
+    ocr_future = _evidence_executor.submit(_timed_call, _ocr, crop)
+    retrieval_future = _evidence_executor.submit(_timed_call, _retrieve, crop, position)
+    (text, ocr_confidence, ocr_items), ocr_elapsed_ms = ocr_future.result()
+    retrieval, retrieval_elapsed_ms = retrieval_future.result()
     retrieval_platform = retrieval.get("platform")
     retrieval_similarity = _number(retrieval.get("similarity"))
     retrieval_accepted = retrieval.get("accepted") is True
@@ -649,6 +654,11 @@ def _fuse_candidate(image: Image.Image, raw: dict[str, Any], registry: bool = Fa
         "registryMatched": registry_trusted,
         "registryProvenance": registry_provenance,
         "yoloCorroborated": yolo_corroborated,
+        "pipelineTimings": {
+            "ocrMs": ocr_elapsed_ms,
+            "retrievalMs": retrieval_elapsed_ms,
+            "signalsParallel": True,
+        },
     }
 
 
@@ -682,8 +692,11 @@ def _merge_candidates(candidates: list[Any], registry_hits: list[Any]) -> list[d
 
 def analyze(image: Image.Image, candidates: list[Any], registry_hits: list[Any]) -> dict[str, Any]:
     started = time.perf_counter()
+    merge_started = time.perf_counter()
+    merged_candidates = _merge_candidates(candidates, registry_hits)
+    merge_elapsed_ms = int((time.perf_counter() - merge_started) * 1000)
     hits = []
-    for raw in _merge_candidates(candidates, registry_hits):
+    for raw in merged_candidates:
         hit = _fuse_candidate(image, raw, registry=bool(raw.get("_registry")))
         if hit:
             hits.append(hit)
@@ -710,7 +723,12 @@ def analyze(image: Image.Image, candidates: list[Any], registry_hits: list[Any])
         "interpretation": "当前没有可用的 OCR 文字内容。",
         "caveat": "未识别到文字不等于没有显式水印。",
     }
+    verdict_started = time.perf_counter()
     ai_watermark_verdict = _ai_watermark_verdict(hits)
+    verdict_elapsed_ms = int((time.perf_counter() - verdict_started) * 1000)
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    ocr_times = [_number((hit.get("pipelineTimings") or {}).get("ocrMs")) for hit in hits]
+    retrieval_times = [_number((hit.get("pipelineTimings") or {}).get("retrievalMs")) for hit in hits]
     return {
         "detected": bool(hits),
         "type": top["type"] if top else "none",
@@ -734,8 +752,16 @@ def analyze(image: Image.Image, candidates: list[Any], registry_hits: list[Any])
                 "error": _vector_error or _clip_error,
             },
             "rule": "candidate + OCR + calibrated FAISS retrieval + platform margin + position + registry provenance; unknown is not forced to a platform",
+            "timings": {
+                "candidateMergeMs": merge_elapsed_ms,
+                "ocrMaxMs": int(max(ocr_times, default=0)),
+                "retrievalMaxMs": int(max(retrieval_times, default=0)),
+                "verdictMs": verdict_elapsed_ms,
+                "totalMs": elapsed_ms,
+                "signalsParallel": True,
+            },
         },
-        "elapsedMs": int((time.perf_counter() - started) * 1000),
+        "elapsedMs": elapsed_ms,
         "coordinateSpace": "display_normalized_v1",
         "mode": "detect-only",
     }

@@ -14,6 +14,13 @@ if str(ROOT) not in sys.path:
 import service
 
 
+def test_jimeng_pill_requires_same_product_or_provenance():
+    assert service._keep_visible_detection("jimeng_pill", {"jimeng_pill"}, frozenset()) is False
+    assert service._keep_visible_detection("jimeng_pill", {"jimeng", "jimeng_pill"}, frozenset()) is True
+    assert service._keep_visible_detection("jimeng_pill", {"jimeng_pill"}, frozenset({"jimeng"})) is True
+    assert service._keep_visible_detection("doubao", {"doubao"}, frozenset()) is True
+
+
 def test_report_and_visible_scan_start_in_parallel(monkeypatch):
     rendezvous = threading.Barrier(2)
 
@@ -32,11 +39,13 @@ def test_report_and_visible_scan_start_in_parallel(monkeypatch):
     monkeypatch.setattr(service, "_visible_hits", visible)
 
     with service.app.test_request_context("/v1/precheck"):
-        collected_report, collected_hits = service._collect_evidence(Path("unused.png"))
+        collected_report, collected_hits, timings = service._collect_evidence(Path("unused.png"))
         assert g.visible_status == "complete"
 
     assert collected_report == {"isAiGenerated": None}
     assert collected_hits == []
+    assert timings["metadataMs"] >= 0
+    assert timings["visiblePipelineMs"] >= 0
 
 
 def test_precheck_normalizes_exif_orientation_for_all_visible_boxes(monkeypatch):
@@ -51,7 +60,7 @@ def test_precheck_normalizes_exif_orientation_for_all_visible_boxes(monkeypatch)
         with Image.open(visible_path) as normalized:
             observed["size"] = normalized.size
             observed["orientation"] = normalized.getexif().get(274)
-        return {}, []
+        return {}, [], {"metadataMs": 1, "visiblePipelineMs": 2}
 
     monkeypatch.setattr(service, "API_TOKEN", "test-token")
     monkeypatch.setattr(service, "_collect_evidence", collect)
