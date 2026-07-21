@@ -1,0 +1,19 @@
+[Unit]
+Description=RealGuard explicit watermark OCR and retrieval fusion
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ymk
+WorkingDirectory=/home/ymk/services/watermark-ensemble
+EnvironmentFile=-/home/ymk/services/watermark-ensemble/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/ymk/services/watermark-ensemble/.venv/bin/python -m gunicorn --bind 127.0.0.1:5068 --workers 1 --threads 2 --timeout 90 --access-logfile - --error-logfile - service:app
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

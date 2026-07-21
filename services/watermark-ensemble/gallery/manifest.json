@@ -1,0 +1,8 @@
+[
+  {"path": "gemini_bg_48.png", "platform": "Google Gemini", "label": "Gemini"},
+  {"path": "gemini_bg_96.png", "platform": "Google Gemini", "label": "Gemini"},
+  {"path": "doubao_alpha.png", "platform": "豆包", "label": "豆包"},
+  {"path": "jimeng_alpha.png", "platform": "即梦AI", "label": "即梦AI"},
+  {"path": "jimeng_pill.png", "platform": "即梦AI", "label": "即梦AI"},
+  {"path": "samsung_alpha.png", "platform": "Samsung Galaxy AI", "label": "Samsung Galaxy AI"}
+]

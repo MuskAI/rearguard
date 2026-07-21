@@ -1,0 +1,269 @@
+{
+  "schemaVersion": 1,
+  "model": "openai/clip-vit-base-patch32",
+  "representation": "bright_overlay_v1",
+  "embeddingDimension": 512,
+  "entryCount": 20,
+  "entries": [
+    {
+      "id": "google-gemini-gemini_black_2048",
+      "platform": "Google Gemini",
+      "position": "bottom-right",
+      "source": "wiltodelta/remove-ai-watermarks:gemini_capture/captures/gemini_black_2048.png",
+      "cropPath": "crops/google-gemini-gemini_black_2048.png",
+      "bbox": {
+        "x": 0.9,
+        "y": 0.89,
+        "w": 0.1,
+        "h": 0.1
+      }
+    },
+    {
+      "id": "google-gemini-gemini_gray_2048",
+      "platform": "Google Gemini",
+      "position": "bottom-right",
+      "source": "wiltodelta/remove-ai-watermarks:gemini_capture/captures/gemini_gray_2048.png",
+      "cropPath": "crops/google-gemini-gemini_gray_2048.png",
+      "bbox": {
+        "x": 0.9,
+        "y": 0.89,
+        "w": 0.1,
+        "h": 0.1
+      }
+    },
+    {
+      "id": "豆包-doubao_black_1x1_1",
+      "platform": "豆包",
+      "position": "bottom-right",
+      "source": "wiltodelta/remove-ai-watermarks:doubao_capture/captures/doubao_black_1x1_1.png",
+      "cropPath": "crops/豆包-doubao_black_1x1_1.png",
+      "bbox": {
+        "x": 0.81,
+        "y": 0.93,
+        "w": 0.19,
+        "h": 0.07
+      }
+    },
+    {
+      "id": "豆包-doubao_gray_1x1_1",
+      "platform": "豆包",
+      "position": "bottom-right",
+      "source": "wiltodelta/remove-ai-watermarks:doubao_capture/captures/doubao_gray_1x1_1.png",
+      "cropPath": "crops/豆包-doubao_gray_1x1_1.png",
+      "bbox": {
+        "x": 0.81,
+        "y": 0.93,
+        "w": 0.19,
+        "h": 0.07
+      }
+    },
+    {
+      "id": "即梦ai-jimeng_cap_A",
+      "platform": "即梦AI",
+      "position": "bottom-right",
+      "source": "wiltodelta/remove-ai-watermarks:jimeng_capture/captures/jimeng_cap_A.png",
+      "cropPath": "crops/即梦ai-jimeng_cap_A.png",
+      "bbox": {
+        "x": 0.77,
+        "y": 0.91,
+        "w": 0.23,
+        "h": 0.09
+      }
+    },
+    {
+      "id": "即梦ai-jimeng_cap_C",
+      "platform": "即梦AI",
+      "position": "bottom-right",
+      "source": "wiltodelta/remove-ai-watermarks:jimeng_capture/captures/jimeng_cap_C.png",
+      "cropPath": "crops/即梦ai-jimeng_cap_C.png",
+      "bbox": {
+        "x": 0.77,
+        "y": 0.91,
+        "w": 0.23,
+        "h": 0.09
+      }
+    },
+    {
+      "id": "samsung-galaxy-ai-samsung_black_1",
+      "platform": "Samsung Galaxy AI",
+      "position": "bottom-left",
+      "source": "wiltodelta/remove-ai-watermarks:samsung_capture/captures/samsung_black_1.png",
+      "cropPath": "crops/samsung-galaxy-ai-samsung_black_1.png",
+      "bbox": {
+        "x": 0.0,
+        "y": 0.94,
+        "w": 0.345,
+        "h": 0.06
+      }
+    },
+    {
+      "id": "samsung-galaxy-ai-samsung_black_2",
+      "platform": "Samsung Galaxy AI",
+      "position": "bottom-left",
+      "source": "wiltodelta/remove-ai-watermarks:samsung_capture/captures/samsung_black_2.png",
+      "cropPath": "crops/samsung-galaxy-ai-samsung_black_2.png",
+      "bbox": {
+        "x": 0.0,
+        "y": 0.94,
+        "w": 0.345,
+        "h": 0.06
+      }
+    },
+    {
+      "id": "samsung-galaxy-ai-samsung_gray_1",
+      "platform": "Samsung Galaxy AI",
+      "position": "bottom-left",
+      "source": "wiltodelta/remove-ai-watermarks:samsung_capture/captures/samsung_gray_1.png",
+      "cropPath": "crops/samsung-galaxy-ai-samsung_gray_1.png",
+      "bbox": {
+        "x": 0.0,
+        "y": 0.94,
+        "w": 0.345,
+        "h": 0.06
+      }
+    },
+    {
+      "id": "samsung-galaxy-ai-samsung_gray_2",
+      "platform": "Samsung Galaxy AI",
+      "position": "bottom-left",
+      "source": "wiltodelta/remove-ai-watermarks:samsung_capture/captures/samsung_gray_2.png",
+      "cropPath": "crops/samsung-galaxy-ai-samsung_gray_2.png",
+      "bbox": {
+        "x": 0.0,
+        "y": 0.94,
+        "w": 0.345,
+        "h": 0.06
+      }
+    },
+    {
+      "id": "google-gemini-2c33e75a-gemini_4_original",
+      "platform": "Google Gemini",
+      "position": "bottom-right",
+      "source": "wiltodelta/remove-ai-watermarks:real/gemini/2c33e75a-gemini_4_original.png",
+      "cropPath": "crops/google-gemini-2c33e75a-gemini_4_original.png",
+      "bbox": {
+        "x": 0.92,
+        "y": 0.875,
+        "w": 0.08,
+        "h": 0.105
+      }
+    },
+    {
+      "id": "google-gemini-45d79a68-gemini_3_original",
+      "platform": "Google Gemini",
+      "position": "bottom-right",
+      "source": "wiltodelta/remove-ai-watermarks:real/gemini/45d79a68-gemini_3_original.png",
+      "cropPath": "crops/google-gemini-45d79a68-gemini_3_original.png",
+      "bbox": {
+        "x": 0.92,
+        "y": 0.875,
+        "w": 0.08,
+        "h": 0.105
+      }
+    },
+    {
+      "id": "google-gemini-4affd7f2-gemini_1_original",
+      "platform": "Google Gemini",
+      "position": "bottom-right",
+      "source": "wiltodelta/remove-ai-watermarks:real/gemini/4affd7f2-gemini_1_original.png",
+      "cropPath": "crops/google-gemini-4affd7f2-gemini_1_original.png",
+      "bbox": {
+        "x": 0.92,
+        "y": 0.875,
+        "w": 0.08,
+        "h": 0.105
+      }
+    },
+    {
+      "id": "google-gemini-8c1a6fb0-gemini_2_original",
+      "platform": "Google Gemini",
+      "position": "bottom-right",
+      "source": "wiltodelta/remove-ai-watermarks:real/gemini/8c1a6fb0-gemini_2_original.png",
+      "cropPath": "crops/google-gemini-8c1a6fb0-gemini_2_original.png",
+      "bbox": {
+        "x": 0.92,
+        "y": 0.875,
+        "w": 0.08,
+        "h": 0.105
+      }
+    },
+    {
+      "id": "google-gemini-d09f84c0-Gemini_Generated_Image_vq7wkwvq7wkwvq7w",
+      "platform": "Google Gemini",
+      "position": "bottom-right",
+      "source": "wiltodelta/remove-ai-watermarks:real/gemini/d09f84c0-Gemini_Generated_Image_vq7wkwvq7wkwvq7w.png",
+      "cropPath": "crops/google-gemini-d09f84c0-Gemini_Generated_Image_vq7wkwvq7wkwvq7w.png",
+      "bbox": {
+        "x": 0.92,
+        "y": 0.875,
+        "w": 0.08,
+        "h": 0.105
+      }
+    },
+    {
+      "id": "google-gemini-d20d4cc9-Gemini_Generated_Image_ug6kdpug6kdpug6k",
+      "platform": "Google Gemini",
+      "position": "bottom-right",
+      "source": "wiltodelta/remove-ai-watermarks:real/gemini/d20d4cc9-Gemini_Generated_Image_ug6kdpug6kdpug6k.png",
+      "cropPath": "crops/google-gemini-d20d4cc9-Gemini_Generated_Image_ug6kdpug6kdpug6k.png",
+      "bbox": {
+        "x": 0.92,
+        "y": 0.875,
+        "w": 0.08,
+        "h": 0.105
+      }
+    },
+    {
+      "id": "google-gemini-fb28dba2-Gemini_Generated_Image_dsjlnsdsjlnsdsjl",
+      "platform": "Google Gemini",
+      "position": "bottom-right",
+      "source": "wiltodelta/remove-ai-watermarks:real/gemini/fb28dba2-Gemini_Generated_Image_dsjlnsdsjlnsdsjl.png",
+      "cropPath": "crops/google-gemini-fb28dba2-Gemini_Generated_Image_dsjlnsdsjlnsdsjl.png",
+      "bbox": {
+        "x": 0.92,
+        "y": 0.875,
+        "w": 0.08,
+        "h": 0.105
+      }
+    },
+    {
+      "id": "google-gemini-gemini_1_original",
+      "platform": "Google Gemini",
+      "position": "bottom-right",
+      "source": "wiltodelta/remove-ai-watermarks:real/gemini/gemini_1_original.png",
+      "cropPath": "crops/google-gemini-gemini_1_original.png",
+      "bbox": {
+        "x": 0.92,
+        "y": 0.875,
+        "w": 0.08,
+        "h": 0.105
+      }
+    },
+    {
+      "id": "google-gemini-gemini_3_original",
+      "platform": "Google Gemini",
+      "position": "bottom-right",
+      "source": "wiltodelta/remove-ai-watermarks:real/gemini/gemini_3_original.png",
+      "cropPath": "crops/google-gemini-gemini_3_original.png",
+      "bbox": {
+        "x": 0.92,
+        "y": 0.875,
+        "w": 0.08,
+        "h": 0.105
+      }
+    },
+    {
+      "id": "豆包-doubao-1",
+      "platform": "豆包",
+      "position": "bottom-right",
+      "source": "wiltodelta/remove-ai-watermarks:real/doubao/doubao-1.png",
+      "cropPath": "crops/豆包-doubao-1.png",
+      "bbox": {
+        "x": 0.81,
+        "y": 0.93,
+        "w": 0.19,
+        "h": 0.07
+      }
+    }
+  ]
+}

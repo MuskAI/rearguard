@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "defaultThreshold": 0.82,
+  "defaultMinMargin": 0.02,
+  "policy": "platform_threshold + inter_platform_margin + position_match",
+  "negativeCropCount": 69,
+  "platforms": {
+    "Google Gemini": {
+      "threshold": 0.9735,
+      "minMargin": 0.0648,
+      "positions": [
+        "bottom-right"
+      ],
+      "positiveLeaveOneOutP10": 0.9412,
+      "negativeP995": 0.9435,
+      "referenceCount": 11,
+      "calibrationWarning": true
+    },
+    "Samsung Galaxy AI": {
+      "threshold": 0.8296,
+      "minMargin": 0.089,
+      "positions": [
+        "bottom-left"
+      ],
+      "positiveLeaveOneOutP10": 0.9919,
+      "negativeP995": 0.8046,
+      "referenceCount": 4,
+      "calibrationWarning": false
+    },
+    "即梦AI": {
+      "threshold": 0.8447,
+      "minMargin": 0.024,
+      "positions": [
+        "bottom-right"
+      ],
+      "positiveLeaveOneOutP10": 0.9981,
+      "negativeP995": 0.8197,
+      "referenceCount": 2,
+      "calibrationWarning": false
+    },
+    "豆包": {
+      "threshold": 0.8554,
+      "minMargin": 0.015,
+      "positions": [
+        "bottom-right"
+      ],
+      "positiveLeaveOneOutP10": 0.9478,
+      "negativeP995": 0.8304,
+      "referenceCount": 3,
+      "calibrationWarning": false
+    }
+  }
+}
