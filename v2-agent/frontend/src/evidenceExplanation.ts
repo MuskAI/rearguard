@@ -101,9 +101,12 @@ function captureEvidencePoint(report?: CaptureEvidence): ExplanationPoint {
   }
   if (report.supportsRealCapture) {
     const evidence = (report.evidence || []).map((item) => item.label).slice(0, 3).join("、");
+    const impact = report.adjustmentEligible
+      ? "在不存在强水印、生成声明或完整性冲突时，该证据可对边界区间的 AI 风险作保守下调，但不会覆盖高风险模型结果。"
+      : "这些字段供人工核对拍摄链；普通 EXIF 可以被编辑，因此不会单独证明真实。";
     return {
-      label: "拍摄流程线索",
-      text: `${report.title}（${report.levelText || "辅助"}强度）：${report.summary}${evidence ? ` 可复核字段包括${evidence}。` : ""}这些字段供人工核对拍摄链，不自动证明真实，也不直接降低模型风险。`,
+      label: report.adjustmentEligible ? "原生实拍支持" : "拍摄流程线索",
+      text: `${report.title}（${report.levelText || "辅助"}强度）：${report.summary}${evidence ? ` 可复核字段包括${evidence}。` : ""}${impact}`,
     };
   }
   return { label: "实拍来源证据", text: `${report.summary} 本项保持中性，不因缺少拍摄字段抬高 AI 风险。` };

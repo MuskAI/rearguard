@@ -280,7 +280,10 @@ export interface CaptureEvidence {
   version: string;
   level: "strong" | "medium" | "weak" | "none" | "conflict" | string;
   levelText: string;
+  profile?: "verified_camera_credential" | "native_capture_chain" | "coherent_exif" | "partial_exif" | "conflicted" | "none" | string;
   supportsRealCapture: boolean;
+  adjustmentEligible?: boolean;
+  nativeSupportCount?: number;
   score: number;
   likelihoodRatio: number;
   title: string;

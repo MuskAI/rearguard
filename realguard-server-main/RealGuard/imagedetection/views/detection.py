@@ -1891,6 +1891,12 @@ def _run_image_detection_payload(
         if not metadata and isinstance(data.get('full_exif_info'), dict):
             metadata = data.get('full_exif_info') or {}
         capture = _capture_evidence_for_metadata(metadata)
+        capture_guardrail = {
+            'version': 'huijian-capture-guardrail-v1',
+            'eligible': False,
+            'applied': False,
+            'reason': 'model_not_publishable',
+        }
         if not model_decision_ready:
             probability = 0.5
             detector_probability = 0.5
@@ -1911,17 +1917,43 @@ def _run_image_detection_payload(
                 metadata,
             )
             probability_model = dict(probability_model or {})
-            probability_model['publishable'] = False
-            probability_model['decisionContribution'] = 'diagnostic_only'
-            probability_model['note'] = (
-                '元数据融合尚未单独校准，仅作并列诊断；公开分数和标签保持签名主模型输出。'
+            capture_guardrail = _capture_evidence_guardrail(
+                probability,
+                probability_model,
+                capture,
             )
+            probability_model['captureGuardrail'] = capture_guardrail
+            if capture_guardrail.get('applied') is True:
+                probability = _clamp01(capture_guardrail.get('adjusted'), probability)
+                if probability < _CAPTURE_GUARDRAIL_REAL_THRESHOLD:
+                    final_label = '真实图像'
+                confidence = '中'
+                probability_model['publishable'] = True
+                probability_model['decisionContribution'] = 'capture_evidence_guardrail'
+                probability_model['note'] = (
+                    '丰富且一致的原生拍摄链仅在边界风险区间内适度下调 AI 风险；'
+                    '不会覆盖强 AI 水印、生成声明、完整性冲突或高风险模型结果。'
+                )
+            else:
+                probability_model['publishable'] = False
+                probability_model['decisionContribution'] = 'diagnostic_only'
+                probability_model['note'] = (
+                    '当前实拍元数据未达到保守护栏门槛，仅作并列诊断；'
+                    '公开分数和标签保持签名主模型输出。'
+                )
         explanation = data.get('explanation') or data.get('explantation') or _to_user_explanation(
             final_label, confidence, has_metadata=bool(metadata)
         )
         split_explanation, split_issues = _split_reasoning_sections(explanation)
         if split_explanation:
             explanation = split_explanation
+        if capture_guardrail.get('applied') is True:
+            explanation = (
+                f"{explanation}\n"
+                f"原始主模型 AI 风险为 {detector_probability * 100:.2f}%；"
+                f"丰富且一致的原生拍摄链将边界风险调整为 {probability * 100:.2f}%。"
+                "普通 EXIF 仍可被编辑，本项不会覆盖强生成来源证据。"
+            ).strip()
         visual_issues_source = data.get('visual_issues') or split_issues
         visual_issues = _normalize_visual_issues(visual_issues_source, final_label=final_label)
         agent_reasoning = data.get('agent_reasoning') or ''
@@ -1954,7 +1986,13 @@ def _run_image_detection_payload(
         result['modelDecisionReady'] = model_decision_ready
         result['reviewRequired'] = not model_decision_ready
         result['decisionStatus'] = 'verdict' if model_decision_ready else 'review_only'
-        result['decisionAuthority'] = 'calibrated_model' if model_decision_ready else 'none'
+        result['decisionAuthority'] = (
+            'calibrated_model_with_capture_evidence'
+            if capture_guardrail.get('applied') is True
+            else 'calibrated_model'
+            if model_decision_ready
+            else 'none'
+        )
         watermark_complete = bool(
             isinstance(visible_watermark, dict)
             and visible_watermark.get('supported') is True
@@ -2505,6 +2543,77 @@ def _capture_evidence_for_metadata(metadata):
     )
 
 
+_CAPTURE_GUARDRAIL_MAX_MODEL_RISK = 0.82
+_CAPTURE_GUARDRAIL_REAL_THRESHOLD = 0.62
+_CAPTURE_GUARDRAIL_BLOCKING_GROUPS = {
+    'known_watermark',
+    'invisible_watermark',
+    'origin_declaration',
+    'integrity',
+    'untrusted_provenance',
+}
+
+
+def _capture_evidence_guardrail(baseline_probability, probability_model, capture):
+    baseline = _clamp01(baseline_probability)
+    model = probability_model if isinstance(probability_model, dict) else {}
+    capture = capture if isinstance(capture, dict) else {}
+    profile = str(capture.get('profile') or '')
+    level = str(capture.get('level') or '')
+    eligible = (
+        capture.get('supportsRealCapture') is True
+        and not capture.get('conflicts')
+        and (
+            level == 'strong'
+            or (
+                level == 'medium'
+                and profile == 'native_capture_chain'
+                and capture.get('adjustmentEligible') is True
+                and float(capture.get('score') or 0.0) >= 0.70
+            )
+        )
+    )
+    result = {
+        'version': 'huijian-capture-guardrail-v1',
+        'eligible': eligible,
+        'applied': False,
+        'profile': profile or 'none',
+        'baseline': round(baseline, 4),
+        'adjusted': round(baseline, 4),
+        'realThreshold': _CAPTURE_GUARDRAIL_REAL_THRESHOLD,
+        'reason': 'capture_chain_not_strong_enough',
+    }
+    if not eligible:
+        return result
+    max_risk = 0.95 if level == 'strong' else _CAPTURE_GUARDRAIL_MAX_MODEL_RISK
+    if baseline > max_risk:
+        result['reason'] = 'model_risk_above_guardrail_range'
+        return result
+    blocking = [
+        str(item.get('label') or item.get('kind') or '')
+        for item in model.get('factors') or []
+        if isinstance(item, dict)
+        and (
+            str(item.get('group') or '') in _CAPTURE_GUARDRAIL_BLOCKING_GROUPS
+            or float(item.get('effectiveLikelihoodRatio') or item.get('likelihoodRatio') or 1.0) >= 3.0
+        )
+    ]
+    if blocking:
+        result['reason'] = 'strong_conflicting_evidence'
+        result['blockingEvidence'] = blocking[:3]
+        return result
+    adjusted = _clamp01(model.get('posterior'), baseline)
+    if adjusted >= baseline - 0.015:
+        result['reason'] = 'adjustment_not_material'
+        return result
+    result.update({
+        'applied': True,
+        'adjusted': round(adjusted, 4),
+        'reason': 'rich_native_capture_chain',
+    })
+    return result
+
+
 def _fuse_fast_metadata_probability(probability, metadata):
     metadata_result = _swarm_metadata_expert({'all_metadata': metadata or {}})
     model = probability_fusion.fuse([
@@ -2939,6 +3048,13 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
     else:
         final_label = '真实图像'
 
+    capture = _capture_evidence_from_experts(experts, primary_result)
+    capture_guardrail = {
+        'version': 'huijian-capture-guardrail-v1',
+        'eligible': False,
+        'applied': False,
+        'reason': 'primary_model_not_authorized',
+    }
     if primary_authorized:
         signed_probability = _clamp01(
             (primary_result or {}).get('probability'),
@@ -2951,11 +3067,25 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
         )
         confidence = str((primary_result or {}).get('confidence') or confidence)
         probability_model = dict(probability_model or {})
-        probability_model['publishable'] = False
-        probability_model['decisionContribution'] = 'diagnostic_only'
+        capture_guardrail = _capture_evidence_guardrail(
+            signed_probability,
+            probability_model,
+            capture,
+        )
+        probability_model['captureGuardrail'] = capture_guardrail
+        if capture_guardrail.get('applied') is True:
+            score = _clamp01(capture_guardrail.get('adjusted'), signed_probability)
+            generated_score = score
+            if generated_score < _CAPTURE_GUARDRAIL_REAL_THRESHOLD:
+                final_label = '真实图像'
+            confidence = '中'
+            probability_model['publishable'] = True
+            probability_model['decisionContribution'] = 'capture_evidence_guardrail'
+        else:
+            probability_model['publishable'] = False
+            probability_model['decisionContribution'] = 'diagnostic_only'
 
     provenance_summary = _swarm_provenance_summary(experts)
-    capture = _capture_evidence_from_experts(experts, primary_result)
 
     evidence = []
     if provenance_summary and provenance_summary.get('headline'):
@@ -2982,10 +3112,17 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
 
     disagreement = spread > disagreement_threshold
     baseline_probability = _clamp01(probability_model.get('pixelBaseline'), score)
-    explanation = [
-        f"Swarm 专家会诊完成：签名主模型发布分数为 {generated_score * 100:.2f}%，其他专家仅作并列诊断，不改变该分数和标签。",
-        f"有效像素专家 {len(probability_model.get('baselineExperts') or [])} 个，专家一致性：{consensus_level}，当前置信度：{confidence}。",
-    ]
+    if capture_guardrail.get('applied') is True:
+        explanation = [
+            f"Swarm 专家会诊完成：签名主模型原始 AI 风险为 {signed_probability * 100:.2f}%。",
+            f"丰富且一致的原生拍摄链通过保守护栏，将边界风险调整为 {generated_score * 100:.2f}%；普通 EXIF 不会触发此调整。",
+            f"有效像素专家 {len(probability_model.get('baselineExperts') or [])} 个，专家一致性：{consensus_level}，当前置信度：{confidence}。",
+        ]
+    else:
+        explanation = [
+            f"Swarm 专家会诊完成：签名主模型发布分数为 {generated_score * 100:.2f}%，其他专家仅作并列诊断，不改变该分数和标签。",
+            f"有效像素专家 {len(probability_model.get('baselineExperts') or [])} 个，专家一致性：{consensus_level}，当前置信度：{confidence}。",
+        ]
     if tamper_score is not None:
         explanation.append(f"独立篡改风险为 {tamper_score * 100:.2f}%，不参与 AI 生成概率平均。")
     if recapture_score is not None:
@@ -3012,7 +3149,11 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
         'reviewRequired': False,
         'decisionStatus': 'verdict',
         'decisionAuthority': (
-            'calibrated_model' if primary_authorized else 'decisive_provenance'
+            'calibrated_model_with_capture_evidence'
+            if capture_guardrail.get('applied') is True
+            else 'calibrated_model'
+            if primary_authorized
+            else 'decisive_provenance'
         ),
         'explanation': "\n".join(explanation),
         'visual_issues': evidence[:6] or ['暂未提取到明确的视觉可疑点。'],

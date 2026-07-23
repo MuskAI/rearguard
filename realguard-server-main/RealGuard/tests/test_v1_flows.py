@@ -1020,6 +1020,74 @@ def test_fast_image_detect_does_not_publish_uncalibrated_model_score(client, mon
     assert any("独立校准契约" in warning for warning in result["evidenceWarnings"])
 
 
+def test_fast_image_detect_uses_rich_native_capture_chain_for_borderline_risk(client, monkeypatch):
+    _login_session(client)
+    monkeypatch.setattr(detection, "validate_model_decision", lambda _decision: True)
+    monkeypatch.setattr(detection, "validate_inference_audit", lambda _audit, _decision: True)
+    camera_metadata = {
+        "EXIF:Make": "Apple",
+        "EXIF:Model": "iPhone 16 Pro",
+        "EXIF:LensModel": "iPhone 16 Pro back triple camera",
+        "EXIF:ExposureTime": "1/120",
+        "EXIF:FNumber": "1.8",
+        "EXIF:ISO": "80",
+        "EXIF:FocalLength": "6.8 mm",
+        "EXIF:DateTimeOriginal": "2026:07:20 10:21:33",
+        "EXIF:OffsetTimeOriginal": "+08:00",
+        "EXIF:MakerNote": {"HDR": "On"},
+        "EXIF:WhiteBalance": "Auto",
+        "EXIF:ColorSpace": "sRGB",
+        "EXIF:SceneType": "Directly photographed",
+    }
+    precheck = {
+        "status": "ok",
+        "coordinateSpace": "display_normalized_v1",
+        "displaySize": {"width": 4032, "height": 3024},
+        "genericVisibleWatermark": {"available": True, "detected": False, "count": 0},
+        "visibleHits": [],
+    }
+    monkeypatch.setattr(detection, "_primary_image_endpoint", lambda: ("http://detector.test/image", 30, ""))
+    monkeypatch.setattr(
+        detection,
+        "_backend_post",
+        lambda *args, **kwargs: _FakeResponse({
+            "code": 200,
+            "data": {
+                "fake_percentage": 70.0,
+                "detector_probability": 0.70,
+                "final_label": "AI生成图像",
+                "confidence": "中",
+                "explanation": "主模型处于边界偏高区间。",
+                "filename": "iphone-photo.jpg",
+                "full_exif_info": camera_metadata,
+                "remote_evidence": {
+                    "visibleWatermarkPrecheck": precheck,
+                    "modelDecision": {
+                        **CALIBRATED_MODEL_DECISION,
+                        "publishedProbability": 0.70,
+                        "finalLabel": "AI生成图像",
+                    },
+                    "modelRun": {"schema": "test-audit"},
+                },
+            },
+        }),
+    )
+    monkeypatch.setattr(detection, "_ensure_local_primary_record", lambda *args, **kwargs: None)
+    monkeypatch.setattr(detection, "_record_model_run", lambda *args, **kwargs: None)
+
+    payload, status_code = _run_fast_payload(client)
+
+    assert status_code == 200
+    result = payload["result"]
+    assert result["detector_probability"] == pytest.approx(0.70)
+    assert result["probability"] < 0.62
+    assert result["final_label"] == "真实图像"
+    assert result["decisionAuthority"] == "calibrated_model_with_capture_evidence"
+    assert result["capture_evidence"]["profile"] == "native_capture_chain"
+    assert result["probabilityModel"]["captureGuardrail"]["applied"] is True
+    assert "原始主模型 AI 风险为 70.00%" in result["explanation"]
+
+
 def test_model_decision_contract_requires_complete_calibration_evidence():
     calibrated = dict(CALIBRATED_MODEL_DECISION)
 

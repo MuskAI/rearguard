@@ -409,6 +409,8 @@ function CaptureEvidenceSection({ report }: { report?: CaptureEvidence }) {
   );
   const stateLabel = report.level === "conflict"
     ? "证据冲突"
+    : report.adjustmentEligible
+      ? "可参与边界校正"
     : report.supportsRealCapture
       ? `${report.levelText || "辅助"}强度支持`
       : "保持中性";

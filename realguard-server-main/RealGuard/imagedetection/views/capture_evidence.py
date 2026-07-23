@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
 
-MODEL_VERSION = "huijian-capture-evidence-v1"
+MODEL_VERSION = "huijian-capture-evidence-v2"
 LEVEL_TEXT = {
     "strong": "强",
     "medium": "中等",
@@ -252,27 +252,54 @@ def analyze_capture_evidence(
     score = round(min(points / 8.0, 1.0), 3)
     has_device = bool(device)
     complete_parameters = len(parameters) >= 2
+    native_support_groups = {
+        "optics",
+        "maker_note",
+        "device_serial",
+        "gps",
+        "embedded_preview",
+        "native_tags",
+    }.intersection(unique_groups)
+    rich_native_chain = (
+        bool(make and model)
+        and len(parameters) >= 3
+        and bool(captured_at)
+        and len(native_support_groups) >= 2
+        and points >= 6.5
+    )
+
     if conflicts:
         level = "conflict"
         supports_real = False
+        profile = "conflicted"
         title = "拍摄元数据存在冲突"
         summary = "读取到拍摄流程字段，但其中存在生成声明、时间或参数冲突，不能确认图片来源。"
         likelihood_ratio = 1.0
+    elif rich_native_chain:
+        level = "medium"
+        supports_real = True
+        profile = "native_capture_chain"
+        title = "发现丰富且一致的原生拍摄链"
+        summary = "设备、光学参数、原始时间与相机私有或原生字段相互支持，可作为真实拍摄的较强辅助证据。"
+        likelihood_ratio = 0.45
     elif has_device and complete_parameters and bool(captured_at) and points >= 5.0:
         level = "medium"
         supports_real = True
+        profile = "coherent_exif"
         title = "拍摄流程元数据较一致"
         summary = "设备、拍摄参数与原始时间相互一致，可作为相机工作流的辅助线索，但不能单独证明图片真实。"
         likelihood_ratio = 0.65
     elif has_device and (bool(captured_at) or bool(parameters)) and points >= 2.4:
         level = "weak"
         supports_real = True
+        profile = "partial_exif"
         title = "发现部分拍摄流程线索"
         summary = "读取到部分设备或拍摄参数，但信息不完整且可以被编辑，仅作弱辅助线索。"
         likelihood_ratio = 0.84
     else:
         level = "none"
         supports_real = False
+        profile = "none"
         title = "未形成可用的拍摄流程线索"
         summary = "没有读取到足够完整且相互一致的相机拍摄字段；元数据缺失保持中性。"
         likelihood_ratio = 1.0
@@ -281,6 +308,7 @@ def analyze_capture_evidence(
         "version": MODEL_VERSION,
         "level": level,
         "levelText": LEVEL_TEXT[level],
+        "profile": profile,
         "supportsRealCapture": supports_real,
         "score": score,
         "likelihoodRatio": likelihood_ratio,
@@ -290,6 +318,8 @@ def analyze_capture_evidence(
         "conflicts": conflicts[:4],
         "limitations": limitations[:3],
         "groups": unique_groups,
+        "nativeSupportCount": len(native_support_groups),
+        "adjustmentEligible": bool(rich_native_chain and not conflicts),
         "fieldCount": len(rows),
         "privacy": {
             "gpsRedacted": has_gps,
@@ -316,7 +346,9 @@ def add_verified_camera_credential(
     result.update({
         "level": "strong",
         "levelText": LEVEL_TEXT["strong"],
+        "profile": "verified_camera_credential",
         "supportsRealCapture": True,
+        "adjustmentEligible": True,
         "score": max(float(result.get("score") or 0.0), 0.96),
         "likelihoodRatio": 0.08,
         "title": "内容凭证确认相机捕获",

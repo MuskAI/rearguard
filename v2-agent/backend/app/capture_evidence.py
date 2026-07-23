@@ -8,7 +8,7 @@ import re
 from typing import Any, Iterable
 
 
-MODEL_VERSION = "huijian-capture-evidence-v1"
+MODEL_VERSION = "huijian-capture-evidence-v2"
 LEVEL_TEXT = {"strong": "强", "medium": "中等", "weak": "弱", "none": "无", "conflict": "存在冲突"}
 
 
@@ -186,18 +186,42 @@ def analyze_capture_evidence(metadata: dict[str, Any] | None, *, ai_markers: Ite
     if marker_texts:
         conflicts.append(_item("ai_declaration", "生成声明冲突", "元数据中存在明确的 AI 生成工具、参数或工作流声明", "strong"))
 
+    native_support_groups = {
+        "optics",
+        "maker_note",
+        "device_serial",
+        "gps",
+        "embedded_preview",
+        "native_tags",
+    }.intersection(groups)
+    rich_native_chain = (
+        bool(make and model)
+        and len(parameters) >= 3
+        and bool(captured_at)
+        and len(native_support_groups) >= 2
+        and points >= 6.5
+    )
+
     if conflicts:
         level, supports, title, summary, ratio = "conflict", False, "拍摄元数据存在冲突", "读取到拍摄字段，但其中存在生成声明、时间或参数冲突，不能作为实拍支持证据。", 1.0
+        profile = "conflicted"
+    elif rich_native_chain:
+        level, supports, title, summary, ratio = "medium", True, "发现丰富且一致的原生拍摄链", "设备、光学参数、原始时间与相机私有或原生字段相互支持，可作为真实拍摄的较强辅助证据。", 0.45
+        profile = "native_capture_chain"
     elif device and len(parameters) >= 2 and captured_at and points >= 5:
         level, supports, title, summary, ratio = "medium", True, "发现一致的相机拍摄链路", "设备、拍摄参数与原始时间相互支持，可作为真实拍摄的中等强度辅助证据。", 0.65
+        profile = "coherent_exif"
     elif device and (captured_at or parameters) and points >= 2.4:
         level, supports, title, summary, ratio = "weak", True, "发现部分拍摄链路线索", "读取到部分设备或拍摄参数，但链路不完整，仅提供弱支持。", 0.84
+        profile = "partial_exif"
     else:
         level, supports, title, summary, ratio = "none", False, "未形成可用的实拍证据", "没有读取到足够完整且相互一致的相机拍摄字段；元数据缺失保持中性。", 1.0
+        profile = "none"
     return {
         "version": MODEL_VERSION,
         "level": level,
         "levelText": LEVEL_TEXT[level],
+        "profile": profile,
         "supportsRealCapture": supports,
         "score": round(min(points / 8.0, 1.0), 3),
         "likelihoodRatio": ratio,
@@ -207,6 +231,8 @@ def analyze_capture_evidence(metadata: dict[str, Any] | None, *, ai_markers: Ite
         "conflicts": conflicts[:4],
         "limitations": limitations[:3],
         "groups": list(dict.fromkeys(groups)),
+        "nativeSupportCount": len(native_support_groups),
+        "adjustmentEligible": bool(rich_native_chain and not conflicts),
         "fieldCount": len(rows),
         "privacy": {"gpsRedacted": has_gps, "serialRedacted": bool(serial), "captureTimeRedacted": bool(captured_at)},
     }
@@ -223,6 +249,7 @@ def add_verified_camera_credential(capture_evidence: dict[str, Any] | None, *, i
     result["groups"] = list(dict.fromkeys(["signed_camera_capture", *(result.get("groups") or [])]))
     result.update({
         "level": "strong", "levelText": LEVEL_TEXT["strong"], "supportsRealCapture": True,
+        "profile": "verified_camera_credential", "adjustmentEligible": True,
         "score": max(float(result.get("score") or 0), 0.96), "likelihoodRatio": 0.08,
         "title": "内容凭证确认相机捕获",
         "summary": "通过校验的 C2PA 来源凭证声明该文件由相机捕获，构成强实拍来源证据。",

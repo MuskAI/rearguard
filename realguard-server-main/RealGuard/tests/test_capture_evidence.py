@@ -29,6 +29,10 @@ def test_coherent_camera_metadata_is_medium_support_and_redacted():
     )
 
     assert result["level"] == "medium"
+    assert result["profile"] == "native_capture_chain"
+    assert result["adjustmentEligible"] is True
+    assert result["nativeSupportCount"] >= 2
+    assert result["likelihoodRatio"] == 0.45
     assert result["supportsRealCapture"] is True
     assert 0 < result["likelihoodRatio"] < 1
     serialized = json.dumps(result, ensure_ascii=False)
@@ -84,3 +88,63 @@ def test_fast_detection_uses_same_capture_probability_fusion():
     assert metadata_probability == 0.28
     assert model["pixelBaseline"] == 0.6
     assert model["factors"][0]["kind"] == "camera_capture_metadata"
+
+
+def test_rich_native_capture_chain_can_correct_borderline_model_risk():
+    capture = capture_evidence.analyze_capture_evidence(_camera_metadata())
+    _fused, model, _metadata_probability = detection._fuse_fast_metadata_probability(
+        0.7,
+        _camera_metadata(),
+    )
+
+    guardrail = detection._capture_evidence_guardrail(0.7, model, capture)
+
+    assert guardrail["eligible"] is True
+    assert guardrail["applied"] is True
+    assert guardrail["adjusted"] < 0.62
+    assert guardrail["reason"] == "rich_native_capture_chain"
+
+
+def test_capture_guardrail_does_not_override_high_model_risk_or_strong_ai_evidence():
+    capture = capture_evidence.analyze_capture_evidence(_camera_metadata())
+    high_risk_model = {"posterior": 0.78, "factors": []}
+    blocked_model = {
+        "posterior": 0.4,
+        "factors": [{
+            "kind": "known_visible_ai_watermark",
+            "label": "已知 AI 平台水印",
+            "group": "known_watermark",
+            "effectiveLikelihoodRatio": 120.0,
+        }],
+    }
+
+    high_risk = detection._capture_evidence_guardrail(0.9, high_risk_model, capture)
+    blocked = detection._capture_evidence_guardrail(0.7, blocked_model, capture)
+
+    assert high_risk["applied"] is False
+    assert high_risk["reason"] == "model_risk_above_guardrail_range"
+    assert blocked["applied"] is False
+    assert blocked["reason"] == "strong_conflicting_evidence"
+
+
+def test_copyable_basic_exif_does_not_activate_capture_guardrail():
+    basic_metadata = {
+        "EXIF:Make": "Apple",
+        "EXIF:Model": "iPhone",
+        "EXIF:ExposureTime": "1/100",
+        "EXIF:FNumber": "1.8",
+        "EXIF:ISO": "100",
+        "EXIF:DateTimeOriginal": "2026:07:20 10:21:33",
+    }
+    capture = capture_evidence.analyze_capture_evidence(basic_metadata)
+    _fused, model, _metadata_probability = detection._fuse_fast_metadata_probability(
+        0.7,
+        basic_metadata,
+    )
+
+    guardrail = detection._capture_evidence_guardrail(0.7, model, capture)
+
+    assert capture["profile"] == "coherent_exif"
+    assert capture["adjustmentEligible"] is False
+    assert guardrail["applied"] is False
+    assert guardrail["reason"] == "capture_chain_not_strong_enough"

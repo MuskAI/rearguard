@@ -32,6 +32,10 @@ def test_camera_chain_is_structured_and_privacy_safe():
     )
 
     assert result["level"] == "medium"
+    assert result["profile"] == "native_capture_chain"
+    assert result["adjustmentEligible"] is True
+    assert result["nativeSupportCount"] >= 2
+    assert result["likelihoodRatio"] == 0.45
     assert result["supportsRealCapture"] is True
     assert result["privacy"] == {
         "gpsRedacted": True,
