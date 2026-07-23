@@ -3319,6 +3319,42 @@ video {
   margin-top: 17px;
 }
 
+.auth-verified-phone {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px 12px;
+  padding: 12px;
+  color: var(--muted-strong);
+  background: var(--primary-soft);
+  border: 1px solid rgba(20, 125, 124, 0.24);
+  border-radius: 7px;
+}
+
+.auth-verified-phone span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--primary-strong);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.auth-verified-phone strong {
+  grid-row: 2;
+  color: var(--ink-strong);
+  font-size: 13px;
+}
+
+.auth-verified-phone button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  color: var(--blue);
+  background: transparent;
+  font-size: 10px;
+  font-weight: 650;
+}
+
 .auth-form > label:not(.terms-check) {
   display: block;
   margin-top: 12px;

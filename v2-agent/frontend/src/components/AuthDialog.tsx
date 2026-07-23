@@ -2,6 +2,7 @@ import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useS
 import { Check, KeyRound, LoaderCircle, MessageSquareText, Smartphone, UserRound, X } from "lucide-react";
 import {
   AccountUser,
+  completeSmsPasswordSetup,
   loginByPassword,
   loginBySms,
   registerAccount,
@@ -15,7 +16,7 @@ interface Props {
   onAuthenticated: (user: AccountUser) => void;
 }
 
-type Panel = "login" | "register";
+type Panel = "login" | "register" | "setup";
 type LoginMode = "password" | "sms";
 
 export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
@@ -23,6 +24,7 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
   const [loginMode, setLoginMode] = useState<LoginMode>("password");
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordConfirm, setPasswordConfirm] = useState("");
   const [username, setUsername] = useState("");
   const [code, setCode] = useState("");
   const [accepted, setAccepted] = useState(false);
@@ -84,7 +86,10 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
   if (!open) return null;
 
   const validPhone = /^1[3-9]\d{9}$/.test(phone);
-  const needsCode = panel === "register" || loginMode === "sms";
+  const needsCode = panel === "register" || (panel === "login" && loginMode === "sms");
+  const needsPassword = panel === "register" || panel === "setup" || (panel === "login" && loginMode === "password");
+  const needsPasswordConfirm = panel === "register" || panel === "setup";
+  const maskedPhone = phone.replace(/^(\d{3})\d{4}(\d{4})$/, "$1****$2");
 
   async function requestCode() {
     if (!validPhone || sending || countdown > 0) return;
@@ -103,27 +108,62 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!accepted) {
+    if (panel !== "setup" && !accepted) {
       setMessage("请先阅读并同意用户协议和隐私政策");
+      return;
+    }
+    if (needsPassword && (password.length < 8 || !/[A-Za-z]/.test(password) || !/\d/.test(password))) {
+      setMessage("密码至少 8 位，并同时包含字母和数字");
+      return;
+    }
+    if (needsPasswordConfirm && password !== passwordConfirm) {
+      setMessage(passwordConfirm ? "两次输入的密码不一致" : "请再次输入密码");
       return;
     }
     setBusy(true);
     setMessage("");
     try {
       if (panel === "register") {
-        await registerAccount({ phone, secret: password, username, smsCode: code, acceptedTerms: accepted });
+        await registerAccount({
+          phone,
+          secret: password,
+          secretConfirm: passwordConfirm,
+          username,
+          smsCode: code,
+          acceptedTerms: accepted,
+        });
         setPanel("login");
         setLoginMode("password");
         setCode("");
+        setPasswordConfirm("");
         setMessage("注册成功，请使用刚才设置的密码登录");
+      } else if (panel === "setup") {
+        const response = await completeSmsPasswordSetup(password, passwordConfirm);
+        onAuthenticated(response.user);
       } else {
         const response = loginMode === "password"
           ? await loginByPassword(phone, password, accepted)
           : await loginBySms(phone, code, accepted);
+        if ("requiresPasswordSetup" in response && response.requiresPasswordSetup) {
+          setPanel("setup");
+          setPassword("");
+          setPasswordConfirm("");
+          setCode("");
+          return;
+        }
+        if (!response.user) throw new Error("登录状态返回异常，请重试");
         onAuthenticated(response.user);
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : panel === "register" ? "注册失败" : "登录失败");
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : panel === "register"
+            ? "注册失败"
+            : panel === "setup"
+              ? "密码设置失败"
+              : "登录失败",
+      );
     } finally {
       setBusy(false);
     }
@@ -133,6 +173,8 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
     setPanel(next);
     setMessage("");
     setCode("");
+    setPassword("");
+    setPasswordConfirm("");
   }
 
   function movePanelFocus(event: ReactKeyboardEvent<HTMLDivElement>) {
@@ -158,16 +200,24 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
         </button>
         <HuijianBrand />
         <div className="auth-heading">
-          <h2 id="auth-title">{panel === "login" ? "欢迎回来" : "创建慧鉴AI账号"}</h2>
-          <p id="auth-description">{panel === "login" ? "登录后，任务与报告只对你本人可见。" : "注册后即可保存个人鉴伪记录。"}</p>
+          <h2 id="auth-title">
+            {panel === "login" ? "欢迎回来" : panel === "register" ? "创建慧鉴AI账号" : "设置登录密码"}
+          </h2>
+          <p id="auth-description">
+            {panel === "login"
+              ? "登录后，任务与报告只对你本人可见。"
+              : panel === "register"
+                ? "注册后即可保存个人鉴伪记录。"
+                : "手机号验证成功，设置密码后即可进入慧鉴 AI。"}
+          </p>
         </div>
 
-        <div className="segmented auth-panels" role="tablist" aria-label="登录或注册" onKeyDown={movePanelFocus}>
+        {panel !== "setup" && <div className="segmented auth-panels" role="tablist" aria-label="登录或注册" onKeyDown={movePanelFocus}>
           <button id="auth-tab-login" type="button" role="tab" aria-selected={panel === "login"} aria-controls="auth-panel" tabIndex={panel === "login" ? 0 : -1} className={panel === "login" ? "active" : ""} onClick={() => switchPanel("login")}>登录</button>
           <button id="auth-tab-register" type="button" role="tab" aria-selected={panel === "register"} aria-controls="auth-panel" tabIndex={panel === "register" ? 0 : -1} className={panel === "register" ? "active" : ""} onClick={() => switchPanel("register")}>注册</button>
-        </div>
+        </div>}
 
-        <div id="auth-panel" role="tabpanel" aria-labelledby={`auth-tab-${panel}`} tabIndex={0}>
+        <div id="auth-panel" role="tabpanel" aria-labelledby={panel === "setup" ? "auth-title" : `auth-tab-${panel}`} tabIndex={0}>
           {panel === "login" && (
             <div className="auth-mode-switch" role="group" aria-label="登录方式">
               <button type="button" aria-pressed={loginMode === "password"} className={loginMode === "password" ? "active" : ""} onClick={() => { setLoginMode("password"); setMessage(""); }}>
@@ -186,14 +236,26 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
               <div className="field-shell"><UserRound size={17} /><input value={username} onChange={(event) => setUsername(event.target.value)} maxLength={128} placeholder="怎么称呼你" required /></div>
             </label>
           )}
-          <label>
+          {panel === "setup" ? (
+            <div className="auth-verified-phone" role="status">
+              <span><Check size={15} /> 手机号已验证</span>
+              <strong>+86 {maskedPhone}</strong>
+              <button type="button" onClick={() => switchPanel("login")}>更换手机号</button>
+            </div>
+          ) : <label>
             <span>手机号</span>
             <div className="field-shell"><Smartphone size={17} /><span className="country-code">+86</span><input inputMode="numeric" autoComplete="tel" value={phone} onChange={(event) => setPhone(event.target.value.replace(/\D/g, "").slice(0, 11))} placeholder="请输入手机号" required /></div>
-          </label>
-          {(panel === "register" || loginMode === "password") && (
+          </label>}
+          {needsPassword && (
             <label>
-              <span>密码</span>
-              <div className="field-shell"><KeyRound size={17} /><input type="password" autoComplete={panel === "register" ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 8 位，包含字母和数字" required minLength={8} /></div>
+              <span>{panel === "setup" ? "设置密码" : "密码"}</span>
+              <div className="field-shell"><KeyRound size={17} /><input type="password" autoComplete={panel === "login" ? "current-password" : "new-password"} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 8 位，包含字母和数字" required minLength={8} maxLength={128} /></div>
+            </label>
+          )}
+          {needsPasswordConfirm && (
+            <label>
+              <span>确认密码</span>
+              <div className="field-shell"><KeyRound size={17} /><input type="password" autoComplete="new-password" value={passwordConfirm} onChange={(event) => setPasswordConfirm(event.target.value)} placeholder="请再次输入相同密码" required minLength={8} maxLength={128} /></div>
             </label>
           )}
           {needsCode && (
@@ -208,16 +270,16 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
             </label>
           )}
 
-          <label className="terms-check">
+          {panel !== "setup" && <label className="terms-check">
             <input type="checkbox" checked={accepted} onChange={(event) => setAccepted(event.target.checked)} />
             <span className="check-visual"><Check size={13} /></span>
             <span>我已阅读并同意 <a href="/legal/terms.html" target="_blank" rel="noreferrer">用户协议</a> 和 <a href="/legal/privacy.html" target="_blank" rel="noreferrer">隐私政策</a></span>
-          </label>
+          </label>}
 
           {message && <div className="auth-message" role="status">{message}</div>}
-          <button className="primary-button auth-submit" type="submit" disabled={busy || !validPhone || !accepted}>
+          <button className="primary-button auth-submit" type="submit" disabled={busy || !validPhone || (panel !== "setup" && !accepted)}>
             {busy && <LoaderCircle size={17} className="spin" />}
-            {busy ? "处理中" : panel === "login" ? "安全登录" : "创建账号"}
+            {busy ? "处理中" : panel === "login" ? "安全登录" : panel === "register" ? "创建账号" : "设置密码并登录"}
           </button>
           </form>
         </div>

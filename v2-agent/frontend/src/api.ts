@@ -1054,10 +1054,26 @@ export function loginByPassword(phone: string, secret: string, acceptedTerms: bo
 }
 
 export function loginBySms(phone: string, smsCode: string, acceptedTerms: boolean) {
-  return accountJson<{ status: string; user: AccountUser }>(
+  return accountJson<{
+    status: string;
+    user?: AccountUser;
+    requiresPasswordSetup?: boolean;
+    passwordSetupExpiresIn?: number;
+  }>(
     "/api/login/sms",
     { method: "POST", body: JSON.stringify({ phone, sms_code: smsCode, accepted_terms: acceptedTerms }) },
     "登录失败",
+  );
+}
+
+export function completeSmsPasswordSetup(secret: string, secretConfirm: string) {
+  return accountJson<{ status: string; message: string; user: AccountUser }>(
+    "/api/login/sms/complete",
+    {
+      method: "POST",
+      body: JSON.stringify({ secret, secret_confirm: secretConfirm }),
+    },
+    "密码设置失败",
   );
 }
 
@@ -1072,6 +1088,7 @@ export function sendSmsCode(phone: string, scene: "login" | "register" | "reset"
 export function registerAccount(payload: {
   phone: string;
   secret: string;
+  secretConfirm: string;
   username: string;
   smsCode: string;
   acceptedTerms: boolean;
@@ -1083,6 +1100,7 @@ export function registerAccount(payload: {
       body: JSON.stringify({
         phone: payload.phone,
         secret: payload.secret,
+        secret_confirm: payload.secretConfirm,
         username: payload.username,
         sms_code: payload.smsCode,
         accepted_terms: payload.acceptedTerms,
