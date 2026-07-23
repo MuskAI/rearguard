@@ -395,7 +395,7 @@ sudo bash -lc '
   [ ! -f /etc/realguard/detector-db.env ] || . /etc/realguard/detector-db.env
   set +a
   cd '"$release_root"'/RealGuard
-  '"$release_root"'/.venv/bin/python -c "from imagedetection.views import privacy_erasure_ledger as ledger; assert ledger.healthcheck().get('available')"
+  '"$release_root"'/.venv/bin/python -c "from imagedetection.views import privacy_erasure_ledger as ledger; assert True in ledger.healthcheck().values()"
   '"$release_root"'/.venv/bin/python -m flask --app run:app identity-db-upgrade
   '"$release_root"'/.venv/bin/python -m flask --app run:app migrate-password-hashes
   '"$release_root"'/.venv/bin/python -m flask --app run:app admin-db-upgrade
@@ -524,11 +524,11 @@ test "$(stat -c '%a' /opt/realguard-data/developer-spool)" = "700"
 test "$(stat -c '%a' /opt/realguard-data/web-spool)" = "700"
 test "$(stat -c '%a' /opt/realguard-data/evidence-manifests)" = "700"
 test "$(stat -c '%a' /opt/realguard-data/admin_state.json)" = "600"
-curl -fsS http://127.0.0.1/admin/login | grep -q '慧鉴 AI 管理员认证'
-admin_register_code="$(curl -sS -o /tmp/realguard-admin-register.html -w '%{http_code}' http://127.0.0.1/admin/register)"
+curl -fsS http://127.0.0.1:5000/admin/login | grep -q '慧鉴 AI 管理员认证'
+admin_register_code="$(curl -sS -o /tmp/realguard-admin-register.html -w '%{http_code}' http://127.0.0.1:5000/admin/register)"
 test "$admin_register_code" = "403"
 ! grep -q '注册管理员' /tmp/realguard-admin-register.html
-big_screen_code="$(curl -sS -o /tmp/realguard-big-screen.json -w '%{http_code}' http://127.0.0.1/api/admin/big-screen)"
+big_screen_code="$(curl -sS -o /tmp/realguard-big-screen.json -w '%{http_code}' http://127.0.0.1:5000/api/admin/big-screen)"
 test "$big_screen_code" = "401"
 
 sudo install -m 644 /tmp/realguard-v1.DEPLOYED_COMMIT /opt/realguard-server/DEPLOYED_COMMIT

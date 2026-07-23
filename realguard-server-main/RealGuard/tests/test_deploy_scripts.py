@@ -178,6 +178,19 @@ def test_release_directories_are_unique_for_repeated_commit_deployments():
     assert 'rollback_unit="realguard-gpu-deploy-rollback-${commit_sha}-$$"' in gpu_activate
 
 
+def test_v1_activation_probes_backend_without_default_nginx_host():
+    activate = (ROOT / "scripts" / "remote" / "activate_v1.sh").read_text(
+        encoding="utf-8"
+    )
+
+    for path in ("/admin/login", "/admin/register", "/api/admin/big-screen"):
+        assert f"http://127.0.0.1:5000{path}" in activate
+        assert f"http://127.0.0.1{path}" not in activate.replace(
+            f"http://127.0.0.1:5000{path}", ""
+        )
+    assert "get('available')" not in activate
+
+
 def test_public_report_share_credentials_are_not_written_to_access_log():
     configs = (
         ROOT / "deploy" / "nginx" / "realguard.conf",
