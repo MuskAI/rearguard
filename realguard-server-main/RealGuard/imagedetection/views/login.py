@@ -45,6 +45,10 @@ PASSWORD_LOGIN_WINDOW = max(60, int(os.environ.get('REALGUARD_PASSWORD_LOGIN_WIN
 PASSWORD_LOGIN_PHONE_LIMIT = max(1, int(os.environ.get('REALGUARD_PASSWORD_LOGIN_PHONE_LIMIT', '8')))
 PASSWORD_LOGIN_IP_LIMIT = max(1, int(os.environ.get('REALGUARD_PASSWORD_LOGIN_IP_LIMIT', '40')))
 SESSION_ABSOLUTE_MAX_AGE = max(3600, int(os.environ.get('REALGUARD_SESSION_ABSOLUTE_MAX_AGE', '604800')))
+SMS_PASSWORD_SETUP_TTL = max(
+    300, int(os.environ.get('REALGUARD_SMS_PASSWORD_SETUP_TTL', '600'))
+)
+SMS_PASSWORD_SETUP_SESSION_KEY = 'pending_sms_password_setup'
 _USER_ACCOUNT_COLUMNS_READY = False
 _SMS_STORAGE_READY = False
 _CONSENT_STORAGE_READY = False
@@ -88,6 +92,129 @@ def _password_policy_error(secret):
     if not any(ch.isalpha() for ch in value) or not any(ch.isdigit() for ch in value):
         return '密码需同时包含字母和数字'
     return ''
+
+
+def _begin_sms_password_setup(phone, user=None):
+    now = int(time.time())
+    session.pop('user_info', None)
+    session[SMS_PASSWORD_SETUP_SESSION_KEY] = {
+        'phone': str(phone or '').strip(),
+        'user_id': (user or {}).get('Userid'),
+        'verified_at': now,
+        'expires_at': now + SMS_PASSWORD_SETUP_TTL,
+        'terms_version': TERMS_VERSION,
+    }
+    session.modified = True
+
+
+def _pending_sms_password_setup():
+    pending = session.get(SMS_PASSWORD_SETUP_SESSION_KEY)
+    if not isinstance(pending, dict):
+        return None
+    now = int(time.time())
+    try:
+        verified_at = int(pending.get('verified_at') or 0)
+        expires_at = int(pending.get('expires_at') or 0)
+    except (TypeError, ValueError):
+        verified_at = 0
+        expires_at = 0
+    phone = str(pending.get('phone') or '').strip()
+    if (
+        not _is_valid_phone(phone)
+        or verified_at <= 0
+        or verified_at > now + 60
+        or expires_at < now
+        or expires_at - verified_at > SMS_PASSWORD_SETUP_TTL
+        or pending.get('terms_version') != TERMS_VERSION
+    ):
+        session.pop(SMS_PASSWORD_SETUP_SESSION_KEY, None)
+        session.modified = True
+        return None
+    return dict(pending)
+
+
+def _clear_sms_password_setup():
+    session.pop(SMS_PASSWORD_SETUP_SESSION_KEY, None)
+    session.modified = True
+
+
+def _complete_sms_password_setup(secret, secret_confirm):
+    pending = _pending_sms_password_setup()
+    if not pending:
+        return False, '验证状态已过期，请重新获取验证码', None
+    password_error = _password_policy_error(secret)
+    if password_error:
+        return False, password_error, None
+    if not secret_confirm:
+        return False, '请再次输入密码', None
+    if not hmac.compare_digest(str(secret), str(secret_confirm)):
+        return False, '两次输入的密码不一致', None
+    if not _ensure_user_account_columns():
+        return False, '账号表初始化失败，请稍后重试', None
+
+    phone = pending['phone']
+    user = _find_user_by_phone(phone)
+    expected_user_id = pending.get('user_id')
+    password_user_id = pending.get('password_user_id')
+
+    if expected_user_id not in (None, ''):
+        if not user or str(user.get('Userid')) != str(expected_user_id):
+            _clear_sms_password_setup()
+            return False, '账号状态已变化，请重新使用验证码登录', None
+    elif user and str(user.get('Userid')) != str(password_user_id or ''):
+        _clear_sms_password_setup()
+        return False, '该手机号已完成注册，请重新使用验证码登录', None
+
+    if user and user.get('secret'):
+        if (
+            str(password_user_id or '') != str(user.get('Userid'))
+            or not _password_matches(user.get('secret'), secret)
+        ):
+            _clear_sms_password_setup()
+            return False, '该账号已经设置密码，请重新使用验证码登录', None
+    elif user:
+        affected = excute_sql(
+            """
+            UPDATE user
+            SET secret = %s, session_version = session_version + 1,
+                password_updated_at = NOW()
+            WHERE Userid = %s AND (secret IS NULL OR secret = '')
+            """,
+            (_hash_password(secret), user.get('Userid')),
+            fetch=False,
+        )
+        if not affected:
+            return False, '密码设置失败，请重新使用验证码登录', None
+        pending['password_user_id'] = user.get('Userid')
+        session[SMS_PASSWORD_SETUP_SESSION_KEY] = pending
+        session.modified = True
+    else:
+        affected = excute_sql(
+            """
+            INSERT INTO user
+                (account_uuid, phone, secret, username, openid, terms_version,
+                 terms_accepted_at, password_updated_at)
+            VALUES (UUID(), %s, %s, %s, %s, %s, NOW(), NOW())
+            """,
+            (phone, _hash_password(secret), phone, '', TERMS_VERSION),
+            fetch=False,
+        )
+        if not affected:
+            return False, '账号创建失败，请重新使用验证码登录', None
+        user = _find_user_by_phone(phone)
+        if not user:
+            return False, '账号创建结果读取失败，请重新登录', None
+        pending['password_user_id'] = user.get('Userid')
+        session[SMS_PASSWORD_SETUP_SESSION_KEY] = pending
+        session.modified = True
+
+    if not _record_terms_acceptance(phone, channel='first_sms_password_setup'):
+        return False, '协议确认记录失败，请稍后重试', None
+    user = _find_user_by_phone(phone)
+    if not user:
+        return False, '账号状态读取失败，请重新登录', None
+    _clear_sms_password_setup()
+    return True, '', user
 
 
 def _ensure_column(table, column, definition):
@@ -1021,7 +1148,11 @@ def send_sms_code():
     except SmsStorageError:
         return jsonify({'success': False, 'message': '短信验证服务暂不可用，请稍后重试'}), 503
 
-    eligible = (scene == 'register' and not existing) or (scene in ('login', 'reset') and bool(existing))
+    eligible = (
+        scene == 'login'
+        or (scene == 'register' and not existing)
+        or (scene == 'reset' and bool(existing))
+    )
     generic_message = '如手机号符合当前操作条件，验证码将发送，请留意短信'
     if not eligible:
         return jsonify({'success': True, 'message': generic_message, 'expires_in': SMS_CODE_TTL})
@@ -1105,7 +1236,7 @@ def login_sms_verify():
             return render_template('login.html', error=message, login_mode='sms')
 
         user = _find_user_by_phone(phone)
-        if user:
+        if user and user.get('secret'):
             if not _record_terms_acceptance(phone):
                 return render_template('login.html', error='协议确认记录失败，请稍后重试', login_mode='sms')
             session_payload = _user_session_payload(user, phone)
@@ -1119,8 +1250,40 @@ def login_sms_verify():
             session.permanent = True
             session['user_info'] = session_payload
             return redirect('/index')
-        return render_template('login.html', error='该手机号尚未注册', login_mode='sms')
+        _begin_sms_password_setup(phone, user)
+        return render_template(
+            'login.html',
+            login_mode='first_password',
+            setup_phone=phone,
+        )
     return render_template('login.html', error='登录失败', login_mode='sms')
+
+
+@login_blueprint.route('/login_sms_complete', methods=['POST'])
+def login_sms_complete():
+    secret = request.form.get('secret', '').strip()
+    secret_confirm = request.form.get('secret_confirm', '').strip()
+    ok, message, user = _complete_sms_password_setup(secret, secret_confirm)
+    if not ok:
+        pending = _pending_sms_password_setup() or {}
+        return render_template(
+            'login.html',
+            error=message,
+            login_mode='first_password',
+            setup_phone=pending.get('phone', ''),
+        ), 400
+    phone = str(user.get('phone') or '')
+    session_payload = _user_session_payload(user, phone)
+    _sync_detection_user(
+        phone,
+        user.get('username') or phone,
+        user.get('openid', '') or phone,
+        session_payload.get('account_uuid'),
+    )
+    session.clear()
+    session.permanent = True
+    session['user_info'] = session_payload
+    return redirect('/index')
 
 
 @login_blueprint.route('/password_reset_verify', methods=['GET', 'POST'])
@@ -1165,6 +1328,7 @@ def register_verify():
     if request.method == 'POST':
         phone = request.form.get('phone', '').strip()
         secret = request.form.get('secret', '').strip()
+        secret_confirm = request.form.get('secret_confirm', '')
         username = request.form.get('username', '').strip() or phone
 
         sms_code = request.form.get('sms_code', '').strip()
@@ -1174,6 +1338,10 @@ def register_verify():
         password_error = _password_policy_error(secret)
         if password_error:
             return render_template('register.html', error=password_error)
+        if not secret_confirm:
+            return render_template('register.html', error='请再次输入密码')
+        if not hmac.compare_digest(secret, str(secret_confirm)):
+            return render_template('register.html', error='两次输入的密码不一致')
         if not _truthy(request.form.get('accepted_terms')):
             return render_template('register.html', error='请先阅读并同意用户协议和隐私政策')
         ok, message = _verify_sms_code('register', phone, sms_code)

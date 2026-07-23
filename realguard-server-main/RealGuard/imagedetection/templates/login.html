@@ -50,6 +50,9 @@
         .form-footer a{color:var(--primary);font-weight:600}
         .form-footer a:hover{text-decoration:underline}
         .error-msg{color:var(--danger);font-size:.8rem;margin-left:8px}
+        .setup-note{padding:12px 14px;margin-bottom:1.2rem;border:1px solid rgba(6,214,160,.35);border-radius:12px;background:rgba(6,214,160,.08);color:var(--text-secondary);font-size:.84rem;line-height:1.6}
+        .setup-note strong{display:block;color:var(--text-primary);font-size:.9rem}
+        .password-hint{margin-top:-.7rem;margin-bottom:1.2rem;color:var(--text-muted);font-size:.78rem;line-height:1.5}
         .footer{padding:2rem 0;background:var(--bg-card);border-top:1px solid var(--border);text-align:center;transition:all .4s}
         .footer-logo{display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:.5rem;font-size:1rem;font-weight:700;color:var(--text-primary)}
         .footer-logo i{color:var(--primary)}
@@ -73,11 +76,11 @@
         <h2>账户登录</h2>
         <p class="sub">登录您的账户以使用全部功能</p>
         <div class="login-tabs">
-            <button type="button" class="login-tab {% if login_mode != 'sms' and login_mode != 'reset' %}active{% endif %}" data-login-tab="password">密码登录</button>
+            <button type="button" class="login-tab {% if login_mode not in ('sms', 'reset', 'first_password') %}active{% endif %}" data-login-tab="password">密码登录</button>
             <button type="button" class="login-tab {% if login_mode == 'sms' %}active{% endif %}" data-login-tab="sms">验证码登录</button>
             <button type="button" class="login-tab {% if login_mode == 'reset' %}active{% endif %}" data-login-tab="reset">找回密码</button>
         </div>
-        <form action="/login_verify" method="post" class="login-panel {% if login_mode != 'sms' and login_mode != 'reset' %}active{% endif %}" data-login-panel="password">
+        <form action="/login_verify" method="post" class="login-panel {% if login_mode not in ('sms', 'reset', 'first_password') %}active{% endif %}" data-login-panel="password">
             <div class="form-group">
                 <label class="form-label">手机号</label>
                 <div class="input-wrap">
@@ -148,6 +151,28 @@
                 </div>
             </div>
             <button type="submit" class="btn-primary"><i class="fa fa-refresh"></i> 重置密码</button>
+        </form>
+        <form action="/login_sms_complete" method="post" class="login-panel {% if login_mode == 'first_password' %}active{% endif %}" data-login-panel="first_password">
+            <div class="setup-note">
+                <strong>手机号验证成功</strong>
+                {{ setup_phone or '当前手机号' }} 首次使用慧鉴 AI，请设置以后可使用的登录密码。
+            </div>
+            <div class="form-group">
+                <label class="form-label">设置密码</label>
+                <div class="input-wrap">
+                    <i class="fa fa-lock"></i>
+                    <input type="password" name="secret" placeholder="至少 8 位，包含字母和数字" autocomplete="new-password" maxlength="128" required>
+                </div>
+            </div>
+            <p class="password-hint">密码至少 8 位，并同时包含字母和数字。</p>
+            <div class="form-group">
+                <label class="form-label">再次输入密码</label>
+                <div class="input-wrap">
+                    <i class="fa fa-lock"></i>
+                    <input type="password" name="secret_confirm" placeholder="请再次输入相同密码" autocomplete="new-password" maxlength="128" required>
+                </div>
+            </div>
+            <button type="submit" class="btn-primary"><i class="fa fa-check"></i> 设置密码并登录</button>
         </form>
         <div class="form-footer">
             还没有账户？<a href="/register">立即注册</a>

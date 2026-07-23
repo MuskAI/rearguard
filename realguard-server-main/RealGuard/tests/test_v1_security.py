@@ -1412,22 +1412,156 @@ def test_login_sms_requires_terms_acceptance(client, monkeypatch):
     assert "用户协议" in response.get_json()["message"]
 
 
-def test_login_sms_unknown_user_is_rejected_without_auto_create(client, monkeypatch):
+def test_login_sms_unknown_user_requires_password_setup_before_authentication(client, monkeypatch):
     monkeypatch.setattr(api, "_verify_sms_code", lambda scene, phone, code: (True, ""))
     monkeypatch.setattr(api, "_find_user_by_phone", lambda phone: None)
-
-    def fake_execute(sql, params=None, fetch=True):
-        raise AssertionError("SMS login must not create users implicitly")
-
-    monkeypatch.setattr(api, "excute_sql", fake_execute)
 
     response = client.post(
         "/api/login/sms",
         json={"phone": "13800000000", "sms_code": "123456", "accepted_terms": True},
     )
 
-    assert response.status_code == 404
-    assert "尚未注册" in response.get_json()["message"]
+    assert response.status_code == 200
+    assert response.get_json()["requiresPasswordSetup"] is True
+    with client.session_transaction() as session:
+        assert "user_info" not in session
+        assert session[login.SMS_PASSWORD_SETUP_SESSION_KEY]["phone"] == "13800000000"
+
+
+def test_login_sms_existing_password_user_logs_in_without_setup(client, monkeypatch):
+    user = {
+        "Userid": 7,
+        "phone": "13800000000",
+        "secret": login._hash_password("Password123"),
+        "username": "tester",
+    }
+    monkeypatch.setattr(api, "_verify_sms_code", lambda scene, phone, code: (True, ""))
+    monkeypatch.setattr(api, "_find_user_by_phone", lambda phone: user)
+    monkeypatch.setattr(api, "_record_terms_acceptance", lambda phone: True)
+    monkeypatch.setattr(api, "_set_session_user", lambda current, phone: {"Userid": current["Userid"]})
+
+    response = client.post(
+        "/api/login/sms",
+        json={"phone": "13800000000", "sms_code": "123456", "accepted_terms": True},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["user"]["Userid"] == 7
+    assert "requiresPasswordSetup" not in response.get_json()
+
+
+def test_first_sms_password_setup_rejects_mismatched_confirmation(client, monkeypatch):
+    monkeypatch.setattr(api, "_verify_sms_code", lambda scene, phone, code: (True, ""))
+    monkeypatch.setattr(api, "_find_user_by_phone", lambda phone: None)
+    started = client.post(
+        "/api/login/sms",
+        json={"phone": "13800000000", "sms_code": "123456", "accepted_terms": True},
+    )
+
+    completed = client.post(
+        "/api/login/sms/complete",
+        json={"secret": "Password123", "secret_confirm": "Password456"},
+    )
+
+    assert started.status_code == 200
+    assert completed.status_code == 400
+    assert "不一致" in completed.get_json()["message"]
+    with client.session_transaction() as session:
+        assert "user_info" not in session
+        assert login.SMS_PASSWORD_SETUP_SESSION_KEY in session
+
+
+def test_first_sms_password_setup_rejects_expired_verification(client):
+    now = int(time.time())
+    with client.session_transaction() as session:
+        session[login.SMS_PASSWORD_SETUP_SESSION_KEY] = {
+            "phone": "13800000000",
+            "user_id": None,
+            "verified_at": now - login.SMS_PASSWORD_SETUP_TTL - 1,
+            "expires_at": now - 1,
+            "terms_version": login.TERMS_VERSION,
+        }
+
+    response = client.post(
+        "/api/login/sms/complete",
+        json={"secret": "Password123", "secret_confirm": "Password123"},
+    )
+
+    assert response.status_code == 400
+    assert "过期" in response.get_json()["message"]
+    with client.session_transaction() as session:
+        assert login.SMS_PASSWORD_SETUP_SESSION_KEY not in session
+
+
+def test_first_sms_password_setup_creates_account_and_logs_in(client, monkeypatch):
+    monkeypatch.setattr(api, "_verify_sms_code", lambda scene, phone, code: (True, ""))
+    monkeypatch.setattr(api, "_find_user_by_phone", lambda phone: None)
+    monkeypatch.setattr(login, "_ensure_user_account_columns", lambda: True)
+    monkeypatch.setattr(login, "_record_terms_acceptance", lambda phone, channel="": True)
+    monkeypatch.setattr(api, "_sync_detection_user", lambda *args, **kwargs: None)
+    state = {"created": False, "secret": ""}
+    created_user = {
+        "Userid": 51,
+        "account_uuid": "11111111-1111-4111-8111-111111111111",
+        "phone": "13800000000",
+        "username": "13800000000",
+        "openid": "",
+        "session_version": 1,
+    }
+
+    def find_user(_phone):
+        return {**created_user, "secret": state["secret"]} if state["created"] else None
+
+    def execute(sql, params=None, fetch=True):
+        normalized = " ".join(sql.split())
+        if normalized.startswith("INSERT INTO user"):
+            state["created"] = True
+            state["secret"] = params[1]
+            return 1
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+    monkeypatch.setattr(login, "_find_user_by_phone", find_user)
+    monkeypatch.setattr(login, "excute_sql", execute)
+
+    started = client.post(
+        "/api/login/sms",
+        json={"phone": "13800000000", "sms_code": "123456", "accepted_terms": True},
+    )
+    completed = client.post(
+        "/api/login/sms/complete",
+        json={"secret": "Password123", "secret_confirm": "Password123"},
+    )
+
+    assert started.get_json()["requiresPasswordSetup"] is True
+    assert completed.status_code == 200
+    assert login._is_password_hash(state["secret"])
+    with client.session_transaction() as session:
+        assert session["user_info"]["Userid"] == 51
+        assert login.SMS_PASSWORD_SETUP_SESSION_KEY not in session
+
+
+def test_register_requires_matching_password_confirmation(client, monkeypatch):
+    monkeypatch.setattr(
+        api,
+        "_verify_sms_code",
+        lambda *args: pytest.fail("mismatched passwords must fail before SMS consumption"),
+    )
+
+    response = client.post(
+        "/api/register",
+        json={
+            "phone": "13800000000",
+            "secret": "Password123",
+            "secret_confirm": "Password456",
+            "username": "tester",
+            "sms_code": "123456",
+            "accepted_terms": True,
+            "terms_version": api.TERMS_VERSION,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "不一致" in response.get_json()["message"]
 
 
 def test_register_requires_terms_acceptance(client, monkeypatch):
@@ -1438,6 +1572,7 @@ def test_register_requires_terms_acceptance(client, monkeypatch):
         json={
             "phone": "13800000000",
             "secret": "Password123",
+            "secret_confirm": "Password123",
             "username": "tester",
             "sms_code": "123456",
             "accepted_terms": False,
@@ -1456,6 +1591,7 @@ def test_register_rejects_stale_legal_document_version(client, monkeypatch):
         json={
             "phone": "13800000000",
             "secret": "Password123",
+            "secret_confirm": "Password123",
             "username": "tester",
             "sms_code": "123456",
             "accepted_terms": True,
@@ -1467,7 +1603,7 @@ def test_register_rejects_stale_legal_document_version(client, monkeypatch):
     assert response.get_json()["code"] == "legal_documents_changed"
 
 
-def test_send_login_code_does_not_enumerate_registered_phone(client, monkeypatch):
+def test_send_login_code_supports_first_use_without_enumerating_phone(client, monkeypatch):
     sent = []
     monkeypatch.setattr(login, "excute_sql", lambda sql, params=None, fetch=True: [])
     monkeypatch.setattr(login, "_reserve_sms_send", lambda scene, phone, client_ip: None)
@@ -1478,7 +1614,7 @@ def test_send_login_code_does_not_enumerate_registered_phone(client, monkeypatch
     assert response.status_code == 200
     assert response.get_json()["success"] is True
     assert "符合当前操作条件" in response.get_json()["message"]
-    assert sent == []
+    assert sent == [("13800000000", "login")]
 
 
 def test_sms_code_locks_after_five_wrong_attempts(sms_database):
@@ -1698,6 +1834,7 @@ def test_register_persists_terms_metadata(client, monkeypatch):
         json={
             "phone": "13800000000",
             "secret": "Password123",
+            "secret_confirm": "Password123",
             "username": "tester",
             "sms_code": "123456",
             "accepted_terms": True,

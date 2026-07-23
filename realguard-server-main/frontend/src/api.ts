@@ -67,13 +67,24 @@ export function loginByPassword(phone: string, secret: string, acceptedTerms: bo
 }
 
 export function loginBySms(phone: string, smsCode: string, acceptedTerms: boolean) {
-  return jsonRequest<{ user: User }>("/api/login/sms", {
+  return jsonRequest<{
+    user?: User;
+    requiresPasswordSetup?: boolean;
+    passwordSetupExpiresIn?: number;
+  }>("/api/login/sms", {
     method: "POST",
     body: JSON.stringify({ phone, sms_code: smsCode, accepted_terms: acceptedTerms })
   });
 }
 
-export function registerUser(payload: { phone: string; secret: string; username: string; sms_code: string; accepted_terms: boolean; terms_version: string }) {
+export function completeSmsPasswordSetup(secret: string, secretConfirm: string) {
+  return jsonRequest<{ user: User; message: string }>("/api/login/sms/complete", {
+    method: "POST",
+    body: JSON.stringify({ secret, secret_confirm: secretConfirm })
+  });
+}
+
+export function registerUser(payload: { phone: string; secret: string; secret_confirm: string; username: string; sms_code: string; accepted_terms: boolean; terms_version: string }) {
   return jsonRequest<{ message: string }>("/api/register", {
     method: "POST",
     body: JSON.stringify(payload)

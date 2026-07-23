@@ -27,9 +27,12 @@ from imagedetection.views import (
 )
 from imagedetection.views.login import (
     PasswordLoginRateLimitError,
+    SMS_PASSWORD_SETUP_TTL,
     SmsStorageError,
     _authenticate_password_user,
+    _begin_sms_password_setup,
     _clear_password_phone_attempts,
+    _complete_sms_password_setup,
     _find_user_by_phone,
     _hash_password,
     _is_valid_phone,
@@ -1971,12 +1974,40 @@ def login_sms():
         return jsonify({"status": "error", "message": message}), 400
 
     user = _find_user_by_phone(phone)
-    if not user:
-        return jsonify({"status": "error", "message": "该手机号尚未注册，请先注册"}), 404
+    if not user or not user.get("secret"):
+        _begin_sms_password_setup(phone, user)
+        return jsonify({
+            "status": "success",
+            "requiresPasswordSetup": True,
+            "message": "手机号验证成功，请设置登录密码",
+            "passwordSetupExpiresIn": SMS_PASSWORD_SETUP_TTL,
+        })
     if not _record_terms_acceptance(phone):
         return jsonify({"status": "error", "message": "协议确认记录失败，请稍后重试"}), 500
 
     return jsonify({"status": "success", "user": _set_session_user(user, phone)})
+
+
+@api_blueprint.route("/login/sms/complete", methods=["POST"])
+def complete_sms_login():
+    payload = request.get_json(silent=True) or request.form
+    secret = str(payload.get("secret") or "").strip()
+    secret_confirm = str(
+        payload.get("secret_confirm") or payload.get("secretConfirm") or ""
+    ).strip()
+    ok, message, user = _complete_sms_password_setup(secret, secret_confirm)
+    if not ok:
+        return jsonify({
+            "status": "error",
+            "code": "password_setup_failed",
+            "message": message,
+        }), 400
+    phone = str(user.get("phone") or "")
+    return jsonify({
+        "status": "success",
+        "message": "密码设置成功",
+        "user": _set_session_user(user, phone),
+    })
 
 
 @api_blueprint.route("/register", methods=["POST"])
@@ -1984,6 +2015,9 @@ def register():
     payload = request.get_json(silent=True) or request.form
     phone = (payload.get("phone") or "").strip()
     secret = (payload.get("secret") or "").strip()
+    secret_confirm = str(
+        payload.get("secret_confirm") or payload.get("secretConfirm") or ""
+    )
     username = (payload.get("username") or "").strip() or phone
     sms_code = (payload.get("sms_code") or "").strip()
     accepted_terms = _truthy(payload.get("accepted_terms") or payload.get("acceptedTerms"))
@@ -1996,6 +2030,10 @@ def register():
     password_error = _password_policy_error(secret)
     if password_error:
         return jsonify({"status": "error", "message": password_error}), 400
+    if not secret_confirm:
+        return jsonify({"status": "error", "message": "请再次输入密码"}), 400
+    if not hmac.compare_digest(secret, secret_confirm):
+        return jsonify({"status": "error", "message": "两次输入的密码不一致"}), 400
     if len(username) > 128:
         return jsonify({"status": "error", "message": "用户名不能超过 128 个字符"}), 400
     if not accepted_terms:

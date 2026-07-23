@@ -85,7 +85,14 @@
                 <label class="form-label">密码</label>
                 <div class="input-wrap">
                     <i class="fa fa-lock"></i>
-                    <input type="password" name="secret" placeholder="至少 8 位，包含字母和数字" required>
+                    <input type="password" name="secret" placeholder="至少 8 位，包含字母和数字" autocomplete="new-password" maxlength="128" required>
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">确认密码</label>
+                <div class="input-wrap">
+                    <i class="fa fa-lock"></i>
+                    <input type="password" name="secret_confirm" placeholder="请再次输入相同密码" autocomplete="new-password" maxlength="128" required>
                 </div>
             </div>
             <div class="form-group">

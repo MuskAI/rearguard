@@ -24,6 +24,7 @@ import {
   getHistory,
   getImageDetectionJob,
   getMe,
+  completeSmsPasswordSetup,
   loginByPassword,
   loginBySms,
   logout,
@@ -46,7 +47,7 @@ import { LEGAL_CONSENT } from "./legalConsent";
 
 type PageKey = "home" | "image" | "video" | "history";
 type Status = { tone: "ok" | "error" | "info"; text: string } | null;
-type AuthMode = "password" | "sms" | "register" | "reset";
+type AuthMode = "password" | "sms" | "register" | "reset" | "setup";
 type HistoryTabKey = "image" | "video";
 type HistorySummaryCard = { label: string; value: number | string; filterKey?: HistoryFilterKey };
 type Lang = "zh" | "en";
@@ -244,16 +245,21 @@ const UI_TEXT = {
       username: "用户名",
       passwordLabel: "密码",
       newPasswordLabel: "新密码",
+      confirmPasswordLabel: "确认密码",
       smsCode: "短信验证码",
       phonePlaceholder: "请输入手机号",
       usernamePlaceholder: "请输入用户名",
       passwordPlaceholder: "请输入密码",
       newPasswordPlaceholder: "至少 8 位，包含字母和数字",
+      confirmPasswordPlaceholder: "请再次输入相同密码",
       smsPlaceholder: "请输入验证码",
       sendCode: "获取验证码",
       sending: "发送中",
       create: "创建账号",
       resetAction: "重置密码",
+      completeSetup: "设置密码并登录",
+      firstPasswordTitle: "手机号验证成功",
+      firstPasswordDesc: "首次使用慧鉴 AI，请设置以后可使用的登录密码。",
       login: "登录",
       forgot: "忘记密码？",
       backLogin: "返回登录",
@@ -448,16 +454,21 @@ const UI_TEXT = {
       username: "Username",
       passwordLabel: "Password",
       newPasswordLabel: "New password",
+      confirmPasswordLabel: "Confirm password",
       smsCode: "SMS code",
       phonePlaceholder: "Enter phone number",
       usernamePlaceholder: "Enter username",
       passwordPlaceholder: "Enter password",
       newPasswordPlaceholder: "At least 8 chars with letters and numbers",
+      confirmPasswordPlaceholder: "Enter the same password again",
       smsPlaceholder: "Enter code",
       sendCode: "Send code",
       sending: "Sending",
       create: "Create account",
       resetAction: "Reset password",
+      completeSetup: "Set password and continue",
+      firstPasswordTitle: "Phone verified",
+      firstPasswordDesc: "Set a password for future sign-ins to Huijian AI.",
       login: "Log in",
       forgot: "Forgot password?",
       backLogin: "Back to login",
@@ -2522,6 +2533,7 @@ function AuthForm({ onAuthed, lang }: { onAuthed: () => Promise<void>; lang: Lan
   const [mode, setMode] = useState<AuthMode>("password");
   const [phone, setPhone] = useState("");
   const [secret, setSecret] = useState("");
+  const [secretConfirm, setSecretConfirm] = useState("");
   const [username, setUsername] = useState("");
   const [smsCode, setSmsCode] = useState("");
   const [acceptedTerms, setAcceptedTerms] = useState(false);
@@ -2544,6 +2556,7 @@ function AuthForm({ onAuthed, lang }: { onAuthed: () => Promise<void>; lang: Lan
     setStatus(null);
     setSmsCode("");
     setSecret("");
+    setSecretConfirm("");
     setCooldown(0);
   }
 
@@ -2594,18 +2607,52 @@ function AuthForm({ onAuthed, lang }: { onAuthed: () => Promise<void>; lang: Lan
     setStatus(null);
     try {
       if (mode === "password") await loginByPassword(phone, secret, acceptedTerms);
-      else if (mode === "sms") await loginBySms(phone, smsCode, acceptedTerms);
+      else if (mode === "sms") {
+        const result = await loginBySms(phone, smsCode, acceptedTerms);
+        if (result.requiresPasswordSetup) {
+          setMode("setup");
+          setSecret("");
+          setSecretConfirm("");
+          setSmsCode("");
+          setStatus(null);
+          return;
+        }
+      } else if (mode === "setup") {
+        const passwordError = passwordPolicyMessage(secret);
+        if (passwordError) {
+          setStatus({ tone: "error", text: passwordError });
+          return;
+        }
+        if (!secretConfirm) {
+          setStatus({ tone: "error", text: tr("请再次输入密码", "Enter the password again") });
+          return;
+        }
+        if (secret !== secretConfirm) {
+          setStatus({ tone: "error", text: tr("两次输入的密码不一致", "The passwords do not match") });
+          return;
+        }
+        await completeSmsPasswordSetup(secret, secretConfirm);
+      }
       else if (mode === "register") {
         const passwordError = passwordPolicyMessage(secret);
         if (passwordError) {
           setStatus({ tone: "error", text: passwordError });
           return;
         }
-        await registerUser({ phone, secret, username, sms_code: smsCode, accepted_terms: acceptedTerms, terms_version: HUIJIAN_TERMS_VERSION });
+        if (!secretConfirm) {
+          setStatus({ tone: "error", text: tr("请再次输入密码", "Enter the password again") });
+          return;
+        }
+        if (secret !== secretConfirm) {
+          setStatus({ tone: "error", text: tr("两次输入的密码不一致", "The passwords do not match") });
+          return;
+        }
+        await registerUser({ phone, secret, secret_confirm: secretConfirm, username, sms_code: smsCode, accepted_terms: acceptedTerms, terms_version: HUIJIAN_TERMS_VERSION });
         setStatus({ tone: "ok", text: tr("注册成功，请切换到登录", "Account created. Switch to log in.") });
         setMode("password");
         setSmsCode("");
         setSecret("");
+        setSecretConfirm("");
         setAcceptedTerms(false);
         return;
       } else {
@@ -2631,27 +2678,28 @@ function AuthForm({ onAuthed, lang }: { onAuthed: () => Promise<void>; lang: Lan
 
   const codeScene: "login" | "register" | "reset" = mode === "register" ? "register" : mode === "reset" ? "reset" : "login";
   const needsSms = mode === "sms" || mode === "register" || mode === "reset";
-  const needsPassword = mode === "password" || mode === "register" || mode === "reset";
-  const passwordLabel = mode === "reset" ? text.newPasswordLabel : text.passwordLabel;
+  const needsPassword = mode === "password" || mode === "register" || mode === "reset" || mode === "setup";
+  const passwordLabel = mode === "reset" || mode === "setup" ? text.newPasswordLabel : text.passwordLabel;
   const passwordPlaceholder = mode === "password" ? text.passwordPlaceholder : text.newPasswordPlaceholder;
-  const submitText = mode === "register" ? text.create : mode === "reset" ? text.resetAction : text.login;
-  const submitIcon: IconfontName = mode === "register" ? "user" : mode === "reset" ? "refresh" : "lock";
-  const requiresTerms = mode !== "reset";
+  const submitText = mode === "register" ? text.create : mode === "reset" ? text.resetAction : mode === "setup" ? text.completeSetup : text.login;
+  const submitIcon: IconfontName = mode === "register" ? "user" : mode === "reset" ? "refresh" : mode === "setup" ? "shield-check" : "lock";
+  const requiresTerms = mode === "password" || mode === "sms" || mode === "register";
 
   return (
     <>
-      <div className="login-tabs" role="tablist" aria-label={tr("登录方式", "Sign-in method")}>
+      {mode !== "setup" && <div className="login-tabs" role="tablist" aria-label={tr("登录方式", "Sign-in method")}>
         <button type="button" role="tab" aria-selected={mode === "password"} className={`login-tab ${mode === "password" ? "active" : ""}`} onClick={() => switchMode("password")}>{text.password}</button>
         <button type="button" role="tab" aria-selected={mode === "sms"} className={`login-tab ${mode === "sms" ? "active" : ""}`} onClick={() => switchMode("sms")}>{text.sms}</button>
-      </div>
-      {(mode === "register" || mode === "reset") && (
+      </div>}
+      {(mode === "register" || mode === "reset" || mode === "setup") && (
         <div className="auth-context-bar">
-          <span>{mode === "register" ? text.register : text.reset}</span>
-          <button type="button" onClick={() => switchMode("password")}>{text.backLogin}</button>
+          <span>{mode === "register" ? text.register : mode === "reset" ? text.reset : text.firstPasswordTitle}</span>
+          <button type="button" onClick={() => switchMode(mode === "setup" ? "sms" : "password")}>{mode === "setup" ? tr("更换手机号", "Use another phone") : text.backLogin}</button>
         </div>
       )}
       <form onSubmit={submit} className="login-panel active">
-        <AuthInput icon="phone" label={text.phone} value={phone} onChange={setPhone} placeholder={text.phonePlaceholder} inputMode="numeric" autoComplete="tel" maxLength={11} />
+        {mode !== "setup" && <AuthInput icon="phone" label={text.phone} value={phone} onChange={setPhone} placeholder={text.phonePlaceholder} inputMode="numeric" autoComplete="tel" maxLength={11} />}
+        {mode === "setup" && <div className="notice info" role="status"><strong>{text.firstPasswordTitle}</strong><br />{phone} · {text.firstPasswordDesc}</div>}
         {mode === "register" && <AuthInput icon="user" label={text.username} value={username} onChange={setUsername} placeholder={text.usernamePlaceholder} autoComplete="name" maxLength={64} />}
         {needsPassword && (
           <>
@@ -2669,7 +2717,19 @@ function AuthForm({ onAuthed, lang }: { onAuthed: () => Promise<void>; lang: Lan
                 </button>
               )}
             />
-            {(mode === "register" || mode === "reset") && <p className="password-hint">{text.passwordHint}</p>}
+            {(mode === "register" || mode === "reset" || mode === "setup") && <p className="password-hint">{text.passwordHint}</p>}
+            {(mode === "register" || mode === "setup") && (
+              <AuthInput
+                icon="lock"
+                label={text.confirmPasswordLabel}
+                value={secretConfirm}
+                onChange={setSecretConfirm}
+                placeholder={text.confirmPasswordPlaceholder}
+                type={showSecret ? "text" : "password"}
+                autoComplete="new-password"
+                maxLength={128}
+              />
+            )}
           </>
         )}
         {needsSms && (
@@ -2705,6 +2765,7 @@ function AuthForm({ onAuthed, lang }: { onAuthed: () => Promise<void>; lang: Lan
           {(mode === "password" || mode === "sms") && <button type="button" onClick={() => switchMode("register")}>{tr("还没有账号？注册", "New here? Create an account")}</button>}
           {(mode === "password" || mode === "sms") && <button type="button" onClick={() => switchMode("reset")}>{text.forgot}</button>}
           {(mode === "register" || mode === "reset") && <button type="button" onClick={() => switchMode("password")}>{text.backLogin}</button>}
+          {mode === "setup" && <button type="button" onClick={() => switchMode("sms")}>{tr("重新验证手机号", "Verify another phone")}</button>}
         </div>
       </form>
     </>
