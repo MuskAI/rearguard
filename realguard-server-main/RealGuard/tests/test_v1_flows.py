@@ -60,6 +60,13 @@ def _heic_bytes():
     return output.getvalue()
 
 
+def _multi_image_mpo_bytes():
+    output = BytesIO()
+    frames = [Image.new("RGB", (12, 8), color) for color in ("navy", "white")]
+    frames[0].save(output, format="MPO", save_all=True, append_images=frames[1:])
+    return output.getvalue()
+
+
 class _FakeResponse:
     def __init__(self, payload):
         self._payload = payload
@@ -1768,6 +1775,23 @@ def test_animated_model_upload_extracts_static_jpeg_without_replacing_source(tmp
 
     assert source.read_bytes() == source_bytes
     assert filename == "live-photo.jpg"
+    assert mimetype == "image/jpeg"
+    with Image.open(BytesIO(model_bytes)) as image:
+        assert image.format == "JPEG"
+        assert getattr(image, "n_frames", 1) == 1
+
+
+def test_mpo_live_photo_upload_extracts_static_jpeg(tmp_path):
+    from imagedetection.image_formats import model_upload_from_path
+
+    source = tmp_path / "IMG_7956.jpeg"
+    source_bytes = _multi_image_mpo_bytes()
+    source.write_bytes(source_bytes)
+
+    filename, model_bytes, mimetype = model_upload_from_path(source)
+
+    assert source.read_bytes() == source_bytes
+    assert filename == "IMG_7956.jpg"
     assert mimetype == "image/jpeg"
     with Image.open(BytesIO(model_bytes)) as image:
         assert image.format == "JPEG"

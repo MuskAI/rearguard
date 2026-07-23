@@ -67,6 +67,13 @@ def _multi_image_heif_bytes():
     return output.getvalue()
 
 
+def _multi_image_mpo_bytes():
+    output = BytesIO()
+    frames = [Image.new("RGB", (12, 8), color) for color in ("navy", "white")]
+    frames[0].save(output, format="MPO", save_all=True, append_images=frames[1:])
+    return output.getvalue()
+
+
 class _BillingStore:
     def __init__(self, free_total=5):
         self.lock = threading.RLock()
@@ -911,6 +918,13 @@ def test_developer_image_validation_accepts_animated_gif():
 
 def test_developer_image_validation_accepts_multi_image_heif():
     dimensions, error = platform._validate_image(_multi_image_heif_bytes())
+
+    assert error is None
+    assert dimensions == {"width": 12, "height": 8}
+
+
+def test_developer_image_validation_accepts_multi_image_mpo():
+    dimensions, error = platform._validate_image(_multi_image_mpo_bytes())
 
     assert error is None
     assert dimensions == {"width": 12, "height": 8}

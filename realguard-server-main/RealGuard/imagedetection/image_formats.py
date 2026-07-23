@@ -48,15 +48,16 @@ def model_upload_from_path(image_path: str | Path) -> tuple[str, bytes, str]:
     """Return a single-frame model upload while leaving the source untouched."""
     path = Path(image_path)
     source_bytes = path.read_bytes()
-    has_multiframe_signature = (
+    has_container_signature = (
         source_bytes[:6] in {b"GIF87a", b"GIF89a"}
         or (source_bytes[:4] == b"RIFF" and source_bytes[8:12] == b"WEBP")
         or source_bytes[:8] == b"\x89PNG\r\n\x1a\n"
+        or source_bytes[:3] == b"\xff\xd8\xff"
     )
     requires_inspection = (
         is_heif_filename(path)
         or is_heif_bytes(source_bytes)
-        or has_multiframe_signature
+        or has_container_signature
     )
     if not requires_inspection:
         return path.name or "image.bin", source_bytes, "application/octet-stream"
