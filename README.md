@@ -686,7 +686,8 @@ WHERE owner_account_uuid IS NULL OR owner_account_uuid = '';
 
 ## 内部测试平台
 
-管理员登录 `/admin` 后可从“内部测试”进入模型测试工作台。该模块只在后台出现，
+管理员登录 `/admin` 后可从“内部测试”进入模型测试工作台，也可直接访问
+`/admin/testing`。该模块只在后台出现，
 普通用户与开发者 API 无法访问。
 
 - 数据集支持直接上传图片，以及从 PDF、DOCX、公网 HTTPS 网页提取图片。

@@ -329,7 +329,7 @@
         <a class="nav-item" href="#system" data-route="system" title="服务健康"><i class="nav-icon fa fa-heartbeat"></i><span class="nav-text">服务健康</span></a>
         {% endif %}
         {% if "testing.view" in admin_permissions %}
-        <a class="nav-item" href="#testing" data-route="testing" title="内部测试平台"><i class="nav-icon fa fa-flask"></i><span class="nav-text">内部测试</span></a>
+        <a class="nav-item" href="/admin/testing" data-route="testing" title="内部测试平台"><i class="nav-icon fa fa-flask"></i><span class="nav-text">内部测试</span></a>
         {% endif %}
         {% if "alerts.manage" in admin_permissions or "audit.view" in admin_permissions %}
         <a class="nav-item" href="#governance" data-route="governance" title="审计告警"><i class="nav-icon fa fa-bell"></i><span class="nav-text">审计告警</span></a>
@@ -709,6 +709,7 @@
     const PERMISSIONS = new Set({{ admin_permissions|tojson }});
     const CAN_MANAGE_ADMINS = {{ can_manage_admins|tojson }};
     const ADMIN_ROLE_LABELS = {{ role_options|default({}, true)|tojson }};
+    const SERVER_INITIAL_ROUTE = {{ initial_admin_route|default('dashboard')|tojson }};
     const titles = {dashboard:'控制台',assurance:'在线保障',models:'模型管理',swarm:'专家会诊模式',system:'服务健康',testing:'内部测试平台',governance:'审计告警',admins:'管理员',users:'用户管理',detections:'检测记录',keys:'访问凭证'};
     const routePermissions = {assurance:'topology.view',models:'topology.view',swarm:'topology.view',system:'topology.view',testing:'testing.view',governance:['alerts.manage','audit.view'],admins:'admin.manage',users:'user.view',detections:'detection.view',keys:'api_key.view'};
     const routeAllowed = (route) => {
@@ -1707,7 +1708,7 @@
       await Promise.allSettled(tasks);
     }
     document.querySelectorAll('[data-route]').forEach(el => el.addEventListener('click', e => { e.preventDefault(); switchRoute(el.dataset.route); }));
-    const initial = (location.hash || '#dashboard').slice(1);
+    const initial = (location.hash || `#${SERVER_INITIAL_ROUTE}`).slice(1);
     const initialRoute = (titles[initial] && routeAllowed(initial)) ? initial : 'dashboard';
     switchRoute(initialRoute); loadAll();
   </script>

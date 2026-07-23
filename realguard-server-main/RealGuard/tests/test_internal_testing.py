@@ -264,3 +264,20 @@ def test_admin_page_contains_internal_testing_workspace(client):
     assert "内部测试平台" in html
     assert 'id="view-testing"' in html
     assert "受控压力测试" in html
+
+
+def test_internal_testing_has_a_cache_busting_direct_entry(client):
+    _login(client, "operator")
+    response = client.get("/admin/testing")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert 'const SERVER_INITIAL_ROUTE = "testing";' in html
+    assert 'href="/admin/testing"' in html
+
+
+def test_internal_testing_direct_entry_requires_admin_login(client):
+    response = client.get("/admin/testing")
+
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/admin/login")

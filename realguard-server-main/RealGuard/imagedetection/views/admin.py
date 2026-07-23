@@ -2456,8 +2456,7 @@ def _service_health():
     }
 
 
-@admin_blueprint.route("/admin")
-def admin_console():
+def _render_admin_console(initial_route="dashboard"):
     active_user, permission_error = _admin_required("view")
     if permission_error:
         if permission_error[1] == 401:
@@ -2477,7 +2476,18 @@ def admin_console():
         role_options=ADMIN_ROLE_LABELS,
         admin_configured=bool(_admin_phone_set() or _admin_user_id_set()),
         admin_account_count=_admin_account_count(),
+        initial_admin_route=initial_route,
     )
+
+
+@admin_blueprint.route("/admin")
+def admin_console():
+    return _render_admin_console("dashboard")
+
+
+@admin_blueprint.route("/admin/testing")
+def admin_testing_console():
+    return _render_admin_console("testing")
 
 
 @admin_blueprint.route("/admin/login", methods=["GET", "POST"])
