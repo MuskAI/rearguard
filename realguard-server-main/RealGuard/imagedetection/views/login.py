@@ -13,7 +13,7 @@ from datetime import datetime
 from urllib.parse import quote
 
 import requests
-from flask import Blueprint, jsonify, has_request_context, render_template, request, session, redirect, url_for
+from flask import Blueprint, current_app, jsonify, has_request_context, render_template, request, session, redirect, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from imagedetection.legal_documents import CONSENT_VERSION, PRIVACY, TERMS
@@ -275,7 +275,35 @@ def _password_matches(stored_secret, candidate):
             return check_password_hash(stored, plain)
         except ValueError:
             return False
+    # Plaintext secrets are accepted only by an explicit non-production
+    # compatibility mode. Production releases run the migration command
+    # before starting the service and fail closed for any leftover row.
+    allow_legacy = os.environ.get("REALGUARD_ALLOW_LEGACY_PLAINTEXT_PASSWORDS", "0").strip().lower()
+    environment = os.environ.get("REALGUARD_ENV", "production").strip().lower()
+    if allow_legacy not in {"1", "true", "yes", "on"} or environment in {"production", "prod", "staging"}:
+        return False
     return hmac.compare_digest(stored, plain)
+
+
+def migrate_plaintext_passwords():
+    """Replace legacy plaintext user secrets without exposing their values."""
+    rows = excute_sql("SELECT Userid, secret FROM user WHERE secret IS NOT NULL AND secret <> ''")
+    if rows is None:
+        raise RuntimeError("failed to read user password records")
+    migrated = 0
+    for row in rows:
+        stored = str(row.get("secret") or "")
+        if not stored or _is_password_hash(stored):
+            continue
+        hashed = _hash_password(stored)
+        changed = excute_sql(
+            "UPDATE user SET secret = %s, password_updated_at = NOW() WHERE Userid = %s AND secret = %s",
+            (hashed, row.get("Userid"), stored),
+            fetch=False,
+        )
+        if changed:
+            migrated += 1
+    return migrated
 
 
 def _find_user_by_phone(phone):
@@ -920,7 +948,17 @@ def _send_sms_code(phone, scene):
     except Exception:
         _delete_sms_challenge(scene, phone)
         raise
-    return code if os.environ.get('SMS_DEBUG_RETURN_CODE') == '1' else None
+    # Never expose an OTP from a production request. Mock OTPs are available
+    # only to Flask's explicit test app or a non-production local environment.
+    debug_otp_allowed = (
+        provider == 'mock'
+        and os.environ.get('SMS_DEBUG_RETURN_CODE') == '1'
+        and (
+            bool(current_app.config.get('TESTING'))
+            or os.environ.get('REALGUARD_ENV', '').strip().lower() in {'development', 'test'}
+        )
+    )
+    return code if debug_otp_allowed else None
 
 
 def _sync_detection_user(phone, username='', openid='', account_uuid=''):

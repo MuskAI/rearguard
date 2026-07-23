@@ -18,16 +18,18 @@ from PIL import Image, UnidentifiedImageError
 from flask import Blueprint, Response, g, has_request_context, jsonify, request
 
 from imagedetection.views import admin_state, reporting
-from imagedetection.views.admin import _admin_required, _audit
+from imagedetection.views.admin import _admin_required
 from imagedetection.views.api import (
+    _append_security_audit,
     _auth_required,
     _developer_key_required,
     _developer_scopes,
     _developer_usage_from_v1,
     _developer_usage_from_v2,
-    _empty_developer_usage,
     _ensure_developer_usage_table,
+    _ensure_security_audit_tables,
     _merge_developer_usage,
+    _retry_pending_privacy_erasures,
     _serve_detection_media_item,
 )
 from imagedetection.views import detection
@@ -157,6 +159,22 @@ WEB_TASK_SPOOL_ROOT = Path(
 ).expanduser()
 if not WEB_TASK_SPOOL_ROOT.is_absolute():
     WEB_TASK_SPOOL_ROOT = Path.cwd() / WEB_TASK_SPOOL_ROOT
+DEVELOPER_FINANCIAL_REAUTH_SECONDS = max(
+    60,
+    min(3600, int(os.environ.get("REALGUARD_FINANCIAL_REAUTH_SECONDS", "900"))),
+)
+DEVELOPER_MAX_UNIT_PRICE_FEN = max(
+    1,
+    int(os.environ.get("REALGUARD_DEVELOPER_MAX_UNIT_PRICE_FEN", "100000")),
+)
+DEVELOPER_MAX_ADMIN_BALANCE_DELTA_FEN = max(
+    1,
+    int(os.environ.get("REALGUARD_DEVELOPER_MAX_ADMIN_BALANCE_DELTA_FEN", "100000000")),
+)
+DEVELOPER_MAX_ADMIN_FREE_DELTA = max(
+    1,
+    int(os.environ.get("REALGUARD_DEVELOPER_MAX_ADMIN_FREE_DELTA", "10000000")),
+)
 
 _PLATFORM_TABLES_READY = False
 _PLATFORM_TABLES_LOCK = threading.Lock()
@@ -201,6 +219,112 @@ def _error(message, status_code, code):
     })
     response.headers["X-Request-Id"] = request_id
     return response, status_code
+
+
+def _financial_admin_required(permission):
+    admin_user, auth_error = _admin_required(permission)
+    if auth_error:
+        return None, auth_error
+    try:
+        admin_id = int((admin_user or {}).get("adminId") or 0)
+        issued_at = int((admin_user or {}).get("issuedAt") or 0)
+    except (TypeError, ValueError):
+        admin_id = 0
+        issued_at = 0
+    now = int(time.time())
+    if admin_id <= 0 or (admin_user or {}).get("authType") != "admin_account":
+        return None, (
+            jsonify({
+                "status": "error",
+                "code": "named_admin_required",
+                "message": "财务操作必须使用实名后台管理员账号",
+            }),
+            403,
+        )
+    if issued_at <= 0 or issued_at > now + 60 or now - issued_at > DEVELOPER_FINANCIAL_REAUTH_SECONDS:
+        return None, (
+            jsonify({
+                "status": "error",
+                "code": "reauthentication_required",
+                "message": "财务操作需要重新登录后台确认身份",
+            }),
+            428,
+        )
+    return admin_user, None
+
+
+def _insert_transactional_admin_audit(cursor, actor, action, target, *, before=None, after=None, meta=None):
+    actor = actor or {}
+    actor_id = actor.get("Userid") or (
+        f"admin:{actor.get('adminId')}" if actor.get("adminId") is not None else ""
+    )
+    cursor.execute(
+        """
+        INSERT INTO admin_audit_logs
+            (actor_id, actor_username, actor_phone, action, target,
+             before_json, after_json, meta_json)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            str(actor_id)[:64],
+            str(actor.get("username") or "")[:64],
+            str(actor.get("phone") or "")[:20],
+            str(action or "")[:96],
+            str(target or "")[:191],
+            json.dumps(before, ensure_ascii=False, default=str) if before is not None else None,
+            json.dumps(after, ensure_ascii=False, default=str) if after is not None else None,
+            json.dumps(meta or {}, ensure_ascii=False, default=str),
+        ),
+    )
+    _append_security_audit(
+        cursor,
+        "admin",
+        actor.get("adminId") or actor_id,
+        action,
+        target,
+        {
+            "before": before,
+            "after": after,
+            **(meta or {}),
+        },
+    )
+
+
+def _store_admin_operation_result(cursor, operation_id, payload, status_code=200):
+    cursor.execute(
+        """
+        INSERT INTO developer_admin_operation_results
+            (operation_id, status_code, response_json)
+        VALUES (%s, %s, %s)
+        """,
+        (
+            operation_id,
+            int(status_code),
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str),
+        ),
+    )
+
+
+def _admin_operation_replay(operation_id):
+    rows = excute_sql(
+        """
+        SELECT status_code, response_json
+        FROM developer_admin_operation_results
+        WHERE operation_id = %s
+        LIMIT 1
+        """,
+        (operation_id,),
+    )
+    if not rows:
+        return None
+    try:
+        payload = json.loads(rows[0].get("response_json") or "")
+        if not isinstance(payload, dict):
+            return None
+        payload["idempotentReplay"] = True
+        return payload, int(rows[0].get("status_code") or 200)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
 
 
 def _openapi_key_required():
@@ -265,6 +389,16 @@ def _ensure_spool_root():
     os.chmod(DEVELOPER_SPOOL_ROOT, 0o700)
 
 
+def _validate_private_spool_stat(file_stat, label):
+    if (
+        not stat.S_ISREG(file_stat.st_mode)
+        or file_stat.st_nlink != 1
+        or file_stat.st_uid != os.geteuid()
+        or stat.S_IMODE(file_stat.st_mode) != 0o600
+    ):
+        raise TaskSpoolError(f"{label} has unsafe ownership or permissions")
+
+
 def _write_task_spool(task_id, image_bytes):
     """Atomically persist an upload before its database row becomes runnable."""
     _ensure_spool_root()
@@ -325,8 +459,7 @@ def _read_task_spool(row):
         raise TaskSpoolError(f"task spool file is unavailable: {exc}") from exc
     try:
         file_stat = os.fstat(fd)
-        if not stat.S_ISREG(file_stat.st_mode):
-            raise TaskSpoolError("task spool file is not regular")
+        _validate_private_spool_stat(file_stat, "task spool file")
         if file_stat.st_size != expected_size:
             raise TaskSpoolError("task spool size verification failed")
         chunks = []
@@ -481,7 +614,8 @@ def _read_web_task_spool(row):
         raise TaskSpoolError(f"Web task spool file is unavailable: {exc}") from exc
     try:
         file_stat = os.fstat(fd)
-        if not stat.S_ISREG(file_stat.st_mode) or file_stat.st_size != expected_size:
+        _validate_private_spool_stat(file_stat, "Web task spool file")
+        if file_stat.st_size != expected_size:
             raise TaskSpoolError("Web task spool verification failed")
         chunks = []
         remaining = expected_size + 1
@@ -860,7 +994,15 @@ def _ensure_developer_platform_tables():
               balance_reserved_fen BIGINT NOT NULL DEFAULT 0,
               created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
               updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-              PRIMARY KEY (user_id)
+              PRIMARY KEY (user_id),
+              CONSTRAINT chk_developer_accounts_nonnegative CHECK (
+                free_total >= 0 AND free_used >= 0 AND free_reserved >= 0
+                AND balance_fen >= 0 AND balance_reserved_fen >= 0
+              ),
+              CONSTRAINT chk_developer_accounts_reservations CHECK (
+                free_used + free_reserved <= free_total
+                AND balance_reserved_fen <= balance_fen
+              )
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
             """
@@ -870,7 +1012,10 @@ def _ensure_developer_platform_tables():
               unit_price_fen INT NOT NULL DEFAULT 0,
               enabled TINYINT(1) NOT NULL DEFAULT 0,
               updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-              PRIMARY KEY (mode)
+              PRIMARY KEY (mode),
+              CONSTRAINT chk_developer_pricing_values CHECK (
+                mode IN ('fast', 'swarm') AND unit_price_fen >= 0 AND enabled IN (0, 1)
+              )
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
             """
@@ -969,7 +1114,14 @@ def _ensure_developer_platform_tables():
               released_at DATETIME NULL,
               PRIMARY KEY (task_id),
               KEY idx_developer_reservations_user_created (user_id, created_at),
-              KEY idx_developer_reservations_status (status, created_at)
+              KEY idx_developer_reservations_status (status, created_at),
+              CONSTRAINT chk_developer_reservation_values CHECK (
+                mode IN ('fast', 'swarm')
+                AND source IN ('free', 'balance')
+                AND status IN ('reserved', 'settled', 'released')
+                AND amount_fen >= 0
+                AND (source <> 'free' OR amount_fen = 0)
+              )
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
             """
@@ -978,17 +1130,30 @@ def _ensure_developer_platform_tables():
               user_id INT NOT NULL,
               key_id BIGINT NULL,
               task_id VARCHAR(64) NULL,
+              operation_id VARCHAR(128) NULL,
+              business_reference VARCHAR(191) NOT NULL,
+              currency CHAR(3) NOT NULL DEFAULT 'CNY',
+              reversal_of_id BIGINT NULL,
               entry_type VARCHAR(32) NOT NULL,
               mode VARCHAR(16) NULL,
               free_calls_delta INT NOT NULL DEFAULT 0,
+              free_calls_after INT NULL,
               balance_delta_fen BIGINT NOT NULL DEFAULT 0,
               amount_fen INT NOT NULL DEFAULT 0,
               balance_after_fen BIGINT NOT NULL DEFAULT 0,
               note VARCHAR(500) NULL,
               created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
               PRIMARY KEY (id),
+              UNIQUE KEY uk_developer_ledger_business_reference (business_reference),
               KEY idx_developer_ledger_user_created (user_id, created_at),
-              KEY idx_developer_ledger_task (task_id)
+              KEY idx_developer_ledger_task (task_id),
+              KEY idx_developer_ledger_operation (operation_id),
+              KEY idx_developer_ledger_reversal (reversal_of_id),
+              CONSTRAINT chk_developer_ledger_values CHECK (
+                amount_fen >= 0 AND balance_after_fen >= 0
+                AND (free_calls_after IS NULL OR free_calls_after >= 0)
+                AND currency = 'CNY'
+              )
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
             """
@@ -1002,13 +1167,51 @@ def _ensure_developer_platform_tables():
               KEY idx_developer_admin_operations_user_created (user_id, created_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
+            """
+            CREATE TABLE IF NOT EXISTS developer_admin_operation_results (
+              operation_id VARCHAR(128) NOT NULL,
+              status_code INT NOT NULL DEFAULT 200,
+              response_json MEDIUMTEXT NOT NULL,
+              created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+              PRIMARY KEY (operation_id),
+              CONSTRAINT fk_developer_admin_operation_results_operation
+                FOREIGN KEY (operation_id) REFERENCES developer_admin_operations(operation_id)
+                ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS admin_audit_logs (
+              id BIGINT NOT NULL AUTO_INCREMENT,
+              created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              actor_id VARCHAR(64) NULL,
+              actor_username VARCHAR(64) NULL,
+              actor_phone VARCHAR(20) NULL,
+              action VARCHAR(96) NOT NULL,
+              target VARCHAR(191) NOT NULL,
+              before_json LONGTEXT NULL,
+              after_json LONGTEXT NULL,
+              meta_json LONGTEXT NULL,
+              PRIMARY KEY (id),
+              KEY idx_admin_audit_created (created_at),
+              KEY idx_admin_audit_action (action),
+              KEY idx_admin_audit_target (target)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """,
         )
         for statement in statements:
             if excute_sql(statement, fetch=False) is None:
                 return False
         if not _ensure_developer_usage_table():
             return False
+        if not _ensure_security_audit_tables():
+            return False
         if not _ensure_task_lease_schema():
+            return False
+        if not _ensure_billing_ledger_schema():
+            return False
+        if not _ensure_billing_constraints():
+            return False
+        if not _ensure_all_account_ledger_openings():
             return False
         defaults = (
             ("fast", "快速检测", DEVELOPER_FAST_PRICE_FEN, int(DEVELOPER_FAST_BILLING_ENABLED)),
@@ -1155,16 +1358,44 @@ def _ensure_task_lease_schema():
                 ORDER BY SEQ_IN_INDEX
                 """
             )
+            desired_idempotency_columns = ["account_uuid", "idempotency_key"]
             idempotency_columns = [str(row.get("COLUMN_NAME") or "") for row in cursor.fetchall()]
-            if idempotency_columns != ["account_uuid", "idempotency_key"]:
+            if idempotency_columns != desired_idempotency_columns:
+                replacement_index = "uk_developer_task_account_idempotency_v2"
+                cursor.execute(
+                    """
+                    SELECT COLUMN_NAME
+                    FROM INFORMATION_SCHEMA.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'developer_detection_tasks'
+                      AND INDEX_NAME = %s
+                    ORDER BY SEQ_IN_INDEX
+                    """,
+                    (replacement_index,),
+                )
+                replacement_columns = [
+                    str(row.get("COLUMN_NAME") or "") for row in cursor.fetchall()
+                ]
+                if replacement_columns and replacement_columns != desired_idempotency_columns:
+                    raise RuntimeError("temporary developer task idempotency index has an unexpected definition")
+                if not replacement_columns:
+                    # Build the stricter replacement while the old uniqueness
+                    # guard is still active. Duplicate data therefore aborts
+                    # safely without leaving task submission unprotected.
+                    cursor.execute(
+                        f"""
+                        ALTER TABLE developer_detection_tasks
+                        ADD UNIQUE INDEX {replacement_index} (account_uuid, idempotency_key)
+                        """
+                    )
                 if idempotency_columns:
                     cursor.execute(
                         "ALTER TABLE developer_detection_tasks DROP INDEX uk_developer_task_idempotency"
                     )
                 cursor.execute(
-                    """
+                    f"""
                     ALTER TABLE developer_detection_tasks
-                    ADD UNIQUE INDEX uk_developer_task_idempotency (account_uuid, idempotency_key)
+                    RENAME INDEX {replacement_index} TO uk_developer_task_idempotency
                     """
                 )
 
@@ -1305,14 +1536,347 @@ def _ensure_task_lease_schema():
             conn.close()
 
 
+def _ensure_billing_ledger_schema():
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT COLUMN_NAME, IS_NULLABLE
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'developer_billing_ledger'
+                """
+            )
+            column_rows = cursor.fetchall()
+            columns = {
+                str(row.get("COLUMN_NAME") or "").lower(): row for row in column_rows
+            }
+            additions = (
+                ("operation_id", "VARCHAR(128) NULL AFTER task_id"),
+                ("business_reference", "VARCHAR(191) NULL AFTER operation_id"),
+                ("currency", "CHAR(3) NOT NULL DEFAULT 'CNY' AFTER business_reference"),
+                ("reversal_of_id", "BIGINT NULL AFTER currency"),
+                ("free_calls_after", "INT NULL AFTER free_calls_delta"),
+            )
+            for column, definition in additions:
+                if column not in columns:
+                    cursor.execute(
+                        f"ALTER TABLE developer_billing_ledger ADD COLUMN {column} {definition}"
+                    )
+            cursor.execute(
+                """
+                UPDATE developer_billing_ledger
+                SET business_reference = CONCAT('legacy-ledger:', id)
+                WHERE business_reference IS NULL OR business_reference = ''
+                """
+            )
+            cursor.execute(
+                """
+                SELECT COUNT(*) AS invalid_count
+                FROM developer_billing_ledger
+                WHERE business_reference IS NULL OR business_reference = '' OR currency <> 'CNY'
+                """
+            )
+            if int((cursor.fetchone() or {}).get("invalid_count") or 0):
+                raise RuntimeError("billing ledger contains rows without a valid business reference")
+            business_reference_row = columns.get("business_reference")
+            if (
+                business_reference_row is None
+                or str(business_reference_row.get("IS_NULLABLE") or "").upper() != "NO"
+            ):
+                cursor.execute(
+                    """
+                    ALTER TABLE developer_billing_ledger
+                    MODIFY COLUMN business_reference VARCHAR(191) NOT NULL
+                    """
+                )
+
+            indexes = (
+                ("uk_developer_ledger_business_reference", "UNIQUE", "business_reference"),
+                ("idx_developer_ledger_operation", "", "operation_id"),
+                ("idx_developer_ledger_reversal", "", "reversal_of_id"),
+            )
+            for index_name, uniqueness, column in indexes:
+                cursor.execute(
+                    """
+                    SELECT INDEX_NAME
+                    FROM INFORMATION_SCHEMA.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'developer_billing_ledger'
+                      AND INDEX_NAME = %s
+                    LIMIT 1
+                    """,
+                    (index_name,),
+                )
+                if cursor.fetchone():
+                    continue
+                cursor.execute(
+                    f"ALTER TABLE developer_billing_ledger ADD {uniqueness} INDEX {index_name} ({column})"
+                )
+        conn.commit()
+        return True
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        print(f"[DEVELOPER BILLING SCHEMA ERROR] ledger migration failed: {exc}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+
+def _ensure_account_ledger_openings(user_id=None):
+    """Backfill one auditable opening entry so ledger deltas reconstruct balances."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        conn.begin()
+        with conn.cursor() as cursor:
+            if user_id is None:
+                cursor.execute("SELECT user_id FROM developer_accounts ORDER BY user_id FOR UPDATE")
+                cursor.fetchall()
+                where = ""
+                params = ()
+            else:
+                cursor.execute(
+                    "SELECT user_id FROM developer_accounts WHERE user_id = %s FOR UPDATE",
+                    (int(user_id),),
+                )
+                if not cursor.fetchone():
+                    raise RuntimeError("developer account is missing while creating its opening ledger entry")
+                where = "WHERE a.user_id = %s"
+                params = (int(user_id),)
+            cursor.execute(
+                f"""
+                SELECT COUNT(*) AS invalid_count
+                FROM (
+                    SELECT a.user_id,
+                           a.free_total - a.free_used - COALESCE(SUM(l.free_calls_delta), 0) AS opening_free,
+                           a.balance_fen - COALESCE(SUM(l.balance_delta_fen), 0) AS opening_balance
+                    FROM developer_accounts a
+                    LEFT JOIN developer_billing_ledger l ON l.user_id = a.user_id
+                    {where}
+                    GROUP BY a.user_id, a.free_total, a.free_used, a.balance_fen
+                    HAVING opening_free < 0 OR opening_balance < 0
+                ) invalid_openings
+                """,
+                params,
+            )
+            if int((cursor.fetchone() or {}).get("invalid_count") or 0):
+                raise RuntimeError("existing ledger deltas cannot be reconciled to a nonnegative opening balance")
+            cursor.execute(
+                f"""
+                INSERT IGNORE INTO developer_billing_ledger
+                    (user_id, business_reference, currency, entry_type,
+                     free_calls_delta, free_calls_after, balance_delta_fen,
+                     amount_fen, balance_after_fen, note, created_at)
+                SELECT a.user_id,
+                       CONCAT('opening:user:', a.user_id),
+                       'CNY',
+                       'opening_balance',
+                       a.free_total - a.free_used - COALESCE(SUM(l.free_calls_delta), 0),
+                       a.free_total - a.free_used - COALESCE(SUM(l.free_calls_delta), 0),
+                       a.balance_fen - COALESCE(SUM(l.balance_delta_fen), 0),
+                       0,
+                       a.balance_fen - COALESCE(SUM(l.balance_delta_fen), 0),
+                       '账本期初余额',
+                       a.created_at
+                FROM developer_accounts a
+                LEFT JOIN developer_billing_ledger l ON l.user_id = a.user_id
+                {where}
+                GROUP BY a.user_id, a.free_total, a.free_used, a.balance_fen, a.created_at
+                HAVING COALESCE(SUM(
+                    l.business_reference = CONCAT('opening:user:', a.user_id)
+                ), 0) = 0
+                """,
+                params,
+            )
+            cursor.execute(
+                f"""
+                SELECT COUNT(*) AS missing_count
+                FROM developer_accounts a
+                LEFT JOIN developer_billing_ledger l
+                  ON l.user_id = a.user_id
+                 AND l.business_reference = CONCAT('opening:user:', a.user_id)
+                {where}
+                AND l.id IS NULL
+                """ if where else """
+                SELECT COUNT(*) AS missing_count
+                FROM developer_accounts a
+                LEFT JOIN developer_billing_ledger l
+                  ON l.user_id = a.user_id
+                 AND l.business_reference = CONCAT('opening:user:', a.user_id)
+                WHERE l.id IS NULL
+                """,
+                params,
+            )
+            if int((cursor.fetchone() or {}).get("missing_count") or 0):
+                raise RuntimeError("one or more developer accounts have no opening ledger entry")
+        conn.commit()
+        return True
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        print(f"[DEVELOPER BILLING SCHEMA ERROR] opening ledger migration failed: {exc}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+
+def _ensure_all_account_ledger_openings():
+    return _ensure_account_ledger_openings()
+
+
+def _ensure_billing_constraints():
+    """Add financial invariants after validating existing production rows."""
+    specifications = (
+        (
+            "developer_accounts",
+            "chk_developer_accounts_nonnegative",
+            "free_total >= 0 AND free_used >= 0 AND free_reserved >= 0 "
+            "AND balance_fen >= 0 AND balance_reserved_fen >= 0",
+            "free_total < 0 OR free_used < 0 OR free_reserved < 0 "
+            "OR balance_fen < 0 OR balance_reserved_fen < 0",
+        ),
+        (
+            "developer_accounts",
+            "chk_developer_accounts_reservations",
+            "free_used + free_reserved <= free_total AND balance_reserved_fen <= balance_fen",
+            "free_used + free_reserved > free_total OR balance_reserved_fen > balance_fen",
+        ),
+        (
+            "developer_pricing",
+            "chk_developer_pricing_values",
+            "mode IN ('fast', 'swarm') AND unit_price_fen >= 0 AND enabled IN (0, 1)",
+            "mode NOT IN ('fast', 'swarm') OR unit_price_fen < 0 OR enabled NOT IN (0, 1)",
+        ),
+        (
+            "developer_billing_reservations",
+            "chk_developer_reservation_values",
+            "mode IN ('fast', 'swarm') AND source IN ('free', 'balance') "
+            "AND status IN ('reserved', 'settled', 'released') AND amount_fen >= 0 "
+            "AND (source <> 'free' OR amount_fen = 0)",
+            "mode NOT IN ('fast', 'swarm') OR source NOT IN ('free', 'balance') "
+            "OR status NOT IN ('reserved', 'settled', 'released') OR amount_fen < 0 "
+            "OR (source = 'free' AND amount_fen <> 0)",
+        ),
+        (
+            "developer_billing_ledger",
+            "chk_developer_ledger_values",
+            "amount_fen >= 0 AND balance_after_fen >= 0 "
+            "AND (free_calls_after IS NULL OR free_calls_after >= 0) AND currency = 'CNY'",
+            "amount_fen < 0 OR balance_after_fen < 0 "
+            "OR (free_calls_after IS NOT NULL AND free_calls_after < 0) OR currency <> 'CNY'",
+        ),
+    )
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            for table, constraint, expression, invalid_expression in specifications:
+                cursor.execute(
+                    """
+                    SELECT CONSTRAINT_NAME
+                    FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = %s
+                      AND CONSTRAINT_NAME = %s
+                      AND CONSTRAINT_TYPE = 'CHECK'
+                    LIMIT 1
+                    """,
+                    (table, constraint),
+                )
+                if cursor.fetchone():
+                    continue
+                cursor.execute(
+                    f"SELECT COUNT(*) AS invalid_count FROM `{table}` WHERE {invalid_expression}"
+                )
+                invalid_count = int((cursor.fetchone() or {}).get("invalid_count") or 0)
+                if invalid_count:
+                    raise RuntimeError(
+                        f"cannot add {constraint}: {invalid_count} existing row(s) violate the invariant"
+                    )
+                try:
+                    cursor.execute(
+                        f"ALTER TABLE `{table}` ADD CONSTRAINT `{constraint}` CHECK ({expression})"
+                    )
+                except Exception:
+                    # A concurrent release may have installed the same named
+                    # constraint. Re-read metadata before deciding it failed.
+                    cursor.execute(
+                        """
+                        SELECT CONSTRAINT_NAME
+                        FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS
+                        WHERE TABLE_SCHEMA = DATABASE()
+                          AND TABLE_NAME = %s
+                          AND CONSTRAINT_NAME = %s
+                          AND CONSTRAINT_TYPE = 'CHECK'
+                        LIMIT 1
+                        """,
+                        (table, constraint),
+                    )
+                    if not cursor.fetchone():
+                        raise
+        conn.commit()
+        return True
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        print(f"[DEVELOPER BILLING SCHEMA ERROR] constraint migration failed: {exc}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+
 def _ensure_developer_account(user_id):
     if not _ensure_developer_platform_tables():
         return False
-    return excute_sql(
+    inserted = excute_sql(
         "INSERT IGNORE INTO developer_accounts (user_id, free_total) VALUES (%s, %s)",
         (user_id, DEVELOPER_FREE_CALLS),
         fetch=False,
-    ) is not None
+    )
+    if inserted is None:
+        return False
+    opening = excute_sql(
+        """
+        SELECT id FROM developer_billing_ledger
+        WHERE user_id = %s AND business_reference = %s
+        LIMIT 1
+        """,
+        (user_id, f"opening:user:{int(user_id)}"),
+    )
+    if opening is None:
+        return False
+    if not opening and not _ensure_account_ledger_openings(user_id):
+        return False
+    reconciliation = excute_sql(
+        """
+        SELECT a.free_total - a.free_used AS account_free_calls,
+               a.balance_fen AS account_balance_fen,
+               COALESCE(SUM(l.free_calls_delta), 0) AS ledger_free_calls,
+               COALESCE(SUM(l.balance_delta_fen), 0) AS ledger_balance_fen
+        FROM developer_accounts a
+        LEFT JOIN developer_billing_ledger l ON l.user_id = a.user_id
+        WHERE a.user_id = %s
+        GROUP BY a.user_id, a.free_total, a.free_used, a.balance_fen
+        """,
+        (user_id,),
+    )
+    if not reconciliation:
+        return False
+    row = reconciliation[0]
+    matches = (
+        int(row.get("account_free_calls") or 0) == int(row.get("ledger_free_calls") or 0)
+        and int(row.get("account_balance_fen") or 0) == int(row.get("ledger_balance_fen") or 0)
+    )
+    if not matches:
+        print(f"[DEVELOPER BILLING INVARIANT] account {int(user_id)} does not reconcile to its ledger")
+    return matches
 
 
 def _pricing_rows():
@@ -1505,14 +2069,18 @@ def _settle_billing(task_id):
             user_id = reservation["user_id"]
             amount_fen = int(reservation.get("amount_fen") or 0)
             cursor.execute(
-                "SELECT balance_fen FROM developer_accounts WHERE user_id = %s FOR UPDATE",
+                """
+                SELECT free_total, free_used, balance_fen
+                FROM developer_accounts WHERE user_id = %s FOR UPDATE
+                """,
                 (user_id,),
             )
-            account = cursor.fetchone() or {"balance_fen": 0}
+            account = cursor.fetchone() or {"free_total": 0, "free_used": 0, "balance_fen": 0}
             cursor.execute(
                 """
                 SELECT user_id, key_id, mode, status,
-                       prompt_tokens, completion_tokens, total_tokens
+                       prompt_tokens, completion_tokens, total_tokens,
+                       task_id, daily_quota_reserved, daily_quota_day
                 FROM developer_detection_tasks
                 WHERE task_id = %s
                 FOR UPDATE
@@ -1532,6 +2100,7 @@ def _settle_billing(task_id):
                     code="billing_invariant_failed",
                     status_code=503,
                 )
+            _consume_task_daily_quota_in_cursor(cursor, usage)
             if reservation.get("source") not in {"free", "balance"}:
                 raise BillingError(
                     "结算来源无效",
@@ -1555,6 +2124,12 @@ def _settle_billing(task_id):
                     )
                 entry_type = "detection_free"
                 free_delta = -1
+                free_after = max(
+                    0,
+                    int(account.get("free_total") or 0)
+                    - int(account.get("free_used") or 0)
+                    - 1,
+                )
                 balance_delta = 0
                 balance_after = int(account.get("balance_fen") or 0)
             else:
@@ -1577,6 +2152,11 @@ def _settle_billing(task_id):
                     )
                 entry_type = "detection_charge"
                 free_delta = 0
+                free_after = max(
+                    0,
+                    int(account.get("free_total") or 0)
+                    - int(account.get("free_used") or 0),
+                )
                 balance_delta = -amount_fen
                 balance_after = int(account.get("balance_fen") or 0) - amount_fen
             cursor.execute(
@@ -1596,17 +2176,20 @@ def _settle_billing(task_id):
             cursor.execute(
                 """
                 INSERT INTO developer_billing_ledger
-                    (user_id, key_id, task_id, entry_type, mode, free_calls_delta,
+                    (user_id, key_id, task_id, business_reference, currency,
+                     entry_type, mode, free_calls_delta, free_calls_after,
                      balance_delta_fen, amount_fen, balance_after_fen, note)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, 'CNY', %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     user_id,
                     reservation.get("key_id"),
                     task_id,
+                    f"settlement:{task_id}",
                     entry_type,
                     reservation.get("mode"),
                     free_delta,
+                    free_after,
                     balance_delta,
                     amount_fen,
                     balance_after,
@@ -1772,14 +2355,16 @@ def _release_billing(
                     cursor.execute(
                         """
                         INSERT INTO developer_billing_ledger
-                            (user_id, key_id, task_id, entry_type, mode, free_calls_delta,
+                            (user_id, key_id, task_id, business_reference, currency,
+                             entry_type, mode, free_calls_delta,
                              balance_delta_fen, amount_fen, balance_after_fen, note)
-                        VALUES (%s, %s, %s, %s, %s, 0, 0, 0, %s, %s)
+                        VALUES (%s, %s, %s, %s, 'CNY', %s, %s, 0, 0, 0, %s, %s)
                         """,
                         (
                             reservation["user_id"],
                             reservation.get("key_id"),
                             task_id,
+                            f"review-only:{task_id}",
                             str(audit_entry_type)[:64],
                             reservation.get("mode"),
                             int(account.get("balance_fen") or 0),
@@ -1913,13 +2498,29 @@ def _reverse_settled_review_only(task_id):
             )
             cursor.execute(
                 """
+                SELECT id
+                FROM developer_billing_ledger
+                WHERE task_id = %s AND entry_type IN ('detection_free', 'detection_charge')
+                ORDER BY id ASC
+                LIMIT 1
+                """,
+                (task_id,),
+            )
+            original_ledger = cursor.fetchone()
+            if not original_ledger:
+                raise BillingError("冲正缺少原始账本记录", code="billing_invariant_failed")
+            cursor.execute(
+                """
                 INSERT INTO developer_billing_ledger
-                    (user_id, key_id, task_id, entry_type, mode, free_calls_delta,
-                     balance_delta_fen, amount_fen, balance_after_fen, note)
-                VALUES (%s, %s, %s, 'detection_review_only_reversal', %s, %s, %s, %s, %s, %s)
+                    (user_id, key_id, task_id, business_reference, currency, reversal_of_id,
+                     entry_type, mode, free_calls_delta, balance_delta_fen,
+                     amount_fen, balance_after_fen, note)
+                VALUES (%s, %s, %s, %s, 'CNY', %s,
+                        'detection_review_only_reversal', %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     reservation["user_id"], reservation.get("key_id"), task_id,
+                    f"review-reversal:{task_id}", original_ledger.get("id"),
                     reservation.get("mode"), free_delta, balance_delta, amount_fen,
                     balance_after, "旧版任务缺少可验证决策授权，自动冲正",
                 ),
@@ -2139,6 +2740,7 @@ def _fail_task_and_release(
     require_expired=False,
     require_exhausted=False,
     require_stale_preparing=False,
+    require_rejected=False,
 ):
     """Atomically terminalize an active task and release its billing reservation."""
     if require_expired:
@@ -2156,6 +2758,12 @@ def _fail_task_and_release(
             " AND updated_at <= DATE_SUB(NOW(6), INTERVAL %s SECOND)"
         )
         lease_params = (DEVELOPER_TASK_PREPARING_TIMEOUT_SECONDS,)
+    elif require_rejected:
+        lease_condition = (
+            " AND status = 'rejected'"
+            " AND updated_at <= DATE_SUB(NOW(6), INTERVAL 60 SECOND)"
+        )
+        lease_params = ()
     elif lease_owner:
         lease_condition = (
             " AND status = 'running'"
@@ -2259,10 +2867,11 @@ def _fail_task_and_release(
 
             _release_task_daily_quota_in_cursor(cursor, task)
 
+            terminal_status_sql = "'rejected'" if require_rejected else "'failed'"
             cursor.execute(
                 f"""
                 UPDATE developer_detection_tasks
-                SET status = 'failed', error_message = %s, completed_at = NOW(),
+                SET status = {terminal_status_sql}, error_message = %s, completed_at = NOW(),
                     lease_owner = NULL, lease_expires_at = NULL
                 WHERE task_id = %s
                   {lease_condition}
@@ -2522,6 +3131,9 @@ def _reconcile_expired_tasks(limit=None):
                   ) OR (
                     status = 'preparing'
                     AND updated_at <= DATE_SUB(NOW(6), INTERVAL %s SECOND)
+                  ) OR (
+                    status = 'rejected'
+                    AND updated_at <= DATE_SUB(NOW(6), INTERVAL 60 SECOND)
                   )
                 ORDER BY updated_at ASC
                 LIMIT %s
@@ -2633,6 +3245,15 @@ def _reconcile_expired_tasks(limit=None):
                     task_id,
                     "任务已达到最大重试次数，系统已释放预留额度",
                     require_exhausted=True,
+                )
+            elif status == "rejected":
+                # A connection can be lost after the reservation commit but
+                # before the client receives the response. Reconcile this
+                # terminal marker without charging the account permanently.
+                changed = _fail_task_and_release(
+                    task_id,
+                    "已拒绝任务的额度预留已完成释放",
+                    require_rejected=True,
                 )
             else:
                 changed = _expire_task_lease(task_id)
@@ -2778,7 +3399,7 @@ def _public_result_payload(payload, mode):
         explicit_status = result.get("decisionStatus")
         explicit_billable = result.get("billable")
         review_only = not (
-            explicit_status == "verdict" and explicit_billable is not False
+            explicit_status == "verdict" and explicit_billable is True
         )
         decision_status = "review_only" if review_only else "verdict"
         result["decisionStatus"] = decision_status
@@ -4091,6 +4712,7 @@ def _run_worker_maintenance():
     web_cleaned = _cleanup_terminal_web_spools()
     web_orphans = _cleanup_orphan_web_spool_files()
     guest_usage_cleaned = _cleanup_expired_guest_usage()
+    privacy_erasure = _retry_pending_privacy_erasures()
     return {
         "recovered": recovered,
         "cleaned": cleaned,
@@ -4099,6 +4721,7 @@ def _run_worker_maintenance():
         "web_cleaned": web_cleaned,
         "web_orphans": web_orphans,
         "guest_usage_cleaned": guest_usage_cleaned,
+        "privacy_erasure": privacy_erasure,
     }
 
 
@@ -4457,6 +5080,9 @@ def get_image_detection(task_id):
     row = _task_row_for_user(task_id, actor["user_id"], actor.get("account_uuid"))
     if not row:
         return _error("任务不存在", 404, "task_not_found")
+    scope_error = _require_scope(actor, f"image:{row.get('mode') or 'fast'}")
+    if scope_error:
+        return scope_error
     if row.get("status") == "success":
         settlement_error = _task_settlement_error(task_id, row)
         if settlement_error:
@@ -4490,6 +5116,9 @@ def get_image_detection_report(task_id):
     row = _task_row_for_user(task_id, actor["user_id"], actor.get("account_uuid"))
     if not row:
         return _error("任务不存在", 404, "task_not_found")
+    mode_scope_error = _require_scope(actor, f"image:{row.get('mode') or 'fast'}")
+    if mode_scope_error:
+        return mode_scope_error
     if row.get("status") != "success" or not row.get("result_item_id"):
         return _error("任务尚未成功完成", 409, "task_not_complete")
     settlement_error = _task_settlement_error(task_id, row)
@@ -4533,12 +5162,13 @@ def get_image_detection_media(task_id):
 def _developer_usage(user_id, days):
     try:
         v1_usage = _developer_usage_from_v1(user_id, days)
-    except Exception:
-        v1_usage = _empty_developer_usage(days)
-    try:
         v2_usage = _developer_usage_from_v2(user_id, days)
-    except Exception:
-        v2_usage = _empty_developer_usage(days)
+    except Exception as exc:
+        raise BillingError(
+            "用量统计暂不可用，请稍后重试",
+            code="usage_storage_unavailable",
+            status_code=503,
+        ) from exc
     return _merge_developer_usage(v1_usage, v2_usage, days)
 
 
@@ -4552,7 +5182,13 @@ def _mode_summary(user_id, days):
         GROUP BY mode
         """,
         (user_id, since.strftime("%Y-%m-%d 00:00:00")),
-    ) or []
+    )
+    if rows is None:
+        raise BillingError(
+            "模式用量统计暂不可用，请稍后重试",
+            code="usage_storage_unavailable",
+            status_code=503,
+        )
     values = {"fast": {"calls": 0, "spendFen": 0}, "swarm": {"calls": 0, "spendFen": 0}}
     for row in rows:
         if row.get("mode") in values:
@@ -4574,7 +5210,13 @@ def _recent_tasks(user_id, account_uuid, limit=8):
         LIMIT %s
         """,
         (user_id, account_uuid, max(1, min(int(limit), 50))),
-    ) or []
+    )
+    if rows is None:
+        raise BillingError(
+            "近期任务暂不可用，请稍后重试",
+            code="usage_storage_unavailable",
+            status_code=503,
+        )
     return [_task_payload(row) for row in rows]
 
 
@@ -4592,16 +5234,18 @@ def developer_account():
     try:
         account = _account_payload(_account_row(user["Userid"]))
         pricing = _pricing_payload()
+        usage = _developer_usage(user["Userid"], days)
+        mode_summary = _mode_summary(user["Userid"], days)
+        recent_tasks = _recent_tasks(user["Userid"], user.get("account_uuid"))
     except BillingError as exc:
-        return jsonify({"status": "error", "message": str(exc)}), exc.status_code
-    usage = _developer_usage(user["Userid"], days)
+        return _error(str(exc), exc.status_code, exc.code)
     return jsonify({
         "status": "success",
         "account": account,
         "pricing": pricing,
-        "modeSummary": _mode_summary(user["Userid"], days),
+        "modeSummary": mode_summary,
         "usage": usage,
-        "recentTasks": _recent_tasks(user["Userid"], user.get("account_uuid")),
+        "recentTasks": recent_tasks,
     })
 
 
@@ -4618,15 +5262,18 @@ def developer_ledger():
         return jsonify({"status": "error", "message": "limit 必须是整数"}), 400
     rows = excute_sql(
         """
-        SELECT id, key_id, task_id, entry_type, mode, free_calls_delta,
+        SELECT id, key_id, task_id, operation_id, business_reference, currency,
+               reversal_of_id, entry_type, mode, free_calls_delta, free_calls_after,
                balance_delta_fen, amount_fen, balance_after_fen, note, created_at
         FROM developer_billing_ledger
         WHERE user_id = %s
-        ORDER BY id DESC
+        ORDER BY created_at DESC, id DESC
         LIMIT %s
         """,
         (user["Userid"], limit),
-    ) or []
+    )
+    if rows is None:
+        return _error("账本读取失败，请稍后重试", 503, "ledger_storage_unavailable")
     return jsonify({
         "status": "success",
         "entries": [
@@ -4634,9 +5281,18 @@ def developer_ledger():
                 "id": row.get("id"),
                 "keyId": row.get("key_id"),
                 "taskId": row.get("task_id"),
+                "operationId": row.get("operation_id"),
+                "businessReference": row.get("business_reference"),
+                "currency": row.get("currency") or "CNY",
+                "reversalOfId": row.get("reversal_of_id"),
                 "type": row.get("entry_type"),
                 "mode": row.get("mode"),
                 "freeCallsDelta": int(row.get("free_calls_delta") or 0),
+                "freeCallsAfter": (
+                    int(row.get("free_calls_after"))
+                    if row.get("free_calls_after") is not None
+                    else None
+                ),
                 "balanceDeltaFen": int(row.get("balance_delta_fen") or 0),
                 "amountFen": int(row.get("amount_fen") or 0),
                 "balanceAfterFen": int(row.get("balance_after_fen") or 0),
@@ -4713,6 +5369,213 @@ def _openapi_document():
     }
 
 
+def _strict_optional_quota_limit(payload, field, maximum):
+    if field not in payload:
+        raise BillingError(f"{field} 不能为空", code="invalid_quota", status_code=400)
+    value = payload.get(field)
+    if value is None:
+        return None
+    if type(value) is not int:
+        raise BillingError(f"{field} 必须是整数或 null", code="invalid_quota", status_code=400)
+    if value < 0 or value > maximum:
+        raise BillingError(
+            f"{field} 必须在 0 到 {maximum} 之间或设为 null",
+            code="invalid_quota",
+            status_code=400,
+        )
+    return value
+
+
+def admin_update_request_quota(key_id):
+    """CAS-update account request limits with idempotent, chained auditing."""
+    admin_user, auth_error = _financial_admin_required("quota.manage")
+    if auth_error:
+        return auth_error
+    if not _ensure_developer_platform_tables() or not admin_state.ensure_api_key_quota_storage():
+        return _error("API 配额存储初始化失败", 503, "quota_storage_unavailable")
+
+    payload = request.get_json(silent=True) or {}
+    try:
+        daily_limit = _strict_optional_quota_limit(payload, "dailyLimit", 10_000_000)
+        rate_limit = _strict_optional_quota_limit(payload, "rateLimitPerMinute", 100_000)
+        expected_daily = _strict_optional_quota_limit(payload, "expectedDailyLimit", 10_000_000)
+        expected_rate = _strict_optional_quota_limit(
+            payload, "expectedRateLimitPerMinute", 100_000
+        )
+    except BillingError as exc:
+        return _error(str(exc), exc.status_code, exc.code)
+
+    operation_id = str(
+        payload.get("operationId") or request.headers.get("Idempotency-Key") or ""
+    ).strip()
+    if not (
+        8 <= len(operation_id) <= 128
+        and all(char.isalnum() or char in "-_.:" for char in operation_id)
+    ):
+        return _error("operationId 必须是 8 到 128 位安全字符", 400, "invalid_operation_id")
+    note = str(payload.get("note") or "管理员调整 API 请求配额").strip()[:500]
+    request_fingerprint = hashlib.sha256(
+        json.dumps(
+            {
+                "keyId": int(key_id),
+                "dailyLimit": daily_limit,
+                "rateLimitPerMinute": rate_limit,
+                "expectedDailyLimit": expected_daily,
+                "expectedRateLimitPerMinute": expected_rate,
+                "note": note,
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+    conn = get_db_connection()
+    account_user_id = 0
+    try:
+        conn.begin()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT user_id FROM developer_api_keys WHERE id = %s LIMIT 1",
+                (key_id,),
+            )
+            owner = cursor.fetchone()
+            if not owner:
+                raise BillingError("API Key 不存在", code="api_key_not_found", status_code=404)
+            account_user_id = int(owner.get("user_id") or 0)
+            cursor.execute(
+                "SELECT Userid FROM `user` WHERE Userid = %s FOR UPDATE",
+                (account_user_id,),
+            )
+            if not cursor.fetchone():
+                raise BillingError("开发者账号不存在", code="account_not_found", status_code=404)
+            cursor.execute(
+                "SELECT id, user_id FROM developer_api_keys WHERE id = %s AND user_id = %s FOR UPDATE",
+                (key_id, account_user_id),
+            )
+            if not cursor.fetchone():
+                raise BillingError("API Key 不存在", code="api_key_not_found", status_code=404)
+            cursor.execute(
+                """
+                INSERT INTO developer_admin_operations
+                    (operation_id, operation_type, user_id, request_sha256)
+                VALUES (%s, 'request_quota_update', %s, %s)
+                """,
+                (operation_id, account_user_id, request_fingerprint),
+            )
+            cursor.execute(
+                """
+                SELECT daily_limit, rate_limit_per_minute, scopes, notes
+                FROM developer_api_account_quotas
+                WHERE user_id = %s
+                FOR UPDATE
+                """,
+                (account_user_id,),
+            )
+            current = cursor.fetchone() or {}
+            before = {
+                "dailyLimit": current.get("daily_limit"),
+                "rateLimitPerMinute": current.get("rate_limit_per_minute"),
+                "scopes": str(current.get("scopes") or ""),
+                "notes": str(current.get("notes") or ""),
+            }
+            if (
+                before["dailyLimit"] != expected_daily
+                or before["rateLimitPerMinute"] != expected_rate
+            ):
+                raise BillingError(
+                    "API 配额已被其他管理员更新，请刷新后重试",
+                    code="quota_conflict",
+                    status_code=409,
+                )
+            after = {
+                "dailyLimit": daily_limit,
+                "rateLimitPerMinute": rate_limit,
+                "scopes": before["scopes"],
+                "notes": note,
+            }
+            cursor.execute(
+                """
+                INSERT INTO developer_api_account_quotas
+                    (user_id, daily_limit, rate_limit_per_minute, scopes, notes)
+                VALUES (%s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    daily_limit = VALUES(daily_limit),
+                    rate_limit_per_minute = VALUES(rate_limit_per_minute),
+                    scopes = VALUES(scopes),
+                    notes = VALUES(notes)
+                """,
+                (
+                    account_user_id,
+                    daily_limit,
+                    rate_limit,
+                    after["scopes"],
+                    after["notes"],
+                ),
+            )
+            _insert_transactional_admin_audit(
+                cursor,
+                admin_user,
+                "developer.request_quota.update",
+                str(account_user_id),
+                before=before,
+                after=after,
+                meta={"keyId": key_id, "operationId": operation_id},
+            )
+            response_payload = {
+                "status": "success",
+                "quota": after,
+                "scope": "account",
+                "userId": account_user_id,
+                "keyId": key_id,
+                "operationId": operation_id,
+                "idempotentReplay": False,
+            }
+            _store_admin_operation_result(cursor, operation_id, response_payload)
+        conn.commit()
+    except pymysql.err.IntegrityError as exc:
+        conn.rollback()
+        if int(exc.args[0] or 0) != 1062:
+            print(f"[DEVELOPER FINANCIAL ERROR] request quota integrity failure: {exc}")
+            return _error("API 配额更新失败，请稍后重试", 500, "financial_operation_failed")
+        operations = excute_sql(
+            """
+            SELECT operation_type, user_id, request_sha256
+            FROM developer_admin_operations WHERE operation_id = %s LIMIT 1
+            """,
+            (operation_id,),
+        )
+        if not operations:
+            return _error("幂等操作状态读取失败", 503, "operation_state_unavailable")
+        operation = operations[0]
+        if (
+            str(operation.get("operation_type") or "") != "request_quota_update"
+            or int(operation.get("user_id") or 0) != account_user_id
+            or str(operation.get("request_sha256") or "") != request_fingerprint
+        ):
+            return _error("operationId 已被其他操作使用", 409, "operation_id_conflict")
+        replay = _admin_operation_replay(operation_id)
+        if replay is None:
+            return _error(
+                "幂等操作已完成，但首次响应快照不可用，请联系管理员核对审计记录",
+                503,
+                "operation_result_unavailable",
+            )
+        replay_payload, replay_status = replay
+        replay_response = jsonify(replay_payload)
+        return replay_response if replay_status == 200 else (replay_response, replay_status)
+    except BillingError as exc:
+        conn.rollback()
+        return _error(str(exc), exc.status_code, exc.code)
+    except Exception as exc:
+        conn.rollback()
+        print(f"[DEVELOPER FINANCIAL ERROR] request quota update failed: {exc}")
+        return _error("API 配额更新失败，请稍后重试", 500, "financial_operation_failed")
+    finally:
+        conn.close()
+    return jsonify(response_payload)
+
+
 @developer_platform_blueprint.get("/openapi.json")
 def developer_openapi_document():
     _, auth_error = _auth_required()
@@ -4723,7 +5586,7 @@ def developer_openapi_document():
 
 @developer_admin_blueprint.get("/pricing")
 def admin_developer_pricing():
-    _, auth_error = _admin_required("view")
+    _, auth_error = _admin_required("billing.view")
     if auth_error:
         return auth_error
     if not _ensure_developer_platform_tables():
@@ -4733,7 +5596,7 @@ def admin_developer_pricing():
 
 @developer_admin_blueprint.post("/pricing")
 def admin_update_developer_pricing():
-    admin_user, auth_error = _admin_required("api_key.manage")
+    admin_user, auth_error = _financial_admin_required("billing.pricing")
     if auth_error:
         return auth_error
     if not _ensure_developer_platform_tables():
@@ -4742,39 +5605,179 @@ def admin_update_developer_pricing():
     mode = str(payload.get("mode") or "").strip().lower()
     if mode not in {"fast", "swarm"}:
         return jsonify({"status": "error", "message": "mode 仅支持 fast 或 swarm"}), 400
-    try:
-        price_fen = max(0, int(payload.get("unitPriceFen", 0)))
-    except (TypeError, ValueError):
+    raw_price_fen = payload.get("unitPriceFen", 0)
+    if type(raw_price_fen) is not int:
         return jsonify({"status": "error", "message": "unitPriceFen 必须是整数"}), 400
-    enabled = bool(payload.get("enabled"))
+    price_fen = raw_price_fen
+    if price_fen < 0 or price_fen > DEVELOPER_MAX_UNIT_PRICE_FEN:
+        return jsonify({
+            "status": "error",
+            "message": f"unitPriceFen 必须在 0 到 {DEVELOPER_MAX_UNIT_PRICE_FEN} 之间",
+        }), 400
+    if not isinstance(payload.get("enabled"), bool):
+        return jsonify({"status": "error", "message": "enabled 必须是布尔值"}), 400
+    enabled = payload["enabled"]
     if enabled and price_fen <= 0:
         return jsonify({"status": "error", "message": "启用付费计价时，单价必须大于 0 分"}), 400
-    before = next((row for row in _pricing_payload() if row["mode"] == mode), None)
-    updated = excute_sql(
-        "UPDATE developer_pricing SET unit_price_fen = %s, enabled = %s WHERE mode = %s",
-        (price_fen, int(enabled), mode),
-        fetch=False,
-    )
-    if updated is None:
-        return jsonify({"status": "error", "message": "计费配置更新失败"}), 500
-    after = next((row for row in _pricing_payload() if row["mode"] == mode), None)
-    _audit(admin_user, "developer.pricing.update", mode, before=before, after=after)
-    return jsonify({"status": "success", "pricing": after})
+    raw_expected_price_fen = payload.get("expectedUnitPriceFen")
+    if type(raw_expected_price_fen) is not int:
+        return jsonify({"status": "error", "message": "expectedUnitPriceFen 必须是整数"}), 400
+    expected_price_fen = raw_expected_price_fen
+    if not isinstance(payload.get("expectedEnabled"), bool):
+        return jsonify({"status": "error", "message": "expectedEnabled 必须是布尔值"}), 400
+    expected_enabled = payload["expectedEnabled"]
+    operation_id = str(
+        payload.get("operationId") or request.headers.get("Idempotency-Key") or ""
+    ).strip()
+    if not (
+        8 <= len(operation_id) <= 128
+        and all(char.isalnum() or char in "-_.:" for char in operation_id)
+    ):
+        return jsonify({"status": "error", "message": "operationId 必须是 8 到 128 位安全字符"}), 400
+    request_fingerprint = hashlib.sha256(
+        json.dumps(
+            {
+                "mode": mode,
+                "unitPriceFen": price_fen,
+                "enabled": enabled,
+                "expectedUnitPriceFen": expected_price_fen,
+                "expectedEnabled": expected_enabled,
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    conn = get_db_connection()
+    try:
+        conn.begin()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO developer_admin_operations
+                    (operation_id, operation_type, user_id, request_sha256)
+                VALUES (%s, 'pricing_update', 0, %s)
+                """,
+                (operation_id, request_fingerprint),
+            )
+            cursor.execute(
+                """
+                SELECT mode, display_name, unit_price_fen, enabled, updated_at
+                FROM developer_pricing WHERE mode = %s FOR UPDATE
+                """,
+                (mode,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                raise BillingError("计费配置不存在", code="pricing_not_found", status_code=404)
+            before = _pricing_payload([row])[0]
+            if (
+                before["unitPriceFen"] != expected_price_fen
+                or before["enabled"] is not expected_enabled
+            ):
+                raise BillingError(
+                    "计费配置已被其他管理员更新，请刷新后重试",
+                    code="pricing_conflict",
+                    status_code=409,
+                )
+            cursor.execute(
+                "UPDATE developer_pricing SET unit_price_fen = %s, enabled = %s WHERE mode = %s",
+                (price_fen, int(enabled), mode),
+            )
+            cursor.execute(
+                """
+                SELECT mode, display_name, unit_price_fen, enabled, updated_at
+                FROM developer_pricing WHERE mode = %s
+                """,
+                (mode,),
+            )
+            after = _pricing_payload([cursor.fetchone()])[0]
+            _insert_transactional_admin_audit(
+                cursor,
+                admin_user,
+                "developer.pricing.update",
+                mode,
+                before=before,
+                after=after,
+                meta={"operationId": operation_id},
+            )
+            response_payload = {
+                "status": "success",
+                "pricing": after,
+                "operationId": operation_id,
+                "idempotentReplay": False,
+            }
+            _store_admin_operation_result(cursor, operation_id, response_payload)
+        conn.commit()
+    except pymysql.err.IntegrityError as exc:
+        conn.rollback()
+        if int(exc.args[0] or 0) != 1062:
+            print(f"[DEVELOPER FINANCIAL ERROR] pricing integrity failure: {exc}")
+            return jsonify({
+                "status": "error",
+                "code": "financial_operation_failed",
+                "message": "计费配置更新失败，请稍后重试",
+            }), 500
+        operations = excute_sql(
+            """
+            SELECT operation_type, user_id, request_sha256
+            FROM developer_admin_operations WHERE operation_id = %s LIMIT 1
+            """,
+            (operation_id,),
+        )
+        if not operations:
+            return jsonify({"status": "error", "message": "幂等操作状态读取失败"}), 503
+        operation = operations[0]
+        if (
+            str(operation.get("operation_type") or "") != "pricing_update"
+            or int(operation.get("user_id") or 0) != 0
+            or str(operation.get("request_sha256") or "") != request_fingerprint
+        ):
+            return jsonify({"status": "error", "message": "operationId 已被其他操作使用"}), 409
+        replay = _admin_operation_replay(operation_id)
+        if replay is None:
+            return jsonify({
+                "status": "error",
+                "code": "operation_result_unavailable",
+                "message": "幂等操作已完成，但首次响应快照不可用，请联系管理员核对审计记录",
+            }), 503
+        replay_payload, replay_status = replay
+        replay_response = jsonify(replay_payload)
+        return replay_response if replay_status == 200 else (replay_response, replay_status)
+    except BillingError as exc:
+        conn.rollback()
+        return jsonify({"status": "error", "code": exc.code, "message": str(exc)}), exc.status_code
+    except Exception as exc:
+        conn.rollback()
+        print(f"[DEVELOPER FINANCIAL ERROR] pricing update failed: {exc}")
+        return jsonify({
+            "status": "error",
+            "code": "financial_operation_failed",
+            "message": "计费配置更新失败，请稍后重试",
+        }), 500
+    finally:
+        conn.close()
+    return jsonify(response_payload)
 
 
 @developer_admin_blueprint.post("/accounts/<int:user_id>/adjust")
 def admin_adjust_developer_account(user_id):
-    admin_user, auth_error = _admin_required("api_key.manage")
+    admin_user, auth_error = _financial_admin_required("billing.adjust")
     if auth_error:
         return auth_error
     payload = request.get_json(silent=True) or {}
-    try:
-        balance_delta = int(payload.get("balanceDeltaFen") or 0)
-        free_delta = int(payload.get("freeTotalDelta") or 0)
-    except (TypeError, ValueError):
+    raw_balance_delta = payload.get("balanceDeltaFen", 0)
+    raw_free_delta = payload.get("freeTotalDelta", 0)
+    if type(raw_balance_delta) is not int or type(raw_free_delta) is not int:
         return jsonify({"status": "error", "message": "调整值必须是整数"}), 400
+    balance_delta = raw_balance_delta
+    free_delta = raw_free_delta
     if balance_delta == 0 and free_delta == 0:
         return jsonify({"status": "error", "message": "至少提供一项非零调整"}), 400
+    if abs(balance_delta) > DEVELOPER_MAX_ADMIN_BALANCE_DELTA_FEN:
+        return jsonify({"status": "error", "message": "余额调整值超过单次允许范围"}), 400
+    if abs(free_delta) > DEVELOPER_MAX_ADMIN_FREE_DELTA:
+        return jsonify({"status": "error", "message": "赠送额度调整值超过单次允许范围"}), 400
     operation_id = str(
         payload.get("operationId") or request.headers.get("Idempotency-Key") or ""
     ).strip()
@@ -4804,7 +5807,6 @@ def admin_adjust_developer_account(user_id):
     ).hexdigest()
     if not _ensure_developer_account(user_id):
         return jsonify({"status": "error", "message": "开发者账户初始化失败"}), 503
-    before = _account_payload(_account_row(user_id))
     conn = get_db_connection()
     try:
         conn.begin()
@@ -4819,12 +5821,16 @@ def admin_adjust_developer_account(user_id):
             )
             cursor.execute(
                 """
-                SELECT free_total, free_used, free_reserved, balance_fen, balance_reserved_fen
+                SELECT user_id, status, free_total, free_used, free_reserved,
+                       balance_fen, balance_reserved_fen, created_at, updated_at
                 FROM developer_accounts WHERE user_id = %s FOR UPDATE
                 """,
                 (user_id,),
             )
             account = cursor.fetchone()
+            if not account:
+                raise BillingError("开发者账户读取失败")
+            before = _account_payload(account)
             next_free_total = int(account.get("free_total") or 0) + free_delta
             next_balance = int(account.get("balance_fen") or 0) + balance_delta
             if next_free_total < int(account.get("free_used") or 0) + int(account.get("free_reserved") or 0):
@@ -4838,17 +5844,52 @@ def admin_adjust_developer_account(user_id):
             cursor.execute(
                 """
                 INSERT INTO developer_billing_ledger
-                    (user_id, entry_type, free_calls_delta, balance_delta_fen,
+                    (user_id, operation_id, business_reference, currency, entry_type,
+                     free_calls_delta, free_calls_after, balance_delta_fen,
                      amount_fen, balance_after_fen, note)
-                VALUES (%s, 'admin_adjustment', %s, %s, 0, %s, %s)
+                VALUES (%s, %s, %s, 'CNY', 'admin_adjustment', %s, %s, %s, 0, %s, %s)
                 """,
-                (user_id, free_delta, balance_delta, next_balance, note),
+                (
+                    user_id,
+                    operation_id,
+                    f"admin-adjustment:{operation_id}",
+                    free_delta,
+                    next_free_total - int(account.get("free_used") or 0),
+                    balance_delta,
+                    next_balance,
+                    note,
+                ),
             )
+            after_row = dict(account)
+            after_row["free_total"] = next_free_total
+            after_row["balance_fen"] = next_balance
+            after = _account_payload(after_row)
+            _insert_transactional_admin_audit(
+                cursor,
+                admin_user,
+                "developer.account.adjust",
+                str(user_id),
+                before=before,
+                after=after,
+                meta={"note": note, "operationId": operation_id},
+            )
+            response_payload = {
+                "status": "success",
+                "account": after,
+                "operationId": operation_id,
+                "idempotentReplay": False,
+            }
+            _store_admin_operation_result(cursor, operation_id, response_payload)
         conn.commit()
     except pymysql.err.IntegrityError as exc:
         conn.rollback()
         if int(exc.args[0] or 0) != 1062:
-            return jsonify({"status": "error", "message": f"账户调整失败: {exc}"}), 500
+            print(f"[DEVELOPER FINANCIAL ERROR] account adjustment integrity failure: {exc}")
+            return jsonify({
+                "status": "error",
+                "code": "financial_operation_failed",
+                "message": "账户调整失败，请稍后重试",
+            }), 500
         operations = excute_sql(
             """
             SELECT operation_type, user_id, request_sha256
@@ -4865,45 +5906,35 @@ def admin_adjust_developer_account(user_id):
             or str(operation.get("request_sha256") or "") != request_fingerprint
         ):
             return jsonify({"status": "error", "message": "operationId 已被其他操作使用"}), 409
-        replay_account = _account_payload(_account_row(user_id))
-        return jsonify(
-            {
-                "status": "success",
-                "account": replay_account,
-                "operationId": operation_id,
-                "idempotentReplay": True,
-            }
-        )
+        replay = _admin_operation_replay(operation_id)
+        if replay is None:
+            return jsonify({
+                "status": "error",
+                "code": "operation_result_unavailable",
+                "message": "幂等操作已完成，但首次响应快照不可用，请联系管理员核对审计记录",
+            }), 503
+        replay_payload, replay_status = replay
+        replay_response = jsonify(replay_payload)
+        return replay_response if replay_status == 200 else (replay_response, replay_status)
     except BillingError as exc:
         conn.rollback()
         return jsonify({"status": "error", "message": str(exc)}), exc.status_code
     except Exception as exc:
         conn.rollback()
-        return jsonify({"status": "error", "message": f"账户调整失败: {exc}"}), 500
+        print(f"[DEVELOPER FINANCIAL ERROR] account adjustment failed: {exc}")
+        return jsonify({
+            "status": "error",
+            "code": "financial_operation_failed",
+            "message": "账户调整失败，请稍后重试",
+        }), 500
     finally:
         conn.close()
-    after = _account_payload(_account_row(user_id))
-    _audit(
-        admin_user,
-        "developer.account.adjust",
-        str(user_id),
-        before=before,
-        after=after,
-        meta={"note": note, "operationId": operation_id},
-    )
-    return jsonify(
-        {
-            "status": "success",
-            "account": after,
-            "operationId": operation_id,
-            "idempotentReplay": False,
-        }
-    )
+    return jsonify(response_payload)
 
 
 @developer_admin_blueprint.get("/accounts/<int:user_id>")
 def admin_developer_account(user_id):
-    _, auth_error = _admin_required("api_key.view")
+    _, auth_error = _admin_required("billing.view")
     if auth_error:
         return auth_error
     users = excute_sql("SELECT Userid FROM user WHERE Userid = %s LIMIT 1", (user_id,))
@@ -4920,14 +5951,14 @@ def admin_developer_account(user_id):
 
 @developer_admin_blueprint.route("/accounts/<int:user_id>/quota", methods=["PATCH", "POST"])
 def admin_set_developer_quota(user_id):
-    admin_user, auth_error = _admin_required("api_key.manage")
+    admin_user, auth_error = _financial_admin_required("billing.adjust")
     if auth_error:
         return auth_error
     payload = request.get_json(silent=True) or {}
-    try:
-        remaining_calls = int(payload.get("remainingCalls"))
-    except (TypeError, ValueError):
+    raw_remaining_calls = payload.get("remainingCalls")
+    if type(raw_remaining_calls) is not int:
         return jsonify({"status": "error", "message": "remainingCalls 必须是整数"}), 400
+    remaining_calls = raw_remaining_calls
     if remaining_calls < 0 or remaining_calls > 10_000_000:
         return jsonify({"status": "error", "message": "remainingCalls 必须在 0 到 10000000 之间"}), 400
     operation_id = str(
@@ -5000,20 +6031,50 @@ def admin_set_developer_quota(user_id):
                 cursor.execute(
                     """
                     INSERT INTO developer_billing_ledger
-                        (user_id, entry_type, free_calls_delta, balance_delta_fen,
+                        (user_id, operation_id, business_reference, currency, entry_type,
+                         free_calls_delta, free_calls_after, balance_delta_fen,
                          amount_fen, balance_after_fen, note)
-                    VALUES (%s, 'admin_quota_set', %s, 0, 0, %s, %s)
+                    VALUES (%s, %s, %s, 'CNY', 'admin_quota_set', %s, %s, 0, 0, %s, %s)
                     """,
-                    (user_id, free_delta, int(account.get("balance_fen") or 0), note),
+                    (
+                        user_id,
+                        operation_id,
+                        f"admin-quota:{operation_id}",
+                        free_delta,
+                        next_free_total - int(account.get("free_used") or 0),
+                        int(account.get("balance_fen") or 0),
+                        note,
+                    ),
                 )
             after_row = dict(account)
             after_row["free_total"] = next_free_total
             after = _account_payload(after_row)
+            _insert_transactional_admin_audit(
+                cursor,
+                admin_user,
+                "developer.account.quota.set",
+                str(user_id),
+                before=before,
+                after=after,
+                meta={"note": note, "operationId": operation_id},
+            )
+            response_payload = {
+                "status": "success",
+                "account": after,
+                "operationId": operation_id,
+                "idempotentReplay": False,
+            }
+            _store_admin_operation_result(cursor, operation_id, response_payload)
         conn.commit()
     except pymysql.err.IntegrityError as exc:
         conn.rollback()
         if int(exc.args[0] or 0) != 1062:
-            return jsonify({"status": "error", "message": f"调用次数设置失败: {exc}"}), 500
+            print(f"[DEVELOPER FINANCIAL ERROR] quota update integrity failure: {exc}")
+            return jsonify({
+                "status": "error",
+                "code": "financial_operation_failed",
+                "message": "调用次数设置失败，请稍后重试",
+            }), 500
         operations = excute_sql(
             """
             SELECT operation_type, user_id, request_sha256
@@ -5030,37 +6091,27 @@ def admin_set_developer_quota(user_id):
             or str(operation.get("request_sha256") or "") != request_fingerprint
         ):
             return jsonify({"status": "error", "message": "operationId 已被其他操作使用"}), 409
-        replay_account = _account_payload(_account_row(user_id))
-        return jsonify(
-            {
-                "status": "success",
-                "account": replay_account,
-                "operationId": operation_id,
-                "idempotentReplay": True,
-            }
-        )
+        replay = _admin_operation_replay(operation_id)
+        if replay is None:
+            return jsonify({
+                "status": "error",
+                "code": "operation_result_unavailable",
+                "message": "幂等操作已完成，但首次响应快照不可用，请联系管理员核对审计记录",
+            }), 503
+        replay_payload, replay_status = replay
+        replay_response = jsonify(replay_payload)
+        return replay_response if replay_status == 200 else (replay_response, replay_status)
     except BillingError as exc:
         conn.rollback()
         return jsonify({"status": "error", "message": str(exc)}), exc.status_code
     except Exception as exc:
         conn.rollback()
-        return jsonify({"status": "error", "message": f"调用次数设置失败: {exc}"}), 500
+        print(f"[DEVELOPER FINANCIAL ERROR] quota update failed: {exc}")
+        return jsonify({
+            "status": "error",
+            "code": "financial_operation_failed",
+            "message": "调用次数设置失败，请稍后重试",
+        }), 500
     finally:
         conn.close()
-
-    _audit(
-        admin_user,
-        "developer.account.quota.set",
-        str(user_id),
-        before=before,
-        after=after,
-        meta={"note": note, "operationId": operation_id or None},
-    )
-    return jsonify(
-        {
-            "status": "success",
-            "account": after,
-            "operationId": operation_id or None,
-            "idempotentReplay": False,
-        }
-    )
+    return jsonify(response_payload)

@@ -109,8 +109,8 @@ def test_c2pa_decide_verdict_signature_failure_dominates():
         validation_issues=["签名校验失败: bad cert"],
     )
     assert "签名" in verdict
-    # Signature failure produces a moderate risk score regardless of source claim.
-    assert 0.6 <= score <= 0.9
+    # Integrity failure remains neutral about whether the pixels are AI-generated.
+    assert score == 0.5
 
 
 def test_c2pa_missing_validation_cannot_lower_camera_risk():
@@ -344,6 +344,23 @@ def test_c2pa_summarize_source_detects_ai():
             },
         ],
     }) == "camera"
+    assert swarm_c2pa_expert._summarize_source({
+        "assertions": [{
+            "label": "c2pa.actions",
+            "data": {"digitalSourceType": "http://cv.iptc.org/newscodes/digitalsourcetype/print"},
+        }],
+    }) == "unknown"
+    assert swarm_c2pa_expert._summarize_source({
+        "assertions": [{
+            "label": "c2pa.actions",
+            "data": {
+                "digitalSourceType": (
+                    "http://cv.iptc.org/newscodes/digitalsourcetype/"
+                    "compositewithtrainedalgorithmicmedia"
+                ),
+            },
+        }],
+    }) == "ai"
 
 
 def test_c2pa_collect_actions_extracts_action_chain():
@@ -379,6 +396,64 @@ def test_c2pa_collect_signer_info():
     info = swarm_c2pa_expert._collect_signer_info(manifest)
     assert "Adobe" in info["issuer"]
     assert info["common_name"] == "Adobe Photoshop"
+
+
+def test_c2pa_camera_ingredient_does_not_neutralize_active_ai_manifest(monkeypatch):
+    envelope = {
+        "active_manifest": "urn:active",
+        "_local_validation_state": "Trusted",
+        "validation_results": {
+            "activeManifest": {
+                "success": [{"code": "claimSignature.validated"}],
+            },
+        },
+        "manifests": {
+            "urn:active": {
+                "claim_generator": "Adobe Firefly",
+                "assertions": [{
+                    "label": "c2pa.actions",
+                    "data": {"actions": [{
+                        "action": "c2pa.edited",
+                        "digitalSourceType": (
+                            "http://cv.iptc.org/newscodes/digitalsourcetype/"
+                            "compositewithtrainedalgorithmicmedia"
+                        ),
+                    }]},
+                }],
+                "ingredients": [{"active_manifest": "urn:camera"}],
+            },
+            "urn:camera": {
+                "claim_generator": "Canon EOS R5",
+                "assertions": [{
+                    "label": "c2pa.actions",
+                    "data": {"actions": [{
+                        "action": "c2pa.created",
+                        "digitalSourceType": (
+                            "http://cv.iptc.org/newscodes/digitalsourcetype/"
+                            "digitalcapture"
+                        ),
+                    }]},
+                }],
+            },
+        },
+    }
+    monkeypatch.setattr(swarm_c2pa_expert, "_C2PA_AVAILABLE", True)
+    monkeypatch.setattr(
+        swarm_c2pa_expert,
+        "_read_manifest",
+        lambda *_args, **_kwargs: (envelope, None),
+    )
+
+    result = swarm_c2pa_expert.run_c2pa_expert(
+        b"image", "edited.png", "image/png"
+    )
+
+    assert result["score"] == 0.94
+    assert result["content_claim"] == "ai"
+    assert result["details"]["chain_conflict"] is False
+    assert result["details"]["chain_sources"] == ["ai", "camera"]
+    assert result["details"]["lineage_transitions"] == ["camera->ai"]
+    assert "来源链冲突" not in result["verdict"]
 
 
 # ----------------------------- Watermark anomaly ----------------------------- #
@@ -573,7 +648,7 @@ def test_provenance_summary_majority_ai():
 
     experts = [
         {"id": "c2pa", "provenance_kind": "c2pa", "status": "success", "score": 0.94,
-         "verdict": "AI", "weight": 0.1},
+         "verdict": "AI", "weight": 0.1, "content_claim": "ai", "integrity": "trusted"},
         {"id": "watermark", "provenance_kind": "watermark", "status": "success", "score": 0.96,
          "verdict": "SD watermark", "weight": 0.1},
         {"id": "wam", "provenance_kind": "wam", "status": "skipped", "score": None},
@@ -593,14 +668,15 @@ def test_provenance_summary_majority_real():
 
     experts = [
         {"id": "c2pa", "provenance_kind": "c2pa", "status": "success", "score": 0.08,
-         "verdict": "Canon", "weight": 0.1},
+         "verdict": "Canon", "weight": 0.1, "content_claim": "camera", "integrity": "trusted"},
         {"id": "watermark", "provenance_kind": "watermark", "status": "success", "score": 0.32,
          "verdict": "no marker", "weight": 0.1},
     ]
     summary = detection._swarm_provenance_summary(experts)
     assert summary is not None
-    assert summary["real_count"] == 2
+    assert summary["real_count"] == 1
     assert summary["ai_count"] == 0
+    assert summary["uncertain_count"] == 1
     assert "真实拍摄" in summary["headline"]
 
 
@@ -608,10 +684,10 @@ def test_provenance_summary_conflict():
     from imagedetection.views import detection
 
     experts = [
-        {"id": "c2pa", "provenance_kind": "c2pa", "status": "success", "score": 0.94,
-         "verdict": "AI", "weight": 0.1},
-        {"id": "watermark", "provenance_kind": "watermark", "status": "success", "score": 0.08,
-         "verdict": "no marker", "weight": 0.1},
+        {"id": "c2pa", "provenance_kind": "c2pa", "status": "success", "score": 0.08,
+         "verdict": "camera", "weight": 0.1, "content_claim": "camera", "integrity": "trusted"},
+        {"id": "watermark", "provenance_kind": "watermark", "status": "success", "score": 0.94,
+         "verdict": "AI marker", "weight": 0.1},
         {"id": "wam", "provenance_kind": "wam", "status": "success", "score": 0.5,
          "verdict": "uncertain", "weight": 0.08},
     ]
@@ -621,6 +697,48 @@ def test_provenance_summary_conflict():
     assert summary["real_count"] == 1
     assert summary["uncertain_count"] == 1
     assert "冲突" in summary["headline"]
+
+
+def test_provenance_summary_does_not_treat_invalid_c2pa_as_ai():
+    from imagedetection.views import detection
+
+    experts = [{
+        "id": "c2pa",
+        "provenance_kind": "c2pa",
+        "status": "success",
+        "score": 0.78,
+        "verdict": "C2PA 签名校验失败",
+        "content_claim": "unknown",
+        "integrity": "invalid",
+    }]
+
+    summary = detection._swarm_provenance_summary(experts)
+
+    assert summary["ai_count"] == 0
+    assert summary["real_count"] == 0
+    assert summary["uncertain_count"] == 1
+    assert "无明确信号" in summary["headline"]
+
+
+def test_provenance_summary_keeps_valid_untrusted_c2pa_neutral():
+    from imagedetection.views import detection
+
+    experts = [{
+        "id": "c2pa",
+        "provenance_kind": "c2pa",
+        "status": "success",
+        "score": 0.94,
+        "verdict": "AI source declaration",
+        "content_claim": "ai",
+        "integrity": "valid_untrusted",
+    }]
+
+    summary = detection._swarm_provenance_summary(experts)
+
+    assert summary["ai_count"] == 0
+    assert summary["real_count"] == 0
+    assert summary["uncertain_count"] == 1
+    assert summary["members"][0]["integrity"] == "valid_untrusted"
 
 
 def test_provenance_summary_returns_none_without_providers():

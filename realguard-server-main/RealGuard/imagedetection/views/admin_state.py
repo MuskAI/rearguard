@@ -305,6 +305,10 @@ def ensure_api_key_quota_storage():
           created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
           updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
           PRIMARY KEY (key_id),
+          CONSTRAINT chk_developer_key_quota_limits CHECK (
+            (daily_limit IS NULL OR daily_limit >= 0)
+            AND (rate_limit_per_minute IS NULL OR rate_limit_per_minute >= 0)
+          ),
           CONSTRAINT fk_developer_api_key_quotas_key
             FOREIGN KEY (key_id) REFERENCES developer_api_keys(id)
             ON DELETE CASCADE
@@ -340,6 +344,10 @@ def ensure_api_key_quota_storage():
           created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
           updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
           PRIMARY KEY (user_id),
+          CONSTRAINT chk_developer_account_quota_limits CHECK (
+            (daily_limit IS NULL OR daily_limit >= 0)
+            AND (rate_limit_per_minute IS NULL OR rate_limit_per_minute >= 0)
+          ),
           CONSTRAINT fk_developer_api_account_quotas_user
             FOREIGN KEY (user_id) REFERENCES `user`(Userid)
             ON DELETE CASCADE
@@ -367,8 +375,66 @@ def ensure_api_key_quota_storage():
     _API_KEY_QUOTA_TABLES_READY = all(
         result is not None
         for result in (quota_result, usage_result, account_quota_result, account_usage_result)
-    )
+    ) and _ensure_quota_check_constraints()
     return _API_KEY_QUOTA_TABLES_READY
+
+
+def _ensure_quota_check_constraints():
+    specifications = (
+        ("developer_api_key_quotas", "chk_developer_key_quota_limits"),
+        ("developer_api_account_quotas", "chk_developer_account_quota_limits"),
+    )
+    expression = (
+        "(daily_limit IS NULL OR daily_limit >= 0) "
+        "AND (rate_limit_per_minute IS NULL OR rate_limit_per_minute >= 0)"
+    )
+    invalid_expression = (
+        "(daily_limit IS NOT NULL AND daily_limit < 0) "
+        "OR (rate_limit_per_minute IS NOT NULL AND rate_limit_per_minute < 0)"
+    )
+    for table, constraint in specifications:
+        rows = _system_sql(
+            """
+            SELECT CONSTRAINT_NAME
+            FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = %s
+              AND CONSTRAINT_NAME = %s
+              AND CONSTRAINT_TYPE = 'CHECK'
+            LIMIT 1
+            """,
+            (table, constraint),
+        )
+        if rows is None:
+            return False
+        if rows:
+            continue
+        invalid = _system_sql(
+            f"SELECT COUNT(*) AS invalid_count FROM `{table}` WHERE {invalid_expression}"
+        )
+        if invalid is None or int((invalid[0] if invalid else {}).get("invalid_count") or 0):
+            return False
+        if _system_sql(
+            f"ALTER TABLE `{table}` ADD CONSTRAINT `{constraint}` CHECK ({expression})",
+            fetch=False,
+        ) is None:
+            # Concurrent startup can win the DDL race; only accept it after
+            # metadata confirms the exact named guard now exists.
+            rows = _system_sql(
+                """
+                SELECT CONSTRAINT_NAME
+                FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = %s
+                  AND CONSTRAINT_NAME = %s
+                  AND CONSTRAINT_TYPE = 'CHECK'
+                LIMIT 1
+                """,
+                (table, constraint),
+            )
+            if not rows:
+                return False
+    return True
 
 
 def _quota_payload(value=None):
@@ -813,6 +879,53 @@ def update_detection_job(job_id, updates):
 
 def get_detection_job(job_id):
     return load_state().get("detectionJobs", {}).get(str(job_id))
+
+
+def scrub_detection_item(itemid, erasure_job_id=""):
+    """Remove cached personal data derived from one erased detection record."""
+    wanted = str(itemid)
+
+    def contains_item(value):
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                if str(key).lower() in {"itemid", "item_id", "result_item_id", "effect_item_id"}:
+                    if str(nested) == wanted:
+                        return True
+                if contains_item(nested):
+                    return True
+        elif isinstance(value, (list, tuple)):
+            return any(contains_item(item) for item in value)
+        return False
+
+    def mutate(state):
+        scrubbed = 0
+        for run in state.setdefault("modelRuns", []):
+            if str(run.get("itemid") or "") != wanted:
+                continue
+            run["itemid"] = None
+            run["actor"] = {"id": "", "account_uuid": "", "username": "", "phone": ""}
+            run["meta"] = {"erased": True, "erasureJobId": str(erasure_job_id or "")}
+            scrubbed += 1
+        jobs = state.setdefault("detectionJobs", {})
+        for job in jobs.values():
+            if not contains_item(job.get("result")):
+                continue
+            job["filename"] = "[erased]"
+            job["actor"] = {
+                "id": "",
+                "account_uuid": "",
+                "username": "",
+                "phone": "",
+                "openid": "",
+            }
+            job["result"] = None
+            job["error"] = ""
+            job["summary"] = "内容已由用户删除"
+            job["updatedAt"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            scrubbed += 1
+        return scrubbed
+
+    return _update_state(mutate)
 
 
 def delete_detection_job(job_id):

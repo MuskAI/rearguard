@@ -307,13 +307,17 @@ class ReasoningAgent:
                 result["explanation"] = (result.get("explanation") or "") + note
                 print(f"  [加权计算·校正后] 综合概率={result['probability']:.4f}")
 
-        # ---------- 最终标签：仅由加权后的综合概率决定（避免与 LLM 文本「最终判断」不一致） ----------
-        result["final_label"] = (
+        # The uncalibrated fusion is diagnostic only. It must never replace the
+        # signed detector decision used by the product/reporting pipeline.
+        result["fusion_probability"] = result["probability"]
+        result["fusion_label"] = (
+            "AI生成图像" if result["fusion_probability"] >= 0.5 else "真实图像"
+        )
+        result["probability"] = max(0.0, min(1.0, p_detector))
+        result["final_label"] = summary.get("detector_label") or (
             "AI生成图像" if result["probability"] >= 0.5 else "真实图像"
         )
-
-        # ---------- 置信度按最终综合概率与 0.5 的距离计算 ----------
-        result["confidence"] = self.confidence_from_probability(result["probability"])
+        result["confidence"] = summary.get("detector_confidence_level") or "低"
 
         # ---------- 提取判断依据 ----------
         explanation_pattern = r"\*\*判断依据\*\*[^：:]*[：:]?\s*([\s\S]+?)(?:\*\*视觉可疑点\*\*|$)"
@@ -328,7 +332,7 @@ class ReasoningAgent:
             result["visual_issues"] = visual_issues_match.group(1).strip()
 
         # 判定为真实时，前端默认展示“无可疑点”
-        if result["final_label"] == "真实图像":
+        if result["fusion_label"] == "真实图像":
             result["visual_issues"] = "无可疑点"
 
         return result

@@ -266,10 +266,38 @@
     .detail-drawer{border:1px solid var(--line-soft);border-radius:var(--radius);background:#fff;padding:14px;margin-top:14px}
     .btn.mini{height:27px;padding:0 8px;font-size:12px}
     .action-row{display:flex;flex-wrap:wrap;gap:6px}
+    .testing-status{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid var(--line);background:#fff;border-radius:var(--radius);overflow:hidden}
+    .testing-status-item{padding:14px 16px;border-right:1px solid var(--line-soft);min-width:0}
+    .testing-status-item:last-child{border-right:0}
+    .testing-status-item small{display:block;color:var(--muted);font-size:11px;margin-bottom:5px}
+    .testing-status-item strong{display:block;font-size:17px;overflow-wrap:anywhere}
+    .testing-status-item span{display:block;color:var(--muted);font-size:11px;margin-top:4px}
+    .testing-workbench{display:grid;grid-template-columns:minmax(0,1.08fr) minmax(360px,.92fr);gap:16px}
+    .testing-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+    .testing-form-grid .span-2{grid-column:1/-1}
+    .testing-upload{border:1px dashed #9caeb9;background:#f8fbfa;border-radius:var(--radius);padding:16px;display:grid;gap:8px;min-height:106px}
+    .testing-upload:hover{border-color:var(--cyan);background:#f3fbfd}
+    .testing-upload input[type=file]{max-width:100%}
+    .testing-help{color:var(--muted);font-size:11px;line-height:1.6;margin:0}
+    .testing-risk{border-left:3px solid var(--amber);background:#fff8ed;padding:12px 14px;color:#7a4a08;font-size:12px;line-height:1.6}
+    .testing-table-actions{display:flex;gap:5px;justify-content:flex-end}
+    .testing-progress{height:6px;border-radius:999px;background:#e8eeec;overflow:hidden;margin-top:7px}
+    .testing-progress>span{display:block;height:100%;background:var(--green);transition:transform .2s;transform-origin:left}
+    .testing-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:12px 0}
+    .testing-metric{border:1px solid var(--line-soft);background:#f8faf9;padding:11px;border-radius:var(--radius)}
+    .testing-metric small{display:block;color:var(--muted);font-size:10px}
+    .testing-metric strong{display:block;font-size:19px;margin-top:4px;font-variant-numeric:tabular-nums}
+    .testing-samples{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:12px}
+    .testing-sample{border:1px solid var(--line-soft);border-radius:var(--radius);overflow:hidden;background:#fff}
+    .testing-sample img{display:block;width:100%;aspect-ratio:4/3;object-fit:cover;background:#edf2f0}
+    .testing-sample-body{padding:9px;display:grid;gap:6px}
+    .testing-sample-body strong{font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .testing-sample-body select{height:32px;font-size:11px}
+    @media(max-width:1280px){.testing-workbench{grid-template-columns:1fr}.testing-status{grid-template-columns:repeat(2,minmax(0,1fr))}.testing-status-item:nth-child(2){border-right:0}.testing-status-item:nth-child(-n+2){border-bottom:1px solid var(--line-soft)}}
     @media(max-width:1280px){.dashboard-grid,.model-workbench{grid-template-columns:1fr}.side-stack{position:static}.models{grid-template-columns:1fr}.host-strip{grid-template-columns:repeat(3,minmax(0,1fr))}}
     @media(max-width:1280px){.assurance-grid{grid-template-columns:1fr}}
     @media(max-width:960px){.app{grid-template-columns:76px minmax(0,1fr)}.brand-title,.brand-sub,.nav-text,.nav-label{display:none}.nav-item{justify-content:center}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.secondary-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.secondary-item:nth-child(3){padding-left:0;border-left:0}.account-name{display:none}}
-    @media(max-width:720px){.app{display:block}.sidebar{height:auto;position:relative;display:flex;gap:8px;padding:8px 10px;overflow-x:auto}.brand{flex:0 0 auto}.nav-group{display:flex;margin-top:0;gap:5px}.nav-label{display:none}.nav-item{width:auto;min-width:max-content;flex:0 0 auto;padding:0 11px}.nav-text{display:inline!important}.topbar{height:56px;padding:0 12px}.crumbs>span{display:none}.top-actions{gap:6px}.sync-status{display:none}.account-popover{position:fixed;right:12px;top:62px}.content{padding:16px 12px 36px}.workspace-heading{align-items:flex-start}.overall-health{max-width:54%;align-items:flex-start}.metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.metric{padding:13px}.metric strong{font-size:22px}.secondary-grid{grid-template-columns:1fr}.secondary-item,.secondary-item:nth-child(3){padding:8px 0;border-left:0;border-top:1px solid var(--line-soft)}.secondary-item:first-child{border-top:0}.model-card.editor .kv,.kv{grid-template-columns:1fr}.panel{padding:14px}.disclosure{padding:0}.panel-head{align-items:flex-start;flex-direction:column}.panel-head .action-row{width:100%}.toolbar{align-items:stretch}.toolbar .input,.toolbar .select,.toolbar .btn{width:100%;flex:1 1 auto;justify-content:center}.route-summary-row{display:grid}.data-table{min-width:640px}.compact-table table{min-width:520px}.host-strip{grid-template-columns:1fr}.host-stat{border-right:0;border-bottom:1px solid var(--line)}.operation-row{grid-template-columns:30px minmax(0,1fr)}.operation-value{grid-column:2;text-align:left}.toast{left:14px;right:14px;bottom:14px}.dialog-actions{display:grid;grid-template-columns:1fr 1fr}.dialog-actions .btn{justify-content:center;min-height:44px}}
+    @media(max-width:720px){.app{display:block}.sidebar{height:auto;position:relative;display:flex;gap:8px;padding:8px 10px;overflow-x:auto}.brand{flex:0 0 auto}.nav-group{display:flex;margin-top:0;gap:5px}.nav-label{display:none}.nav-item{width:auto;min-width:max-content;flex:0 0 auto;padding:0 11px}.nav-text{display:inline!important}.topbar{height:56px;padding:0 12px}.crumbs>span{display:none}.top-actions{gap:6px}.sync-status{display:none}.account-popover{position:fixed;right:12px;top:62px}.content{padding:16px 12px 36px}.workspace-heading{align-items:flex-start}.overall-health{max-width:54%;align-items:flex-start}.metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.metric{padding:13px}.metric strong{font-size:22px}.secondary-grid{grid-template-columns:1fr}.secondary-item,.secondary-item:nth-child(3){padding:8px 0;border-left:0;border-top:1px solid var(--line-soft)}.secondary-item:first-child{border-top:0}.model-card.editor .kv,.kv{grid-template-columns:1fr}.panel{padding:14px}.disclosure{padding:0}.panel-head{align-items:flex-start;flex-direction:column}.panel-head .action-row{width:100%}.toolbar{align-items:stretch}.toolbar .input,.toolbar .select,.toolbar .btn{width:100%;flex:1 1 auto;justify-content:center}.route-summary-row{display:grid}.data-table{min-width:640px}.compact-table table{min-width:520px}.host-strip{grid-template-columns:1fr}.host-stat{border-right:0;border-bottom:1px solid var(--line)}.operation-row{grid-template-columns:30px minmax(0,1fr)}.operation-value{grid-column:2;text-align:left}#view-testing .workspace-heading{display:block}#view-testing .workspace-heading>.action-row{width:auto;margin-top:12px}#view-testing .workspace-heading>.action-row .btn{width:auto}.testing-status,.testing-form-grid,.testing-metrics{grid-template-columns:1fr}.testing-status-item{border-right:0;border-bottom:1px solid var(--line-soft)}.testing-status-item:last-child{border-bottom:0}.testing-form-grid .span-2{grid-column:auto}.toast{left:14px;right:14px;bottom:14px}.dialog-actions{display:grid;grid-template-columns:1fr 1fr}.dialog-actions .btn{justify-content:center;min-height:44px}}
     @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
   </style>
 </head>
@@ -299,6 +327,9 @@
         <a class="nav-item" href="#models" data-route="models" title="模型管理"><i class="nav-icon fa fa-cubes"></i><span class="nav-text">模型管理</span></a>
         <a class="nav-item" href="#swarm" data-route="swarm" title="专家会诊模式"><i class="nav-icon fa fa-sitemap"></i><span class="nav-text">专家会诊模式</span></a>
         <a class="nav-item" href="#system" data-route="system" title="服务健康"><i class="nav-icon fa fa-heartbeat"></i><span class="nav-text">服务健康</span></a>
+        {% endif %}
+        {% if "testing.view" in admin_permissions %}
+        <a class="nav-item" href="#testing" data-route="testing" title="内部测试平台"><i class="nav-icon fa fa-flask"></i><span class="nav-text">内部测试</span></a>
         {% endif %}
         {% if "alerts.manage" in admin_permissions or "audit.view" in admin_permissions %}
         <a class="nav-item" href="#governance" data-route="governance" title="审计告警"><i class="nav-icon fa fa-bell"></i><span class="nav-text">审计告警</span></a>
@@ -469,6 +500,101 @@
           </section>
         </section>
 
+        {% if "testing.view" in admin_permissions %}
+        <section class="view" id="view-testing" data-title="内部测试平台">
+          <div class="workspace-heading">
+            <div>
+              <span class="eyebrow">INTERNAL EVALUATION</span>
+              <h1>内部测试平台</h1>
+              <p>隔离管理测试数据，统一完成模型评测、批量检测、文档取图和受控压测。</p>
+            </div>
+            <div class="action-row">
+              <button class="btn secondary" type="button" onclick="loadTesting(true)"><i class="fa fa-refresh"></i>刷新状态</button>
+            </div>
+          </div>
+
+          <div class="testing-status" id="testingStatus"></div>
+
+          {% if "testing.run" in admin_permissions %}
+          <div class="testing-workbench">
+            <section class="panel">
+              <div class="panel-head">
+                <div><h2>1. 准备测试数据</h2><p>支持图片、PDF、DOCX 和公网网页；相同图片按 SHA-256 自动去重。</p></div>
+              </div>
+              <form id="testingDatasetForm" class="testing-form-grid" onsubmit="createTestingDataset(event)">
+                <label>数据集名称<input class="input" id="testingDatasetName" maxlength="180" placeholder="例如：真实相机样本 2026-07"></label>
+                <label>默认真值
+                  <select class="select" id="testingDefaultLabel">
+                    <option value="unlabeled">未标注，稍后逐张设置</option>
+                    <option value="real">全部为真实图像</option>
+                    <option value="fake">全部为 AI 生成图像</option>
+                  </select>
+                </label>
+                <label class="span-2 testing-upload">
+                  <strong><i class="fa fa-files-o"></i> 上传图片或文档</strong>
+                  <input id="testingFiles" type="file" multiple accept="image/*,.pdf,.docx">
+                  <span class="testing-help">最多 50 个文件、提取 200 张图片；单文件 24 MB、单数据集 128 MB。</span>
+                </label>
+                <label class="span-2">或从网页提取图片
+                  <input class="input" id="testingSourceUrl" type="url" inputmode="url" placeholder="https://example.com/article">
+                  <span class="testing-help">仅允许公网 HTTPS，自动拒绝本机、内网和保留地址。</span>
+                </label>
+                <div class="span-2 action-row">
+                  <button class="btn green" id="testingCreateDataset" type="submit"><i class="fa fa-database"></i>创建数据集</button>
+                </div>
+              </form>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <div><h2>2. 启动模型评测</h2><p>真值样本会计算混淆矩阵、Accuracy、Precision、Recall 和 F1。</p></div>
+              </div>
+              <form class="compact-form" onsubmit="startTestingEvaluation(event)">
+                <label>测试数据集<select class="select" id="testingEvalDataset" required></select></label>
+                <label>目标模型<select class="select" id="testingEvalModel" required></select></label>
+                <label>并发数
+                  <input class="input" id="testingEvalConcurrency" type="number" min="1" max="4" value="1" required>
+                  <span class="testing-help">科学对比建议固定为 1；吞吐探索可提高到 4。</span>
+                </label>
+                <button class="btn" type="submit"><i class="fa fa-play"></i>开始评测</button>
+              </form>
+            </section>
+          </div>
+          {% endif %}
+
+          {% if "testing.load" in admin_permissions %}
+          <section class="panel">
+            <div class="panel-head">
+              <div><h2>受控压力测试</h2><p>观察吞吐、错误率与 P50/P95/P99；同一时间只允许一个压测任务。</p></div>
+            </div>
+            <div class="testing-risk"><strong>仅用于你有权测试的慧鉴服务。</strong> 后台硬限制并发 ≤16、请求数 ≤1000、持续时间 ≤120 秒；压测请求带内部测试标记并写入审计。</div>
+            <form id="testingLoadForm" class="testing-form-grid" onsubmit="startTestingLoad(event)" style="margin-top:12px">
+              <label>目标模型<select class="select" id="testingLoadModel" required></select></label>
+              <label>固定测试图<input class="input" id="testingLoadFile" type="file" accept="image/*" required></label>
+              <label>并发数<input class="input" id="testingLoadConcurrency" type="number" min="1" max="16" value="2" required></label>
+              <label>请求总数<input class="input" id="testingLoadRequests" type="number" min="1" max="1000" value="20" required></label>
+              <label>最长持续时间（秒）<input class="input" id="testingLoadDuration" type="number" min="1" max="120" value="30" required></label>
+              <div class="action-row" style="align-items:end"><button class="btn red" type="submit"><i class="fa fa-tachometer"></i>启动压测</button></div>
+            </form>
+          </section>
+          {% endif %}
+
+          <div class="testing-workbench">
+            <section class="panel">
+              <div class="panel-head"><div><h2>测试数据集</h2><p>查看来源、标注覆盖率和提取结果。</p></div></div>
+              <div id="testingDatasets"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-head"><div><h2>测试任务</h2><p>评测和压测统一记录，运行中任务自动刷新。</p></div></div>
+              <div id="testingRuns"></div>
+            </section>
+          </div>
+          <section class="panel" id="testingDetailPanel" hidden>
+            <div id="testingDetail"></div>
+          </section>
+        </section>
+        {% endif %}
+
         <section class="view" id="view-governance" data-title="审计告警">
           <div class="assurance-grid">
             <section class="panel">
@@ -583,15 +709,16 @@
     const PERMISSIONS = new Set({{ admin_permissions|tojson }});
     const CAN_MANAGE_ADMINS = {{ can_manage_admins|tojson }};
     const ADMIN_ROLE_LABELS = {{ role_options|default({}, true)|tojson }};
-    const titles = {dashboard:'控制台',assurance:'在线保障',models:'模型管理',swarm:'专家会诊模式',system:'服务健康',governance:'审计告警',admins:'管理员',users:'用户管理',detections:'检测记录',keys:'访问凭证'};
-    const routePermissions = {assurance:'topology.view',models:'topology.view',swarm:'topology.view',system:'topology.view',governance:['alerts.manage','audit.view'],admins:'admin.manage',users:'user.view',detections:'detection.view',keys:'api_key.view'};
+    const titles = {dashboard:'控制台',assurance:'在线保障',models:'模型管理',swarm:'专家会诊模式',system:'服务健康',testing:'内部测试平台',governance:'审计告警',admins:'管理员',users:'用户管理',detections:'检测记录',keys:'访问凭证'};
+    const routePermissions = {assurance:'topology.view',models:'topology.view',swarm:'topology.view',system:'topology.view',testing:'testing.view',governance:['alerts.manage','audit.view'],admins:'admin.manage',users:'user.view',detections:'detection.view',keys:'api_key.view'};
     const routeAllowed = (route) => {
       const required = routePermissions[route];
       if(!required) return true;
       return Array.isArray(required) ? required.some(can) : can(required);
     };
     const mutationRequests = new Map();
-    let state = {metrics:null, models:[], routing:{}, routingHistory:[], detections:[], users:[], admins:[], keys:[], services:[], host:null, serviceSummary:null, performance:null, assurance:null, swarm:null, alerts:null, alertDeliveries:[], audit:[], pages:{}, selectedUser:null, selectedDetection:null};
+    let state = {metrics:null, models:[], routing:{}, routingHistory:[], detections:[], users:[], admins:[], keys:[], services:[], host:null, serviceSummary:null, performance:null, assurance:null, swarm:null, alerts:null, alertDeliveries:[], audit:[], testing:null, testingDetail:null, pages:{}, selectedUser:null, selectedDetection:null};
+    let testingRefreshTimer = null;
     const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
     const can = (permission) => PERMISSIONS.has(permission);
     function toast(message){ const el=$('toast'); el.textContent=message; el.style.display='block'; clearTimeout(window.__toast); window.__toast=setTimeout(()=>el.style.display='none',4200); }
@@ -660,6 +787,20 @@
       try{ return await requestPromise; }
       finally{ if(mutationKey) mutationRequests.delete(mutationKey); }
     }
+    async function uploadApi(url, formData){
+      const mutationKey = `POST:${url}`;
+      if(mutationRequests.has(mutationKey)) throw new Error('该操作正在处理中，请稍候');
+      const requestPromise = (async() => {
+        const res = await fetch(url, {method:'POST', headers:{'X-CSRF-Token':CSRF_TOKEN}, body:formData});
+        const data = await res.json().catch(()=>({status:'error',message:'非 JSON 响应'}));
+        if(res.status === 401){ location.href='/admin/login'; throw new Error('后台会话已过期，请重新登录'); }
+        if(!res.ok || data.status === 'error') throw new Error(data.message || `HTTP ${res.status}`);
+        return data;
+      })();
+      mutationRequests.set(mutationKey, requestPromise);
+      try{ return await requestPromise; }
+      finally{ mutationRequests.delete(mutationKey); }
+    }
     function statusPill(health){
       if(!health) return '<span class="status warn">unchecked</span>';
       if(health.ok) return '<span class="status ok">online</span>';
@@ -704,6 +845,7 @@
       if(route === 'assurance' && can('topology.view')) loadAssurance();
       if(route === 'swarm' && can('topology.view')) loadExpertReview();
       if(route === 'system' && can('topology.view')) loadSystem();
+      if(route === 'testing' && can('testing.view')) loadTesting(true);
       if(route === 'governance') { if(can('alerts.manage')) loadAlerts(); if(can('audit.view')) loadAudit(); }
       if(route === 'admins' && CAN_MANAGE_ADMINS) loadAdmins();
       if(route === 'users') loadUsers();
@@ -848,7 +990,7 @@
       const developer = data.developerAccount || null;
       box.innerHTML = `
         <section class="detail-drawer">
-          <div class="panel-head"><div><h2>用户详情 · ${esc(user.username || user.phone || user.id)}</h2><p class="mono">${esc(user.openid || '')}</p></div><div class="action-row">${developer && can('api_key.manage') ? `<button class="btn" onclick="setDeveloperQuota(${Number(user.id)})">设置 API 次数</button>` : ''}<button class="btn secondary" onclick="$('userDetail').innerHTML='';state.selectedUser=null">关闭</button></div></div>
+          <div class="panel-head"><div><h2>用户详情 · ${esc(user.username || user.phone || user.id)}</h2><p class="mono">${esc(user.openid || '')}</p></div><div class="action-row">${developer && can('billing.adjust') ? `<button class="btn" onclick="setDeveloperQuota(${Number(user.id)})">设置 API 次数</button>` : ''}<button class="btn secondary" onclick="$('userDetail').innerHTML='';state.selectedUser=null">关闭</button></div></div>
           <div class="secondary-grid">
             <div class="secondary-item"><small>图像检测</small><strong>${esc(data.stats?.imageDetections ?? 0)}</strong></div>
             <div class="secondary-item"><small>视频检测</small><strong>${esc(data.stats?.videoDetections ?? 0)}</strong></div>
@@ -1051,7 +1193,7 @@
     }
     function renderApiKeys(){
       $('apiKeys').innerHTML = table(['名称','归属','Key','状态','配额','最后使用','操作'], state.keys.map(k => `
-        <tr><td>${esc(k.name)}</td><td>${esc(k.owner)}<br><span class="mono">${esc(k.phone)}</span></td><td class="mono">${esc(k.masked)}</td><td>${k.status === 'active' ? '<span class="pill green">启用</span>' : '<span class="pill red">已撤销</span>'}</td><td>${esc(k.quota?.dailyLimit ?? '不限')}/日<br><span class="mono">${esc(k.quota?.rateLimitPerMinute ?? '不限')}/分钟</span></td><td>${esc(k.lastUsedAt || '-')}</td><td><button class="btn mini secondary" onclick="editQuota(${Number(k.id)})">配额</button></td></tr>`)) + (state.pages.keys?.hasMore ? '<div class="load-more"><button class="btn secondary" onclick="loadApiKeys(true)">加载更多</button></div>' : '');
+        <tr><td>${esc(k.name)}</td><td>${esc(k.owner)}<br><span class="mono">${esc(k.phone)}</span></td><td class="mono">${esc(k.masked)}</td><td>${k.status === 'active' ? '<span class="pill green">启用</span>' : '<span class="pill red">已撤销</span>'}</td><td>${esc(k.quota?.dailyLimit ?? '不限')}/日<br><span class="mono">${esc(k.quota?.rateLimitPerMinute ?? '不限')}/分钟</span></td><td>${esc(k.lastUsedAt || '-')}</td><td>${can('quota.manage') ? `<button class="btn mini secondary" onclick="editQuota(${Number(k.id)})">配额</button>` : '-'}</td></tr>`)) + (state.pages.keys?.hasMore ? '<div class="load-more"><button class="btn secondary" onclick="loadApiKeys(true)">加载更多</button></div>' : '');
     }
     function adminBytes(value){
       const bytes = Number(value);
@@ -1269,12 +1411,12 @@
       await loadAlerts(); await loadAudit();
     }
     async function openUser(id){
-      const accountRequest=can('api_key.view') ? api(`/api/admin/developer/accounts/${encodeURIComponent(id)}`).catch(()=>null) : Promise.resolve(null);
+      const accountRequest=can('billing.view') ? api(`/api/admin/developer/accounts/${encodeURIComponent(id)}`).catch(()=>null) : Promise.resolve(null);
       const [data,accountData]=await Promise.all([api(`/api/admin/users/${encodeURIComponent(id)}`),accountRequest]);
       data.developerAccount=accountData?.account || null;state.selectedUser=data;renderUserDetail();
     }
     async function setDeveloperQuota(id){
-      if(!can('api_key.manage')){ toast('当前角色无开发者额度管理权限'); return; }
+      if(!can('billing.adjust')){ toast('当前角色无开发者额度管理权限'); return; }
       const account=state.selectedUser?.developerAccount;
       if(!account){ toast('开发者账户尚未加载'); return; }
       const values=await requestAction({title:'设置 API 剩余次数',message:`用户 #${id} · 已使用 ${account.freeUsed} 次，预占 ${account.freeReserved} 次`,warning:'这里设置的是当前可继续调用的次数，不会改写历史用量。',confirmText:'保存次数',fields:[
@@ -1315,15 +1457,241 @@
       toast(`记录 ${id}: ${feedbackLabel}`); await loadDetections(); await loadAudit();
     }
     async function editQuota(id){
-      if(!can('api_key.manage')){ toast('当前角色无 访问凭证 管理权限'); return; }
+      if(!can('quota.manage')){ toast('当前角色无 API 配额管理权限'); return; }
       const key = state.keys.find(k => Number(k.id) === Number(id)) || {};
       const values=await requestAction({title:'调整 API 配额',message:`${key.name || `Key #${id}`} · ${key.masked || ''}`,confirmText:'保存配额',fields:[
         {name:'dailyLimit',label:'账号每日调用上限（同账号 Token 共享）',type:'number',min:0,step:1,value:key.quota?.dailyLimit ?? ''},
         {name:'rateLimitPerMinute',label:'账号每分钟限流（同账号 Token 共享）',type:'number',min:0,step:1,value:key.quota?.rateLimitPerMinute ?? ''},
       ]});
       if(!values) return;
+      const parseLimit=value=>value === '' || value == null ? null : Number(value);
+      values.dailyLimit=parseLimit(values.dailyLimit);
+      values.rateLimitPerMinute=parseLimit(values.rateLimitPerMinute);
+      values.expectedDailyLimit=key.quota?.dailyLimit ?? null;
+      values.expectedRateLimitPerMinute=key.quota?.rateLimitPerMinute ?? null;
+      values.operationId=(globalThis.crypto?.randomUUID?.() || `request-quota-${Date.now()}-${Math.random().toString(36).slice(2)}`);
       await api(`/api/admin/api-keys/${encodeURIComponent(id)}/quota`, {method:'POST', body:JSON.stringify(values)});
       toast('配额已保存'); await loadApiKeys(); await loadAudit();
+    }
+    function testingPercent(value){
+      return value == null || Number.isNaN(Number(value)) ? '--' : `${(Number(value) * 100).toFixed(1)}%`;
+    }
+    function testingBytes(value){
+      const bytes=Number(value || 0);
+      if(bytes < 1024) return `${bytes} B`;
+      if(bytes < 1024*1024) return `${(bytes/1024).toFixed(1)} KB`;
+      return `${(bytes/1024/1024).toFixed(1)} MB`;
+    }
+    function testingRunStatus(status){
+      const meta={
+        queued:['排队中','warn'],running:['运行中','warn'],cancel_requested:['停止中','warn'],
+        completed:['已完成','ok'],cancelled:['已停止',''],failed:['失败','']
+      }[status] || [status || '未知',''];
+      return `<span class="status ${meta[1]}">${esc(meta[0])}</span>`;
+    }
+    function renderTesting(){
+      const data=state.testing || {};
+      const summary=data.summary || {};
+      const system=data.system || {};
+      const host=system.host || {};
+      const algorithm=system.algorithmServer || {};
+      const services=system.services || {};
+      const hostCpu=host.cpu?.loadPercent;
+      const hostMemory=host.memory?.usedPercent;
+      $('testingStatus').innerHTML=[
+        ['Web 服务器',host.status === 'critical' ? '异常' : host.status === 'warning' ? '需关注' : '运行正常',`CPU ${hostCpu ?? '--'}% · 内存 ${hostMemory ?? '--'}%`],
+        ['算法服务器',algorithm.serviceReady ? '服务在线' : '服务异常',`${algorithm.modelName || '主鉴伪模型'} · ${algorithm.latencyMs ?? '--'} ms`],
+        ['模型服务',`${services.online ?? 0}/${services.total ?? 0} 在线`,`降级 ${services.degraded ?? 0} · 离线 ${services.offline ?? 0}`],
+        ['测试任务',`${summary.activeRunCount ?? 0} 个运行中`,`${summary.sampleCount ?? 0} 样本 · ${summary.labeledCount ?? 0} 已标注`],
+      ].map(([label,value,hint])=>`<div class="testing-status-item"><small>${esc(label)}</small><strong>${esc(value)}</strong><span>${esc(hint)}</span></div>`).join('');
+
+      const models=(system.models || []).filter(model=>model.enabled !== false);
+      const modelOptions=models.map(model=>`<option value="${esc(model.id)}">${esc(model.name || model.id)}${model.health?.ok ? '' : ' · 未就绪'}</option>`).join('');
+      ['testingEvalModel','testingLoadModel'].forEach(id=>{
+        const select=$(id); if(!select) return;
+        const previous=select.value;
+        select.innerHTML=modelOptions || '<option value="">暂无可测试模型</option>';
+        if([...select.options].some(option=>option.value===previous)) select.value=previous;
+      });
+      const datasets=data.datasets || [];
+      if($('testingEvalDataset')){
+        const select=$('testingEvalDataset');
+        const previous=select.value;
+        select.innerHTML=datasets.map(item=>`<option value="${esc(item.id)}">${esc(item.name)} · ${item.sample_count} 张</option>`).join('') || '<option value="">请先创建数据集</option>';
+        if([...select.options].some(option=>option.value===previous)) select.value=previous;
+      }
+      $('testingDatasets').innerHTML=table(
+        ['名称','样本','标注','来源','创建时间','操作'],
+        datasets.map(item=>`<tr>
+          <td><strong>${esc(item.name)}</strong><br><span class="mono">${esc(item.id)}</span></td>
+          <td>${item.sample_count}<br><span class="muted">${testingBytes(item.total_bytes)}</span></td>
+          <td>${item.labeled_count}/${item.sample_count}</td>
+          <td>${esc(item.source_type)}</td>
+          <td>${esc(String(item.created_at || '').replace('T',' ').slice(0,19))}</td>
+          <td><div class="testing-table-actions"><button class="btn mini secondary" onclick="openTestingDataset('${esc(item.id)}')">查看</button>${can('testing.run')?`<button class="btn mini secondary" onclick="deleteTestingDataset('${esc(item.id)}')">删除</button>`:''}</div></td>
+        </tr>`),
+        '还没有测试数据集'
+      );
+      const runs=data.runs || [];
+      $('testingRuns').innerHTML=table(
+        ['任务','目标','进度','状态','操作'],
+        runs.slice(0,30).map(run=>{
+          const total=Number(run.total_count || 0);
+          const completed=Number(run.completed_count || 0);
+          const progress=total ? Math.min(100,Math.round(completed/total*100)) : 0;
+          const active=['queued','running','cancel_requested'].includes(run.status);
+          return `<tr>
+            <td><strong>${run.kind==='load_test'?'压力测试':'模型评测'}</strong><br><span class="mono">${esc(run.id)}</span></td>
+            <td>${esc(run.model_name || run.model_id)}</td>
+            <td>${completed}/${total}<div class="testing-progress"><span style="transform:scaleX(${progress/100})"></span></div></td>
+            <td>${testingRunStatus(run.status)}</td>
+            <td><div class="testing-table-actions"><button class="btn mini secondary" onclick="openTestingRun('${esc(run.id)}')">结果</button>${active&&can('testing.run')?`<button class="btn mini secondary" onclick="cancelTestingRun('${esc(run.id)}')">停止</button>`:''}</div></td>
+          </tr>`;
+        }),
+        '还没有测试任务'
+      );
+    }
+    async function loadTesting(showError=false){
+      if(!can('testing.view')) return;
+      clearTimeout(testingRefreshTimer);
+      try{
+        state.testing=await api('/api/admin/testing/overview');
+        renderTesting();
+      }catch(err){
+        if(showError) toast(err?.message || '内部测试平台加载失败');
+      }
+      const active=(state.testing?.runs || []).some(run=>['queued','running','cancel_requested'].includes(run.status));
+      if(active && location.hash==='#testing') testingRefreshTimer=setTimeout(()=>loadTesting(false),3000);
+    }
+    async function createTestingDataset(event){
+      event.preventDefault();
+      const button=$('testingCreateDataset');
+      const form=new FormData();
+      form.set('name',$('testingDatasetName').value);
+      form.set('defaultLabel',$('testingDefaultLabel').value);
+      form.set('sourceUrl',$('testingSourceUrl').value);
+      [...$('testingFiles').files].forEach(file=>form.append('files',file));
+      if(!$('testingFiles').files.length && !$('testingSourceUrl').value.trim()){ toast('请选择文件或填写网页地址'); return; }
+      button.disabled=true; button.textContent='正在提取…';
+      try{
+        const data=await uploadApi('/api/admin/testing/datasets',form);
+        toast(`已创建数据集，共 ${data.dataset.sample_count} 张图片`);
+        $('testingDatasetForm').reset();
+        await loadTesting(true);
+        await openTestingDataset(data.dataset.id);
+      }catch(err){ toast(err?.message || '数据集创建失败'); }
+      finally{ button.disabled=false; button.innerHTML='<i class="fa fa-database"></i>创建数据集'; }
+    }
+    async function openTestingDataset(id){
+      const data=await api(`/api/admin/testing/datasets/${encodeURIComponent(id)}`);
+      const dataset=data.dataset || {};
+      state.testingDetail={type:'dataset',data:dataset};
+      const samples=dataset.samples || [];
+      $('testingDetailPanel').hidden=false;
+      $('testingDetail').innerHTML=`
+        <div class="panel-head">
+          <div><h2>${esc(dataset.name)}</h2><p>${samples.length} 张图片 · ${dataset.labeled_count} 张已标注 · ${testingBytes(dataset.total_bytes)}</p></div>
+          <button class="btn mini secondary" onclick="$('testingDetailPanel').hidden=true">关闭</button>
+        </div>
+        <div class="testing-samples">${samples.slice(0,60).map(sample=>`
+          <article class="testing-sample">
+            <img loading="lazy" src="/api/admin/testing/samples/${encodeURIComponent(sample.id)}/image" alt="${esc(sample.name)}">
+            <div class="testing-sample-body">
+              <strong title="${esc(sample.name)}">${esc(sample.name)}</strong>
+              <span class="testing-help">${sample.width}×${sample.height} · ${testingBytes(sample.byte_size)}</span>
+              <select class="select" aria-label="设置 ${esc(sample.name)} 的真值" ${can('testing.run')?'': 'disabled'} onchange="setTestingSampleLabel('${esc(sample.id)}',this.value)">
+                <option value="unlabeled" ${sample.ground_truth==='unlabeled'?'selected':''}>未标注</option>
+                <option value="real" ${sample.ground_truth==='real'?'selected':''}>真实图像</option>
+                <option value="fake" ${sample.ground_truth==='fake'?'selected':''}>AI 生成</option>
+              </select>
+            </div>
+          </article>`).join('')}</div>
+        ${samples.length>60?`<p class="testing-help">为保证页面流畅，仅预览前 60 张；全部 ${samples.length} 张都会参与评测。</p>`:''}`;
+      $('testingDetailPanel').scrollIntoView({behavior:'smooth',block:'start'});
+    }
+    async function setTestingSampleLabel(id,groundTruth){
+      try{
+        await api(`/api/admin/testing/samples/${encodeURIComponent(id)}`,{method:'POST',body:JSON.stringify({groundTruth})});
+        await loadTesting(false);
+      }catch(err){ toast(err?.message || '标签保存失败'); }
+    }
+    async function deleteTestingDataset(id){
+      const approval=await requestAction({title:'删除测试数据集',message:`将删除数据集 ${id} 及其图片。历史任务指标会保留，但样本明细不再可用。`,warning:'运行中的数据集不能删除。',confirmText:'确认删除',danger:true});
+      if(!approval) return;
+      try{ await api(`/api/admin/testing/datasets/${encodeURIComponent(id)}`,{method:'DELETE'}); toast('测试数据集已删除'); $('testingDetailPanel').hidden=true; await loadTesting(true); }
+      catch(err){ toast(err?.message || '删除失败'); }
+    }
+    async function startTestingEvaluation(event){
+      event.preventDefault();
+      const datasetId=$('testingEvalDataset').value;
+      const modelId=$('testingEvalModel').value;
+      if(!datasetId || !modelId){ toast('请选择数据集和模型'); return; }
+      try{
+        const data=await api('/api/admin/testing/runs',{method:'POST',body:JSON.stringify({datasetId,modelId,concurrency:Number($('testingEvalConcurrency').value)})});
+        toast(`评测任务已启动：${data.run.id}`);
+        await loadTesting(true);
+        await openTestingRun(data.run.id);
+      }catch(err){ toast(err?.message || '评测启动失败'); }
+    }
+    async function startTestingLoad(event){
+      event.preventDefault();
+      const approval=await requestAction({title:'启动受控压力测试',message:`并发 ${$('testingLoadConcurrency').value} · 请求 ${$('testingLoadRequests').value} · 最长 ${$('testingLoadDuration').value} 秒`,warning:'压测会真实占用模型服务资源，运行期间可能影响检测延迟。',confirmText:'确认启动',danger:true});
+      if(!approval) return;
+      const file=$('testingLoadFile').files[0];
+      if(!file){ toast('请选择固定测试图片'); return; }
+      const form=new FormData();
+      form.set('confirmation','INTERNAL_LOAD_TEST');
+      form.set('modelId',$('testingLoadModel').value);
+      form.set('concurrency',$('testingLoadConcurrency').value);
+      form.set('requestCount',$('testingLoadRequests').value);
+      form.set('durationSeconds',$('testingLoadDuration').value);
+      form.set('file',file);
+      try{
+        const data=await uploadApi('/api/admin/testing/load-tests',form);
+        toast(`压测任务已启动：${data.run.id}`);
+        await loadTesting(true);
+        await openTestingRun(data.run.id);
+      }catch(err){ toast(err?.message || '压测启动失败'); }
+    }
+    async function cancelTestingRun(id){
+      try{ await api(`/api/admin/testing/runs/${encodeURIComponent(id)}/cancel`,{method:'POST',body:'{}'}); toast('已请求停止任务'); await loadTesting(true); }
+      catch(err){ toast(err?.message || '停止任务失败'); }
+    }
+    async function openTestingRun(id){
+      const data=await api(`/api/admin/testing/runs/${encodeURIComponent(id)}`);
+      const run=data.run || {};
+      state.testingDetail={type:'run',data:run};
+      const metrics=run.metrics || {};
+      const latency=metrics.latency || {};
+      const isEvaluation=run.kind==='evaluation';
+      const metricItems=isEvaluation ? [
+        ['Accuracy',testingPercent(metrics.accuracy)],['Precision',testingPercent(metrics.precision)],
+        ['Recall',testingPercent(metrics.recall)],['F1',testingPercent(metrics.f1)],
+        ['成功样本',metrics.successCount ?? '--'],['失败样本',metrics.failureCount ?? '--'],
+        ['P50',latency.p50Ms == null?'--':`${latency.p50Ms} ms`],['P95',latency.p95Ms == null?'--':`${latency.p95Ms} ms`],
+      ] : [
+        ['吞吐',metrics.throughputRps == null?'--':`${metrics.throughputRps} req/s`],
+        ['错误率',testingPercent(metrics.errorRate)],['成功请求',metrics.successCount ?? '--'],
+        ['失败请求',metrics.failureCount ?? '--'],['P50',latency.p50Ms == null?'--':`${latency.p50Ms} ms`],
+        ['P95',latency.p95Ms == null?'--':`${latency.p95Ms} ms`],['P99',latency.p99Ms == null?'--':`${latency.p99Ms} ms`],
+        ['最大延迟',latency.maxMs == null?'--':`${latency.maxMs} ms`],
+      ];
+      const confusion=metrics.confusionMatrix || {};
+      $('testingDetailPanel').hidden=false;
+      $('testingDetail').innerHTML=`
+        <div class="panel-head">
+          <div><h2>${isEvaluation?'模型评测':'压力测试'} · ${esc(run.model_name || run.model_id)}</h2><p class="mono">${esc(run.id)} · ${testingRunStatus(run.status)}</p></div>
+          <div class="action-row">${isEvaluation?`<a class="btn mini secondary" href="/api/admin/testing/runs/${encodeURIComponent(run.id)}/export"><i class="fa fa-download"></i>导出 CSV</a>`:''}<button class="btn mini secondary" onclick="$('testingDetailPanel').hidden=true">关闭</button></div>
+        </div>
+        ${run.error?`<div class="inline-state error"><strong>任务失败</strong><span>${esc(run.error)}</span></div>`:''}
+        <div class="testing-metrics">${metricItems.map(([label,value])=>`<div class="testing-metric"><small>${esc(label)}</small><strong>${esc(value)}</strong></div>`).join('')}</div>
+        ${isEvaluation&&metrics.labeledCount?`<div class="route-summary">
+          <div class="route-summary-row"><span>混淆矩阵</span><strong>TP ${confusion.tp ?? 0} · TN ${confusion.tn ?? 0} · FP ${confusion.fp ?? 0} · FN ${confusion.fn ?? 0}</strong></div>
+          <div class="route-summary-row"><span>科学口径</span><strong>${metrics.labeledCount} 个有真值且产生有效预测的样本</strong></div>
+        </div>`:isEvaluation?'<div class="warning-band">当前数据集没有足够真值标签，已统计延迟与成功率，但不计算准确率指标。</div>':''}
+        ${isEvaluation?table(['样本','真值','预测','分数','耗时','状态'],(run.results||[]).slice(0,200).map(item=>`<tr><td>${esc(item.sample_name || item.sample_id)}</td><td>${esc(item.ground_truth)}</td><td>${esc(item.predicted_label)}</td><td>${item.score == null?'--':testingPercent(item.score)}</td><td>${item.latency_ms == null?'--':`${item.latency_ms} ms`}</td><td>${item.status==='success'?'<span class="status ok">成功</span>':`<span class="status">${esc(item.error || '失败')}</span>`}</td></tr>`),'任务尚未产生样本结果'):''}`;
+      $('testingDetailPanel').scrollIntoView({behavior:'smooth',block:'start'});
+      if(['queued','running','cancel_requested'].includes(run.status)) setTimeout(()=>{ if(state.testingDetail?.data?.id===id) openTestingRun(id); },2500);
     }
     async function loadAll(){
       updateSync('正在同步…');

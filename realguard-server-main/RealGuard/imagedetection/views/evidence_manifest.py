@@ -512,6 +512,7 @@ def _model_inference_audit(model_run: Mapping[str, Any] | None) -> dict[str, Any
             "model",
             "rawModelScore",
             "publishedProbability",
+            "fakeProbability",
             "finalLabel",
             "originalSize",
             "processedSize",
@@ -588,7 +589,11 @@ def build_image_manifest(
     confidence = _stored_text(item, "clarity", "未记录")
     if decision["status"] == "verdict" and decision["authority"] == "calibrated_model":
         try:
-            audit_probability = float(model_inference.get("publishedProbability")) * 100.0
+            audit_probability = float(
+                model_inference.get("publishedProbability")
+                if model_inference.get("publishedProbability") is not None
+                else model_inference.get("fakeProbability")
+            ) * 100.0
         except (TypeError, ValueError):
             audit_probability = float("nan")
         audit_consistent = bool(
@@ -938,12 +943,12 @@ def delete_signed_image_manifest(
     return True
 
 
-def stage_signed_image_manifest_deletion(
+def plan_signed_image_manifest_deletion(
     record_id: int | str,
     *,
     snapshot_root: str | os.PathLike[str] | None = None,
 ) -> tuple[Path, Path] | None:
-    """Atomically hide a snapshot so database erasure can still be rolled back."""
+    """Choose and validate a quarantine path before any filesystem mutation."""
     normalized_id = str(record_id or "").strip()
     if not normalized_id or not normalized_id.isdigit():
         raise EvidenceManifestError("证据快照记录 ID 无效")
@@ -957,12 +962,47 @@ def stage_signed_image_manifest_deletion(
             if not stat.S_ISREG(snapshot_stat.st_mode) or snapshot_stat.st_nlink != 1:
                 raise EvidenceManifestError("证据快照文件类型或链接数异常")
             staged = root / f".{path.name}.deleting-{uuid.uuid4().hex}"
+        except EvidenceManifestError:
+            raise
+        except OSError as exc:
+            raise EvidenceManifestError("无法规划证据快照擦除") from exc
+    return path, staged
+
+
+def stage_signed_image_manifest_deletion(
+    record_id: int | str,
+    *,
+    snapshot_root: str | os.PathLike[str] | None = None,
+    planned_deletion: tuple[Path, Path] | None = None,
+) -> tuple[Path, Path] | None:
+    """Atomically hide a snapshot so database erasure can still be rolled back."""
+    planned = planned_deletion
+    if planned is None:
+        planned = plan_signed_image_manifest_deletion(
+            record_id,
+            snapshot_root=snapshot_root,
+        )
+    if planned is None:
+        return None
+    path, staged = planned
+    normalized_id = str(record_id or "").strip()
+    root = _snapshot_root(snapshot_root)
+    expected_path = _snapshot_path(root, normalized_id)
+    if path != expected_path or staged.parent != root or ".deleting-" not in staged.name:
+        raise EvidenceManifestError("证据快照擦除计划无效")
+    with _snapshot_lock(root, normalized_id):
+        try:
+            snapshot_stat = path.lstat()
+            if not stat.S_ISREG(snapshot_stat.st_mode) or snapshot_stat.st_nlink != 1:
+                raise EvidenceManifestError("证据快照文件类型或链接数异常")
+            if staged.exists():
+                raise EvidenceManifestError("证据快照隔离路径已存在")
             path.replace(staged)
         except EvidenceManifestError:
             raise
         except OSError as exc:
             raise EvidenceManifestError("无法隔离证据快照") from exc
-    return path, staged
+    return planned
 
 
 def restore_staged_image_manifest_deletion(staged_deletion: tuple[Path, Path] | None) -> None:
@@ -1045,7 +1085,11 @@ def _valid_manifest_shape(manifest: object) -> bool:
         if conclusion.get("decision_status") == "verdict" and conclusion.get("decision_authority") == "calibrated_model":
             audit = structured.get("model_inference")
             try:
-                audit_probability = float(audit.get("publishedProbability")) * 100.0
+                audit_probability = float(
+                    audit.get("publishedProbability")
+                    if audit.get("publishedProbability") is not None
+                    else audit.get("fakeProbability")
+                ) * 100.0
                 score_matches = abs(audit_probability - float(risk_score)) <= 0.11
             except (AttributeError, TypeError, ValueError):
                 score_matches = False

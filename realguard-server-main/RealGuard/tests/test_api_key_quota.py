@@ -12,7 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from imagedetection import creat_app  # noqa: E402
-from imagedetection.views import admin, admin_state, api  # noqa: E402
+from imagedetection.views import admin, admin_state, api, developer_platform  # noqa: E402
 
 
 class _SharedQuotaDb:
@@ -351,6 +351,8 @@ def test_legacy_admin_quota_is_migrated_then_db_becomes_authoritative(monkeypatc
 
     def fake_system_sql(sql, params=None, fetch=True):
         normalized = " ".join(sql.split())
+        if normalized.startswith("SELECT CONSTRAINT_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS"):
+            return [{"CONSTRAINT_NAME": params[1]}]
         if normalized.startswith("CREATE TABLE"):
             return 0
         if normalized.startswith("SELECT user_id FROM developer_api_keys"):
@@ -402,22 +404,37 @@ def test_legacy_admin_quota_is_migrated_then_db_becomes_authoritative(monkeypatc
 
 
 def test_db_authoritative_quota_write_failure_returns_admin_503(app, monkeypatch):
-    monkeypatch.setattr(admin, "_admin_required", lambda permission: ({"Userid": 1, "role": "admin"}, None))
-    monkeypatch.setattr(admin, "excute_sql", lambda sql, params=None, fetch=True: [{"id": 7}])
-    monkeypatch.setattr(admin.admin_state, "get_api_key_quota", lambda key_id: {"dailyLimit": 10})
-    monkeypatch.setattr(admin.admin_state, "set_api_key_quota", lambda key_id, quota: None)
+    monkeypatch.setattr(
+        developer_platform,
+        "admin_update_request_quota",
+        lambda key_id: (
+            admin.jsonify({
+                "error": {
+                    "code": "quota_storage_unavailable",
+                    "message": "API 配额存储初始化失败",
+                }
+            }),
+            503,
+        ),
+    )
     client = app.test_client()
     with client.session_transaction() as session:
         session[admin.ADMIN_CSRF_SESSION_KEY] = "csrf-token"
 
     response = client.post(
         "/api/admin/api-keys/7/quota",
-        json={"dailyLimit": 20},
+        json={
+            "dailyLimit": 20,
+            "rateLimitPerMinute": None,
+            "expectedDailyLimit": 10,
+            "expectedRateLimitPerMinute": None,
+            "operationId": "quota-write-failure-001",
+        },
         headers={"X-CSRF-Token": "csrf-token"},
     )
 
     assert response.status_code == 503
-    assert response.get_json()["code"] == "quota_persistence_failed"
+    assert response.get_json()["error"]["code"] == "quota_storage_unavailable"
 
 
 def test_db_authoritative_quota_write_failure_does_not_update_json(monkeypatch, tmp_path):

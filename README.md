@@ -684,6 +684,27 @@ FROM image_detection.data
 WHERE owner_account_uuid IS NULL OR owner_account_uuid = '';
 ```
 
+## 内部测试平台
+
+管理员登录 `/admin` 后可从“内部测试”进入模型测试工作台。该模块只在后台出现，
+普通用户与开发者 API 无法访问。
+
+- 数据集支持直接上传图片，以及从 PDF、DOCX、公网 HTTPS 网页提取图片。
+- 样本按 SHA-256 去重，可逐张设置 `real`、`fake` 或 `unlabeled` 真值。
+- 模型评测记录固定模型快照，输出混淆矩阵、Accuracy、Precision、Recall、F1、
+  成功率以及 P50/P95/P99 延迟。
+- 受控压测输出吞吐、错误率、状态码和延迟分位数；服务端硬限制并发 16、请求 1000、
+  持续 120 秒，同一时间仅允许一个压测任务。
+- Web 主机、算法服务器和模型服务状态与测试任务放在同一工作台监控。
+- 所有创建、标注、运行、停止和删除操作均使用管理员权限、CSRF 与后台审计。
+
+测试数据默认存放在 `/opt/realguard-data/internal-testing/`，权限应保持 `0700/0600`。
+默认最多保存 200 个数据集、10 GiB 图片，可通过
+`REALGUARD_INTERNAL_TEST_MAX_DATASETS` 和 `REALGUARD_INTERNAL_TEST_MAX_BYTES` 调整。
+测试请求使用 `__realguard_internal_test__` 身份和 `X-RealGuard-Internal-Test: 1`
+标记，不计入普通用户历史、开发者额度或后台生产检测统计。测试数据库使用 SQLite
+一致性快照、样本使用独立归档，并随 RealGuard 定时备份与恢复演练一起校验。
+
 ## 安全说明
 
 - 不要提交 `.env`、私钥、数据库 dump、上传文件、SQLite 数据库。
@@ -698,14 +719,14 @@ WHERE owner_account_uuid IS NULL OR owner_account_uuid = '';
 - 管理状态固定写入 `/opt/realguard-data/admin_state.json`；不要放回受 `ProtectHome` 隔离的用户主目录。
 - 对外开发者请求必须经过 `/api/openapi/v1/` 计费网关；`/api/developer/v1/detect` 与证据服务直连 Key 均保持停用。
 - 开发者异步检测只由 `realguard-developer-worker.service` 执行；上传文件先原子写入权限为 `0600` 的私有 spool，再预占额度并入队。数据库租约、心跳、幂等键和最大重试次数共同约束重启恢复。
-- 图像 PDF 报告首次生成时固化服务端证据清单，记录原件 SHA-256、模型/策略版本和结论并独立签名；后续下载复用首次快照，原件或快照变化时失败关闭。
+- V1 图像 PDF 首次生成时固化服务端证据清单，记录原件 SHA-256、模型/策略版本和结论，并使用共享密钥 HMAC 做平台内部完整性封印；它不能由第三方仅凭报告独立验签，也不应表述为电子签名。V2 报告使用 Ed25519 非对称签名，可通过受保护验证接口或离线证据包校验。
 
 ## 已知问题和待办
 
 - 生产库当前有 699 条旧图像和 58 条旧视频记录尚未绑定 `account_uuid`。它们默认对用户不可见，不能按手机号或 openid 自动猜测归属。认领必须经过 `operator` 申请、`reviewer` 审批，校验原媒体 SHA-256、治理证据文件 SHA-256、目标账号锁和 HMAC 完整性；错误申请应先驳回释放，再重新提交。
 - 当前 66 主模型在少量已知实拍样本上存在系统性高分误判，自动真假结论已由 `model_decision_policy.py` 关闭。必须完成独立校准集的标签/预处理/FP32-INT8 对齐、FPR/FNR 和阈值验收后，才能配置校准记录并开放自动判定。
 - 网页端快速检测、Swarm 与开发者 API 已由独立持久 worker 执行。当前单机总执行并发固定为 2；扩展到多 worker 或多 GPU 前必须重新验证通道公平、租约恢复和容量报告。
-- V1 图像 PDF 已有首次固化签名清单；视频报告和 V2 深度取证报告还没有统一到同一套证据签名、密钥轮换和验签策略，不能宣称达到司法取证级。
+- V1 图像 PDF 已有首次固化的服务端 HMAC 完整性清单；V2 报告已具备 Ed25519 清单与冻结 PDF 绑定、密钥轮换验证注册表和离线验签能力。两者仍没有可信时间戳、外部公钥锚定、KMS/HSM 或电子认证服务支持，因此不能宣称达到司法取证级或具备电子签名法律效力。
 - Umami 监控后台不在 `deploy_v1.sh` / `deploy_v2.sh` 自动发布范围内。
 - 本地自动备份、每周隔离恢复演练、独立告警 worker、dead-man watchdog 和安全审计链校验 timer 已纳入部署。异地 `rclone`、KMS/HSM、WORM/对象锁检查点及双机容灾仍需由运维配置并留档；未配置时后台必须保持红色告警，不得宣称完成商用灾备。
 

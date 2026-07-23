@@ -6,6 +6,7 @@ import json
 import os
 import base64
 import secrets
+import stat
 import time
 import uuid
 from collections import defaultdict
@@ -18,7 +19,12 @@ from PIL import Image
 from flask import Blueprint, Response, jsonify, request, send_file, session, stream_with_context
 
 from imagedetection.views.historical_record import DETECTION_BACKEND_BASE_URL
-from imagedetection.views import admin_state, evidence_manifest, traffic_geo
+from imagedetection.views import (
+    admin_state,
+    evidence_manifest,
+    privacy_erasure_ledger,
+    traffic_geo,
+)
 from imagedetection.views.login import (
     PasswordLoginRateLimitError,
     SmsStorageError,
@@ -62,11 +68,21 @@ DEVELOPER_WORKER_MAX_HEARTBEAT_AGE = max(
     int(os.environ.get("REALGUARD_DEVELOPER_WORKER_MAX_HEARTBEAT_AGE", "60")),
 )
 THUMBNAIL_CACHE_DIR = Path(os.environ.get("REALGUARD_THUMBNAIL_CACHE_DIR", "/tmp/realguard-thumbnails"))
+PRIVACY_DEVELOPER_SPOOL_ROOT = Path(
+    os.environ.get("REALGUARD_DEVELOPER_SPOOL_ROOT", "/opt/realguard-data/developer-spool")
+)
+PRIVACY_WEB_SPOOL_ROOT = Path(
+    os.environ.get("REALGUARD_WEB_TASK_SPOOL_ROOT", "/opt/realguard-data/web-spool")
+)
 THUMBNAIL_MAX_SIZE = (
     int(os.environ.get("REALGUARD_THUMBNAIL_MAX_WIDTH", "220")),
     int(os.environ.get("REALGUARD_THUMBNAIL_MAX_HEIGHT", "165")),
 )
 THUMBNAIL_QUALITY = int(os.environ.get("REALGUARD_THUMBNAIL_QUALITY", "45"))
+PRIVACY_ERASURE_PRECOMMIT_GRACE_SECONDS = max(
+    600,
+    int(os.environ.get("REALGUARD_PRIVACY_ERASURE_PRECOMMIT_GRACE_SECONDS", "900")),
+)
 HISTORY_ORDER_BY = (
     "CASE WHEN CAST(createtime AS CHAR) REGEXP '^[0-9]{14}$' "
     "THEN STR_TO_DATE(CAST(createtime AS CHAR), '%%Y%%m%%d%%H%%i%%s') "
@@ -75,6 +91,14 @@ HISTORY_ORDER_BY = (
 )
 DEVELOPER_API_KEY_PREFIX = "rg_sk_"
 DEVELOPER_API_KEY_MAX_ACTIVE = int(os.environ.get("REALGUARD_DEVELOPER_API_KEY_MAX_ACTIVE", "5"))
+DEVELOPER_API_KEY_DEFAULT_TTL_SECONDS = max(
+    86400,
+    int(os.environ.get("REALGUARD_DEVELOPER_API_KEY_DEFAULT_TTL_SECONDS", str(90 * 86400))),
+)
+DEVELOPER_API_KEY_MAX_TTL_SECONDS = max(
+    DEVELOPER_API_KEY_DEFAULT_TTL_SECONDS,
+    int(os.environ.get("REALGUARD_DEVELOPER_API_KEY_MAX_TTL_SECONDS", str(365 * 86400))),
+)
 DEVELOPER_API_KEY_DEFAULT_SCOPES = "image:fast"
 DEVELOPER_API_KEY_ALLOWED_SCOPES = frozenset({"image:fast", "image:swarm", "reports"})
 DEVELOPER_AUTH_SECRET = os.environ.get("REALGUARD_DEVELOPER_AUTH_SECRET", "").strip()
@@ -96,6 +120,7 @@ _DEVELOPER_KEY_TABLE_READY = False
 _DEVELOPER_USAGE_TABLE_READY = False
 _SECURITY_AUDIT_TABLES_READY = False
 _USER_ACCOUNT_COLUMNS_READY = False
+_PRIVACY_ERASURE_TABLE_READY = False
 
 
 def _current_user():
@@ -198,7 +223,14 @@ def _idempotent_developer_api_key(user_id, operation, idempotency_key):
 def _developer_operation_idempotency(user_id, operation):
     key = request.headers.get("Idempotency-Key", "").strip()
     if not key:
-        return None, None
+        return None, (
+            jsonify({
+                "status": "error",
+                "code": "idempotency_key_required",
+                "message": "创建或轮换 API Key 必须提供 Idempotency-Key",
+            }),
+            400,
+        )
     if len(key) > 128:
         return None, (jsonify({"status": "error", "message": "Idempotency-Key 不能超过 128 个字符"}), 400)
     api_key = _idempotent_developer_api_key(user_id, operation, key)
@@ -547,8 +579,10 @@ def record_analytics_pageview():
 
 
 def _normalize_developer_expiry(raw):
+    now = datetime.now()
     if raw in (None, ""):
-        return None, None
+        parsed = now + timedelta(seconds=DEVELOPER_API_KEY_DEFAULT_TTL_SECONDS)
+        return parsed.strftime("%Y-%m-%d %H:%M:%S"), None
     text = str(raw).strip().replace("Z", "+00:00")
     try:
         parsed = datetime.fromisoformat(text)
@@ -556,8 +590,10 @@ def _normalize_developer_expiry(raw):
         return None, "有效期格式无效，请使用 ISO 8601 时间"
     if parsed.tzinfo is not None:
         parsed = parsed.astimezone().replace(tzinfo=None)
-    if parsed <= datetime.now():
+    if parsed <= now:
         return None, "有效期必须晚于当前时间"
+    if parsed > now + timedelta(seconds=DEVELOPER_API_KEY_MAX_TTL_SECONDS):
+        return None, f"API Key 有效期不能超过 {DEVELOPER_API_KEY_MAX_TTL_SECONDS // 86400} 天"
     return parsed.strftime("%Y-%m-%d %H:%M:%S"), None
 
 
@@ -827,9 +863,15 @@ def _revoke_developer_key_atomic(user_id, key_id):
                 (key_id, user_id),
             )
             current = cursor.fetchone()
-            if not current or current.get("status") != "active":
+            if not current:
                 conn.rollback()
                 return False, "API Key 不存在或已撤销", 404
+            if current.get("status") == "revoked":
+                conn.commit()
+                return True, None, 200
+            if current.get("status") != "active":
+                conn.rollback()
+                return False, "API Key 当前状态不允许撤销", 409
             cursor.execute(
                 "UPDATE developer_api_keys SET status = 'revoked', revoked_at = NOW() "
                 "WHERE id = %s AND user_id = %s AND status = 'active'",
@@ -2381,9 +2423,353 @@ def _local_detection_media_path(kind, item):
     return media_root, (media_root / folder / kind / filename).resolve()
 
 
+def _ensure_privacy_erasure_table():
+    global _PRIVACY_ERASURE_TABLE_READY
+    if _PRIVACY_ERASURE_TABLE_READY:
+        return True
+    result = excute_sql(
+        """
+        CREATE TABLE IF NOT EXISTS privacy_erasure_jobs (
+          job_id CHAR(36) NOT NULL,
+          resource_kind VARCHAR(16) NOT NULL,
+          resource_id BIGINT NOT NULL,
+          owner_key_hash CHAR(64) NOT NULL,
+          state VARCHAR(24) NOT NULL DEFAULT 'preparing',
+          original_path TEXT NULL,
+          staged_path TEXT NULL,
+          thumbnail_original_path TEXT NULL,
+          thumbnail_staged_path TEXT NULL,
+          manifest_original_path TEXT NULL,
+          manifest_staged_path TEXT NULL,
+          attempt_count INT UNSIGNED NOT NULL DEFAULT 0,
+          last_error VARCHAR(255) NULL,
+          created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+          updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+          completed_at DATETIME(6) NULL,
+          PRIMARY KEY (job_id),
+          KEY idx_privacy_erasure_resource (resource_kind, resource_id),
+          KEY idx_privacy_erasure_state_updated (state, updated_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        fetch=False,
+    )
+    _PRIVACY_ERASURE_TABLE_READY = result is not None
+    return _PRIVACY_ERASURE_TABLE_READY
+
+
+def _privacy_owner_hash(actor):
+    actor = actor or {}
+    identity = (
+        actor.get("account_uuid")
+        or actor.get("openid")
+        or actor.get("phone")
+        or actor.get("Userid")
+        or "anonymous"
+    )
+    return hashlib.sha256(str(identity).encode("utf-8")).hexdigest()
+
+
+def _create_privacy_erasure_job(kind, itemid, actor):
+    job_id = str(uuid.uuid4())
+    inserted = excute_sql(
+        """
+        INSERT INTO privacy_erasure_jobs
+            (job_id, resource_kind, resource_id, owner_key_hash, state)
+        VALUES (%s, %s, %s, %s, 'preparing')
+        """,
+        (job_id, kind, itemid, _privacy_owner_hash(actor)),
+        fetch=False,
+    )
+    return job_id if inserted is not None else None
+
+
+def _stage_privacy_erasure_job(
+    job_id,
+    *,
+    original_path=None,
+    staged_path=None,
+    thumbnail_original_path=None,
+    thumbnail_staged_path=None,
+    staged_manifest=None,
+):
+    manifest_original, manifest_staged = staged_manifest or (None, None)
+    updated = excute_sql(
+        """
+        UPDATE privacy_erasure_jobs
+        SET state = 'staged', original_path = %s, staged_path = %s,
+            thumbnail_original_path = %s, thumbnail_staged_path = %s,
+            manifest_original_path = %s, manifest_staged_path = %s,
+            last_error = NULL
+        WHERE job_id = %s AND state = 'preparing'
+        """,
+        (
+            str(original_path) if original_path else None,
+            str(staged_path) if staged_path else None,
+            str(thumbnail_original_path) if thumbnail_original_path else None,
+            str(thumbnail_staged_path) if thumbnail_staged_path else None,
+            str(manifest_original) if manifest_original else None,
+            str(manifest_staged) if manifest_staged else None,
+            job_id,
+        ),
+        fetch=False,
+    )
+    return updated == 1
+
+
+def _privacy_erasure_job(job_id):
+    rows = excute_sql(
+        """
+        SELECT job_id, resource_kind, resource_id, state,
+               original_path, staged_path,
+               thumbnail_original_path, thumbnail_staged_path,
+               manifest_original_path, manifest_staged_path,
+               attempt_count, updated_at
+        FROM privacy_erasure_jobs WHERE job_id = %s LIMIT 1
+        """,
+        (job_id,),
+    )
+    return rows[0] if rows else None
+
+
+def _privacy_erasure_allowed_roots():
+    upload_root = (Path(__file__).resolve().parents[1] / "static" / "uploads").resolve()
+    return (
+        upload_root,
+        THUMBNAIL_CACHE_DIR.expanduser().resolve(),
+        evidence_manifest._snapshot_root().resolve(),
+    )
+
+
+def _validated_erasure_path(raw_path, *, staged):
+    if not raw_path:
+        return None
+    path = Path(str(raw_path)).expanduser().resolve()
+    try:
+        allowed = any(path.is_relative_to(root) for root in _privacy_erasure_allowed_roots())
+    except AttributeError:  # pragma: no cover - Python 3.8 compatibility
+        allowed = any(str(path).startswith(f"{root}{os.sep}") for root in _privacy_erasure_allowed_roots())
+    if not allowed or (staged and ".deleting-" not in path.name):
+        raise RuntimeError("擦除任务路径校验失败")
+    return path
+
+
+def _set_privacy_erasure_state(job_id, state, *, error="", scrub_paths=False):
+    path_reset = (
+        ", original_path = NULL, staged_path = NULL, thumbnail_original_path = NULL, "
+        "thumbnail_staged_path = NULL, manifest_original_path = NULL, manifest_staged_path = NULL"
+        if scrub_paths
+        else ""
+    )
+    completed = ", completed_at = NOW(6)" if state in {"completed", "rolled_back"} else ""
+    updated = excute_sql(
+        f"""
+        UPDATE privacy_erasure_jobs
+        SET state = %s, last_error = %s, attempt_count = attempt_count + 1
+            {path_reset}{completed}
+        WHERE job_id = %s
+        """,
+        (state, str(error or "")[:255] or None, job_id),
+        fetch=False,
+    )
+    return updated == 1
+
+
+def _erase_privacy_spool_file(root, spool_name):
+    name = str(spool_name or "").strip()
+    root = Path(root).expanduser()
+    if not root.is_absolute() or not name or Path(name).name != name or name in {".", ".."}:
+        raise RuntimeError("擦除任务队列文件路径无效")
+    root_stat = root.lstat()
+    if not stat.S_ISDIR(root_stat.st_mode) or stat.S_ISLNK(root_stat.st_mode):
+        raise RuntimeError("擦除任务队列目录无效")
+    path = root / name
+    try:
+        file_stat = path.lstat()
+    except FileNotFoundError:
+        return True
+    if not stat.S_ISREG(file_stat.st_mode) or file_stat.st_nlink != 1:
+        raise RuntimeError("擦除任务队列文件类型或链接数异常")
+    path.unlink()
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_fd = os.open(root, directory_flags)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+    return True
+
+
+def _scrub_history_replicas(kind, itemid, job_id):
+    if kind != "image":
+        return True
+    erased_hash = hashlib.sha256(f"erased:{job_id}".encode("utf-8")).hexdigest()
+    erased_account_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"realguard-erased:{job_id}"))
+    conn = get_db_connection()
+    try:
+        conn.begin()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT task_id, spool_path
+                FROM developer_detection_tasks
+                WHERE (result_item_id = %s OR effect_item_id = %s)
+                  AND spool_path IS NOT NULL
+                FOR UPDATE
+                """,
+                (itemid, itemid),
+            )
+            developer_spools = cursor.fetchall() or []
+            cursor.execute(
+                """
+                SELECT job_id, spool_path
+                FROM web_detection_tasks
+                WHERE effect_item_id = %s AND spool_path IS NOT NULL
+                FOR UPDATE
+                """,
+                (itemid,),
+            )
+            web_spools = cursor.fetchall() or []
+
+            # Delete bytes before removing their durable references. If a later
+            # SQL write fails, the retained path makes the retry idempotent;
+            # the reverse order could strand sensitive unreferenced files.
+            for row in developer_spools:
+                _erase_privacy_spool_file(PRIVACY_DEVELOPER_SPOOL_ROOT, row.get("spool_path"))
+            for row in web_spools:
+                _erase_privacy_spool_file(PRIVACY_WEB_SPOOL_ROOT, row.get("spool_path"))
+
+            cursor.execute(
+                """
+                UPDATE developer_detection_tasks
+                SET user_id = 0, account_uuid = %s, key_id = 0,
+                    filename = '[erased]', mime_type = 'application/octet-stream',
+                    execution_filename = NULL, request_sha256 = %s,
+                    spool_path = NULL, spool_size = NULL, request_context_json = NULL,
+                    idempotency_key = NULL, effect_item_id = NULL,
+                    effect_result_json = NULL, result_item_id = NULL,
+                    result_json = NULL, error_message = NULL
+                WHERE result_item_id = %s OR effect_item_id = %s
+                """,
+                (erased_account_uuid, erased_hash, itemid, itemid),
+            )
+            cursor.execute(
+                """
+                UPDATE web_detection_tasks
+                SET filename = '[erased]', mime_type = 'application/octet-stream',
+                    request_sha256 = %s, spool_path = NULL, spool_size = NULL,
+                    request_context_json = NULL, owner_type = 'erased', owner_key = %s,
+                    idempotency_key = NULL, effect_item_id = NULL,
+                    effect_result_json = NULL, result_json = NULL, error_message = NULL
+                WHERE effect_item_id = %s
+                """,
+                (erased_hash, erased_hash, itemid),
+            )
+            cursor.execute(
+                """
+                UPDATE admin_model_runs
+                SET itemid = NULL, actor_id = NULL, actor_username = NULL,
+                    actor_phone = NULL, meta_json = %s
+                WHERE itemid = %s
+                """,
+                (json.dumps({"erased": True, "erasureJobId": job_id}), itemid),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    admin_state.scrub_detection_item(itemid, job_id)
+    return True
+
+
+def _restore_privacy_erasure_job(job):
+    try:
+        for original_key, staged_key in (
+            ("original_path", "staged_path"),
+            ("thumbnail_original_path", "thumbnail_staged_path"),
+            ("manifest_original_path", "manifest_staged_path"),
+        ):
+            original = _validated_erasure_path(job.get(original_key), staged=False)
+            staged = _validated_erasure_path(job.get(staged_key), staged=True)
+            if staged and staged.exists() and original and not original.exists():
+                staged.replace(original)
+        return _set_privacy_erasure_state(job["job_id"], "rolled_back", scrub_paths=True)
+    except Exception as exc:
+        _set_privacy_erasure_state(job["job_id"], "restore_failed", error=type(exc).__name__)
+        return False
+
+
+def _finalize_privacy_erasure_job(job):
+    errors = []
+    for key in ("staged_path", "thumbnail_staged_path", "manifest_staged_path"):
+        try:
+            staged = _validated_erasure_path(job.get(key), staged=True)
+            if staged:
+                staged.unlink(missing_ok=True)
+        except Exception as exc:
+            errors.append(f"{key}:{type(exc).__name__}")
+    try:
+        _scrub_history_replicas(job.get("resource_kind"), int(job.get("resource_id")), job["job_id"])
+    except Exception as exc:
+        errors.append(f"replicas:{type(exc).__name__}")
+    if errors:
+        _set_privacy_erasure_state(job["job_id"], "cleanup_failed", error=",".join(errors))
+        return False
+    return _set_privacy_erasure_state(job["job_id"], "completed", scrub_paths=True)
+
+
+def _privacy_erasure_record_exists(kind, itemid):
+    table = "data" if kind == "image" else "video_data"
+    rows = excute_detection_sql(f"SELECT itemid FROM {table} WHERE itemid = %s LIMIT 1", (itemid,))
+    if rows is None:
+        return None
+    return bool(rows)
+
+
+def _retry_pending_privacy_erasures(limit=50):
+    if not _ensure_privacy_erasure_table():
+        return {"retried": 0, "completed": 0, "restored": 0}
+    try:
+        batch_size = max(1, min(int(limit), 200))
+    except (TypeError, ValueError):
+        batch_size = 50
+    rows = excute_sql(
+        """
+        SELECT job_id, resource_kind, resource_id, state,
+               original_path, staged_path,
+               thumbnail_original_path, thumbnail_staged_path,
+               manifest_original_path, manifest_staged_path,
+               attempt_count, updated_at
+        FROM privacy_erasure_jobs
+        WHERE state IN ('pending_cleanup', 'cleanup_failed', 'restore_failed')
+           OR (
+                state IN ('preparing', 'staged')
+                AND updated_at <= DATE_SUB(NOW(6), INTERVAL %s SECOND)
+           )
+        ORDER BY updated_at ASC LIMIT %s
+        """,
+        (PRIVACY_ERASURE_PRECOMMIT_GRACE_SECONDS, batch_size),
+    ) or []
+    completed = 0
+    restored = 0
+    for job in rows:
+        if job.get("state") in {"preparing", "staged", "restore_failed"}:
+            exists = _privacy_erasure_record_exists(job.get("resource_kind"), job.get("resource_id"))
+            if exists is None:
+                continue
+            if exists:
+                restored += int(_restore_privacy_erasure_job(job))
+                continue
+        completed += int(_finalize_privacy_erasure_job(job))
+    return {"retried": len(rows), "completed": completed, "restored": restored}
+
+
 def _delete_owned_history_record(kind, itemid, actor):
     if kind not in {"image", "video"}:
         return False, "媒体类型不受支持", 404
+    if not _ensure_privacy_erasure_table():
+        return False, "擦除任务存储暂不可用", 503
     table = "data" if kind == "image" else "video_data"
     if actor.get("mode") == "guest":
         owner_where = "Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s"
@@ -2398,6 +2784,7 @@ def _delete_owned_history_record(kind, itemid, actor):
     staged_manifest = None
     original_path = None
     item = None
+    erasure_job_id = None
     try:
         conn = get_detection_db_connection()
         conn.begin()
@@ -2417,9 +2804,27 @@ def _delete_owned_history_record(kind, itemid, actor):
             except ValueError:
                 conn.rollback()
                 return False, "媒体路径无效", 500
+            erasure_job_id = _create_privacy_erasure_job(kind, itemid, actor)
+            if not erasure_job_id:
+                raise RuntimeError("无法创建擦除任务")
+            privacy_erasure_ledger.record_tombstone(
+                "realguard-v1",
+                f"{kind}-history",
+                itemid,
+                resource_fingerprint_value=privacy_erasure_ledger.resource_fingerprint(
+                    {
+                        "sourceSystem": "realguard-v1",
+                        "resourceKind": f"{kind}-history",
+                        "itemId": itemid,
+                        "filename": item.get("filename") or "",
+                        "sha256": item.get("sha256") or item.get("file_sha256") or "",
+                        "owner": item.get("openid") or item.get("phone") or "",
+                        "mediaPath": str(original_path),
+                    }
+                ),
+            )
             if original_path.is_file():
                 quarantine_path = original_path.with_name(f".{original_path.name}.deleting-{uuid.uuid4().hex}")
-                original_path.replace(quarantine_path)
 
             if kind == "image":
                 thumbnail_path = _thumbnail_cache_path(item)
@@ -2427,8 +2832,30 @@ def _delete_owned_history_record(kind, itemid, actor):
                     thumbnail_quarantine_path = thumbnail_path.with_name(
                         f".{thumbnail_path.name}.deleting-{uuid.uuid4().hex}"
                     )
-                    thumbnail_path.replace(thumbnail_quarantine_path)
-                staged_manifest = evidence_manifest.stage_signed_image_manifest_deletion(itemid)
+                staged_manifest = evidence_manifest.plan_signed_image_manifest_deletion(itemid)
+
+            # Persist every future rename before performing it. If the process
+            # dies after any filesystem mutation, the retry worker can now
+            # restore or finish the exact paths instead of leaving an orphan.
+            if not _stage_privacy_erasure_job(
+                erasure_job_id,
+                original_path=original_path if quarantine_path else None,
+                staged_path=quarantine_path,
+                thumbnail_original_path=thumbnail_path if thumbnail_quarantine_path else None,
+                thumbnail_staged_path=thumbnail_quarantine_path,
+                staged_manifest=staged_manifest,
+            ):
+                raise RuntimeError("无法持久化擦除任务")
+
+            if quarantine_path:
+                original_path.replace(quarantine_path)
+            if thumbnail_quarantine_path:
+                thumbnail_path.replace(thumbnail_quarantine_path)
+            if staged_manifest:
+                staged_manifest = evidence_manifest.stage_signed_image_manifest_deletion(
+                    itemid,
+                    planned_deletion=staged_manifest,
+                )
 
             if kind == "image":
                 cursor.execute("DELETE FROM exif WHERE data_itemid = %s", (itemid,))
@@ -2461,27 +2888,20 @@ def _delete_owned_history_record(kind, itemid, actor):
             evidence_manifest.restore_staged_image_manifest_deletion(staged_manifest)
         except evidence_manifest.EvidenceManifestError:
             pass
+        if erasure_job_id:
+            job = _privacy_erasure_job(erasure_job_id)
+            if job:
+                _restore_privacy_erasure_job(job)
         return False, "删除失败，请稍后重试", 500
     finally:
         if conn:
             conn.close()
 
-    if quarantine_path:
-        try:
-            quarantine_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-    if thumbnail_quarantine_path:
-        try:
-            thumbnail_quarantine_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-    if kind == "image" and item:
-        try:
-            evidence_manifest.finalize_staged_image_manifest_deletion(staged_manifest)
-        except evidence_manifest.EvidenceManifestError as exc:
-            print(f"[EVIDENCE DELETE ERROR] item={itemid}: {exc}")
-    return True, "", 204
+    _set_privacy_erasure_state(erasure_job_id, "pending_cleanup")
+    job = _privacy_erasure_job(erasure_job_id)
+    if job and _finalize_privacy_erasure_job(job):
+        return True, "", 204
+    return True, erasure_job_id, 202
 
 
 @api_blueprint.route("/media/image/<int:itemid>")
@@ -2502,6 +2922,12 @@ def delete_image_detection_history(itemid):
     deleted, message, status = _delete_owned_history_record("image", itemid, actor)
     if not deleted:
         return jsonify({"status": "error", "message": message}), status
+    if status == 202:
+        return jsonify({
+            "status": "pending",
+            "message": "记录已从账户中移除，物理擦除仍在后台重试",
+            "erasureRequestId": message,
+        }), status
     return "", status
 
 
@@ -2513,6 +2939,12 @@ def delete_video_detection_history(itemid):
     deleted, message, status = _delete_owned_history_record("video", itemid, actor)
     if not deleted:
         return jsonify({"status": "error", "message": message}), status
+    if status == 202:
+        return jsonify({
+            "status": "pending",
+            "message": "记录已从账户中移除，物理擦除仍在后台重试",
+            "erasureRequestId": message,
+        }), status
     return "", status
 
 

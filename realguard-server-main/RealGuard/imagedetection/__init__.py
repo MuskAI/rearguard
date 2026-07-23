@@ -131,6 +131,15 @@ def creat_app():
             click.echo(f"{label}: {count}")
         click.echo("identity schema ready")
 
+    @app.cli.command("migrate-password-hashes")
+    def migrate_password_hashes():
+        """Convert legacy plaintext user secrets before production startup."""
+        try:
+            migrated = login.migrate_plaintext_passwords()
+        except Exception as exc:
+            raise click.ClickException(f"password hash migration failed: {exc}") from exc
+        click.echo(f"password hashes migrated: {migrated}")
+
     @app.cli.command("developer-db-upgrade")
     def developer_db_upgrade():
         """Create or update developer API and billing tables."""

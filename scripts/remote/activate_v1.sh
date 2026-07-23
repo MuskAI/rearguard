@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+sudo install -m 600 -o ubuntu -g ubuntu /dev/null /var/lock/realguard-public-release.lock
 sudo install -m 600 -o ubuntu -g ubuntu /dev/null /var/lock/realguard-v1-deploy.lock
+exec 8>/var/lock/realguard-public-release.lock
+flock -w 900 8 || { printf 'Another public release transaction is still running.\n' >&2; exit 75; }
 exec 9>/var/lock/realguard-v1-deploy.lock
 flock -n 9 || { printf 'Another V1 activation is already running.\n' >&2; exit 75; }
 
@@ -22,6 +25,7 @@ units_switched=0
 rollback() {
   status=$?
   trap - ERR
+  set +e
   printf 'V1 activation failed; restoring the previous application.\n' >&2
   if [[ "$frontend_switched" == "1" && -d /var/www/realguard-frontend.previous ]]; then
     sudo rm -rf /var/www/realguard-frontend
@@ -99,8 +103,44 @@ if sudo nginx -T 2>/dev/null \
   echo "Nginx must not listen on the internal V1 application port 5000" >&2
   exit 1
 fi
+sudo install -d -m 700 -o ubuntu -g ubuntu /opt/realguard-data/privacy-erasure
+sudo -u ubuntu python3 - /opt/realguard-data/privacy-erasure/privacy-erasure-tombstones.sqlite3 <<'PY'
+import os
+from pathlib import Path
+import sqlite3
+import sys
+
+path = Path(sys.argv[1])
+with sqlite3.connect(path) as connection:
+    connection.executescript("""
+    CREATE TABLE IF NOT EXISTS privacy_erasure_tombstones (
+        tombstone_id TEXT PRIMARY KEY,
+        created_at TEXT NOT NULL,
+        source_system TEXT NOT NULL,
+        resource_kind TEXT NOT NULL,
+        primary_id TEXT NOT NULL,
+        secondary_id TEXT,
+        payload_json TEXT NOT NULL,
+        payload_sha256 TEXT NOT NULL UNIQUE
+    );
+    CREATE INDEX IF NOT EXISTS idx_privacy_tombstones_created
+        ON privacy_erasure_tombstones(created_at, tombstone_id);
+    CREATE TRIGGER IF NOT EXISTS privacy_tombstones_immutable_update
+    BEFORE UPDATE ON privacy_erasure_tombstones
+    BEGIN
+        SELECT RAISE(ABORT, 'privacy erasure tombstones are immutable');
+    END;
+    CREATE TRIGGER IF NOT EXISTS privacy_tombstones_immutable_delete
+    BEFORE DELETE ON privacy_erasure_tombstones
+    BEGIN
+        SELECT RAISE(ABORT, 'privacy erasure tombstones are immutable');
+    END;
+    """)
+os.chmod(path, 0o600)
+PY
 sudo install -m 700 /tmp/realguard-backup /usr/local/sbin/realguard-backup
 sudo install -m 700 /tmp/realguard-restore-verify /usr/local/sbin/realguard-restore-verify
+sudo install -m 700 /tmp/realguard-replay-privacy-erasures /usr/local/sbin/realguard-replay-privacy-erasures
 sudo bash -lc '
   set -euo pipefail
   set -a
@@ -158,6 +198,7 @@ sudo systemctl stop realguard-backend.service 2>/dev/null || true
 sudo install -d -m 755 -o ubuntu -g ubuntu /opt/realguard-data
 sudo install -d -m 700 -o ubuntu -g ubuntu /opt/realguard-data/developer-spool
 sudo install -d -m 700 -o ubuntu -g ubuntu /opt/realguard-data/web-spool
+sudo install -d -m 700 -o ubuntu -g ubuntu /opt/realguard-data/privacy-erasure
 sudo install -d -m 700 -o ubuntu -g ubuntu /opt/realguard-data/evidence-manifests
 sudo install -m 644 /tmp/realguard-ip2region-v4.xdb /opt/realguard-data/ip2region_v4.xdb
 if [[ ! -f /opt/realguard-data/admin_state.json ]]; then
@@ -265,6 +306,10 @@ if ! sudo grep -q '^REALGUARD_SECURITY_AUDIT_HMAC_KEYS_JSON=' /etc/realguard/rea
   printf "REALGUARD_SECURITY_AUDIT_HMAC_KEYS_JSON='{}'\n" \
     | sudo tee -a /etc/realguard/realguard-backend.env >/dev/null
 fi
+if ! sudo grep -q '^REALGUARD_PRIVACY_ERASURE_LEDGER_PATH=' /etc/realguard/realguard-backend.env; then
+  printf 'REALGUARD_PRIVACY_ERASURE_LEDGER_PATH=/opt/realguard-data/privacy-erasure/privacy-erasure-tombstones.sqlite3\n' \
+    | sudo tee -a /etc/realguard/realguard-backend.env >/dev/null
+fi
 if ! sudo grep -q '^REALGUARD_EVIDENCE_HMAC_KEY=' /etc/realguard/realguard-backend.env; then
   evidence_key="$(openssl rand -hex 32)"
   printf 'REALGUARD_EVIDENCE_HMAC_KEY=%s\n' "$evidence_key" \
@@ -350,11 +395,23 @@ sudo bash -lc '
   [ ! -f /etc/realguard/detector-db.env ] || . /etc/realguard/detector-db.env
   set +a
   cd '"$release_root"'/RealGuard
+  '"$release_root"'/.venv/bin/python -c "from imagedetection.views import privacy_erasure_ledger as ledger; assert ledger.healthcheck().get('available')"
   '"$release_root"'/.venv/bin/python -m flask --app run:app identity-db-upgrade
+  '"$release_root"'/.venv/bin/python -m flask --app run:app migrate-password-hashes
   '"$release_root"'/.venv/bin/python -m flask --app run:app admin-db-upgrade
   '"$release_root"'/.venv/bin/python -m flask --app run:app developer-db-upgrade
   '"$release_root"'/.venv/bin/python -m flask --app run:app reconcile-detection-jobs
-  '"$release_root"'/.venv/bin/python -m flask --app run:app security-audit-verify --bootstrap
+  audit_checkpoint=/opt/realguard-audit-checkpoint/checkpoint.json
+  audit_bootstrap_marker=/etc/realguard/security-audit-bootstrap.once
+  if [[ -f "$audit_checkpoint" ]]; then
+    '"$release_root"'/.venv/bin/python -m flask --app run:app security-audit-verify
+  elif [[ -f "$audit_bootstrap_marker" ]]; then
+    '"$release_root"'/.venv/bin/python -m flask --app run:app security-audit-verify --bootstrap
+    rm -f -- "$audit_bootstrap_marker"
+  else
+    echo "Security audit checkpoint is missing. Create the one-time root marker $audit_bootstrap_marker only after verifying this is a new trusted installation." >&2
+    exit 1
+  fi
 '
 sudo chown ubuntu:ubuntu /opt/realguard-data/admin_state.json
 sudo chmod 600 /opt/realguard-data/admin_state.json

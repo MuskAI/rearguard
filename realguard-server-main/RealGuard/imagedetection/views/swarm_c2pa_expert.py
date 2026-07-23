@@ -62,13 +62,11 @@ AI_DIGITAL_SOURCE_TYPES = {
     "http://cv.iptc.org/newscodes/digitalsourcetype/algorithmicmedia",
     "http://cv.iptc.org/newscodes/digitalsourcetype/compositesynthetic",
     "http://cv.iptc.org/newscodes/digitalsourcetype/synthetic",
+    "http://cv.iptc.org/newscodes/digitalsourcetype/compositewithtrainedalgorithmicmedia",
 }
 
 CAMERA_DIGITAL_SOURCE_TYPES = {
     "http://cv.iptc.org/newscodes/digitalsourcetype/digitalcapture",
-    "http://cv.iptc.org/newscodes/digitalsourcetype/negativefilm",
-    "http://cv.iptc.org/newscodes/digitalsourcetype/positivefilm",
-    "http://cv.iptc.org/newscodes/digitalsourcetype/print",
 }
 
 
@@ -349,7 +347,7 @@ def _decide_verdict(
     if validation_severity == "error":
         evidence.extend(validation_issues[:2])
         evidence.append("C2PA 签名链校验失败，凭证可能被篡改。")
-        return 0.78, "C2PA 签名校验失败", "中", evidence
+        return 0.5, "C2PA 签名校验失败", "中", evidence
 
     if ai_gen_hits or ai_dst_hits:
         if ai_gen_hits:
@@ -456,12 +454,21 @@ def run_c2pa_expert(image_bytes: bytes, filename: Optional[str], mimetype: Optio
     signer_info = _collect_signer_info(active_manifest)
     actions = _collect_actions(active_manifest)
 
-    chain_sources = [_summarize_source(entry["manifest"]) for entry in chain]
-    chain_conflict = (
-        "ai" in chain_sources
-        and "camera" in chain_sources
-        and len(chain) >= 2
-    )
+    active_source = _summarize_source(active_manifest)
+    ingredient_sources = [
+        _summarize_source(entry["manifest"])
+        for entry in ingredient_entries
+    ]
+    chain_sources = [active_source, *ingredient_sources]
+    lineage_transitions = sorted({
+        f"{source}->{active_source}"
+        for source in ingredient_sources
+        if source != "unknown" and active_source != "unknown" and source != active_source
+    })
+    # An ingredient describes an input asset, not the current output. A camera
+    # original feeding an AI edit is expected provenance and must not neutralize
+    # the active manifest's AI declaration (or vice versa).
+    chain_conflict = False
 
     score, verdict, confidence, evidence = _decide_verdict(
         generators,
@@ -470,12 +477,11 @@ def run_c2pa_expert(image_bytes: bytes, filename: Optional[str], mimetype: Optio
         validation_issues,
     )
 
-    if chain_conflict:
+    if lineage_transitions:
         evidence.append(
-            f"C2PA 来源链存在冲突：链上同时出现 AI 生成与相机捕获声明（共 {len(chain)} 段 manifest）。"
+            "C2PA ingredient 与当前资产来源不同；当前资产结论以 active manifest 为准，"
+            "ingredient 仅作为输入素材谱系。"
         )
-        score = max(score, 0.7)
-        verdict = f"{verdict}（来源链冲突）"
     if ingredient_entries:
         evidence.append(
             f"C2PA ingredient 链长度 {len(ingredient_entries)}，根 manifest 已遍历。"
@@ -494,6 +500,7 @@ def run_c2pa_expert(image_bytes: bytes, filename: Optional[str], mimetype: Optio
         "chain_length": len(chain),
         "chain_sources": chain_sources,
         "chain_conflict": chain_conflict,
+        "lineage_transitions": lineage_transitions,
         "ingredient_count": len(ingredient_entries),
         "actions": actions[:6],
         "signer": signer_info,
@@ -502,6 +509,18 @@ def run_c2pa_expert(image_bytes: bytes, filename: Optional[str], mimetype: Optio
         "validation_severity": validation_severity,
         "validation_issues": validation_issues[:3],
     }
+    content_claim = _summarize_source(active_manifest)
+    if validation_severity == "error":
+        content_claim = "unknown"
+    integrity = (
+        "invalid"
+        if validation_severity == "error"
+        else "trusted"
+        if validation_severity == "ok"
+        else "valid_untrusted"
+    )
+    details["content_claim"] = content_claim
+    details["integrity"] = integrity
 
     message_parts: List[str] = []
     if generators:
@@ -518,6 +537,8 @@ def run_c2pa_expert(image_bytes: bytes, filename: Optional[str], mimetype: Optio
         "score": round(score, 4),
         "verdict": verdict,
         "provenance_kind": "c2pa",
+        "content_claim": content_claim,
+        "integrity": integrity,
         "details": details,
         "confidence": confidence,
         "evidence": evidence[:5],

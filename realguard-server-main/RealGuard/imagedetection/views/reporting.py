@@ -188,17 +188,17 @@ def _html_envelope_block(envelope: Mapping[str, Any]) -> str:
     encoded = base64.urlsafe_b64encode(evidence_manifest.canonical_json(envelope)).decode("ascii")
     return f"""
         <section class="card" aria-labelledby="evidence-manifest-title">
-          <h2 id="evidence-manifest-title">签名完整性清单</h2>
+          <h2 id="evidence-manifest-title">服务端完整性清单</h2>
           <table>
             <tbody>
               <tr><td>任务 / 记录 ID</td><td>{escape(manifest['task_id'])} / {escape(manifest['record_id'])}</td></tr>
               <tr><td>原文件 SHA-256</td><td style="word-break:break-all;">{escape(source['sha256'])}</td></tr>
               <tr><td>模型 / 策略版本</td><td>{escape(model['version'])} / {escape(manifest['policy_version'])}</td></tr>
               <tr><td>生成时间</td><td>{escape(manifest['generated_at'])}</td></tr>
-              <tr><td>HMAC 签名</td><td style="word-break:break-all;">{escape(signature['value'])}</td></tr>
+              <tr><td>服务端 HMAC 完整性封印</td><td style="word-break:break-all;">{escape(signature['value'])}</td></tr>
             </tbody>
           </table>
-          <div class="footnote">签名算法：{escape(signature['algorithm'])}；密钥标识：{escape(signature['key_id'])}。签名清单用于服务端完整性校验，不替代司法鉴定或人工复核。</div>
+          <div class="footnote">算法：{escape(signature['algorithm'])}；密钥标识：{escape(signature['key_id'])}。该封印需要平台持有的共享密钥才能验证，第三方不能仅凭本报告独立验签，也不属于可靠电子签名；仅用于平台服务端完整性校验，不替代司法鉴定或人工复核。</div>
           <script type="application/vnd.huijian.evidence+base64">{encoded}</script>
         </section>
     """
@@ -226,7 +226,10 @@ def image_report_content(
     review_only = result.get("decisionStatus") != "verdict"
     probability = None if review_only else round(float(result.get("probability", 0) or 0) * 100, 1)
     confidence = _safe_text(result.get("confidence"), "")
-    requires_review = review_only or (probability is not None and 35 < probability < 75) or confidence == "低"
+    # The model decision contract is the single source of truth. Do not apply
+    # a second hard-coded 35%-75% boundary here, which can contradict the
+    # signed threshold and leave a verdict labeled as review-only.
+    requires_review = review_only
     final_label = "需人工复核" if requires_review else (
         result.get("final_label") or ("AI生成图像" if float(item.get("fake", 0) or 0) >= 50 else "真实图像")
     )
@@ -332,7 +335,7 @@ def video_report_content(item: dict, result: dict) -> str:
     raw_probability = result.get("fake_percentage")
     probability = None if review_only or raw_probability is None else round(float(raw_probability), 1)
     confidence = _safe_text(result.get("confidence"), "")
-    requires_review = review_only or probability is None or 35 < probability < 75 or confidence == "低"
+    requires_review = review_only or probability is None
     final_label = "需人工复核" if requires_review else (result.get("final_label") or "视频检测结果")
     accent = "#b36a12" if requires_review else ("#d9573f" if "AI" in str(final_label) else "#1b8f7a")
     video_url = escape(_safe_text(result.get("video_url"), ""))

@@ -2,6 +2,8 @@
 Description=RealGuard Web Backend
 After=network.target mysql.service
 Requires=mysql.service
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 [Service]
 Type=simple
@@ -11,6 +13,7 @@ WorkingDirectory=/opt/realguard-server/RealGuard
 Environment=REALGUARD_HOST=127.0.0.1
 Environment=REALGUARD_PORT=5000
 Environment=REALGUARD_SESSION_COOKIE_SECURE=1
+Environment=REALGUARD_ENV=production
 Environment=REALGUARD_ALERT_WORKER_ENABLED=0
 EnvironmentFile=/etc/realguard/session.env
 EnvironmentFile=/etc/realguard/realguard-backend.env
@@ -22,11 +25,17 @@ ExecStart=/opt/realguard-server/.venv/bin/gunicorn --worker-class gthread --work
 Restart=always
 RestartSec=3
 TimeoutStopSec=45
+CPUQuota=150%
+MemoryHigh=512M
+MemoryMax=640M
+MemorySwapMax=256M
+TasksMax=256
+OOMPolicy=stop
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=full
-ReadWritePaths=/opt/realguard-server/RealGuard /opt/realguard-data /tmp
+ReadWritePaths=/opt/realguard-data/uploads /opt/realguard-data /tmp
 UMask=0077
 
 [Install]

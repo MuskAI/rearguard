@@ -22,11 +22,11 @@
         .result-image{border-radius:14px;overflow:hidden;background:var(--bg-input);height:380px;display:flex;align-items:center;justify-content:center}
         .result-image img{max-width:100%;max-height:100%;display:block;object-fit:contain}
         .result-details{display:flex;flex-direction:column;gap:1.2rem}
-        .verdict{display:flex;align-items:center;gap:1rem;padding:1.2rem;border-radius:14px}.verdict.fake{background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2)}.verdict.real{background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2)}
-        .verdict-icon{width:56px;height:56px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:1.6rem;color:#fff;flex-shrink:0}.verdict.fake .verdict-icon{background:var(--danger)}.verdict.real .verdict-icon{background:var(--success)}
-        .verdict-text h3{font-size:1.2rem;font-weight:700;margin-bottom:.2rem}.verdict.fake .verdict-text h3{color:var(--danger)}.verdict.real .verdict-text h3{color:var(--success)}.verdict-text p{font-size:.82rem;color:var(--text-secondary)}
+        .verdict{display:flex;align-items:center;gap:1rem;padding:1.2rem;border-radius:14px}.verdict.fake{background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2)}.verdict.real{background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2)}.verdict.review{background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.24)}
+        .verdict-icon{width:56px;height:56px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:1.6rem;color:#fff;flex-shrink:0}.verdict.fake .verdict-icon{background:var(--danger)}.verdict.real .verdict-icon{background:var(--success)}.verdict.review .verdict-icon{background:var(--warning)}
+        .verdict-text h3{font-size:1.2rem;font-weight:700;margin-bottom:.2rem}.verdict.fake .verdict-text h3{color:var(--danger)}.verdict.real .verdict-text h3{color:var(--success)}.verdict.review .verdict-text h3{color:var(--warning)}.verdict-text p{font-size:.82rem;color:var(--text-secondary)}
         .prob-bars{display:flex;flex-direction:column;gap:.8rem}.prob-bar-item label{display:flex;justify-content:space-between;font-size:.78rem;margin-bottom:4px}.prob-bar-item label span:first-child{color:var(--text-secondary)}.prob-bar-item label .val{font-weight:700}
-        .bar-track{height:8px;border-radius:4px;background:var(--bg-input);overflow:hidden}.bar-fill{height:100%;border-radius:4px;transition:width 1s cubic-bezier(.22,1,.36,1)}.bar-fill.green{background:var(--success)}.bar-fill.red{background:var(--danger)}.bar-fill.blue{background:var(--primary)}
+        .bar-track{height:8px;border-radius:4px;background:var(--bg-input);overflow:hidden}.bar-fill{height:100%;border-radius:4px;transition:width 1s cubic-bezier(.22,1,.36,1)}.bar-fill.green{background:var(--success)}.bar-fill.red{background:var(--danger)}.bar-fill.blue{background:var(--primary)}.bar-fill.amber{background:var(--warning)}
         .info-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.8rem}@media(max-width:600px){.info-grid{grid-template-columns:repeat(2,1fr)}}
         .info-item{padding:.75rem;background:var(--bg-input);border-radius:10px;text-align:center}.info-item .label{font-size:.7rem;color:var(--text-muted);margin-bottom:.2rem}.info-item .value{font-size:.85rem;font-weight:600;color:var(--text-primary)}
         /* Clickable metadata item */
@@ -302,18 +302,25 @@
         loadingCard.innerHTML='<div style="text-align:center;padding:4rem;color:var(--text-muted)"><i class="fa fa-'+(msg?'exclamation-triangle':'inbox')+'" style="font-size:2.5rem;display:block;margin-bottom:1rem;'+(msg?'color:var(--danger)':'')+'"></i><p>'+(msg||'暂无检测结果')+'</p><a href="/image_upload" style="color:var(--primary);font-weight:600;display:inline-block;margin-top:1rem;"><i class="fa fa-arrow-left"></i> 去检测一张图片</a></div>';
     }
 
+    function finiteProbability(value){
+        if(value===null||value===undefined||value==='')return null;
+        var parsed=Number(value);
+        return Number.isFinite(parsed)?Math.max(0,Math.min(1,parsed)):null;
+    }
+
     function renderResult(r){
-        var pNum = Number(r.probability);
-        if (isNaN(pNum)) pNum = 0;
+        r=r||{};
+        var pNum=finiteProbability(r.probability);
+        var decisionStatus=String(r.decisionStatus||((r.decision&&r.decision.status)||'')).trim().toLowerCase();
+        var verdictFromResult=String(r.final_label||'').trim();
+        var isReview=(decisionStatus==='review_only'||r.reviewRequired===true||String(r.reviewRequired).toLowerCase()==='true'||verdictFromResult==='需人工复核'||pNum===null);
         var hasExpertReview = !!(r && r.swarm && r.swarm.enabled);
-        var verdictFromResult = String((r && r.final_label) || '').trim();
-        var isFake = hasExpertReview ? (verdictFromResult !== '真实图像') : (pNum >= 0.5);
-        var verdictLabel = hasExpertReview && verdictFromResult ? verdictFromResult : (isFake ? 'AI生成图像' : '真实图像');
-        var prob=(pNum*100).toFixed(1);
-        var detectorNum = Number(r.detector_probability);
-        if (isNaN(detectorNum)) detectorNum = pNum;
-        detectorNum = Math.max(0, Math.min(1, detectorNum));
-        var detProb=(detectorNum*100).toFixed(1);
+        var isFake=!isReview&&(hasExpertReview?(verdictFromResult!=='真实图像'):(pNum>=0.5));
+        var verdictLabel=isReview?'需人工复核':(hasExpertReview&&verdictFromResult?verdictFromResult:(isFake?'AI生成图像':'真实图像'));
+        var prob=isReview?null:(pNum*100).toFixed(1);
+        var detectorNum=finiteProbability(r.detector_probability);
+        if(detectorNum===null&&!isReview)detectorNum=pNum;
+        var detProb=detectorNum===null?null:(detectorNum*100).toFixed(1);
 
         currentItemId=null;
         if(r.itemid!==undefined&&r.itemid!==null&&r.itemid!==''){
@@ -322,23 +329,25 @@
         }
 
         document.getElementById('resultImg').src=r.image_url;
-        var v=document.getElementById('verdict');v.className='verdict '+(isFake?'fake':'real');
-        document.getElementById('verdictIcon').innerHTML='<i class="fa '+(isFake?'fa-times':'fa-check')+'"></i>';
+        var verdictClass=isReview?'review':(isFake?'fake':'real');
+        var verdictIcon=isReview?'fa-search':(isFake?'fa-times':'fa-check');
+        var v=document.getElementById('verdict');v.className='verdict '+verdictClass;
+        document.getElementById('verdictIcon').innerHTML='<i class="fa '+verdictIcon+'"></i>';
         document.getElementById('verdictLabel').textContent=verdictLabel;
-        document.getElementById('verdictSub').textContent='置信度: '+(r.confidence||'-')+'  |  '+(hasExpertReview?'综合异常风险: ':'AI 生成概率: ')+prob+'%';
+        document.getElementById('verdictSub').textContent=isReview?'当前证据不足，暂不出具真假结论':('置信度: '+(r.confidence||'-')+'  |  '+(hasExpertReview?'综合异常风险: ':'AI 生成概率: ')+prob+'%');
 
-        document.getElementById('probLabel').textContent=hasExpertReview?'专家会诊综合异常风险':'AI 生成概率';
-        document.getElementById('detProbLabel').textContent=hasExpertReview?'主检测器 AI 风险':'检测器原始 AI 概率';
-        document.getElementById('probVal').textContent=prob+'%';
-        document.getElementById('probVal').style.color=isFake?'var(--danger)':'var(--success)';
-        document.getElementById('detProbVal').textContent=detProb+'%';
+        document.getElementById('probLabel').textContent=isReview?'结论状态':(hasExpertReview?'专家会诊综合异常风险':'AI 生成概率');
+        document.getElementById('detProbLabel').textContent=isReview?'模型分数':(hasExpertReview?'主检测器 AI 风险':'检测器原始 AI 概率');
+        document.getElementById('probVal').textContent=isReview?'待复核':prob+'%';
+        document.getElementById('probVal').style.color=isReview?'var(--warning)':(isFake?'var(--danger)':'var(--success)');
+        document.getElementById('detProbVal').textContent=isReview?'未发布':detProb+'%';
 
         requestAnimationFrame(function(){
-            var pb=document.getElementById('probBar');pb.style.width=prob+'%';pb.className='bar-fill '+(isFake?'red':'green');
-            document.getElementById('detProbBar').style.width=detProb+'%';
+            var pb=document.getElementById('probBar');pb.style.width=isReview?'0%':prob+'%';pb.className='bar-fill '+(isReview?'amber':(isFake?'red':'green'));
+            document.getElementById('detProbBar').style.width=isReview?'0%':detProb+'%';
         });
 
-        document.getElementById('infoConf').textContent=r.confidence||'-';
+        document.getElementById('infoConf').textContent=isReview?'待复核':(r.confidence||'-');
         document.getElementById('infoSize').textContent=r.file_size||'-';
         document.getElementById('infoFmt').textContent=r.img_format||'-';
         document.getElementById('infoRes').textContent=r.resolution||'-';

@@ -164,6 +164,7 @@ def test_developer_api_key_lifecycle(client, monkeypatch):
     _login_session(client)
     monkeypatch.setattr(api, "_ensure_developer_api_key_table", lambda: True)
     monkeypatch.setattr(api, "DEVELOPER_AUTH_SECRET", "internal-secret")
+    monkeypatch.setattr(api, "DEVELOPER_IDEMPOTENCY_SECRET", "test-idempotency-secret")
     rows = []
     next_id = {"value": 0}
 
@@ -251,7 +252,11 @@ def test_developer_api_key_lifecycle(client, monkeypatch):
 
     monkeypatch.setattr(api, "_revoke_developer_key_atomic", fake_revoke_atomic)
 
-    created = client.post("/api/developer/keys", json={"name": "Agent key"})
+    created = client.post(
+        "/api/developer/keys",
+        json={"name": "Agent key"},
+        headers={"Idempotency-Key": "create-agent-key-001"},
+    )
     payload = created.get_json()
     api_key = payload["apiKey"]
 
@@ -284,6 +289,16 @@ def test_developer_api_key_lifecycle(client, monkeypatch):
     )
     assert rejected.status_code == 200
     assert rejected.get_json()["valid"] is False
+
+
+def test_developer_api_key_creation_requires_idempotency_key(client, monkeypatch):
+    _login_session(client)
+    monkeypatch.setattr(api, "_ensure_developer_api_key_table", lambda: True)
+
+    response = client.post("/api/developer/keys", json={"name": "Agent key"})
+
+    assert response.status_code == 400
+    assert response.get_json()["code"] == "idempotency_key_required"
 
 
 def test_developer_token_usage_proxy_uses_current_user(client, monkeypatch):
@@ -1091,6 +1106,9 @@ def test_v1_watermark_policy_keeps_confirmed_platform_marks_non_decisive():
     assert result["final_label"] == "真实图像"
     assert result["probability"] == pytest.approx(0.21)
     assert "watermark_verdict_override" not in result
+    explanation = detection.watermark_verdict.build_explanation(result, visible)
+    assert "Google Gemini" in explanation
+    assert "不单独决定真伪" in explanation
 
 
 def test_v1_registry_visual_attribution_remains_non_decisive_without_yolo():

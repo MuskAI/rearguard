@@ -43,6 +43,9 @@ DEPLOY_V2="$ROOT_DIR/scripts/deploy_v2.sh"
 DEPLOY_GPU="$ROOT_DIR/scripts/deploy_detection_service.sh"
 
 status_output="$(FORMAT=env DEPLOY_SSH_KEY="$DEPLOY_SSH_KEY" DEPLOY_HOST="$DEPLOY_HOST" DEPLOY_USER="$DEPLOY_USER" DRY_RUN="$DRY_RUN" bash "$STATUS_SCRIPT" "$TARGET")"
+v1_expected="$(printf '%s\n' "$status_output" | sed -n 's/^v1_expected=//p' | tail -1)"
+v2_expected="$(printf '%s\n' "$status_output" | sed -n 's/^v2_expected=//p' | tail -1)"
+gpu_expected="$(printf '%s\n' "$status_output" | sed -n 's/^gpu_expected=//p' | tail -1)"
 v1_repo_state="$(printf '%s\n' "$status_output" | sed -n 's/^v1_repo_state=//p' | tail -1)"
 v2_repo_state="$(printf '%s\n' "$status_output" | sed -n 's/^v2_repo_state=//p' | tail -1)"
 gpu_repo_state="$(printf '%s\n' "$status_output" | sed -n 's/^gpu_repo_state=//p' | tail -1)"
@@ -92,12 +95,24 @@ validate_repo_state() {
 }
 if [[ "$TARGET" == "all" || "$TARGET" == "v1" ]]; then
   validate_repo_state "$v1_repo_state"
+  [[ "$v1_expected" =~ ^[0-9a-f]{7,40}$ ]] || {
+    echo "V1 expected commit was missing or invalid" >&2
+    exit 1
+  }
 fi
 if [[ "$TARGET" == "all" || "$TARGET" == "v2" ]]; then
   validate_repo_state "$v2_repo_state"
+  [[ "$v2_expected" =~ ^[0-9a-f]{7,40}$ ]] || {
+    echo "V2 expected commit was missing or invalid" >&2
+    exit 1
+  }
 fi
 if [[ "$TARGET" == "all" || "$TARGET" == "gpu" ]]; then
   validate_repo_state "$gpu_repo_state"
+  [[ "$gpu_expected" =~ ^[0-9a-f]{7,40}$ ]] || {
+    echo "GPU expected commit was missing or invalid" >&2
+    exit 1
+  }
 fi
 
 deploy_if_needed() {
@@ -136,5 +151,25 @@ if [[ "$TARGET" == "all" || "$TARGET" == "v2" ]]; then
   deploy_if_needed "V2" "$v2_repo_state" "$DEPLOY_V2" "$v2_service" "$v2_internal" "$v2_external"
 fi
 
-printf '\nFinal status:\n'
-STRICT=1 DEPLOY_SSH_KEY="$DEPLOY_SSH_KEY" DEPLOY_HOST="$DEPLOY_HOST" DEPLOY_USER="$DEPLOY_USER" DRY_RUN="$DRY_RUN" bash "$STATUS_SCRIPT" "$TARGET"
+final_status_check() {
+  local label="$1"
+  local expected="$2"
+  local target="$3"
+  printf '\nFinal %s status (expected commit %s):\n' "$label" "$expected"
+  STRICT=1 EXPECT_COMMIT="$expected" \
+    DEPLOY_SSH_KEY="$DEPLOY_SSH_KEY" \
+    DEPLOY_HOST="$DEPLOY_HOST" \
+    DEPLOY_USER="$DEPLOY_USER" \
+    DRY_RUN="$DRY_RUN" \
+    bash "$STATUS_SCRIPT" "$target"
+}
+
+if [[ "$TARGET" == "all" || "$TARGET" == "gpu" ]]; then
+  final_status_check "GPU" "$gpu_expected" gpu
+fi
+if [[ "$TARGET" == "all" || "$TARGET" == "v1" ]]; then
+  final_status_check "V1" "$v1_expected" v1
+fi
+if [[ "$TARGET" == "all" || "$TARGET" == "v2" ]]; then
+  final_status_check "V2" "$v2_expected" v2
+fi

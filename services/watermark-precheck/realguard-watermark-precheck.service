@@ -8,6 +8,8 @@ Type=simple
 User=ymk
 WorkingDirectory=/home/ymk/services/watermark-precheck
 EnvironmentFile=/home/ymk/services/watermark-precheck/.env
+Environment=WATERMARK_ENSEMBLE_URL=http://127.0.0.1:5068/v1/analyze
+Environment=WATERMARK_ENSEMBLE_HEALTH_URL=http://127.0.0.1:5068/health
 ExecStart=/home/ymk/services/watermark-precheck/.venv/bin/gunicorn --bind 127.0.0.1:5066 --workers 1 --threads 4 --timeout 40 yolo_adapter:app
 Restart=always
 RestartSec=3s

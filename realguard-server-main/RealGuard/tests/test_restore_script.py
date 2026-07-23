@@ -26,6 +26,24 @@ def _write_sqlite(path: Path, value: str) -> None:
         connection.execute("INSERT INTO sample (value) VALUES (?)", (value,))
 
 
+def _write_erasure_ledger(path: Path) -> None:
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE privacy_erasure_tombstones (
+                tombstone_id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                source_system TEXT NOT NULL,
+                resource_kind TEXT NOT NULL,
+                primary_id TEXT NOT NULL,
+                secondary_id TEXT,
+                payload_json TEXT NOT NULL,
+                payload_sha256 TEXT NOT NULL UNIQUE
+            )
+            """
+        )
+
+
 def _write_archive(path: Path, source: Path) -> None:
     with tarfile.open(path, "w:gz") as archive:
         archive.add(source, arcname=".")
@@ -47,6 +65,7 @@ def test_restore_script_rehydrates_isolated_snapshot(tmp_path):
 
     _write_sqlite(snapshot / "jianzhen-v2.sqlite3", "v2")
     _write_sqlite(snapshot / "traffic-cumulative.sqlite3", "traffic")
+    _write_erasure_ledger(snapshot / "privacy-erasure-tombstones.sqlite3")
     upload_source = tmp_path / "upload-source"
     upload_source.mkdir()
     (upload_source / "sample.png").write_bytes(b"image")
@@ -59,6 +78,11 @@ def test_restore_script_rehydrates_isolated_snapshot(tmp_path):
     governance_source.mkdir()
     (governance_source / "case-1.json").write_text('{"case":1}', encoding="utf-8")
     _write_archive(snapshot / "legacy-governance-evidence.tgz", governance_source)
+    _write_sqlite(snapshot / "internal-testing.sqlite3", "evaluation")
+    internal_testing_source = tmp_path / "internal-testing-source"
+    internal_testing_source.mkdir()
+    (internal_testing_source / "sample.png").write_bytes(b"benchmark-image")
+    _write_archive(snapshot / "internal-testing-files.tgz", internal_testing_source)
 
     checksum_lines = []
     for path in sorted(snapshot.iterdir()):
@@ -94,6 +118,10 @@ esac
         "REALGUARD_RESTORE_REPORT_ROOT": str(report_root),
         "REALGUARD_RESTORE_STATUS_FILE": str(tmp_path / "restore-status.json"),
         "REALGUARD_RESTORE_WORK_ROOT": str(tmp_path),
+        "REALGUARD_RESTORE_REQUIRE_LIVE_ERASURE_LEDGER": "0",
+        "REALGUARD_PRIVACY_ERASURE_REPLAY_BIN": str(
+            ROOT / "scripts" / "remote" / "replay_privacy_erasure_tombstones.py"
+        ),
     }
 
     completed = subprocess.run(
@@ -111,8 +139,10 @@ esac
     assert report["status"] == "passed"
     assert report["mysql"]["systemTables"] == 3
     assert report["sqlite"]["v2"]["integrity"] == "ok"
+    assert report["sqlite"]["internalTesting"]["integrity"] == "ok"
     assert report["archives"]["uploads"]["files"] == 1
     assert report["archives"]["legacyGovernanceEvidence"]["files"] == 1
+    assert report["archives"]["internalTestingFiles"]["files"] == 1
     restore_status = json.loads((tmp_path / "restore-status.json").read_text(encoding="utf-8"))
     assert restore_status["state"] == "passed"
     assert restore_status["lastSuccessAt"]

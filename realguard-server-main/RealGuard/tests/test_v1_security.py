@@ -273,6 +273,61 @@ def test_api_key_revoke_rolls_back_when_security_audit_fails(monkeypatch):
     assert connection.committed is False
 
 
+def test_api_key_revoke_is_idempotent_after_first_success(monkeypatch):
+    calls = []
+
+    class Cursor:
+        rowcount = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, sql, params=None):
+            calls.append(" ".join(sql.split()))
+
+        def fetchone(self):
+            return {"id": 9, "name": "primary", "scopes": "image:fast", "status": "revoked"}
+
+    class Connection:
+        committed = False
+        rolled_back = False
+
+        def begin(self):
+            return None
+
+        def cursor(self):
+            return Cursor()
+
+        def rollback(self):
+            self.rolled_back = True
+
+        def commit(self):
+            self.committed = True
+
+        def close(self):
+            return None
+
+    connection = Connection()
+    monkeypatch.setattr(api, "get_db_connection", lambda: connection)
+    monkeypatch.setattr(
+        api,
+        "_append_security_audit",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("an idempotent replay must not append another audit event")
+        ),
+    )
+
+    revoked, message, status = api._revoke_developer_key_atomic(7, 9)
+
+    assert (revoked, message, status) == (True, None, 200)
+    assert connection.committed is True
+    assert connection.rolled_back is False
+    assert not any(sql.startswith("UPDATE developer_api_keys") for sql in calls)
+
+
 def test_model_run_persists_the_audit_integrity_seal(monkeypatch):
     captured = {}
     seal = {"schema": "realguard.persisted-inference-audit.v1", "keyId": "gpu-v1", "hmacSha256": "c" * 64}
@@ -839,6 +894,8 @@ def test_browser_pageview_endpoint_rejects_cross_site_and_unmarked_requests(clie
 
 
 def test_authenticate_password_user_upgrades_legacy_secret(monkeypatch):
+    monkeypatch.setenv("REALGUARD_ENV", "test")
+    monkeypatch.setenv("REALGUARD_ALLOW_LEGACY_PLAINTEXT_PASSWORDS", "1")
     recorded = []
     user = {
         "Userid": 1,
@@ -866,6 +923,28 @@ def test_authenticate_password_user_upgrades_legacy_secret(monkeypatch):
     assert update_params[0] != "legacy-pass"
     assert login._is_password_hash(update_params[0])
     assert update_fetch is False
+
+
+def test_production_rejects_plaintext_password_compatibility(monkeypatch):
+    monkeypatch.setenv("REALGUARD_ENV", "production")
+    monkeypatch.setenv("REALGUARD_ALLOW_LEGACY_PLAINTEXT_PASSWORDS", "1")
+    assert not login._password_matches("legacy-pass", "legacy-pass")
+
+
+def test_developer_api_key_expiry_defaults_and_has_a_hard_cap():
+    from datetime import datetime, timedelta
+
+    options, error = api._developer_key_options({"scopes": ["image:fast"]})
+    assert error is None
+    expires_at = datetime.strptime(options["expires_at"], "%Y-%m-%d %H:%M:%S")
+    assert timedelta(days=89) < expires_at - datetime.now() <= timedelta(days=90, minutes=1)
+
+    too_long, too_long_error = api._developer_key_options({
+        "scopes": ["image:fast"],
+        "expiresAt": (datetime.now() + timedelta(days=366)).isoformat(),
+    })
+    assert too_long is None
+    assert "不能超过" in too_long_error
 
 
 def test_image_result_api_queries_with_account_uuid(client, monkeypatch):
@@ -1892,6 +1971,7 @@ def test_owned_image_history_delete_removes_database_media_and_thumbnail(tmp_pat
     thumbnail = tmp_path / "thumbnail.webp"
     thumbnail.write_bytes(b"thumb")
     statements = []
+    erasure_events = []
 
     class Cursor:
         rowcount = 0
@@ -1943,11 +2023,47 @@ def test_owned_image_history_delete_removes_database_media_and_thumbnail(tmp_pat
     monkeypatch.setattr(api, "get_detection_db_connection", Connection)
     monkeypatch.setattr(api, "_local_detection_media_path", lambda kind, item: (tmp_path.resolve(), original.resolve()))
     monkeypatch.setattr(api, "_thumbnail_cache_path", lambda item: thumbnail)
+    monkeypatch.setattr(api, "_ensure_privacy_erasure_table", lambda: True)
+    monkeypatch.setattr(api, "_create_privacy_erasure_job", lambda *args: "erase-job-42")
+    monkeypatch.setattr(
+        api.privacy_erasure_ledger,
+        "record_tombstone",
+        lambda *_args, **_kwargs: erasure_events.append("tombstone")
+        or {"tombstoneId": "erase-test"},
+    )
+
+    def persist_staging_plan(*_args, **kwargs):
+        assert erasure_events == ["tombstone"]
+        erasure_events.append("paths-persisted")
+        assert original.is_file()
+        assert thumbnail.is_file()
+        assert kwargs["staged_path"] is not None
+        assert kwargs["thumbnail_staged_path"] is not None
+        return True
+
+    monkeypatch.setattr(api, "_stage_privacy_erasure_job", persist_staging_plan)
+    monkeypatch.setattr(api, "_set_privacy_erasure_state", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        api,
+        "_privacy_erasure_job",
+        lambda job_id: {"job_id": job_id, "resource_kind": "image", "resource_id": 42},
+    )
+    monkeypatch.setattr(
+        api,
+        "_finalize_privacy_erasure_job",
+        lambda job: original.unlink(missing_ok=True) or thumbnail.unlink(missing_ok=True) or True,
+    )
+    monkeypatch.setattr(api, "_restore_privacy_erasure_job", lambda job: True)
     staged_manifest = (tmp_path / "manifest.json", tmp_path / ".manifest.deleting")
     monkeypatch.setattr(
         api.evidence_manifest,
-        "stage_signed_image_manifest_deletion",
+        "plan_signed_image_manifest_deletion",
         lambda itemid: staged_manifest,
+    )
+    monkeypatch.setattr(
+        api.evidence_manifest,
+        "stage_signed_image_manifest_deletion",
+        lambda itemid, **kwargs: kwargs.get("planned_deletion") or staged_manifest,
     )
     monkeypatch.setattr(
         api.evidence_manifest,
@@ -1973,6 +2089,134 @@ def test_owned_image_history_delete_removes_database_media_and_thumbnail(tmp_pat
     delete_sql, delete_params = next((sql, params) for sql, params in statements if sql.startswith("DELETE FROM data"))
     assert "owner_account_uuid = %s" in delete_sql
     assert delete_params == (42, ACCOUNT_UUID)
+
+
+def test_erasure_cleanup_failure_stays_pending_for_retry(tmp_path, monkeypatch):
+    staged = tmp_path / ".sample.png.deleting-abc123"
+    staged.write_bytes(b"sensitive")
+    states = []
+    original_unlink = Path.unlink
+
+    def failing_unlink(path, *args, **kwargs):
+        if path == staged:
+            raise OSError("simulated disk failure")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(api, "_privacy_erasure_allowed_roots", lambda: (tmp_path.resolve(),))
+    monkeypatch.setattr(api, "_scrub_history_replicas", lambda *args, **kwargs: True)
+    monkeypatch.setattr(api, "_set_privacy_erasure_state", lambda *args, **kwargs: states.append((args, kwargs)) or True)
+    monkeypatch.setattr(Path, "unlink", failing_unlink)
+
+    completed = api._finalize_privacy_erasure_job({
+        "job_id": "erase-pending-1",
+        "resource_kind": "image",
+        "resource_id": 42,
+        "staged_path": str(staged),
+        "thumbnail_staged_path": None,
+        "manifest_staged_path": None,
+    })
+
+    assert completed is False
+    assert staged.exists()
+    assert states[-1][0][1] == "cleanup_failed"
+    assert "OSError" in states[-1][1]["error"]
+
+
+def test_replica_scrub_unlinks_spools_before_nulling_database_paths(tmp_path, monkeypatch):
+    developer_root = tmp_path / "developer-spool"
+    web_root = tmp_path / "web-spool"
+    developer_root.mkdir()
+    web_root.mkdir()
+    developer_spool = developer_root / "task-1.upload"
+    web_spool = web_root / "job-1.upload"
+    developer_spool.write_bytes(b"developer-private")
+    web_spool.write_bytes(b"web-private")
+    executed = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params=None):
+            normalized = " ".join(sql.split())
+            executed.append((normalized, params))
+            if normalized.startswith("SELECT task_id, spool_path"):
+                self.rows = [{"task_id": "task-1", "spool_path": developer_spool.name}]
+            elif normalized.startswith("SELECT job_id, spool_path"):
+                self.rows = [{"job_id": "job-1", "spool_path": web_spool.name}]
+            elif normalized.startswith("UPDATE developer_detection_tasks"):
+                assert not developer_spool.exists()
+                assert not web_spool.exists()
+            elif not normalized.startswith(("UPDATE web_detection_tasks", "UPDATE admin_model_runs")):
+                raise AssertionError(f"unexpected SQL: {normalized}")
+
+        def fetchall(self):
+            return self.rows
+
+    class Connection:
+        def begin(self):
+            return None
+
+        def cursor(self):
+            return Cursor()
+
+        def commit(self):
+            return None
+
+        def rollback(self):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(api, "PRIVACY_DEVELOPER_SPOOL_ROOT", developer_root)
+    monkeypatch.setattr(api, "PRIVACY_WEB_SPOOL_ROOT", web_root)
+    monkeypatch.setattr(api, "get_db_connection", Connection)
+    monkeypatch.setattr(api.admin_state, "scrub_detection_item", lambda *_args: True)
+
+    assert api._scrub_history_replicas("image", 42, "erase-job-42") is True
+    assert not developer_spool.exists()
+    assert not web_spool.exists()
+    assert any(sql.startswith("UPDATE developer_detection_tasks") for sql, _ in executed)
+
+
+def test_privacy_worker_does_not_touch_recent_precommit_staging(monkeypatch):
+    captured = {}
+
+    def execute(statement, params=None, fetch=True):
+        captured["statement"] = " ".join(statement.split())
+        captured["params"] = params
+        return []
+
+    monkeypatch.setattr(api, "_ensure_privacy_erasure_table", lambda: True)
+    monkeypatch.setattr(api, "excute_sql", execute)
+
+    result = api._retry_pending_privacy_erasures(limit=25)
+
+    assert result == {"retried": 0, "completed": 0, "restored": 0}
+    assert "state IN ('pending_cleanup', 'cleanup_failed', 'restore_failed')" in captured["statement"]
+    assert "state IN ('preparing', 'staged')" in captured["statement"]
+    assert "updated_at <= DATE_SUB(NOW(6), INTERVAL %s SECOND)" in captured["statement"]
+    assert captured["params"] == (api.PRIVACY_ERASURE_PRECOMMIT_GRACE_SECONDS, 25)
+    assert api.PRIVACY_ERASURE_PRECOMMIT_GRACE_SECONDS > 330
+
+
+def test_history_delete_returns_trackable_pending_erasure(client, monkeypatch):
+    monkeypatch.setattr(
+        api,
+        "_delete_owned_history_record",
+        lambda kind, itemid, actor: (True, "erase-request-42", 202),
+    )
+    _login_session(client, phone="13800000007")
+
+    response = client.delete("/api/history/image-detections/42")
+
+    assert response.status_code == 202
+    assert response.get_json()["status"] == "pending"
+    assert response.get_json()["erasureRequestId"] == "erase-request-42"
 
 
 def test_history_delete_does_not_remove_foreign_record(client, monkeypatch):
@@ -2019,3 +2263,17 @@ def test_same_origin_browser_write_reaches_api_handler(client, monkeypatch):
     )
 
     assert response.status_code == 404
+
+
+def test_result_template_never_coerces_review_only_probability_to_real_verdict():
+    template = (
+        ROOT / "imagedetection" / "templates" / "image_detection_result.html"
+    ).read_text(encoding="utf-8")
+
+    assert "value===null||value===undefined||value===''" in template
+    assert "decisionStatus==='review_only'" in template
+    assert "verdictFromResult==='需人工复核'" in template
+    assert "isReview?'需人工复核'" in template
+    assert "当前证据不足，暂不出具真假结论" in template
+    assert "isReview?'待复核':prob+'%'" in template
+    assert "Number(r.probability)" not in template

@@ -14,7 +14,7 @@ from datetime import datetime
 DB_CONFIG = {
     'host': os.environ.get('REALGUARD_DB_HOST', '127.0.0.1'),
     'port': int(os.environ.get('REALGUARD_DB_PORT', '3306')),
-    'user': os.environ.get('REALGUARD_DB_USER', 'root'),
+    'user': os.environ.get('REALGUARD_DB_USER', 'realguard_app'),
     'password': os.environ.get('REALGUARD_DB_PASSWORD', ''),
     'database': os.environ.get('REALGUARD_DB_NAME', 'system'),
     'charset': 'utf8mb4',
@@ -27,7 +27,7 @@ DB_CONFIG = {
 DETECTION_DB_CONFIG = {
     'host': os.environ.get('REALGUARD_DETECTION_DB_HOST', '127.0.0.1'),
     'port': int(os.environ.get('REALGUARD_DETECTION_DB_PORT', '3306')),
-    'user': os.environ.get('REALGUARD_DETECTION_DB_USER', 'root'),
+    'user': os.environ.get('REALGUARD_DETECTION_DB_USER', 'realguard_detection'),
     'password': os.environ.get('REALGUARD_DETECTION_DB_PASSWORD', ''),
     'database': os.environ.get('REALGUARD_DETECTION_DB_NAME', 'image_detection'),
     'charset': 'utf8mb4',
@@ -911,7 +911,7 @@ def excute_sql(sql, params=None, fetch=True):
                 result = cursor.rowcount
         return result
     except Exception as e:
-        print(f"[SQL ERROR] {e}")
+        print(f"[SQL ERROR] {type(e).__name__}")
         if conn:
             conn.rollback()
         return None
@@ -932,7 +932,7 @@ def excute_sql_lastid(sql, params=None):
             conn.commit()
             return cursor.lastrowid
     except Exception as e:
-        print(f"[SQL ERROR] {e}")
+        print(f"[SQL ERROR] {type(e).__name__}")
         if conn:
             conn.rollback()
         return None
@@ -958,7 +958,7 @@ def excute_detection_sql(sql, params=None, fetch=True):
                 result = cursor.rowcount
         return result
     except Exception as e:
-        print(f"[DETECTION SQL ERROR] {e}")
+        print(f"[DETECTION SQL ERROR] {type(e).__name__}")
         if conn:
             conn.rollback()
         return None
@@ -979,7 +979,7 @@ def excute_detection_sql_lastid(sql, params=None):
             conn.commit()
             return cursor.lastrowid
     except Exception as e:
-        print(f"[DETECTION SQL ERROR] {e}")
+        print(f"[DETECTION SQL ERROR] {type(e).__name__}")
         if conn:
             conn.rollback()
         return None

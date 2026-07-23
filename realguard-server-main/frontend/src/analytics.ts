@@ -79,21 +79,34 @@ export function initialAnalyticsPage(): AnalyticsPage {
 
 export function trackConfirmedPageview(page: AnalyticsPage) {
   if (typeof window === "undefined" || navigator.webdriver) return;
-  if (analyticsConsent() !== "granted") return;
+  // Traffic totals are anonymous and opt-out. A visitor who explicitly
+  // denies analytics is never recorded; an untouched choice still allows the
+  // public dashboard to reflect real visits instead of staying at zero.
+  if (analyticsConsent() === "denied") return;
   if (new URLSearchParams(window.location.search).get("demo") === "1") return;
   const body = JSON.stringify({
     visitorId: analyticsVisitorId(),
     eventId: analyticsEventId(page),
     page,
   });
-  void fetch("/api/analytics/pageview", {
-    method: "POST",
-    credentials: "omit",
-    keepalive: true,
-    headers: {
-      "Content-Type": "application/json",
-      "X-RealGuard-Browser-Event": "1",
-    },
-    body,
-  }).catch(() => undefined);
+  const send = (attempt: number) => {
+    void fetch("/api/analytics/pageview", {
+      method: "POST",
+      credentials: "omit",
+      cache: "no-store",
+      keepalive: attempt === 0,
+      headers: {
+        "Content-Type": "application/json",
+        "X-RealGuard-Browser-Event": "1",
+      },
+      body,
+    }).then((response) => {
+      if (!response.ok && attempt < 1) {
+        window.setTimeout(() => send(attempt + 1), 800);
+      }
+    }).catch(() => {
+      if (attempt < 1) window.setTimeout(() => send(attempt + 1), 800);
+    });
+  };
+  send(0);
 }

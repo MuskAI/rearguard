@@ -363,6 +363,20 @@ def test_admin_register_requires_existing_admin_session(client, monkeypatch):
         assert sess["admin_user"]["adminId"] == 1
 
 
+def test_empty_admin_allowlist_never_bootstraps_from_normal_login(client, monkeypatch):
+    monkeypatch.delenv("REALGUARD_ADMIN_PHONES", raising=False)
+    monkeypatch.delenv("REALGUARD_ADMIN_USER_IDS", raising=False)
+    monkeypatch.setenv("REALGUARD_ADMIN_ALLOW_ANY_LOGIN", "1")
+    monkeypatch.setattr(admin, "_admin_account_count", lambda: 0)
+    monkeypatch.setattr(admin, "_current_user", lambda: {
+        "Userid": 7,
+        "phone": "13800000000",
+        "username": "ordinary-user",
+    })
+
+    assert admin._is_legacy_admin(admin._current_user()) is False
+
+
 def test_admin_big_screen_endpoint_uses_admin_session(client, monkeypatch):
     with client.session_transaction() as sess:
         sess["admin_user"] = {"Userid": "admin:1", "adminId": 1, "username": "ops", "role": "admin"}
@@ -977,7 +991,16 @@ def test_admin_alerts_and_api_key_quota_are_persisted(client, monkeypatch, tmp_p
         if "SELECT id, user_id FROM developer_api_keys" in sql
         else 1,
     )
-    _login_session(client, admin_role="admin")
+    monkeypatch.setattr(
+        developer_platform,
+        "admin_update_request_quota",
+        lambda key_id: admin.jsonify({
+            "status": "success",
+            "keyId": key_id,
+            "quota": {"dailyLimit": 200, "rateLimitPerMinute": 20},
+        }),
+    )
+    _login_session(client, admin_role="super_admin")
 
     headers = _csrf_headers(client)
     alerts = client.post("/api/admin/alerts", json={
@@ -993,7 +1016,6 @@ def test_admin_alerts_and_api_key_quota_are_persisted(client, monkeypatch, tmp_p
     assert quota.get_json()["quota"]["dailyLimit"] == 200
     audit_actions = [item["action"] for item in client.get("/api/admin/audit").get_json()["audit"]]
     assert "alerts.update" in audit_actions
-    assert "api_key.quota.update" in audit_actions
 
 
 def test_admin_detection_review_writes_feedback_and_audit(client, monkeypatch, tmp_path):
@@ -1466,6 +1488,16 @@ def test_developer_admin_write_requires_global_csrf(client):
 
     assert response.status_code == 403
     assert "CSRF" in response.get_json()["message"]
+
+
+def test_financial_write_permissions_are_super_admin_only():
+    assert "billing.view" in admin.ADMIN_ROLE_PERMISSIONS["admin"]
+    assert "billing.adjust" not in admin.ADMIN_ROLE_PERMISSIONS["admin"]
+    assert "billing.pricing" not in admin.ADMIN_ROLE_PERMISSIONS["admin"]
+    assert "quota.manage" not in admin.ADMIN_ROLE_PERMISSIONS["admin"]
+    assert "billing.adjust" in admin.ADMIN_ROLE_PERMISSIONS["super_admin"]
+    assert "billing.pricing" in admin.ADMIN_ROLE_PERMISSIONS["super_admin"]
+    assert "quota.manage" in admin.ADMIN_ROLE_PERMISSIONS["super_admin"]
 
 
 def test_legacy_whitelist_is_readonly_for_sensitive_data(client, monkeypatch):

@@ -130,6 +130,9 @@ class _AIGCAgentSystem:
             "metadata_signals": metadata_signals,
             "metadata_count": len(metadata_raw),
             "llm_used": llm_used,
+            "fusion_probability": parsed.get("fusion_probability"),
+            "fusion_label": parsed.get("fusion_label"),
+            "decisionAuthority": "none",
         }
 
         self._print_result(final_result)

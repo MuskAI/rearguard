@@ -29,6 +29,8 @@ web_worker_drain_attempted=0
 public_config_switched=0
 gpu_activation_succeeded=0
 deployment_committed=0
+gpu_activation_started=0
+gpu_remote_stage=""
 PUBLIC_CONFIG_TARGET="/etc/systemd/system/realguard-detector-backend.service.d/remote.conf"
 PUBLIC_CONFIG_MARKER="/opt/realguard-data/public-detector-remote.DEPLOYED_COMMIT"
 PUBLIC_BACKUP_ROOT=""
@@ -88,6 +90,12 @@ cleanup() {
   if [[ "$web_worker_drain_attempted" == "1" && -n "$WEB_DRAIN_KEY" ]]; then
     if ! recover_public_worker; then
       echo "WARNING: immediate public worker recovery failed; the remote TTL watchdog remains armed" >&2
+    fi
+  fi
+  if [[ -n "$gpu_remote_stage" && "$gpu_activation_started" != "1" ]]; then
+    if ! ssh -q "${ssh_options[@]}" "$GPU_USER@$GPU_HOST" \
+        "rm -rf -- '$gpu_remote_stage'"; then
+      echo "WARNING: could not remove the unused GPU staging directory $gpu_remote_stage" >&2
     fi
   fi
   rm -rf "$TMP_DIR"
@@ -203,9 +211,22 @@ if [[ "$DRY_RUN" == "1" ]]; then
   exit 0
 fi
 
-scp "${scp_options[@]}" "$ARCHIVE" "$GPU_USER@$GPU_HOST:/tmp/realguard-detection-release.tgz"
-scp "${scp_options[@]}" "$MARKER" "$GPU_USER@$GPU_HOST:/tmp/realguard-detection.DEPLOYED_COMMIT"
-scp "${scp_options[@]}" "$ACTIVATE_SCRIPT" "$GPU_USER@$GPU_HOST:/tmp/realguard-activate-detection.sh"
+gpu_remote_stage="$(
+  ssh -q "${ssh_options[@]}" "$GPU_USER@$GPU_HOST" \
+    "umask 077; mktemp -d '/tmp/realguard-detection-${commit_sha}.XXXXXXXXXX'" \
+    | tr -d '\r' \
+    | tail -n 1
+)"
+if [[ ! "$gpu_remote_stage" =~ ^/tmp/realguard-detection-[0-9a-f]{7,40}\.[A-Za-z0-9]+$ ]]; then
+  printf 'Remote GPU staging path is invalid: %s\n' "$gpu_remote_stage" >&2
+  exit 1
+fi
+scp "${scp_options[@]}" "$ARCHIVE" \
+  "$GPU_USER@$GPU_HOST:$gpu_remote_stage/realguard-detection-release.tgz"
+scp "${scp_options[@]}" "$MARKER" \
+  "$GPU_USER@$GPU_HOST:$gpu_remote_stage/realguard-detection.DEPLOYED_COMMIT"
+scp "${scp_options[@]}" "$ACTIVATE_SCRIPT" \
+  "$GPU_USER@$GPU_HOST:$gpu_remote_stage/realguard-activate-detection.sh"
 if [[ -z "$WEB_DRAIN_KEY" ]]; then
   echo "GPU_WEB_DRAIN_SSH_KEY or DEPLOY_SSH_KEY is required to install the public detector configuration" >&2
   exit 1
@@ -256,8 +277,20 @@ public_ssh \
      realguard-developer-worker.service; \
    sudo rm -f '$PUBLIC_ACTIVATE_TMP'"
 public_config_switched=1
+gpu_activation_started=1
 ssh -tt "${ssh_options[@]}" "$GPU_USER@$GPU_HOST" \
-  "bash /tmp/realguard-activate-detection.sh"
+  "set -euo pipefail; \
+   stage='$gpu_remote_stage'; \
+   cleanup_stage() { rm -rf -- \"\$stage\"; }; \
+   trap cleanup_stage EXIT; \
+   trap 'exit 129' HUP; \
+   trap 'exit 130' INT; \
+   trap 'exit 143' TERM; \
+   GPU_RELEASE_ARCHIVE=\"\$stage/realguard-detection-release.tgz\" \
+   GPU_RELEASE_MARKER=\"\$stage/realguard-detection.DEPLOYED_COMMIT\" \
+   bash \"\$stage/realguard-activate-detection.sh\""
+gpu_remote_stage=""
+gpu_activation_started=0
 gpu_activation_succeeded=1
 
 if [[ "$web_worker_drain_attempted" == "1" ]]; then

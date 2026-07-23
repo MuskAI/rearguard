@@ -876,7 +876,20 @@ def _backend_model_decision_is_publishable(data):
         and isinstance(remote_evidence.get('modelRun'), dict)
         else None
     )
-    return validate_model_decision(decision) and validate_inference_audit(audit, decision)
+    if not (validate_model_decision(decision) and validate_inference_audit(audit, decision)):
+        return False
+    # The signed decision must be the exact value exposed by the response. A
+    # downstream Agent/VLM may add diagnostics, but cannot rewrite the verdict.
+    try:
+        published = float(decision.get('publishedProbability'))
+        response_probability = float(data.get('fake_percentage')) / 100.0
+    except (TypeError, ValueError):
+        return False
+    return (
+        abs(published - response_probability) <= 1e-6
+        and str(data.get('final_label') or '').strip()
+        == str(decision.get('finalLabel') or '').strip()
+    )
 
 
 def _stored_visible_watermark_for_item(itemid):
@@ -973,6 +986,7 @@ def _record_model_run(itemid, data, user_info):
                 'aiThreshold': model_decision.get('aiThreshold'),
                 'rawModelScore': model_decision.get('rawModelScore'),
                 'publishedProbability': model_decision.get('publishedProbability'),
+                'finalLabel': str(model_decision.get('finalLabel') or '')[:64],
                 'gateReasons': [
                     str(reason)[:240]
                     for reason in (model_decision.get('gateReasons') or [])[:12]
@@ -1959,6 +1973,7 @@ def _run_image_detection_payload(
         watermark_override_applied = False
         if isinstance(visible_watermark, dict):
             result['visibleWatermark'] = visible_watermark
+            result['explanation'] = watermark_verdict.build_explanation(result, visible_watermark)
             if watermark_verdict.apply_to_result(result, visible_watermark):
                 watermark_override_applied = True
                 result['reviewRequired'] = False
@@ -2754,9 +2769,9 @@ def _swarm_provenance_summary(experts):
 
         {
           "members": [...],          # which expert ids were considered
-          "ai_count": int,           # number that concluded "ai-generated" (score >= 0.6)
-          "real_count": int,         # number that concluded "real" (score <= 0.4)
-          "uncertain_count": int,    # 0.4 < score < 0.6 or no manifest / unknown
+          "ai_count": int,           # explicit AI source/marker claims
+          "real_count": int,         # trusted direct-capture claims only
+          "uncertain_count": int,    # absent, untrusted, or integrity-only signals
           "headline": str,           # short user-facing line
         }
 
@@ -2773,10 +2788,24 @@ def _swarm_provenance_summary(experts):
         score = _clamp01(expert.get('score'), 0.5)
         kind = expert['provenance_kind']
         verdict = expert.get('verdict') or ''
-        members.append({'id': expert.get('id'), 'kind': kind, 'score': round(score, 3), 'verdict': verdict})
-        if score >= 0.6:
+        details = expert.get('details') if isinstance(expert.get('details'), dict) else {}
+        content_claim = str(expert.get('content_claim') or details.get('content_claim') or '').lower()
+        integrity = str(expert.get('integrity') or details.get('integrity') or '').lower()
+        if not content_claim and kind in ('watermark', 'wam'):
+            content_claim = 'ai' if score >= 0.6 else 'unknown'
+        if not content_claim and kind == 'c2pa' and integrity not in {'invalid', 'valid_untrusted'}:
+            content_claim = 'ai' if score >= 0.6 else 'camera' if score <= 0.4 else 'unknown'
+        members.append({
+            'id': expert.get('id'),
+            'kind': kind,
+            'score': round(score, 3),
+            'verdict': verdict,
+            'contentClaim': content_claim or 'unknown',
+            'integrity': integrity or 'unknown',
+        })
+        if content_claim == 'ai' and (kind != 'c2pa' or integrity == 'trusted'):
             ai_count += 1
-        elif score <= 0.4:
+        elif content_claim == 'camera' and integrity == 'trusted':
             real_count += 1
         else:
             uncertain_count += 1
@@ -3220,6 +3249,10 @@ def _run_swarm_detection_payload(image_bytes, filename, mimetype, user_info, *, 
     visible_expert = next((expert for expert in experts if expert.get('id') == 'visible_watermark'), None)
     if visible_expert and isinstance(visible_expert.get('visibleWatermark'), dict):
         final_result['visibleWatermark'] = visible_expert['visibleWatermark']
+        final_result['explanation'] = watermark_verdict.build_explanation(
+            final_result,
+            visible_expert['visibleWatermark'],
+        )
         if watermark_verdict.apply_to_result(final_result, visible_expert['visibleWatermark']):
             final_result['reviewRequired'] = False
             final_result['decisionStatus'] = 'verdict'

@@ -20,13 +20,14 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from urllib.parse import urlparse
 
 import requests
-from flask import Blueprint, Response, g, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, Response, g, jsonify, redirect, render_template, request, send_file, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from imagedetection.views import (
     admin_state,
     aliyun_green,
     evidence_manifest,
+    internal_testing,
     model_registry,
     traffic_geo,
 )
@@ -52,6 +53,7 @@ ADMIN_CSRF_SESSION_KEY = "admin_csrf_token"
 ADMIN_SCREEN_SESSION_KEY = "admin_screen_access_digest"
 ADMIN_SCREEN_SESSION_ISSUED_KEY = "admin_screen_access_issued_at"
 ADMIN_USERNAME_RE = re.compile(r"^[a-zA-Z0-9_.-]{3,64}$")
+INTERNAL_TEST_OWNER_SQL = "COALESCE(openid, '') <> '__realguard_internal_test__'"
 ADMIN_PASSWORD_MIN_LENGTH = int(os.environ.get("REALGUARD_ADMIN_PASSWORD_MIN_LENGTH", "10"))
 ADMIN_LOGIN_MAX_ATTEMPTS = int(os.environ.get("REALGUARD_ADMIN_LOGIN_MAX_ATTEMPTS", "5"))
 ADMIN_LOGIN_IP_MAX_ATTEMPTS = int(os.environ.get("REALGUARD_ADMIN_LOGIN_IP_MAX_ATTEMPTS", "20"))
@@ -146,9 +148,16 @@ ALL_ADMIN_PERMISSIONS = {
     "detection.view",
     "detection.read_pii",
     "api_key.view",
+    "billing.view",
+    "billing.adjust",
+    "billing.pricing",
+    "quota.manage",
     "topology.view",
     "model.manage",
     "model.probe",
+    "testing.view",
+    "testing.run",
+    "testing.load",
     "routing.manage",
     "alerts.manage",
     "detection.review",
@@ -163,7 +172,8 @@ ADMIN_ROLE_PERMISSIONS = {
         "legacy_history.request", "legacy_history.approve",
     },
     "admin": ALL_ADMIN_PERMISSIONS - {
-        "admin.manage", "legacy_history.request", "legacy_history.approve",
+        "admin.manage", "billing.adjust", "billing.pricing", "quota.manage",
+        "legacy_history.request", "legacy_history.approve",
     },
     "operator": {
         "view",
@@ -172,6 +182,9 @@ ADMIN_ROLE_PERMISSIONS = {
         "api_key.view",
         "topology.view",
         "model.probe",
+        "testing.view",
+        "testing.run",
+        "testing.load",
         "alerts.manage",
         "routing.manage",
         "detection.review",
@@ -181,6 +194,7 @@ ADMIN_ROLE_PERMISSIONS = {
     },
     "reviewer": {
         "view", "detection.view", "detection.review", "data.export",
+        "testing.view",
         "legacy_history.view", "legacy_history.approve",
     },
     "readonly": {"view"},
@@ -246,8 +260,10 @@ def _is_legacy_admin(user):
         return False
     phones = _admin_phone_set()
     user_ids = _admin_user_id_set()
+    # A missing allowlist must fail closed. The first administrator is created
+    # through `flask create-admin`, never by an arbitrary logged-in account.
     if not phones and not user_ids:
-        return bool(os.environ.get("REALGUARD_ADMIN_ALLOW_ANY_LOGIN", "0") == "1")
+        return False
     return str(user.get("phone") or "") in phones or str(user.get("Userid") or "") in user_ids
 
 
@@ -1736,7 +1752,7 @@ def _traffic_metrics_payload(traffic):
     cumulative = traffic.get("cumulative") if isinstance(traffic.get("cumulative"), dict) else {}
     cumulative_homepage = cumulative.get("homepage") if isinstance(cumulative.get("homepage"), dict) else {}
     cumulative_site = cumulative.get("site") if isinstance(cumulative.get("site"), dict) else {}
-    return {
+    payload = {
         "ready": bool(traffic.get("ready")),
         "windowHours": int(traffic.get("windowHours") or 24),
         "homepagePageViews": int(homepage.get("pageViews") or 0),
@@ -1752,6 +1768,13 @@ def _traffic_metrics_payload(traffic):
         "cumulativeSitePageViews": int(cumulative_site.get("pageViews", cumulative.get("requests")) or 0),
         "cumulativeSiteUniqueVisitors": int(cumulative_site.get("uniqueVisitors", cumulative.get("uniqueVisitors")) or 0),
     }
+    source = traffic.get("source")
+    tracking_status = traffic.get("trackingStatus")
+    if isinstance(source, dict) and source:
+        payload["source"] = source
+    if tracking_status and tracking_status != "unknown":
+        payload["trackingStatus"] = tracking_status
+    return payload
 
 
 def _cached_traffic_summary():
@@ -1774,7 +1797,7 @@ def _dashboard_metrics():
         (today_start, today_end),
     )
     today_image_count = _scalar(
-        "SELECT COUNT(*) AS count FROM data WHERE createtime >= %s AND createtime < %s",
+        f"SELECT COUNT(*) AS count FROM data WHERE createtime >= %s AND createtime < %s AND {INTERNAL_TEST_OWNER_SQL}",
         (today_start, today_end),
         detection=True,
     )
@@ -1784,7 +1807,7 @@ def _dashboard_metrics():
         detection=True,
     )
     yesterday_image_count = _scalar(
-        "SELECT COUNT(*) AS count FROM data WHERE createtime >= %s AND createtime < %s",
+        f"SELECT COUNT(*) AS count FROM data WHERE createtime >= %s AND createtime < %s AND {INTERNAL_TEST_OWNER_SQL}",
         (yesterday_start, yesterday_end),
         detection=True,
     )
@@ -1794,7 +1817,7 @@ def _dashboard_metrics():
         detection=True,
     )
     last7_image_count = _scalar(
-        "SELECT COUNT(*) AS count FROM data WHERE createtime >= %s AND createtime < %s",
+        f"SELECT COUNT(*) AS count FROM data WHERE createtime >= %s AND createtime < %s AND {INTERNAL_TEST_OWNER_SQL}",
         (last7_start, today_end),
         detection=True,
     )
@@ -1803,7 +1826,11 @@ def _dashboard_metrics():
         (last7_start, today_end),
         detection=True,
     )
-    last_image_at = _scalar("SELECT createtime AS latest FROM data ORDER BY itemid DESC LIMIT 1", detection=True, default="")
+    last_image_at = _scalar(
+        f"SELECT createtime AS latest FROM data WHERE {INTERNAL_TEST_OWNER_SQL} ORDER BY itemid DESC LIMIT 1",
+        detection=True,
+        default="",
+    )
     last_video_at = _scalar("SELECT createtime AS latest FROM video_data ORDER BY itemid DESC LIMIT 1", detection=True, default="")
     traffic = _cached_traffic_summary()
     return {
@@ -1814,7 +1841,10 @@ def _dashboard_metrics():
             "apiKeys": _scalar("SELECT COUNT(*) AS count FROM developer_api_keys WHERE status = 'active'"),
         },
         "detections": {
-            "images": _scalar("SELECT COUNT(*) AS count FROM data", detection=True),
+            "images": _scalar(
+                f"SELECT COUNT(*) AS count FROM data WHERE {INTERNAL_TEST_OWNER_SQL}",
+                detection=True,
+            ),
             "videos": _scalar("SELECT COUNT(*) AS count FROM video_data", detection=True),
             "today": today_image_count + today_video_count,
             "todayImages": today_image_count,
@@ -1827,8 +1857,14 @@ def _dashboard_metrics():
             "last7Videos": last7_video_count,
             "lastImageAt": format_createtime(last_image_at),
             "lastVideoAt": format_createtime(last_video_at),
-            "feedbackPositive": _scalar("SELECT COUNT(*) AS count FROM data WHERE feedback IN (1, '1', '满意')", detection=True),
-            "feedbackNegative": _scalar("SELECT COUNT(*) AS count FROM data WHERE feedback IN (-1, '-1', '不满意')", detection=True),
+            "feedbackPositive": _scalar(
+                f"SELECT COUNT(*) AS count FROM data WHERE feedback IN (1, '1', '满意') AND {INTERNAL_TEST_OWNER_SQL}",
+                detection=True,
+            ),
+            "feedbackNegative": _scalar(
+                f"SELECT COUNT(*) AS count FROM data WHERE feedback IN (-1, '-1', '不满意') AND {INTERNAL_TEST_OWNER_SQL}",
+                detection=True,
+            ),
         },
         "traffic": _traffic_metrics_payload(traffic),
         "todayWindow": {
@@ -1861,10 +1897,10 @@ def _clear_dashboard_metrics_cache():
 def _hourly_detection_series(hours=24):
     start, buckets = _hours_window(hours)
     image_rows = excute_detection_sql(
-        """
+        f"""
         SELECT DATE_FORMAT(createtime, '%%Y-%%m-%%d %%H:00:00') AS bucket, COUNT(*) AS count
         FROM data
-        WHERE createtime >= %s
+        WHERE createtime >= %s AND {INTERNAL_TEST_OWNER_SQL}
         GROUP BY bucket
         ORDER BY bucket ASC
         """,
@@ -1893,9 +1929,10 @@ def _hourly_detection_series(hours=24):
 
 def _label_distribution():
     rows = excute_detection_sql(
-        """
+        f"""
         SELECT itemid, aigc
         FROM data
+        WHERE {INTERNAL_TEST_OWNER_SQL}
         ORDER BY itemid DESC
         LIMIT 1000
         """
@@ -1917,9 +1954,15 @@ def _label_distribution():
 
 def _feedback_distribution():
     if "feedback" not in _detection_data_columns():
-        return [{"label": "未反馈", "count": _scalar("SELECT COUNT(*) AS count FROM data", detection=True)}]
+        return [{
+            "label": "未反馈",
+            "count": _scalar(
+                f"SELECT COUNT(*) AS count FROM data WHERE {INTERNAL_TEST_OWNER_SQL}",
+                detection=True,
+            ),
+        }]
     rows = excute_detection_sql(
-        """
+        f"""
         SELECT CASE
                  WHEN feedback = 1 THEN '满意'
                  WHEN feedback = -1 THEN '不满意'
@@ -1927,6 +1970,7 @@ def _feedback_distribution():
                END AS label,
                COUNT(*) AS count
         FROM data
+        WHERE {INTERNAL_TEST_OWNER_SQL}
         GROUP BY label
         ORDER BY count DESC
         """
@@ -1974,6 +2018,7 @@ def _recent_detection_items(limit=12):
         f"""
         SELECT {select_clause}
         FROM data
+        WHERE {INTERNAL_TEST_OWNER_SQL}
         ORDER BY itemid DESC
         LIMIT %s
         """,
@@ -2403,7 +2448,9 @@ def _service_health():
         "environment": {
             "detectorBackendUrl": os.environ.get("REALGUARD_DETECTION_BACKEND_URL", ""),
             "adminConfigured": bool(_admin_phone_set() or _admin_user_id_set()),
-            "adminAllowAnyLogin": os.environ.get("REALGUARD_ADMIN_ALLOW_ANY_LOGIN", "0") == "1",
+            # Kept for old dashboard clients; the legacy bypass is intentionally
+            # disabled and is no longer a meaningful runtime capability.
+            "adminAllowAnyLogin": False,
             "adminAccounts": _admin_account_count(),
         },
     }
@@ -2675,6 +2722,278 @@ def admin_model_probe(model_id):
     result = _probe_model(model)
     _audit(user, "model.probe", model_id, meta={"ok": result.get("ok"), "message": result.get("message")})
     return jsonify({"status": "success", "probe": result})
+
+
+def _internal_testing_model(model_id):
+    model = model_registry.get_model(str(model_id or "").strip())
+    if not model:
+        return None, "模型不存在"
+    if model.get("enabled") is False:
+        return None, "模型已停用"
+    modality = str(model.get("modality") or "image").strip().lower()
+    if modality not in ("image", "vision", "multimodal"):
+        return None, "内部测试平台一期仅支持图像模型"
+    endpoint = str(model.get("endpoint") or "").strip()
+    endpoint_error = model_registry.validate_model_url(endpoint, allow_internal=True)
+    if endpoint_error:
+        return None, endpoint_error
+    return model, ""
+
+
+def _testing_system_snapshot():
+    registry = model_registry.load_registry()
+    raw_models = _models_payload_with_health(registry.get("models", []))
+    screen_models = [_screen_model_payload(model) for model in raw_models]
+    routing = _screen_routing_payload(registry.get("routing", {}))
+    return {
+        "host": _host_telemetry(),
+        "algorithmServer": _screen_algorithm_server_payload(screen_models, routing),
+        "services": _service_summary(screen_models),
+        "models": [
+            {
+                "id": model.get("id"),
+                "name": model.get("name") or model.get("id"),
+                "runtime": model.get("runtime"),
+                "modality": model.get("modality") or "image",
+                "enabled": model.get("enabled") is not False,
+                "health": model.get("health"),
+            }
+            for model in raw_models
+        ],
+    }
+
+
+@admin_blueprint.route("/api/admin/testing/overview")
+def admin_testing_overview():
+    _, error = _admin_required("testing.view")
+    if error:
+        return error
+    payload = internal_testing.overview()
+    payload["system"] = _testing_system_snapshot()
+    return jsonify({"status": "success", **payload})
+
+
+@admin_blueprint.route("/api/admin/testing/datasets", methods=["POST"])
+def admin_testing_create_dataset():
+    user, error = _admin_required("testing.run")
+    if error:
+        return error
+    uploads = []
+    for uploaded in request.files.getlist("files"):
+        if not uploaded or not uploaded.filename:
+            continue
+        data = uploaded.stream.read(internal_testing.MAX_UPLOAD_BYTES + 1)
+        if len(data) > internal_testing.MAX_UPLOAD_BYTES:
+            return jsonify({"status": "error", "message": f"{uploaded.filename} 超过 24 MB"}), 413
+        uploads.append((uploaded.filename, data))
+    labels = {}
+    raw_labels = str(request.form.get("labels") or "").strip()
+    if raw_labels:
+        try:
+            labels = json.loads(raw_labels)
+        except json.JSONDecodeError:
+            return jsonify({"status": "error", "message": "标签映射必须是 JSON 对象"}), 400
+        if not isinstance(labels, dict) or len(labels) > internal_testing.MAX_DATASET_SAMPLES:
+            return jsonify({"status": "error", "message": "标签映射格式或数量无效"}), 400
+    try:
+        dataset = internal_testing.create_dataset(
+            uploads,
+            source_url=request.form.get("sourceUrl") or "",
+            name=request.form.get("name") or "",
+            default_label=request.form.get("defaultLabel") or "unlabeled",
+            labels=labels,
+            actor=user,
+        )
+    except (ValueError, requests.RequestException) as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    _audit(
+        user,
+        "testing.dataset.create",
+        dataset.get("id") or "dataset",
+        meta={
+            "sampleCount": dataset.get("sample_count"),
+            "sourceType": dataset.get("source_type"),
+        },
+    )
+    return jsonify({"status": "success", "dataset": dataset}), 201
+
+
+@admin_blueprint.route("/api/admin/testing/datasets/<dataset_id>")
+def admin_testing_dataset(dataset_id):
+    _, error = _admin_required("testing.view")
+    if error:
+        return error
+    dataset = internal_testing.get_dataset(dataset_id, include_samples=True)
+    if not dataset:
+        return jsonify({"status": "error", "message": "测试数据集不存在"}), 404
+    return jsonify({"status": "success", "dataset": dataset})
+
+
+@admin_blueprint.route("/api/admin/testing/datasets/<dataset_id>", methods=["DELETE"])
+def admin_testing_delete_dataset(dataset_id):
+    user, error = _admin_required("testing.run")
+    if error:
+        return error
+    try:
+        deleted = internal_testing.delete_dataset(dataset_id)
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 409
+    if not deleted:
+        return jsonify({"status": "error", "message": "测试数据集不存在"}), 404
+    _audit(user, "testing.dataset.delete", dataset_id)
+    return jsonify({"status": "success", "deleted": dataset_id})
+
+
+@admin_blueprint.route("/api/admin/testing/samples/<sample_id>/image")
+def admin_testing_sample_image(sample_id):
+    _, error = _admin_required("testing.view")
+    if error:
+        return error
+    item = internal_testing.sample_path(sample_id)
+    if not item:
+        return jsonify({"status": "error", "message": "测试样本不存在"}), 404
+    path, mime_type, name = item
+    return send_file(path, mimetype=mime_type, download_name=name, conditional=True, max_age=0)
+
+
+@admin_blueprint.route("/api/admin/testing/samples/<sample_id>", methods=["PATCH", "POST"])
+def admin_testing_update_sample(sample_id):
+    user, error = _admin_required("testing.run")
+    if error:
+        return error
+    payload = request.get_json(silent=True) or {}
+    label = str(payload.get("groundTruth") or "").strip().lower()
+    if label not in internal_testing.ALLOWED_LABELS:
+        return jsonify({"status": "error", "message": "标签必须为 real、fake 或 unlabeled"}), 400
+    sample = internal_testing.update_sample_label(sample_id, label)
+    if not sample:
+        return jsonify({"status": "error", "message": "测试样本不存在"}), 404
+    _audit(user, "testing.sample.label", sample_id, after={"groundTruth": label})
+    return jsonify({"status": "success", "sample": sample})
+
+
+@admin_blueprint.route("/api/admin/testing/runs", methods=["POST"])
+def admin_testing_create_run():
+    user, error = _admin_required("testing.run")
+    if error:
+        return error
+    payload = request.get_json(silent=True) or {}
+    model, model_error = _internal_testing_model(payload.get("modelId"))
+    if model_error:
+        return jsonify({"status": "error", "message": model_error}), 400
+    try:
+        run = internal_testing.create_evaluation(
+            str(payload.get("datasetId") or ""),
+            model,
+            concurrency=payload.get("concurrency") or 1,
+            actor=user,
+        )
+    except (TypeError, ValueError) as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    _audit(
+        user,
+        "testing.evaluation.start",
+        run.get("id") or "evaluation",
+        meta={
+            "datasetId": payload.get("datasetId"),
+            "modelId": payload.get("modelId"),
+            "concurrency": (run.get("configuration") or {}).get("concurrency"),
+        },
+    )
+    return jsonify({"status": "success", "run": run}), 202
+
+
+@admin_blueprint.route("/api/admin/testing/load-tests", methods=["POST"])
+def admin_testing_create_load_test():
+    user, error = _admin_required("testing.load")
+    if error:
+        return error
+    if request.form.get("confirmation") != "INTERNAL_LOAD_TEST":
+        return jsonify({"status": "error", "message": "请确认这是受控内部压测"}), 400
+    active_load = [
+        run for run in internal_testing.list_runs(100)
+        if run.get("kind") == "load_test"
+        and run.get("status") in {"queued", "running", "cancel_requested"}
+    ]
+    if active_load:
+        return jsonify({"status": "error", "message": "已有压测任务运行中，请等待或先停止"}), 409
+    model, model_error = _internal_testing_model(request.form.get("modelId"))
+    if model_error:
+        return jsonify({"status": "error", "message": model_error}), 400
+    uploaded = request.files.get("file")
+    if not uploaded or not uploaded.filename:
+        return jsonify({"status": "error", "message": "压测必须上传固定测试图片"}), 400
+    image = uploaded.stream.read(internal_testing.MAX_UPLOAD_BYTES + 1)
+    if len(image) > internal_testing.MAX_UPLOAD_BYTES:
+        return jsonify({"status": "error", "message": "压测图片超过 24 MB"}), 413
+    try:
+        run = internal_testing.create_load_test(
+            model,
+            image,
+            uploaded.filename,
+            uploaded.mimetype or "application/octet-stream",
+            concurrency=request.form.get("concurrency") or 1,
+            request_count=request.form.get("requestCount") or 20,
+            duration_seconds=request.form.get("durationSeconds") or 30,
+            actor=user,
+        )
+    except (TypeError, ValueError) as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    _audit(
+        user,
+        "testing.load.start",
+        run.get("id") or "load-test",
+        meta=run.get("configuration"),
+    )
+    return jsonify({"status": "success", "run": run}), 202
+
+
+@admin_blueprint.route("/api/admin/testing/runs/<run_id>")
+def admin_testing_run(run_id):
+    _, error = _admin_required("testing.view")
+    if error:
+        return error
+    run = internal_testing.get_run(run_id, include_results=True)
+    if not run:
+        return jsonify({"status": "error", "message": "测试任务不存在"}), 404
+    return jsonify({"status": "success", "run": run})
+
+
+@admin_blueprint.route("/api/admin/testing/runs/<run_id>/cancel", methods=["POST"])
+def admin_testing_cancel_run(run_id):
+    user, error = _admin_required("testing.run")
+    if error:
+        return error
+    run = internal_testing.cancel_run(run_id)
+    if not run:
+        return jsonify({"status": "error", "message": "测试任务不存在"}), 404
+    _audit(user, "testing.run.cancel", run_id, meta={"status": run.get("status")})
+    return jsonify({"status": "success", "run": run})
+
+
+@admin_blueprint.route("/api/admin/testing/runs/<run_id>/export")
+def admin_testing_export_run(run_id):
+    _, error = _admin_required("testing.view")
+    if error:
+        return error
+    run = internal_testing.get_run(run_id, include_results=True)
+    if not run:
+        return jsonify({"status": "error", "message": "测试任务不存在"}), 404
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "sample_id", "sample_name", "ground_truth", "predicted_label", "score",
+        "status", "latency_ms", "http_status", "error",
+    ])
+    for item in run.get("results") or []:
+        writer.writerow([
+            item.get("sample_id"), item.get("sample_name"), item.get("ground_truth"),
+            item.get("predicted_label"), item.get("score"), item.get("status"),
+            item.get("latency_ms"), item.get("http_status"), item.get("error"),
+        ])
+    response = Response(output.getvalue(), content_type="text/csv; charset=utf-8")
+    response.headers["Content-Disposition"] = f'attachment; filename="{run_id}.csv"'
+    return response
 
 
 @admin_blueprint.route("/api/admin/routing", methods=["PATCH", "POST"])
@@ -3094,7 +3413,7 @@ def admin_detections():
     cursor = _cursor_arg()
     query = _search_term()
     label = str(request.args.get("label") or "").strip()
-    filters = []
+    filters = [INTERNAL_TEST_OWNER_SQL]
     params = []
     if query:
         like = f"%{query}%"
@@ -3336,6 +3655,7 @@ def admin_detections_export():
         f"""
         SELECT {select_clause}
         FROM data
+        WHERE {INTERNAL_TEST_OWNER_SQL}
         ORDER BY itemid DESC
         LIMIT 5000
         """
@@ -3458,37 +3778,7 @@ def admin_api_keys():
 
 @admin_blueprint.route("/api/admin/api-keys/<int:key_id>/quota", methods=["PATCH", "POST"])
 def admin_api_key_quota(key_id):
-    user, error = _admin_required("api_key.manage")
-    if error:
-        return error
-    key_rows = excute_sql("SELECT id, user_id FROM developer_api_keys WHERE id = %s LIMIT 1", (key_id,))
-    if key_rows is None:
-        return jsonify({"status": "error", "message": "API Key 信息读取失败"}), 500
-    if not key_rows:
-        return jsonify({"status": "error", "message": "API Key 不存在"}), 404
-    payload = request.get_json(silent=True) or {}
-    normalized = {}
-    for field in ("dailyLimit", "rateLimitPerMinute"):
-        if field in payload:
-            value = payload.get(field)
-            if value in (None, ""):
-                normalized[field] = None
-            else:
-                try:
-                    normalized[field] = max(0, int(value))
-                except (TypeError, ValueError):
-                    return jsonify({"status": "error", "message": f"{field} 必须为数字"}), 400
-    for field in ("scopes", "notes"):
-        if field in payload:
-            normalized[field] = str(payload.get(field) or "").strip()
-    before = admin_state.get_api_key_quota(key_id)
-    quota = admin_state.set_api_key_quota(key_id, normalized)
-    if quota is None:
-        return jsonify({
-            "status": "error",
-            "code": "quota_persistence_failed",
-            "message": "API Key 配额保存失败，请稍后重试",
-        }), 503
-    account_id = key_rows[0].get("user_id")
-    _audit(user, "api_key.quota.update", f"account:{account_id}", before=before, after=quota)
-    return jsonify({"status": "success", "quota": quota, "scope": "account", "userId": account_id})
+    # Imported lazily to avoid the admin/developer blueprint import cycle.
+    from imagedetection.views.developer_platform import admin_update_request_quota
+
+    return admin_update_request_quota(key_id)

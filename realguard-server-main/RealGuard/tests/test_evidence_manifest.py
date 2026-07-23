@@ -760,7 +760,9 @@ def test_html_report_embeds_signed_envelope_and_not_client_verdict(tmp_path):
     )
 
     assert "需人工复核 · 未发布自动风险分数" in html
-    assert "签名完整性清单" in html
+    assert "服务端完整性清单" in html
+    assert "第三方不能仅凭本报告独立验签" in html
+    assert "不属于可靠电子签名" in html
     assert hashlib.sha256(b"original").hexdigest() in html
     assert "v1-onnx-mil-2026.07" in html
     assert "客户端声称没有风险" not in html

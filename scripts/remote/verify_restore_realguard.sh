@@ -11,6 +11,9 @@ WORK_ROOT="${REALGUARD_RESTORE_WORK_ROOT:-/var/tmp}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 MYSQL_BIN="${MYSQL_BIN:-mysql}"
 MYSQLCHECK_BIN="${MYSQLCHECK_BIN:-mysqlcheck}"
+ERASURE_REPLAY_BIN="${REALGUARD_PRIVACY_ERASURE_REPLAY_BIN:-/usr/local/sbin/realguard-replay-privacy-erasures}"
+LIVE_ERASURE_LEDGER="${REALGUARD_PRIVACY_ERASURE_LEDGER_PATH:-/opt/realguard-data/privacy-erasure/privacy-erasure-tombstones.sqlite3}"
+REQUIRE_LIVE_ERASURE_LEDGER="${REALGUARD_RESTORE_REQUIRE_LIVE_ERASURE_LEDGER:-1}"
 SYSTEM_DATABASE="${REALGUARD_DB_NAME:-system}"
 DETECTION_DATABASE="${REALGUARD_DETECTION_DB_NAME:-image_detection}"
 status_snapshot="$SNAPSHOT_INPUT"
@@ -92,6 +95,7 @@ for required in \
   mysql-detection.sql.gz \
   jianzhen-v2.sqlite3 \
   traffic-cumulative.sqlite3 \
+  privacy-erasure-tombstones.sqlite3 \
   uploads.tgz \
   evidence-manifests.tgz \
   legacy-governance-evidence.tgz; do
@@ -102,13 +106,37 @@ for required in \
   }
 done
 
+if [[ "$REQUIRE_LIVE_ERASURE_LEDGER" != "0" && "$REQUIRE_LIVE_ERASURE_LEDGER" != "1" ]]; then
+  echo "REALGUARD_RESTORE_REQUIRE_LIVE_ERASURE_LEDGER must be 0 or 1." >&2
+  write_status "failed" "invalid_live_erasure_ledger_policy" || true
+  exit 1
+fi
+replay_ledger="$snapshot/privacy-erasure-tombstones.sqlite3"
+if [[ -f "$LIVE_ERASURE_LEDGER" && ! -L "$LIVE_ERASURE_LEDGER" ]]; then
+  replay_ledger="$LIVE_ERASURE_LEDGER"
+elif [[ "$REQUIRE_LIVE_ERASURE_LEDGER" == "1" ]]; then
+  echo "A current privacy erasure ledger is required before restoring an older snapshot." >&2
+  write_status "failed" "live_erasure_ledger_required" || true
+  exit 1
+fi
+if [[ -x "$ERASURE_REPLAY_BIN" ]]; then
+  ERASURE_REPLAY_CMD=("$ERASURE_REPLAY_BIN")
+elif [[ -f "$ERASURE_REPLAY_BIN" ]]; then
+  # Portable deployments may ship the Python replay tool without an
+  # executable bit; production installs should use the root-owned wrapper.
+  ERASURE_REPLAY_CMD=("$PYTHON_BIN" "$ERASURE_REPLAY_BIN")
+else
+  echo "Privacy erasure replay tool is unavailable: $ERASURE_REPLAY_BIN" >&2
+  write_status "failed" "privacy_erasure_replay_tool_missing" || true
+  exit 1
+fi
+
 started_epoch="$(date +%s)"
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 suffix="$(date -u +%Y%m%d%H%M%S)_$$"
 restore_system="rg_restore_system_$suffix"
 restore_detection="rg_restore_detection_$suffix"
 work_dir="$(mktemp -d "$WORK_ROOT/realguard-restore-drill.XXXXXX")"
-event_scheduler_before=""
 
 cleanup() {
   status=$?
@@ -116,9 +144,6 @@ cleanup() {
   set +e
   "$MYSQL_BIN" --batch --execute="DROP DATABASE IF EXISTS \`$restore_system\`; DROP DATABASE IF EXISTS \`$restore_detection\`;" \
     >/dev/null 2>&1
-  if [[ "$event_scheduler_before" == "ON" ]]; then
-    "$MYSQL_BIN" --batch --execute="SET GLOBAL event_scheduler = ON" >/dev/null 2>&1
-  fi
   rm -rf -- "$work_dir"
   if (( status != 0 )); then
     write_status "failed" "restore_verification_failed" || true
@@ -127,6 +152,12 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 write_status "running"
+cp -p -- "$snapshot/jianzhen-v2.sqlite3" "$work_dir/jianzhen-v2.sqlite3"
+admin_state_args=()
+if [[ -f "$snapshot/admin_state.json" ]]; then
+  cp -p -- "$snapshot/admin_state.json" "$work_dir/admin_state.json"
+  admin_state_args=(--admin-state "$work_dir/admin_state.json")
+fi
 
 (
   cd "$snapshot"
@@ -146,22 +177,12 @@ for database in "$restore_system" "$restore_detection"; do
   }
 done
 
-event_scheduler_before="$(
-  "$MYSQL_BIN" --batch --skip-column-names --execute="SELECT @@GLOBAL.event_scheduler"
-)"
-if [[ "$event_scheduler_before" == "ON" ]]; then
-  if [[ "${REALGUARD_RESTORE_ALLOW_EVENT_PAUSE:-0}" != "1" ]]; then
-    echo "MySQL event_scheduler is ON; set REALGUARD_RESTORE_ALLOW_EVENT_PAUSE=1 for an isolated drill." >&2
-    exit 1
-  fi
-  "$MYSQL_BIN" --batch --execute="SET GLOBAL event_scheduler = OFF"
-fi
-
 restore_mysql_dump() {
   local dump_path="$1" source_database="$2" target_database="$3"
   "$PYTHON_BIN" - "$dump_path" "$source_database" "$target_database" <<'PY' \
     | "$MYSQL_BIN" --binary-mode --default-character-set=utf8mb4
 import gzip
+import re
 import sys
 
 dump_path, source_database, target_database = sys.argv[1:]
@@ -169,6 +190,22 @@ source_token = f"`{source_database}`"
 target_token = f"`{target_database}`"
 create_count = 0
 use_count = 0
+delimiter = ";"
+statement_lines = []
+
+
+def emit_statement(lines):
+    statement = "".join(lines)
+    # Online drills must never pause the production scheduler. Event DDL stays
+    # in the checksummed backup, but is omitted from this temporary restore so
+    # a freshly restored event cannot execute against the drill database.
+    creates_event = bool(
+        re.search(r"(?:\bCREATE\b|CREATE\*/).*?\bEVENT\b", statement, re.I | re.S)
+    )
+    if creates_event:
+        sys.stdout.write("-- RealGuard restore drill skipped a scheduled event definition.\n")
+    else:
+        sys.stdout.write(statement)
 
 with gzip.open(dump_path, "rt", encoding="utf-8", errors="strict") as source:
     for line in source:
@@ -185,7 +222,22 @@ with gzip.open(dump_path, "rt", encoding="utf-8", errors="strict") as source:
                 raise SystemExit("dump USE does not match the configured source database")
             line = line.replace(source_token, target_token, 1)
             use_count += 1
-        sys.stdout.write(line)
+        if stripped.upper().startswith("DELIMITER "):
+            if statement_lines:
+                emit_statement(statement_lines)
+                statement_lines = []
+            delimiter = stripped.split(None, 1)[1].strip()
+            if not delimiter or any(char.isspace() for char in delimiter):
+                raise SystemExit("dump contains an invalid DELIMITER directive")
+            sys.stdout.write(line)
+            continue
+        statement_lines.append(line)
+        if line.rstrip().endswith(delimiter):
+            emit_statement(statement_lines)
+            statement_lines = []
+
+if statement_lines:
+    emit_statement(statement_lines)
 
 if create_count != 1 or use_count != 1:
     raise SystemExit(
@@ -230,8 +282,13 @@ print(json.dumps({"tables": tables, "integrity": "ok"}, separators=(",", ":")))
 PY
 }
 
-v2_sqlite="$(verify_sqlite "$snapshot/jianzhen-v2.sqlite3")"
+v2_sqlite="$(verify_sqlite "$work_dir/jianzhen-v2.sqlite3")"
 traffic_sqlite="$(verify_sqlite "$snapshot/traffic-cumulative.sqlite3")"
+privacy_erasure_sqlite="$(verify_sqlite "$snapshot/privacy-erasure-tombstones.sqlite3")"
+internal_testing_sqlite='{"present":false}'
+if [[ -f "$snapshot/internal-testing.sqlite3" ]]; then
+  internal_testing_sqlite="$(verify_sqlite "$snapshot/internal-testing.sqlite3")"
+fi
 
 verify_archive() {
   local archive="$1" destination="$2"
@@ -269,6 +326,32 @@ evidence_summary="$(
 legacy_governance_summary="$(
   verify_archive "$snapshot/legacy-governance-evidence.tgz" "$work_dir/legacy-governance-evidence"
 )"
+internal_testing_files='{"present":false}'
+if [[ -f "$snapshot/internal-testing-files.tgz" ]]; then
+  internal_testing_files="$(
+    verify_archive "$snapshot/internal-testing-files.tgz" "$work_dir/internal-testing"
+  )"
+fi
+
+replay_args=(
+  --ledger "$replay_ledger"
+  --snapshot-ledger "$snapshot/privacy-erasure-tombstones.sqlite3"
+  --mysql-bin "$MYSQL_BIN"
+  --system-database "$restore_system"
+  --detection-database "$restore_detection"
+  --v2-database "$work_dir/jianzhen-v2.sqlite3"
+  --uploads-root "$work_dir/uploads"
+  --evidence-root "$work_dir/evidence-manifests"
+)
+if ((${#admin_state_args[@]})); then
+  replay_args+=("${admin_state_args[@]}")
+fi
+replay_output="$(
+  "${ERASURE_REPLAY_CMD[@]}" \
+    "${replay_args[@]}"
+)"
+"$MYSQLCHECK_BIN" --check --extended "$restore_system" "$restore_detection" >/dev/null
+v2_sqlite="$(verify_sqlite "$work_dir/jianzhen-v2.sqlite3")"
 
 finished_epoch="$(date +%s)"
 finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -278,7 +361,9 @@ report_path="$REPORT_ROOT/$(basename "$snapshot")-$suffix.json"
 "$PYTHON_BIN" - \
   "$report_path" "$snapshot" "$started_at" "$finished_at" "$duration_seconds" \
   "$system_tables" "$detection_tables" "$v2_sqlite" "$traffic_sqlite" \
-  "$uploads_summary" "$evidence_summary" "$legacy_governance_summary" <<'PY'
+  "$privacy_erasure_sqlite" "$replay_output" \
+  "$uploads_summary" "$evidence_summary" "$legacy_governance_summary" \
+  "$internal_testing_sqlite" "$internal_testing_files" <<'PY'
 import json
 from pathlib import Path
 import sys
@@ -293,9 +378,13 @@ import sys
     detection_tables,
     v2_sqlite,
     traffic_sqlite,
+    privacy_erasure_sqlite,
+    replay_output,
     uploads,
     evidence,
     legacy_governance,
+    internal_testing_sqlite,
+    internal_testing_files,
 ) = sys.argv[1:]
 report = {
     "status": "passed",
@@ -312,11 +401,15 @@ report = {
     "sqlite": {
         "v2": json.loads(v2_sqlite),
         "traffic": json.loads(traffic_sqlite),
+        "privacyErasureLedger": json.loads(privacy_erasure_sqlite),
+        "internalTesting": json.loads(internal_testing_sqlite),
     },
+    "privacyErasureReplay": json.loads(replay_output),
     "archives": {
         "uploads": json.loads(uploads),
         "evidenceManifests": json.loads(evidence),
         "legacyGovernanceEvidence": json.loads(legacy_governance),
+        "internalTestingFiles": json.loads(internal_testing_files),
     },
 }
 Path(report_path).write_text(

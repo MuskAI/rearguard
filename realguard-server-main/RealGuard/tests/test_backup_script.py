@@ -8,6 +8,7 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+import tarfile
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -36,7 +37,12 @@ def test_backup_script_creates_consistent_local_snapshot(tmp_path):
 
     v2_db = tmp_path / "v2.sqlite3"
     traffic_db = tmp_path / "traffic.sqlite3"
-    for database, value in ((v2_db, "v2"), (traffic_db, "traffic")):
+    privacy_ledger = tmp_path / "privacy-erasure.sqlite3"
+    for database, value in (
+        (v2_db, "v2"),
+        (traffic_db, "traffic"),
+        (privacy_ledger, "privacy-erasure"),
+    ):
         with sqlite3.connect(database) as connection:
             connection.execute("CREATE TABLE evidence (value TEXT NOT NULL)")
             connection.execute("INSERT INTO evidence (value) VALUES (?)", (value,))
@@ -44,14 +50,27 @@ def test_backup_script_creates_consistent_local_snapshot(tmp_path):
     uploads = tmp_path / "uploads"
     uploads.mkdir()
     (uploads / "sample.txt").write_text("upload evidence", encoding="utf-8")
+    (uploads / ".sample.txt.deleting-test").write_text(
+        "must never enter backup", encoding="utf-8"
+    )
     evidence_manifests = tmp_path / "evidence-manifests"
     evidence_manifests.mkdir()
     (evidence_manifests / "image-7.manifest.json").write_text(
         '{"manifest":{"record_id":"7"}}', encoding="utf-8"
     )
+    (evidence_manifests / ".image-8.manifest.json.deleting-test").write_text(
+        "must never enter backup", encoding="utf-8"
+    )
     governance_evidence = tmp_path / "legacy-governance-evidence"
     governance_evidence.mkdir()
     (governance_evidence / "case-7.json").write_text('{"case":7}', encoding="utf-8")
+    internal_testing = tmp_path / "internal-testing"
+    (internal_testing / "datasets" / "set-1").mkdir(parents=True)
+    (internal_testing / "datasets" / "set-1" / "sample.png").write_bytes(b"test-image")
+    internal_testing_db = internal_testing / "internal-testing.sqlite3"
+    with sqlite3.connect(internal_testing_db) as connection:
+        connection.execute("CREATE TABLE runs (id TEXT PRIMARY KEY)")
+        connection.execute("INSERT INTO runs (id) VALUES ('run-1')")
     backup_root = tmp_path / "backups"
     mysqldump_args_log = tmp_path / "mysqldump-args.log"
     rclone_args_log = tmp_path / "rclone-args.log"
@@ -60,7 +79,10 @@ def test_backup_script_creates_consistent_local_snapshot(tmp_path):
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "REALGUARD_BACKUP_ROOT": str(backup_root),
-        "REALGUARD_BACKUP_RETENTION_DAYS": "14",
+            "REALGUARD_BACKUP_RETENTION_DAYS": "14",
+            "REALGUARD_BACKUP_MIN_FREE_BYTES": "0",
+            "REALGUARD_BACKUP_MIN_FREE_PERCENT": "0",
+            "REALGUARD_BACKUP_MIN_STAGING_BYTES": "1048576",
         "REALGUARD_BACKUP_RCLONE_REMOTE": "archive:realguard",
         "REALGUARD_BACKUP_STATUS_FILE": str(backup_status),
         "REALGUARD_DB_USER": "backup-user",
@@ -71,9 +93,12 @@ def test_backup_script_creates_consistent_local_snapshot(tmp_path):
         "REALGUARD_DETECTION_DB_NAME": "image_detection",
         "JIANZHEN_DB_PATH": str(v2_db),
         "REALGUARD_TRAFFIC_CUMULATIVE_DB": str(traffic_db),
+        "REALGUARD_PRIVACY_ERASURE_LEDGER_PATH": str(privacy_ledger),
         "REALGUARD_UPLOADS_DIR": str(uploads),
         "REALGUARD_EVIDENCE_SNAPSHOT_ROOT": str(evidence_manifests),
         "REALGUARD_LEGACY_EVIDENCE_ROOT": str(governance_evidence),
+        "REALGUARD_INTERNAL_TEST_ROOT": str(internal_testing),
+        "REALGUARD_INTERNAL_TEST_DB": str(internal_testing_db),
         "MYSQLDUMP_ARGS_LOG": str(mysqldump_args_log),
         "RCLONE_ARGS_LOG": str(rclone_args_log),
         "PYTHON_BIN": sys.executable,
@@ -95,9 +120,22 @@ def test_backup_script_creates_consistent_local_snapshot(tmp_path):
     assert gzip.decompress((snapshot / "mysql-detection.sql.gz").read_bytes()).startswith(b"-- deterministic")
     assert (snapshot / "jianzhen-v2.sqlite3").is_file()
     assert (snapshot / "traffic-cumulative.sqlite3").is_file()
+    assert (snapshot / "privacy-erasure-tombstones.sqlite3").is_file()
     assert (snapshot / "uploads.tgz").is_file()
     assert (snapshot / "evidence-manifests.tgz").is_file()
     assert (snapshot / "legacy-governance-evidence.tgz").is_file()
+    assert (snapshot / "internal-testing.sqlite3").is_file()
+    assert (snapshot / "internal-testing-files.tgz").is_file()
+    with tarfile.open(snapshot / "uploads.tgz", "r:gz") as archive:
+        assert all(".deleting-" not in name for name in archive.getnames())
+    with tarfile.open(snapshot / "evidence-manifests.tgz", "r:gz") as archive:
+        assert all(".deleting-" not in name for name in archive.getnames())
+    with tarfile.open(snapshot / "internal-testing-files.tgz", "r:gz") as archive:
+        names = archive.getnames()
+        assert any(name.endswith("sample.png") for name in names)
+        assert all("internal-testing.sqlite3" not in name for name in names)
+    with sqlite3.connect(snapshot / "internal-testing.sqlite3") as connection:
+        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
     assert f"evidence_manifest_directory={evidence_manifests}" in (
         snapshot / "MANIFEST"
     ).read_text(encoding="utf-8")
