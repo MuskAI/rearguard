@@ -1556,6 +1556,7 @@ video {
 }
 
 .result-preview {
+  position: relative;
   width: 210px;
   height: 146px;
   display: grid;
@@ -1567,12 +1568,59 @@ video {
   border-radius: 7px;
 }
 
+.result-preview-image {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
 .result-preview img,
 .result-preview video {
   width: 100%;
   height: 100%;
   object-fit: contain;
   background: #edf3f4;
+}
+
+.result-preview-watermarks {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.result-preview-watermark-box {
+  position: absolute;
+  min-width: 5px;
+  min-height: 5px;
+  border: 2px solid #43c7b0;
+  box-shadow: 0 0 0 1px rgba(8, 41, 38, 0.78), inset 0 0 0 1px rgba(255, 255, 255, 0.54);
+}
+
+.result-preview-watermark-box.is-platform {
+  border-color: #f0644d;
+  box-shadow: 0 0 0 1px rgba(85, 20, 12, 0.82), inset 0 0 0 1px rgba(255, 255, 255, 0.62);
+}
+
+.result-preview-watermark-box > b {
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  min-width: 20px;
+  height: 17px;
+  display: grid;
+  place-items: center;
+  padding: 0 4px;
+  color: #073832;
+  background: #64ddc5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 8px;
+  line-height: 1;
+}
+
+.result-preview-watermark-box.is-platform > b {
+  color: #fff;
+  background: #e65d48;
 }
 
 .result-preview > span {

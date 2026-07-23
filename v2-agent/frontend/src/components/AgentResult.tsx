@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   BadgeCheck,
@@ -35,9 +35,10 @@ import {
   type ProvenanceReport,
   type ReportShareItem,
   type SynthIDResult,
+  type VisibleWatermarkHit,
   type VisibleWatermarkResult,
 } from "../api";
-import { buildEvidenceExplanation, hasDecisiveAiWatermark } from "../evidenceExplanation";
+import { buildEvidenceExplanation, hasDecisiveAiWatermark, localizedWatermarkHits } from "../evidenceExplanation";
 import WatermarkPipeline from "./WatermarkPipeline";
 
 type ResultTab = "summary" | "evidence" | "file";
@@ -66,8 +67,97 @@ interface VerdictView {
   reviewOnly: boolean;
 }
 
+const AI_WATERMARK_PROVIDERS = new Set(["gemini", "doubao", "jimeng", "jimeng_pill", "samsung"]);
+
 function clamp01(value: number) {
   return Math.max(0, Math.min(value, 1));
+}
+
+interface PreviewWatermarkMark {
+  hit: VisibleWatermarkHit;
+  index: number;
+}
+
+interface PreviewImageFrame {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+function AnnotatedImagePreview({
+  src,
+  alt,
+  marks,
+}: {
+  src: string;
+  alt: string;
+  marks: PreviewWatermarkMark[];
+}) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
+  const [frame, setFrame] = useState<PreviewImageFrame | null>(null);
+
+  const updateFrame = useCallback(() => {
+    const host = hostRef.current;
+    const image = imageRef.current;
+    if (!host || !image || image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
+    const scale = Math.min(host.clientWidth / image.naturalWidth, host.clientHeight / image.naturalHeight);
+    const width = image.naturalWidth * scale;
+    const height = image.naturalHeight * scale;
+    setFrame({
+      left: (host.clientWidth - width) / 2,
+      top: (host.clientHeight - height) / 2,
+      width,
+      height,
+    });
+  }, []);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(updateFrame) : null;
+    observer?.observe(host);
+    window.addEventListener("resize", updateFrame);
+    updateFrame();
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", updateFrame);
+    };
+  }, [src, updateFrame]);
+
+  return (
+    <div className="result-preview-image" ref={hostRef}>
+      <img ref={imageRef} src={src} alt={alt} onLoad={updateFrame} />
+      {frame && marks.length > 0 && (
+        <div
+          className="result-preview-watermarks"
+          role="group"
+          aria-label={`图中已标注 ${marks.length} 处可见水印`}
+          style={{ left: frame.left, top: frame.top, width: frame.width, height: frame.height }}
+        >
+          {marks.map(({ hit, index }) => {
+            const x = clamp01(Number(hit.bbox?.x || 0));
+            const y = clamp01(Number(hit.bbox?.y || 0));
+            const width = Math.min(clamp01(Number(hit.bbox?.w || 0)), 1 - x);
+            const height = Math.min(clamp01(Number(hit.bbox?.h || 0)), 1 - y);
+            const label = hit.label || (AI_WATERMARK_PROVIDERS.has(hit.provider) ? "AI 平台水印" : "可见水印");
+            return (
+              <span
+                className={`result-preview-watermark-box ${AI_WATERMARK_PROVIDERS.has(hit.provider) ? "is-platform" : ""}`}
+                key={`${hit.provider}-${index}-${x}-${y}`}
+                style={{ left: `${x * 100}%`, top: `${y * 100}%`, width: `${width * 100}%`, height: `${height * 100}%` }}
+                aria-label={`第 ${index} 处水印：${label}，置信度 ${Math.round(hit.confidence * 100)}%`}
+                title={`${label} · ${Math.round(hit.confidence * 100)}%`}
+              >
+                <b>{String(index).padStart(2, "0")}</b>
+              </span>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function riskTone(risk: number): VerdictView["tone"] {
@@ -359,11 +449,11 @@ function CaptureEvidenceSection({ report }: { report?: CaptureEvidence }) {
 
 function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult; preview?: string }) {
   if (!report || !preview) return null;
-  const platformProviders = new Set(["gemini", "doubao", "jimeng", "jimeng_pill", "samsung"]);
   const hits = (report.hits || []).slice(0, 8);
-  const platformHits = hits.filter((hit) => platformProviders.has(hit.provider));
+  const localizedHits = localizedWatermarkHits(report).slice(0, 8);
+  const platformHits = hits.filter((hit) => AI_WATERMARK_PROVIDERS.has(hit.provider));
   const decisiveWatermark = hasDecisiveAiWatermark(report);
-  const genericHits = hits.filter((hit) => !platformProviders.has(hit.provider));
+  const genericHits = hits.filter((hit) => !AI_WATERMARK_PROVIDERS.has(hit.provider));
   const detector = report.detector;
   const detected = hits.length > 0;
   const hasPlatformHit = platformHits.length > 0;
@@ -446,14 +536,15 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
           <div className="watermark-visual">
             <div className="watermark-canvas">
               <img src={preview} alt="带有可见水印定位框的原始图像" />
-              {hits.map((hit, index) => {
+              {localizedHits.map((hit) => {
+                const index = Math.max(hits.indexOf(hit), 0);
                 const x = clamp01(Number(hit.bbox?.x || 0));
                 const y = clamp01(Number(hit.bbox?.y || 0));
                 const width = Math.min(clamp01(Number(hit.bbox?.w || 0)), 1 - x);
                 const height = Math.min(clamp01(Number(hit.bbox?.h || 0)), 1 - y);
                 return (
                   <span
-                    className={`watermark-box ${platformProviders.has(hit.provider) ? "is-platform" : ""}`}
+                    className={`watermark-box ${AI_WATERMARK_PROVIDERS.has(hit.provider) ? "is-platform" : ""}`}
                     key={`${hit.provider}-${index}-${x}-${y}`}
                     style={{ left: `${x * 100}%`, top: `${y * 100}%`, width: `${width * 100}%`, height: `${height * 100}%` }}
                     aria-label={`第 ${index + 1} 处可见水印，置信度 ${Math.round(hit.confidence * 100)}%`}
@@ -468,12 +559,12 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
             {hits.length > 0 ? (
               <ol>
                 {hits.map((hit, index) => (
-                  <li className={platformProviders.has(hit.provider) ? "is-platform" : ""} key={`${hit.provider}-detail-${index}`}>
+                  <li className={AI_WATERMARK_PROVIDERS.has(hit.provider) ? "is-platform" : ""} key={`${hit.provider}-detail-${index}`}>
                     <span>{String(index + 1).padStart(2, "0")}</span>
                     <div>
-                      <strong>{hit.label || (platformProviders.has(hit.provider) ? "已知 AI 平台水印" : "可见水印（平台待确认）")}</strong>
+                      <strong>{hit.label || (AI_WATERMARK_PROVIDERS.has(hit.provider) ? "已知 AI 平台水印" : "可见水印（平台待确认）")}</strong>
                       <small>
-                        {platformProviders.has(hit.provider)
+                        {AI_WATERMARK_PROVIDERS.has(hit.provider)
                           ? hit.method === "explicit_ai_watermark_fusion"
                             ? "OCR 生成语义 · FAISS 平台检索 · YOLO 区域定位"
                             : `remove-ai-watermarks 平台匹配${hit.localizationConfirmed ? " · YOLO 区域复核" : " · 视觉归属线索"}`
@@ -647,6 +738,14 @@ export default function AgentResult(props: Props) {
   const visibleWatermark = props.outcome.kind === "image" || props.outcome.kind === "evidence"
     ? props.outcome.result.visibleWatermark
     : undefined;
+  const previewWatermarkMarks = useMemo(() => {
+    if (!visibleWatermark) return [];
+    const allHits = visibleWatermark.hits || [];
+    return localizedWatermarkHits(visibleWatermark).slice(0, 8).map((hit, localizedIndex) => ({
+      hit,
+      index: Math.max(allHits.indexOf(hit) + 1, localizedIndex + 1),
+    }));
+  }, [visibleWatermark]);
   const synthid = props.outcome.kind === "image" || props.outcome.kind === "evidence"
     ? props.outcome.result.synthid
     : undefined;
@@ -730,7 +829,7 @@ export default function AgentResult(props: Props) {
           {props.outcome.kind === "video" && preview ? (
             <video src={preview} controls preload="metadata" />
           ) : preview ? (
-            <img src={preview} alt={fileName(props.outcome)} />
+            <AnnotatedImagePreview src={preview} alt={fileName(props.outcome)} marks={previewWatermarkMarks} />
           ) : (
             <span>{props.outcome.kind === "video" ? <Video size={30} /> : props.outcome.kind === "image" ? <ImageIcon size={30} /> : <FileText size={30} />}</span>
           )}
