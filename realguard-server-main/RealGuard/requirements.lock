@@ -57,6 +57,7 @@ packaging==26.2
 pdfminer.six==20250506
 pdfplumber==0.11.7
 pillow==11.2.1
+pillow-heif==1.5.0
 propcache==0.5.2
 protobuf==7.35.1
 py-ip2region==3.0.4

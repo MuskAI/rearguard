@@ -241,6 +241,7 @@ async def prevent_sensitive_response_caching(request: Request, call_next):
 
 EXT_TO_TYPE = {
     "jpg": "image", "jpeg": "image", "png": "image", "webp": "image", "bmp": "image", "gif": "image",
+    "heic": "image", "heif": "image",
     "mp4": "video", "mov": "video", "avi": "video", "mkv": "video", "webm": "video",
     "mp3": "audio", "wav": "audio", "m4a": "audio", "flac": "audio", "aac": "audio",
     "txt": "document", "pdf": "document", "doc": "document", "docx": "document", "md": "document",

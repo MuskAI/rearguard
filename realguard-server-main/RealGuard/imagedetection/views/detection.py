@@ -19,6 +19,7 @@ from PIL import Image, UnidentifiedImageError
 from werkzeug.utils import secure_filename
 
 from model_decision_contract import validate_inference_audit, validate_model_decision
+from imagedetection.image_formats import is_heif_filename, is_unsupported_animation
 
 from imagedetection.views import (
     admin_state,
@@ -49,7 +50,7 @@ from imagedetection.views.utils import (
 
 image_upload_blueprint = Blueprint('image_upload_blueprint', __name__, static_folder='static')
 
-ALLOWED_EXTENSIONS = {'jpg', 'jpeg', 'png', 'webp', 'bmp', 'gif'}
+ALLOWED_EXTENSIONS = {'jpg', 'jpeg', 'png', 'webp', 'bmp', 'gif', 'heic', 'heif'}
 ALLOWED_VIDEO_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv', 'flv', 'wmv', 'webm'}
 DETECTION_BACKEND_BASE_URL = os.environ.get(
     'REALGUARD_DETECTION_BACKEND_URL',
@@ -222,7 +223,7 @@ def _read_image_upload(file):
                 width, height = image.size
                 if width <= 0 or height <= 0:
                     raise ValueError('invalid image dimensions')
-                if bool(getattr(image, 'is_animated', False)) and int(getattr(image, 'n_frames', 1)) > 1:
+                if is_unsupported_animation(image):
                     return None, (jsonify({
                         'status': 'error',
                         'code': 'unsupported_animated_image',
@@ -250,7 +251,7 @@ def _read_image_upload(file):
         return None, (jsonify({
             'status': 'error',
             'code': 'invalid_image',
-            'message': '无法解析图片，请上传有效的 JPG、PNG、WebP、BMP 或 GIF 文件',
+            'message': '无法解析图片，请上传有效的 JPG、PNG、WebP、BMP、GIF、HEIC 或 HEIF 文件',
         }), 400)
     return image_bytes, None
 
@@ -429,6 +430,14 @@ def allowed_file(filename):
 
 def allowed_video_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_VIDEO_EXTENSIONS
+
+
+def _public_image_url(itemid, filename=''):
+    if not itemid:
+        return ''
+    if is_heif_filename(filename):
+        return f"/api/media/thumbnail/image/{itemid}"
+    return f"/api/media/image/{itemid}"
 
 
 def _to_user_explanation(final_label='', confidence='', has_metadata=False):
@@ -1183,7 +1192,7 @@ def _materialize_primary_source(record, data, image_bytes, filename, backend_ope
     if current_name and os.path.isfile(current_path):
         data.update({
             'filename': current_name,
-            'image_url': f"/api/media/image/{record['itemid']}",
+            'image_url': _public_image_url(record['itemid'], current_name),
         })
         return
 
@@ -1220,7 +1229,7 @@ def _materialize_primary_source(record, data, image_bytes, filename, backend_ope
         raise
     data.update({
         'filename': stored_name,
-        'image_url': f"/api/media/image/{record['itemid']}",
+        'image_url': _public_image_url(record['itemid'], stored_name),
         'file_size': file_size,
         'img_format': img_format,
         'resolution': resolution,
@@ -1289,7 +1298,7 @@ def _insert_local_detection_record(
     data.update({
         'data_itemid': itemid,
         'filename': stored_name,
-        'image_url': f"/api/media/image/{itemid}",
+        'image_url': _public_image_url(itemid, stored_name),
         'file_size': file_size,
         'img_format': img_format,
         'resolution': resolution,
@@ -1487,7 +1496,7 @@ def _insert_v2_fallback_record(payload, image_bytes, filename, backend_openid, p
             'fake_percentage': fake_pct,
             'final_label': final_label,
             'confidence': confidence_level,
-            'image_url': f"/api/media/image/{itemid}",
+            'image_url': _public_image_url(itemid, stored_name),
             'filename': stored_name,
             'file_size': file_size,
             'img_format': img_format,
@@ -1624,7 +1633,7 @@ def _insert_aliyun_record(model, aliyun_payload, image_bytes, filename, backend_
             'fake_percentage': fake_pct,
             'final_label': final_label,
             'confidence': confidence_level,
-            'image_url': f"/api/media/image/{itemid}",
+            'image_url': _public_image_url(itemid, stored_name),
             'filename': stored_name,
             'file_size': file_size,
             'img_format': img_format,
@@ -1974,7 +1983,7 @@ def _run_image_detection_payload(
             'agent_reasoning': public_agent_reasoning,
             'llm_used': bool(public_agent_reasoning),
             'visual_issues': visual_issues,
-            'image_url': f"/api/media/image/{data_itemid}" if data_itemid else '',
+            'image_url': _public_image_url(data_itemid, data.get('filename') or safe_name),
             'filename': data.get('filename') or safe_name,
             'file_size': data.get('file_size') or (data.get('meta') or {}).get('file_size', ''),
             'img_format': data.get('img_format') or (data.get('meta') or {}).get('img_format', ''),
@@ -3256,7 +3265,10 @@ def _persist_swarm_history_result(
     final_result.update({
         'itemid': local_itemid,
         'filename': data.get('filename') or final_result.get('filename'),
-        'image_url': f"/api/media/image/{local_itemid}",
+        'image_url': _public_image_url(
+            local_itemid,
+            data.get('filename') or final_result.get('filename') or filename,
+        ),
         'file_size': data.get('file_size') or final_result.get('file_size'),
         'img_format': data.get('img_format') or final_result.get('img_format'),
         'resolution': data.get('resolution') or final_result.get('resolution'),

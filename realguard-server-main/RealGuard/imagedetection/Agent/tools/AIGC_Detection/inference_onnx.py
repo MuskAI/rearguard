@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import io
 import json
 import os
 import secrets
@@ -10,6 +11,8 @@ import numpy as np
 import onnxruntime as ort
 import requests
 from PIL import Image
+
+from imagedetection.image_formats import model_upload_from_path
 
 from model_decision_contract import seal_inference_audit
 
@@ -210,16 +213,12 @@ def preprocess(img_path):
 def _predict_remote(img_path):
     consume_remote_evidence()
     nonce = secrets.token_hex(16)
-    image_sha256 = hashlib.sha256()
-    with open(img_path, "rb") as image_source:
-        while chunk := image_source.read(1024 * 1024):
-            image_sha256.update(chunk)
-    image_sha256 = image_sha256.hexdigest()
+    filename, model_bytes, model_mime = model_upload_from_path(img_path)
+    image_sha256 = hashlib.sha256(model_bytes).hexdigest()
     headers = {"X-RealGuard-Request-Nonce": nonce}
     if REMOTE_INFERENCE_TOKEN:
         headers["X-RealGuard-Internal-Token"] = REMOTE_INFERENCE_TOKEN
 
-    filename = os.path.basename(str(img_path)) or "image.png"
     response = None
     last_error = None
     retryable_error = False
@@ -236,13 +235,12 @@ def _predict_remote(img_path):
             max(0.1, remaining - connect_timeout),
         )
         try:
-            with open(img_path, "rb") as image_file:
-                response = requests.post(
-                    REMOTE_INFERENCE_URL,
-                    files={"image_file": (filename, image_file, "application/octet-stream")},
-                    headers=headers,
-                    timeout=(connect_timeout, read_timeout),
-                )
+            response = requests.post(
+                REMOTE_INFERENCE_URL,
+                files={"image_file": (filename, io.BytesIO(model_bytes), model_mime)},
+                headers=headers,
+                timeout=(connect_timeout, read_timeout),
+            )
             last_error = None
             retryable_error = False
         except requests.ConnectTimeout as exc:

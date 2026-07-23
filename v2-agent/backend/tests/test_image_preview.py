@@ -6,6 +6,7 @@ import importlib
 import sys
 
 from PIL import Image
+from pillow_heif import from_pillow
 
 
 def test_transparent_preview_is_composited_on_white(monkeypatch, tmp_path):
@@ -30,3 +31,21 @@ def test_transparent_preview_is_composited_on_white(monkeypatch, tmp_path):
 
     assert min(background) >= 245
     assert foreground[0] > foreground[1] + 80
+
+
+def test_heic_live_photo_still_gets_browser_safe_preview(monkeypatch, tmp_path):
+    monkeypatch.setenv("JIANZHEN_DATA_DIR", str(tmp_path))
+    for module_name in ("app.storage", "app.main"):
+        sys.modules.pop(module_name, None)
+    main = importlib.import_module("app.main")
+
+    raw = io.BytesIO()
+    from_pillow(Image.new("RGB", (24, 16), (35, 120, 210))).save(raw, quality=90)
+
+    assert main._detect_type("IMG_2048.HEIC", None) == "image"
+    preview = main._image_data_uri(raw.getvalue(), "image", max_side=32, quality=90)
+    assert preview is not None
+    encoded = preview.split(",", 1)[1]
+    with Image.open(io.BytesIO(base64.b64decode(encoded))) as rendered:
+        assert rendered.format == "WEBP"
+        assert rendered.size == (24, 16)

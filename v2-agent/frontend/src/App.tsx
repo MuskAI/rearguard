@@ -70,7 +70,7 @@ const MAX_VIDEO_BYTES = 256 * 1024 * 1024;
 const AGENT_POLL_INITIAL_MS = 1_200;
 const AGENT_POLL_MAX_MS = 2_400;
 const AGENT_POLL_RATE_LIMIT_RETRIES = 8;
-const ACCEPTED_FILES = "image/jpeg,image/png,image/webp,image/bmp,image/gif,video/mp4,video/quicktime,video/webm,.txt,.md,.csv,.json,.log,.docx,.mp4,.mov,.webm";
+const ACCEPTED_FILES = "image/jpeg,image/png,image/webp,image/bmp,image/gif,image/heic,image/heif,.heic,.heif,video/mp4,video/quicktime,video/webm,.txt,.md,.csv,.json,.log,.docx,.mp4,.mov,.webm";
 
 type UploadKind = "image" | "video" | "audio" | "document" | "unknown";
 type AppView = "home" | "workspace" | "developer";
@@ -92,11 +92,16 @@ function initialAppView(): AppView {
 
 function inferKind(name: string): UploadKind {
   const ext = name.split(".").pop()?.toLowerCase() || "";
-  if (["jpg", "jpeg", "png", "webp", "bmp", "gif"].includes(ext)) return "image";
+  if (["jpg", "jpeg", "png", "webp", "bmp", "gif", "heic", "heif"].includes(ext)) return "image";
   if (["mp4", "mov", "webm", "avi", "mkv", "flv", "wmv"].includes(ext)) return "video";
   if (["mp3", "wav", "m4a", "flac", "aac", "ogg"].includes(ext)) return "audio";
   if (["txt", "md", "csv", "json", "log", "docx"].includes(ext)) return "document";
   return "unknown";
+}
+
+function isHeifImage(name: string) {
+  const ext = name.split(".").pop()?.toLowerCase() || "";
+  return ext === "heic" || ext === "heif";
 }
 
 function kindLabel(kind: UploadKind) {
@@ -621,7 +626,7 @@ export default function App() {
     }
     if (kind === "unknown") {
       setPendingFile({ name: file.name, size: file.size, typeLabel: kindLabel(kind) });
-      setErrorMessage("暂不支持这个文件格式。可上传常见图片、MP4/MOV/WEBM 视频，以及 TXT、MD、CSV、JSON、LOG、DOCX 文档。");
+      setErrorMessage("暂不支持这个文件格式。可上传 JPG、PNG、WebP、HEIC/HEIF 实况照片静态帧、MP4/MOV/WEBM 视频，以及 TXT、MD、CSV、JSON、LOG、DOCX 文档。");
       return;
     }
     if (kind === "audio") {
@@ -639,7 +644,9 @@ export default function App() {
     const controller = new AbortController();
     runControllerRef.current = controller;
     const token = ++runTokenRef.current;
-    const previewUrl = kind === "image" || kind === "video" ? URL.createObjectURL(file) : undefined;
+    const previewUrl = (kind === "image" && !isHeifImage(file.name)) || kind === "video"
+      ? URL.createObjectURL(file)
+      : undefined;
     if (previewUrl) previewUrlRef.current = previewUrl;
     setPendingFile({
       name: file.name,
@@ -1296,7 +1303,7 @@ function WelcomeWorkspace({
             <div><FileText size={18} /><span><strong>文档</strong><small>正文检测</small></span><Check size={14} /></div>
             <div className="unavailable"><Volume2 size={18} /><span><strong>音频</strong><small>尚未部署</small></span><CircleDashed size={14} /></div>
           </div>
-          <small className="upload-limits">图片/文档不超过 25 MB · 视频不超过 256 MB</small>
+          <small className="upload-limits">图片支持 HEIC/HEIF 实况照片静态帧 · 图片/文档不超过 25 MB · 视频不超过 256 MB</small>
         </section>
 
         <div className="trust-notes">

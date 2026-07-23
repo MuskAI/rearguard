@@ -17,6 +17,7 @@ import requests
 from werkzeug.utils import secure_filename
 
 from model_decision_contract import validate_inference_audit, validate_model_decision
+from imagedetection.image_formats import is_unsupported_animation
 
 from imagedetection.views.utils import (
     create_folder,
@@ -29,7 +30,7 @@ from imagedetection.views.utils import (
 )
 
 
-ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "bmp", "gif"}
+ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "bmp", "gif", "heic", "heif"}
 MAX_IMAGE_UPLOAD_BYTES = max(
     1024,
     int(os.environ.get("REALGUARD_MAX_IMAGE_UPLOAD_BYTES", str(25 * 1024 * 1024))),
@@ -580,7 +581,7 @@ def create_app():
                     width, height = image.size
                     if width <= 0 or height <= 0:
                         raise ValueError("invalid image dimensions")
-                    if bool(getattr(image, "is_animated", False)) and int(getattr(image, "n_frames", 1)) > 1:
+                    if is_unsupported_animation(image):
                         return jsonify({"code": 415, "msg": "Animated images are not supported"}), 415
                     if width * height > MAX_IMAGE_SOURCE_PIXELS:
                         return jsonify({"code": 413, "msg": "Image pixel dimensions are too large"}), 413

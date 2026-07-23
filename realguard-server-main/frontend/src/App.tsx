@@ -979,7 +979,7 @@ function HomePage({
                   <button className="task-choice primary" onClick={() => openImage("standard")}>
                     <ForensicIcon name="image-forensics" tone="blue" className="task-choice-icon" />
                     <span><strong>{text.home.primaryAction}</strong><small>{lang === "zh" ? "识别生成内容与可疑编辑痕迹" : "Inspect generated content and suspicious edits"}</small></span>
-                    <em>JPG · PNG · WEBP</em>
+                    <em>JPG · PNG · HEIC/HEIF</em>
                     <ArrowRight size={18} aria-hidden="true" />
                   </button>
                   <button className="task-choice" onClick={() => setPage("video")}>
@@ -1218,7 +1218,8 @@ function ImageDetectionPage({
     setFile(next);
     setResult(null);
     setExpertReviewJob(null);
-    setPreview(next ? URL.createObjectURL(next) : "");
+    const suffix = next?.name.split(".").pop()?.toLowerCase();
+    setPreview(next && suffix !== "heic" && suffix !== "heif" ? URL.createObjectURL(next) : "");
     setStatus({ tone: "info", text: next ? tr(`已选择: ${next.name}`, `Selected: ${next.name}`) : tr("等待上传图片...", "Waiting for image upload...") });
   }
 
@@ -1397,7 +1398,7 @@ function ImageDetectionPage({
             <div className="card-divider" />
             <div className="section-label"><IconfontIcon name="upload" size={17} /> {tr("上传图片", "Upload image")}</div>
             {isGuest && <TrialHint used={guestDetections} lang={lang} />}
-            <UploadBox accept="image/*" file={file} preview={preview} onFile={selectFile} kind={imageKind} lang={lang} />
+            <UploadBox accept="image/*,.heic,.heif" file={file} preview={preview} onFile={selectFile} kind={imageKind} lang={lang} />
             <button className={`btn-primary ${busy ? "detecting" : ""}`} disabled={!file || busy} onClick={submit}>
               <IconfontIcon name={busy ? "loader" : "search"} size={18} className={busy ? "spin" : ""} /> {busy ? tr("正在分析", "Analyzing") : tr("开始检测", "Start detection")}
             </button>
@@ -1895,7 +1896,11 @@ function UploadBox({
         >
           <div className="upload-icon"><IconfontIcon name="upload" size={28} /></div>
           <div className="upload-text">{tr(`拖放${kind}到此处，或点击上传`, `Drop ${kind} here, or click to upload`)}</div>
-          <div className="upload-hint">{tr(`支持常见${kind}格式`, `Supports common ${kind} formats`)}</div>
+          <div className="upload-hint">
+            {accept.includes(".heic")
+              ? tr("支持 JPG、PNG、WebP、HEIC、HEIF 与实况照片静态帧", "Supports JPG, PNG, WebP, HEIC, HEIF, and Live Photo stills")
+              : tr(`支持常见${kind}格式`, `Supports common ${kind} formats`)}
+          </div>
         </label>
       ) : (
         <div className="file-preview visible">

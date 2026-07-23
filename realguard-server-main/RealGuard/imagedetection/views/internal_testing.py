@@ -45,7 +45,7 @@ MAX_STORED_DATASETS = int(os.environ.get("REALGUARD_INTERNAL_TEST_MAX_DATASETS",
 MAX_STORED_BYTES = int(
     os.environ.get("REALGUARD_INTERNAL_TEST_MAX_BYTES", str(10 * 1024 * 1024 * 1024))
 )
-ALLOWED_IMAGE_FORMATS = {"JPEG", "PNG", "WEBP", "BMP", "GIF", "TIFF"}
+ALLOWED_IMAGE_FORMATS = {"JPEG", "PNG", "WEBP", "BMP", "GIF", "TIFF", "HEIF", "HEIC"}
 ALLOWED_LABELS = {"real", "fake", "unlabeled"}
 _SCHEMA_LOCK = threading.Lock()
 _SCHEMA_READY = False

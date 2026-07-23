@@ -10,6 +10,7 @@ dependencies = [
     "openai>=1.30",
     "python-dotenv>=1.0",
     "pillow>=10.0",
+    "pillow-heif>=1.1,<2",
     "numpy>=1.26",
     "matplotlib>=3.7",
     "c2pa-python>=0.32.6",

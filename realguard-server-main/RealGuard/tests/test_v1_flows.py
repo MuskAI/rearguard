@@ -52,6 +52,14 @@ def _animated_gif_bytes():
     return output.getvalue()
 
 
+def _heic_bytes():
+    from pillow_heif import from_pillow
+
+    output = BytesIO()
+    from_pillow(Image.new("RGB", (12, 8), "navy")).save(output, quality=90)
+    return output.getvalue()
+
+
 class _FakeResponse:
     def __init__(self, payload):
         self._payload = payload
@@ -1682,6 +1690,67 @@ def test_image_upload_rejects_animated_image_instead_of_analyzing_first_frame(cl
 
     assert response.status_code == 415
     assert response.get_json()["code"] == "unsupported_animated_image"
+
+
+def test_image_upload_accepts_heic_live_photo_still(client, monkeypatch, tmp_path):
+    _login_session(client)
+    queued = []
+    monkeypatch.setattr(detection.admin_state, "STATE_PATH", tmp_path / "admin_state.json")
+
+    def enqueue(job, *args, **kwargs):
+        queued.append((job, args, kwargs))
+        return True, "", "", job["id"], False
+
+    monkeypatch.setattr(
+        detection,
+        "_enqueue_persistent_web_job",
+        enqueue,
+    )
+
+    response = client.post(
+        "/image_upload/detect_async",
+        data={"image": (BytesIO(_heic_bytes()), "IMG_2048.HEIC")},
+        content_type="multipart/form-data",
+        headers={"Idempotency-Key": "live-photo-heic-001"},
+    )
+
+    assert response.status_code == 202
+    assert queued
+
+
+def test_heic_model_upload_is_jpeg_without_replacing_source(tmp_path):
+    from imagedetection.image_formats import model_upload_from_path
+
+    source = tmp_path / "IMG_2048.HEIC"
+    source_bytes = _heic_bytes()
+    source.write_bytes(source_bytes)
+
+    filename, model_bytes, mimetype = model_upload_from_path(source)
+
+    assert source.read_bytes() == source_bytes
+    assert filename == "IMG_2048.jpg"
+    assert mimetype == "image/jpeg"
+    with Image.open(BytesIO(model_bytes)) as image:
+        assert image.format == "JPEG"
+        assert image.size == (12, 8)
+
+
+def test_heic_model_upload_detects_content_when_extension_is_wrong(tmp_path):
+    from imagedetection.image_formats import model_upload_from_path
+
+    source = tmp_path / "renamed-photo.jpg"
+    source.write_bytes(_heic_bytes())
+
+    _, model_bytes, mimetype = model_upload_from_path(source)
+
+    assert mimetype == "image/jpeg"
+    with Image.open(BytesIO(model_bytes)) as image:
+        assert image.format == "JPEG"
+
+
+def test_heic_result_uses_browser_safe_thumbnail():
+    assert detection._public_image_url(17, "IMG_2048.HEIC") == "/api/media/thumbnail/image/17"
+    assert detection._public_image_url(18, "photo.jpg") == "/api/media/image/18"
 
 
 def test_image_upload_rejects_pixel_bomb_before_queueing(client, monkeypatch):

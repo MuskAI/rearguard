@@ -22,6 +22,7 @@ except Exception:
 EXT_TO_MIME = {
     "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
     "webp": "image/webp", "gif": "image/gif", "tif": "image/tiff", "tiff": "image/tiff",
+    "heic": "image/heic", "heif": "image/heif",
     "mp4": "video/mp4", "mov": "video/quicktime", "avif": "image/avif",
 }
 
