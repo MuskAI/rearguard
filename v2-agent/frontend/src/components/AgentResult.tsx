@@ -95,7 +95,11 @@ function verdictFor(outcome: AgentOutcome): VerdictView {
     const tone = localizedWatermark ? "fake" : outcome.result.final_label.includes("真实") ? "real" : riskTone(risk);
     return {
       label: localizedWatermark ? "AI生成图像" : outcome.result.final_label || (tone === "real" ? "更倾向真实" : "存在生成风险"),
-      description: tone === "real" ? "本次多源分析未发现足以支持 AI 生成的强证据。" : "检测到需要关注的生成或编辑线索，建议结合原始来源复核。",
+      description: localizedWatermark
+        ? "已确认强 AI 平台水印，平台匹配、区域定位与 OCR/检索证据相互印证。"
+        : tone === "real"
+          ? "本次多源分析未发现足以支持 AI 生成的强证据。"
+          : "检测到需要关注的生成或编辑线索，建议结合原始来源复核。",
       risk,
       riskLabel: outcome.result.swarm?.enabled ? "综合异常风险" : "AI 生成风险",
       tone,
