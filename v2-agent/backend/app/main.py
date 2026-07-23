@@ -1102,6 +1102,9 @@ def _strip_internal_history_fields(item: dict) -> dict:
     clean.pop("_developerUserId", None)
     clean.pop("_developerAccountUuid", None)
     clean.pop("_developerKeyId", None)
+    precheck = clean.get("provenancePrecheck")
+    if isinstance(precheck, dict):
+        clean = watermark_yolo.merge(clean, precheck)
     watermark_verdict.apply(clean, clean.get("visibleWatermark"))
     return _authorize_analysis(clean, allow_decisive_provenance=True)
 

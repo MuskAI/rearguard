@@ -207,6 +207,53 @@ def test_explicit_ocr_and_retrieval_authorize_generic_yolo_candidate():
     assert merged["reviewRequired"] is False
     assert merged["watermarkVerdictOverride"]["policyVersion"] == "explicit-ai-watermark-v2"
 
+    legacy = _analysis()
+    legacy.update({
+        "verdict": "unknown",
+        "confidence": 0.0,
+        "decisionStatus": "review_only",
+        "decisionAuthority": "none",
+        "reviewRequired": True,
+        "visibleWatermark": {
+            "detected": True,
+            "coordinateSpace": "display_normalized_v1",
+            "displaySize": {"width": 2848, "height": 1600},
+            "hits": [{
+                "provider": "yolo11x_watermark",
+                "label": "可见水印（平台待确认）",
+                "confidence": 0.8574,
+                "bbox": bbox,
+                "method": "yolo11x_watermark_detection",
+                "decisive": False,
+            }],
+        },
+        "provenancePrecheck": {
+            "status": "ok",
+            "available": True,
+            "engineVersion": "0.15.3",
+            "coordinateSpace": "display_normalized_v1",
+            "displaySize": {"width": 2848, "height": 1600},
+            "genericVisibleWatermark": {
+                "available": True,
+                "detected": True,
+                "count": 1,
+                "model": "corzent/yolo11x_watermark_detection",
+            },
+            "visibleHits": [{
+                "provider": "yolo11x_watermark",
+                "label": "可见水印（平台待确认）",
+                "confidence": 0.8574,
+                "bbox": bbox,
+            }],
+            "explicitWatermark": merged["visibleWatermark"]["explicitWatermark"],
+        },
+    })
+    rehydrated = main._strip_internal_history_fields(legacy)
+    assert rehydrated["verdict"] == "highly_suspected_fake"
+    assert rehydrated["confidence"] == 0.99
+    assert rehydrated["decisionAuthority"] == "decisive_provenance"
+    assert rehydrated["reviewRequired"] is False
+
 
 def test_merge_marks_detector_unavailable_without_changing_analysis():
     merged = watermark_yolo.merge(_analysis(), {
