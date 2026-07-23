@@ -44,24 +44,39 @@ export function hasLocalizedWatermark(report?: VisibleWatermarkResult): boolean 
 }
 
 export function decisiveWatermarkHits(report?: VisibleWatermarkResult): VisibleWatermarkHit[] {
-  void report;
-  return [];
+  if (
+    report?.explicitWatermark?.available !== true
+    || report.explicitWatermark.detected !== true
+    || report.explicitWatermark.aiWatermarkVerdict?.verdict !== "yes"
+    || report.explicitWatermark.aiWatermarkVerdict?.isAiGeneratedWatermark !== true
+  ) return [];
+  return localizedWatermarkHits(report).filter((hit) => hit.decisive === true);
 }
 
 export function hasDecisiveAiWatermark(report?: VisibleWatermarkResult): boolean {
-  void report;
-  return false;
+  return decisiveWatermarkHits(report).length > 0;
 }
 
 function watermarkPoint(report?: VisibleWatermarkResult): ExplanationPoint {
   const hits = localizedWatermarkHits(report);
+  const decisive = decisiveWatermarkHits(report);
+  if (decisive.length > 0) {
+    const names = Array.from(new Set(
+      decisive.map((hit) => hit.label || PROVIDER_LABELS[hit.provider] || "AI 平台水印"),
+    ));
+    return {
+      label: "强 AI 水印证据",
+      decisive: true,
+      text: `定位到 ${decisive.length} 处强水印证据（${names.join("、")}），已通过平台匹配、区域定位与 OCR/检索融合复核；该证据已独立授权“AI生成图像”结论。`,
+    };
+  }
   if (hits.length > 0) {
     const names = Array.from(new Set(
       hits.map((hit) => hit.label || PROVIDER_LABELS[hit.provider] || "可见标记"),
     ));
     return {
       label: "可见标记线索",
-      text: `定位到 ${hits.length} 处可见标记区域（${names.join("、")}）。标记可被复制、覆盖或后期添加，仅供人工核对来源，不单独决定真伪，也不抬高模型风险。`,
+      text: `定位到 ${hits.length} 处可见标记区域（${names.join("、")}），但尚未通过强水印授权门槛；仅供人工核对来源，不单独决定真伪。`,
     };
   }
   if (!report) {
@@ -98,11 +113,14 @@ function imageExplanation(outcome: Extract<AgentOutcome, { kind: "image" }>, ris
   const result = outcome.result;
   const report = result.visibleWatermark;
   const reviewOnly = result.decisionStatus !== "verdict" || result.reviewRequired === true;
+  const watermarkDecisive = hasDecisiveAiWatermark(report);
   const points: ExplanationPoint[] = [
     watermarkPoint(report),
     {
       label: "主模型",
-      text: reviewOnly
+      text: watermarkDecisive && result.modelDecisionReady !== true
+        ? "主模型尚未通过独立校准门禁，因此其原始分数不对外发布；本次自动结论由强 AI 水印来源证据独立授权。"
+        : reviewOnly
         ? "模型分析已完成，但签名校准门禁未通过；原始审计分不作为真假概率展示，也不形成自动结论。"
         : `签名校准门禁已通过，本次发布的 AI 生成风险为 ${percent(risk)}。`,
     },
@@ -127,7 +145,9 @@ function imageExplanation(outcome: Extract<AgentOutcome, { kind: "image" }>, ris
     decisive: !reviewOnly,
     text: reviewOnly
       ? "当前没有通过决策授权门禁的证据，结论保持“需人工复核”；请结合原始文件、来源链与可见标记位置核对。"
-      : `综合现有已授权证据，结论为“${verdictLabel}”，发布风险 ${percent(risk)}；仍建议保留原始文件与来源记录。`,
+      : watermarkDecisive
+        ? `强 AI 水印证据已通过决策授权门槛，结论为“${verdictLabel}”，发布风险 ${percent(risk)}。`
+        : `综合现有已授权证据，结论为“${verdictLabel}”，发布风险 ${percent(risk)}；仍建议保留原始文件与来源记录。`,
   });
   return points;
 }

@@ -332,6 +332,7 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
   const platformProviders = new Set(["gemini", "doubao", "jimeng", "jimeng_pill", "samsung"]);
   const hits = (report.hits || []).slice(0, 8);
   const platformHits = hits.filter((hit) => platformProviders.has(hit.provider));
+  const decisiveWatermark = hasDecisiveAiWatermark(report);
   const genericHits = hits.filter((hit) => !platformProviders.has(hit.provider));
   const detector = report.detector;
   const detected = hits.length > 0;
@@ -381,7 +382,9 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
         ? "该定位证据来自完全相同文件（SHA-256 一致）的最近一次成功扫描；系统会按当前水印规则重新计算结论。"
         : "该定位证据来自同一账号对完全相同文件（SHA-256 一致）的最近一次成功扫描；系统会按当前水印规则重新计算结论。"
       : hasPlatformHit
-        ? `匹配到 ${platformHits.length} 处 AI 平台标记${confirmedHits.length > 0 ? `，其中 ${confirmedHits.length} 处通过 YOLO 区域复核` : ""}${genericHits.length > 0 ? `；另有 ${genericHits.length} 处可见水印的平台归属待确认` : ""}。可见标记不单独决定真伪。`
+        ? decisiveWatermark
+          ? `匹配到 ${platformHits.length} 处强 AI 水印证据，并通过平台匹配、区域定位与 OCR/检索融合复核；该证据已参与最终判定。`
+          : `匹配到 ${platformHits.length} 处 AI 平台标记${confirmedHits.length > 0 ? `，其中 ${confirmedHits.length} 处通过 YOLO 区域复核` : ""}${genericHits.length > 0 ? `；另有 ${genericHits.length} 处可见水印的平台归属待确认` : ""}，但尚未通过强水印授权门槛。`
         : detected
           ? "已定位到可见水印但尚不能确认平台归属；定位框仅作为上下文线索，不会单独改变鉴伪结论。"
           : "平台注册表与 YOLO 可见水印检测均未发现水印。";
@@ -393,7 +396,7 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
       </div>
       <div className={`watermark-status ${hasPlatformHit ? "is-detected" : detected ? "is-possible" : report.supported ? "is-clear" : "is-unavailable"}`}>
         <span>{hasPlatformHit ? `已知平台 ${platformHits.length}` : detected ? `可见水印 ${genericHits.length}` : report.supported ? "未检出" : "暂不可用"}</span>
-        <strong>{hasPlatformHit ? `${providerLabels} · 平台规则确认` : detected ? `${reusedFromSameFile ? "同一文件复核补充 · " : ""}通用水印线索，不单独判假` : "已完成平台规则与通用水印扫描"}</strong>
+        <strong>{hasPlatformHit ? `${providerLabels} · ${decisiveWatermark ? "强证据确认" : "平台规则确认"}` : detected ? `${reusedFromSameFile ? "同一文件复核补充 · " : ""}通用水印线索，不单独判假` : "已完成平台规则与通用水印扫描"}</strong>
         {elapsed > 0 ? <time>{elapsed} ms</time> : null}
       </div>
       {report.supported && (

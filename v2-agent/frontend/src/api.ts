@@ -551,6 +551,22 @@ export interface VisibleWatermarkResult {
   temporal: { sampledFrames: number; positiveFrames: number; moving: boolean };
   note: string;
   elapsedMs?: number;
+  explicitWatermark?: {
+    available: boolean;
+    detected: boolean;
+    type: "text" | "logo" | "unknown" | "none" | string;
+    sourcePlatform?: string | null;
+    provider?: string | null;
+    confidence: number;
+    confidenceBand?: string;
+    aiWatermarkVerdict?: {
+      verdict: "yes" | "no" | "inconclusive" | string;
+      isAiGeneratedWatermark: boolean | null;
+      confidence: number;
+      reason?: string;
+      relevantHitCount?: number;
+    };
+  } | null;
   pipelineTrace?: WatermarkPipelineTrace | null;
   reanalysis?: {
     reused: boolean;

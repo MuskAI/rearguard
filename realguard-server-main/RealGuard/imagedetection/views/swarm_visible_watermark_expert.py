@@ -30,6 +30,18 @@ REGISTRY_PROVIDERS = frozenset({"gemini", "doubao", "jimeng", "jimeng_pill", "sa
 YOLO_PROVIDER = "yolo11x_watermark"
 YOLO_METHOD = "yolo11x_watermark_detection"
 YOLO_MODEL = "corzent/yolo11x_watermark_detection"
+EXPLICIT_PROVIDER_ALIASES = {
+    "gemini": "gemini",
+    "google gemini": "gemini",
+    "豆包": "doubao",
+    "doubao": "doubao",
+    "即梦": "jimeng",
+    "即梦ai": "jimeng",
+    "jimeng": "jimeng",
+    "jimeng ai": "jimeng",
+    "jimeng_pill": "jimeng_pill",
+    "samsung": "samsung",
+}
 
 
 def _clamp01(value: Any) -> float:
@@ -90,6 +102,79 @@ def _boxes_overlap(first: Dict[str, Any], second: Dict[str, Any]) -> bool:
     iou = intersection / union if union > 0 else 0.0
     smaller_coverage = intersection / smaller if smaller > 0 else 0.0
     return iou >= 0.08 or smaller_coverage >= 0.5
+
+
+def _provider_id(value: Any) -> str:
+    return EXPLICIT_PROVIDER_ALIASES.get(str(value or "").strip().lower(), "")
+
+
+def _explicit_watermark(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    raw = payload.get("explicitWatermark")
+    if not isinstance(raw, dict):
+        return None
+    raw_verdict = raw.get("aiWatermarkVerdict")
+    raw_verdict = raw_verdict if isinstance(raw_verdict, dict) else {}
+    hits = []
+    for item in (raw.get("hits") or [])[:24]:
+        if not isinstance(item, dict):
+            continue
+        bbox = _normalized_bbox(item.get("bbox"))
+        if bbox is None:
+            continue
+        text_analysis = item.get("textAnalysis")
+        text_analysis = text_analysis if isinstance(text_analysis, dict) else {}
+        source_platform = str(item.get("sourcePlatform") or "")[:80]
+        hits.append({
+            "bbox": bbox,
+            "type": str(item.get("type") or "unknown")[:24],
+            "sourcePlatform": source_platform,
+            "provider": _provider_id(source_platform),
+            "confidence": _clamp01(item.get("confidence")),
+            "textAnalysis": {
+                "verdict": str(text_analysis.get("verdict") or "")[:48],
+                "likelyAIgenerated": text_analysis.get("likelyAIgenerated") is True,
+                "aiGenerationConfidence": _clamp01(text_analysis.get("aiGenerationConfidence")),
+                "platformMatch": str(text_analysis.get("platformMatch") or "")[:80] or None,
+            },
+            "retrievalAccepted": item.get("retrievalAccepted") is True,
+            "registryMatched": item.get("registryMatched") is True,
+            "yoloCorroborated": item.get("yoloCorroborated") is True,
+        })
+    source_platform = str(raw.get("sourcePlatform") or "")[:80]
+    return {
+        "available": raw.get("available") is True,
+        "detected": raw.get("detected") is True,
+        "type": str(raw.get("type") or "none")[:24],
+        "sourcePlatform": source_platform,
+        "provider": _provider_id(source_platform),
+        "confidence": _clamp01(raw.get("confidence")),
+        "confidenceBand": str(raw.get("confidenceBand") or "")[:24],
+        "aiWatermarkVerdict": {
+            "verdict": str(raw_verdict.get("verdict") or "inconclusive")[:24],
+            "isAiGeneratedWatermark": raw_verdict.get("isAiGeneratedWatermark"),
+            "confidence": _clamp01(raw_verdict.get("confidence")),
+            "reason": str(raw_verdict.get("reason") or "")[:500],
+            "relevantHitCount": _nonnegative_int(raw_verdict.get("relevantHitCount")),
+        },
+        "hits": hits,
+    }
+
+
+def _explicit_matches_hit(explicit: Optional[Dict[str, Any]], provider: str, bbox: Dict[str, Any]) -> bool:
+    if not explicit or explicit.get("detected") is not True:
+        return False
+    verdict = explicit.get("aiWatermarkVerdict") or {}
+    if (
+        verdict.get("verdict") != "yes"
+        or verdict.get("isAiGeneratedWatermark") is not True
+        or explicit.get("provider") != provider
+    ):
+        return False
+    return any(
+        item.get("provider") == provider
+        and _boxes_overlap(item.get("bbox") or {}, bbox)
+        for item in explicit.get("hits") or []
+    )
 
 
 def _deduplicate(hits: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
@@ -198,6 +283,7 @@ def _visible_result(payload: Dict[str, Any]) -> Dict[str, Any]:
         return visible
     detector = payload.get("genericVisibleWatermark")
     detector = detector if isinstance(detector, dict) else {}
+    explicit = _explicit_watermark(payload)
     raw_detections = []
     for key in ("visibleHits", "detections"):
         values = payload.get(key)
@@ -224,7 +310,7 @@ def _visible_result(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "crop": None,
                 "model": REGISTRY_MODEL,
                 "modelRevision": payload.get("engineVersion"),
-                "decisive": False,
+                "decisive": _explicit_matches_hit(explicit, provider, bbox),
                 "registryCorroborated": bool(detection.get("corroborated")),
                 "evidenceRole": "visual_attribution",
                 "localizationConfirmed": bool(detection.get("yoloCorroborated")),
@@ -325,6 +411,7 @@ def _visible_result(payload: Dict[str, Any]) -> Dict[str, Any]:
         "temporal": {"sampledFrames": 1, "positiveFrames": 1 if hits else 0, "moving": False},
         "note": " ".join(notes),
         "elapsedMs": int(payload.get("elapsedMs") or detector.get("elapsedMs") or 0),
+        "explicitWatermark": explicit,
         "pipelineTrace": _pipeline_trace(payload),
         "detector": {
             "available": available,
