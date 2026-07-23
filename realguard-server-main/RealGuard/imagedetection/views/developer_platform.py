@@ -819,38 +819,56 @@ def _enqueue_web_detection_task(
     request_sha256 = hashlib.sha256(image_bytes).hexdigest()
     spool_name = None
     guest_usage_reserved = False
+
+    def resolve_existing(rows):
+        if not rows:
+            return None
+        row = rows[0]
+        if str(row.get("mode") or "") != mode or str(row.get("request_sha256") or "") != request_sha256:
+            raise TaskRecoveryError("Web detection idempotency key was reused for different input")
+        if str(row.get("status") or "") != "failed":
+            return str(row["job_id"]), True
+        released = excute_sql(
+            """
+            UPDATE web_detection_tasks
+            SET idempotency_key = NULL
+            WHERE job_id = %s AND status = 'failed' AND idempotency_key = %s
+            """,
+            (row["job_id"], idempotency_key),
+            fetch=False,
+        )
+        if released != 1:
+            raise TaskRecoveryError("failed to release failed Web detection idempotency key")
+        return None
+
     try:
         existing = excute_sql(
             """
-            SELECT job_id, mode, request_sha256
+            SELECT job_id, mode, request_sha256, status
             FROM web_detection_tasks
             WHERE owner_type = %s AND owner_key = %s AND idempotency_key = %s
             LIMIT 1
             """,
             (owner_type, owner_key, idempotency_key),
         )
-        if existing:
-            row = existing[0]
-            if str(row.get("mode") or "") != mode or str(row.get("request_sha256") or "") != request_sha256:
-                raise TaskRecoveryError("Web detection idempotency key was reused for different input")
-            return str(row["job_id"]), True
+        replay = resolve_existing(existing)
+        if replay:
+            return replay
         with _queue_submission_guard(len(image_bytes), owner_type, owner_key):
             # Recheck under the cross-process admission lock to close the race
             # between two first submissions carrying the same key.
             existing = excute_sql(
                 """
-                SELECT job_id, mode, request_sha256
+                SELECT job_id, mode, request_sha256, status
                 FROM web_detection_tasks
                 WHERE owner_type = %s AND owner_key = %s AND idempotency_key = %s
                 LIMIT 1
                 """,
                 (owner_type, owner_key, idempotency_key),
             )
-            if existing:
-                row = existing[0]
-                if str(row.get("mode") or "") != mode or str(row.get("request_sha256") or "") != request_sha256:
-                    raise TaskRecoveryError("Web detection idempotency key was reused for different input")
-                return str(row["job_id"]), True
+            replay = resolve_existing(existing)
+            if replay:
+                return replay
             if is_guest:
                 daily_rows = excute_sql(
                     "SELECT COUNT(*) AS cnt FROM web_guest_daily_usage WHERE usage_day = CURDATE()"

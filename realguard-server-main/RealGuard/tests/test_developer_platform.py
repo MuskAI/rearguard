@@ -3106,6 +3106,50 @@ def test_web_task_replay_bypasses_current_queue_capacity(monkeypatch):
     ) == ("job_existing", True)
 
 
+def test_failed_web_task_retry_releases_old_idempotency_key(monkeypatch, tmp_path):
+    monkeypatch.setattr(platform, "WEB_TASK_SPOOL_ROOT", tmp_path / "web-spool")
+    monkeypatch.setattr(platform, "_ensure_developer_platform_tables", lambda: True)
+    monkeypatch.setattr(platform, "_queue_submission_guard", lambda *_args: nullcontext())
+    existing = {
+        "job_id": "job_failed",
+        "mode": "fast",
+        "request_sha256": platform.hashlib.sha256(b"image-bytes").hexdigest(),
+        "status": "failed",
+    }
+    inserted = []
+
+    def fake_sql(sql, params=None, fetch=True):
+        normalized = " ".join(sql.split())
+        if normalized.startswith("SELECT job_id, mode, request_sha256, status"):
+            return [dict(existing)] if existing else []
+        if normalized.startswith("UPDATE web_detection_tasks SET idempotency_key = NULL"):
+            existing.clear()
+            return 1
+        if normalized.startswith("INSERT INTO web_detection_tasks"):
+            inserted.append(params)
+            return 1
+        raise AssertionError(sql)
+
+    monkeypatch.setattr(platform, "excute_sql", fake_sql)
+    job = {
+        "id": "job_retry_new",
+        "mode": "fast",
+        "actor": {"account_uuid": "11111111-1111-4111-8111-111111111111"},
+    }
+
+    assert platform._enqueue_web_detection_task(
+        job,
+        b"image-bytes",
+        "IMG_7956.jpeg",
+        "image/jpeg",
+        {"Userid": 7},
+        False,
+        "",
+        "web-failed-retry-001",
+    ) == ("job_retry_new", False)
+    assert len(inserted) == 1
+
+
 def test_web_task_schema_adds_idempotency_column_before_unique_index(monkeypatch):
     operations = []
 
