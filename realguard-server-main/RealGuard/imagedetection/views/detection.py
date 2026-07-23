@@ -19,7 +19,7 @@ from PIL import Image, UnidentifiedImageError
 from werkzeug.utils import secure_filename
 
 from model_decision_contract import validate_inference_audit, validate_model_decision
-from imagedetection.image_formats import is_heif_filename, is_unsupported_animation
+from imagedetection.image_formats import is_heif_filename
 
 from imagedetection.views import (
     admin_state,
@@ -223,12 +223,6 @@ def _read_image_upload(file):
                 width, height = image.size
                 if width <= 0 or height <= 0:
                     raise ValueError('invalid image dimensions')
-                if is_unsupported_animation(image):
-                    return None, (jsonify({
-                        'status': 'error',
-                        'code': 'unsupported_animated_image',
-                        'message': '暂不支持多帧 GIF 或动态 WebP，请上传静态图片',
-                    }), 415)
                 if width * height > MAX_IMAGE_SOURCE_PIXELS:
                     return None, (jsonify({
                         'status': 'error',

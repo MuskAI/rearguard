@@ -902,26 +902,11 @@ def test_developer_api_rejects_images_above_pixel_limit(client, monkeypatch):
     assert response.get_json()["error"]["code"] == "image_pixels_too_large"
 
 
-def test_developer_api_rejects_animated_images(client, monkeypatch):
-    actor = {
-        "id": 11,
-        "user_id": 1,
-        "account_uuid": "00000000-0000-4000-8000-000000000001",
-        "scopes": ["image:fast"],
-    }
-    monkeypatch.setattr(platform, "_developer_key_required", lambda: (actor, None))
-    monkeypatch.setattr(platform, "_ensure_developer_platform_tables", lambda: True)
-    monkeypatch.setattr(platform, "_maybe_reconcile_expired_tasks", lambda: 0)
+def test_developer_image_validation_accepts_animated_gif():
+    dimensions, error = platform._validate_image(_animated_gif_bytes())
 
-    response = client.post(
-        "/api/openapi/v1/image-detections",
-        headers={"Idempotency-Key": "animated-image-request"},
-        data={"mode": "fast", "image": (BytesIO(_animated_gif_bytes()), "sample.gif")},
-        content_type="multipart/form-data",
-    )
-
-    assert response.status_code == 415
-    assert response.get_json()["error"]["code"] == "unsupported_animated_image"
+    assert error is None
+    assert dimensions == {"width": 2, "height": 2}
 
 
 def test_developer_image_validation_accepts_multi_image_heif():

@@ -17,7 +17,6 @@ import requests
 from PIL import Image, UnidentifiedImageError
 from flask import Blueprint, Response, g, has_request_context, jsonify, request
 
-from imagedetection.image_formats import is_unsupported_animation
 from imagedetection.views import admin_state, reporting
 from imagedetection.views.admin import _admin_required
 from imagedetection.views.api import (
@@ -4755,12 +4754,6 @@ def _validate_image(image_bytes):
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with Image.open(io.BytesIO(image_bytes)) as image:
                 width, height = image.size
-                if is_unsupported_animation(image):
-                    return None, {
-                        "message": "暂不支持多帧 GIF 或动态 WebP，请上传静态图片",
-                        "status": 415,
-                        "code": "unsupported_animated_image",
-                    }
                 image.verify()
     except (Image.DecompressionBombError, Image.DecompressionBombWarning):
         return None, {

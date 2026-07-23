@@ -9,7 +9,6 @@ from PIL import Image, ImageOps
 
 
 HEIF_EXTENSIONS = frozenset({"heic", "heif"})
-HEIF_FORMATS = frozenset({"HEIC", "HEIF"})
 HEIF_BRANDS = frozenset({
     b"heic",
     b"heix",
@@ -45,24 +44,31 @@ def is_heif_bytes(data: bytes) -> bool:
     return bool(brands & HEIF_BRANDS)
 
 
-def is_unsupported_animation(image: Image.Image) -> bool:
-    """HEIF may contain auxiliary images; only reject actual animated formats."""
-    image_format = str(image.format or "").upper()
-    return (
-        image_format not in HEIF_FORMATS
-        and bool(getattr(image, "is_animated", False))
-        and int(getattr(image, "n_frames", 1)) > 1
-    )
-
-
 def model_upload_from_path(image_path: str | Path) -> tuple[str, bytes, str]:
-    """Return a browser/model-safe upload while leaving the source file untouched."""
+    """Return a single-frame model upload while leaving the source untouched."""
     path = Path(image_path)
     source_bytes = path.read_bytes()
-    if not is_heif_filename(path) and not is_heif_bytes(source_bytes):
+    has_multiframe_signature = (
+        source_bytes[:6] in {b"GIF87a", b"GIF89a"}
+        or (source_bytes[:4] == b"RIFF" and source_bytes[8:12] == b"WEBP")
+        or source_bytes[:8] == b"\x89PNG\r\n\x1a\n"
+    )
+    requires_inspection = (
+        is_heif_filename(path)
+        or is_heif_bytes(source_bytes)
+        or has_multiframe_signature
+    )
+    if not requires_inspection:
         return path.name or "image.bin", source_bytes, "application/octet-stream"
 
     with Image.open(io.BytesIO(source_bytes)) as opened:
+        requires_static_frame = (
+            is_heif_filename(path)
+            or is_heif_bytes(source_bytes)
+            or int(getattr(opened, "n_frames", 1)) > 1
+        )
+        if not requires_static_frame:
+            return path.name or "image.bin", source_bytes, "application/octet-stream"
         if getattr(opened, "n_frames", 1) > 1:
             opened.seek(0)
         image = ImageOps.exif_transpose(opened)

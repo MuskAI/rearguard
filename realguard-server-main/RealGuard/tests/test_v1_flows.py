@@ -1679,17 +1679,26 @@ def test_image_upload_rejects_invalid_image_before_queueing(client):
     assert response.get_json()["code"] == "invalid_image"
 
 
-def test_image_upload_rejects_animated_image_instead_of_analyzing_first_frame(client):
+def test_image_upload_accepts_animated_image_as_live_photo(client, monkeypatch, tmp_path):
     _login_session(client)
+    queued = []
+    monkeypatch.setattr(detection.admin_state, "STATE_PATH", tmp_path / "admin_state.json")
+    monkeypatch.setattr(
+        detection,
+        "_enqueue_persistent_web_job",
+        lambda job, *args, **kwargs: queued.append((job, args, kwargs))
+        or (True, "", "", job["id"], False),
+    )
 
     response = client.post(
         "/image_upload/detect_async",
         data={"image": (BytesIO(_animated_gif_bytes()), "sample.gif")},
         content_type="multipart/form-data",
+        headers={"Idempotency-Key": "live-photo-gif-001"},
     )
 
-    assert response.status_code == 415
-    assert response.get_json()["code"] == "unsupported_animated_image"
+    assert response.status_code == 202
+    assert queued
 
 
 def test_image_upload_accepts_heic_live_photo_still(client, monkeypatch, tmp_path):
@@ -1746,6 +1755,23 @@ def test_heic_model_upload_detects_content_when_extension_is_wrong(tmp_path):
     assert mimetype == "image/jpeg"
     with Image.open(BytesIO(model_bytes)) as image:
         assert image.format == "JPEG"
+
+
+def test_animated_model_upload_extracts_static_jpeg_without_replacing_source(tmp_path):
+    from imagedetection.image_formats import model_upload_from_path
+
+    source = tmp_path / "live-photo.gif"
+    source_bytes = _animated_gif_bytes()
+    source.write_bytes(source_bytes)
+
+    filename, model_bytes, mimetype = model_upload_from_path(source)
+
+    assert source.read_bytes() == source_bytes
+    assert filename == "live-photo.jpg"
+    assert mimetype == "image/jpeg"
+    with Image.open(BytesIO(model_bytes)) as image:
+        assert image.format == "JPEG"
+        assert getattr(image, "n_frames", 1) == 1
 
 
 def test_heic_result_uses_browser_safe_thumbnail():

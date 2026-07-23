@@ -17,8 +17,6 @@ import requests
 from werkzeug.utils import secure_filename
 
 from model_decision_contract import validate_inference_audit, validate_model_decision
-from imagedetection.image_formats import is_unsupported_animation
-
 from imagedetection.views.utils import (
     create_folder,
     excute_detection_sql,
@@ -581,8 +579,6 @@ def create_app():
                     width, height = image.size
                     if width <= 0 or height <= 0:
                         raise ValueError("invalid image dimensions")
-                    if is_unsupported_animation(image):
-                        return jsonify({"code": 415, "msg": "Animated images are not supported"}), 415
                     if width * height > MAX_IMAGE_SOURCE_PIXELS:
                         return jsonify({"code": 413, "msg": "Image pixel dimensions are too large"}), 413
                     image.verify()
