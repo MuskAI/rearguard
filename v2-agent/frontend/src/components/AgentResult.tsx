@@ -354,6 +354,7 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
         : "可见水印扫描完成，本次未检出";
   const elapsed = Number(report.elapsedMs || detector?.roundTripMs || 0);
   const suppliedRegistry = detector?.engines?.find((engine) => engine.id === "known_ai_registry");
+  const suppliedFusion = detector?.engines?.find((engine) => engine.id === "explicit_ai_watermark_fusion");
   const suppliedYolo = detector?.engines?.find((engine) => engine.id.includes("yolo"));
   const engines = [
     {
@@ -365,6 +366,17 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
       count: platformHits.length,
       model: suppliedRegistry?.model || "wiltodelta/remove-ai-watermarks",
       version: suppliedRegistry?.version || platformHits[0]?.modelRevision,
+      role: "attribution",
+    },
+    {
+      ...(suppliedFusion || {}),
+      id: "explicit_ai_watermark_fusion",
+      label: "OCR / 检索融合",
+      available: Boolean(suppliedFusion?.available ?? report.explicitWatermark?.available),
+      detected: Boolean(suppliedFusion?.detected ?? decisiveWatermark),
+      count: suppliedFusion?.count ?? (decisiveWatermark ? platformHits.filter((hit) => hit.decisive).length : 0),
+      model: suppliedFusion?.model || "RapidOCR + FAISS/CLIP + rule fusion",
+      version: suppliedFusion?.version || "explicit-ai-watermark-v2",
       role: "attribution",
     },
     {
@@ -436,7 +448,9 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
                       <strong>{hit.label || (platformProviders.has(hit.provider) ? "已知 AI 平台水印" : "可见水印（平台待确认）")}</strong>
                       <small>
                         {platformProviders.has(hit.provider)
-                          ? `remove-ai-watermarks 平台匹配${hit.localizationConfirmed ? " · YOLO 区域复核" : " · 视觉归属线索"}`
+                          ? hit.method === "explicit_ai_watermark_fusion"
+                            ? "OCR 生成语义 · FAISS 平台检索 · YOLO 区域定位"
+                            : `remove-ai-watermarks 平台匹配${hit.localizationConfirmed ? " · YOLO 区域复核" : " · 视觉归属线索"}`
                           : "YOLO 可见水印定位 · 仅作上下文线索"}
                       </small>
                       <i><em style={{ width: `${clamp01(hit.confidence) * 100}%` }} /></i>

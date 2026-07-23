@@ -137,6 +137,77 @@ def test_merge_exposes_completed_scan_when_no_watermark_is_found():
     assert visible["elapsedMs"] == 91
 
 
+def test_explicit_ocr_and_retrieval_authorize_generic_yolo_candidate():
+    bbox = {"x": 0.8921, "y": 0.9385, "w": 0.1004, "h": 0.0411}
+    merged = watermark_yolo.merge(_analysis(), {
+        "status": "ok",
+        "available": True,
+        "engineVersion": "0.15.3",
+        "coordinateSpace": "display_normalized_v1",
+        "displaySize": {"width": 2848, "height": 1600},
+        "genericVisibleWatermark": {
+            "available": True,
+            "detected": True,
+            "count": 1,
+            "model": "corzent/yolo11x_watermark_detection",
+        },
+        "visibleHits": [{
+            "provider": "yolo11x_watermark",
+            "label": "可见水印（平台待确认）",
+            "confidence": 0.8574,
+            "bbox": bbox,
+        }],
+        "explicitWatermark": {
+            "available": True,
+            "detected": True,
+            "type": "text",
+            "sourcePlatform": "豆包",
+            "confidence": 0.901,
+            "confidenceBand": "high",
+            "aiWatermarkVerdict": {
+                "verdict": "yes",
+                "isAiGeneratedWatermark": True,
+                "confidence": 0.99,
+                "reason": "文字明确包含 AI 生成语义，且匹配豆包平台词。",
+                "relevantHitCount": 1,
+            },
+            "hits": [{
+                "bbox": bbox,
+                "type": "text",
+                "text": "豆包AI生成",
+                "sourcePlatform": "豆包",
+                "confidence": 0.901,
+                "detectionConfidence": 0.8574,
+                "ocrConfidence": 0.949,
+                "textAnalysis": {
+                    "verdict": "supports_ai_generation",
+                    "likelyAIgenerated": True,
+                    "aiGenerationConfidence": 0.99,
+                    "platformMatch": "豆包",
+                },
+                "retrievalAccepted": True,
+                "retrievalSimilarity": 0.9068,
+                "retrievalReferenceId": "doubao-black",
+                "registryMatched": False,
+                "yoloCorroborated": False,
+            }],
+        },
+    })
+
+    visible = merged["visibleWatermark"]
+    assert len(visible["hits"]) == 1
+    assert visible["hits"][0]["provider"] == "doubao"
+    assert visible["hits"][0]["method"] == "explicit_ai_watermark_fusion"
+    assert visible["hits"][0]["decisive"] is True
+    assert visible["explicitWatermark"]["aiWatermarkVerdict"]["verdict"] == "yes"
+    assert merged["verdict"] == "highly_suspected_fake"
+    assert merged["confidence"] == 0.99
+    assert merged["decisionStatus"] == "verdict"
+    assert merged["decisionAuthority"] == "decisive_provenance"
+    assert merged["reviewRequired"] is False
+    assert merged["watermarkVerdictOverride"]["policyVersion"] == "explicit-ai-watermark-v2"
+
+
 def test_merge_marks_detector_unavailable_without_changing_analysis():
     merged = watermark_yolo.merge(_analysis(), {
         "genericVisibleWatermark": {

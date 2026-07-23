@@ -14,6 +14,36 @@ REGISTRY_PROVIDERS = frozenset({"gemini", "doubao", "jimeng", "jimeng_pill", "sa
 YOLO_PROVIDER = "yolo11x_watermark"
 YOLO_METHOD = "yolo11x_watermark_detection"
 YOLO_MODEL = "corzent/yolo11x_watermark_detection"
+EXPLICIT_METHOD = "explicit_ai_watermark_fusion"
+EXPLICIT_MODEL = "RapidOCR + FAISS/CLIP + rule fusion"
+EXPLICIT_MIN_CONFIDENCE = 0.80
+EXPLICIT_PROVIDER_MIN_CONFIDENCE = {
+    "gemini": 0.72,
+    "doubao": 0.80,
+    "jimeng": 0.80,
+    "jimeng_pill": 0.80,
+    "samsung": 0.80,
+}
+PROVIDER_LABELS = {
+    "gemini": "Google Gemini",
+    "doubao": "豆包",
+    "jimeng": "即梦AI",
+    "jimeng_pill": "即梦AI",
+    "samsung": "Samsung Galaxy AI",
+}
+PROVIDER_ALIASES = {
+    "gemini": "gemini",
+    "google gemini": "gemini",
+    "豆包": "doubao",
+    "doubao": "doubao",
+    "即梦": "jimeng",
+    "即梦ai": "jimeng",
+    "jimeng": "jimeng",
+    "jimeng ai": "jimeng",
+    "jimeng_pill": "jimeng_pill",
+    "samsung": "samsung",
+    "samsung galaxy ai": "samsung",
+}
 
 
 def _clamp01(value: Any) -> float:
@@ -52,6 +82,146 @@ def _bbox(value: Any) -> dict[str, float] | None:
     ):
         return None
     return {"x": round(x, 4), "y": round(y, 4), "w": round(width, 4), "h": round(height, 4)}
+
+
+def _provider_id(value: Any) -> str:
+    return PROVIDER_ALIASES.get(str(value or "").strip().lower(), "")
+
+
+def _explicit_watermark(precheck: dict[str, Any]) -> dict[str, Any] | None:
+    raw = precheck.get("explicitWatermark")
+    if not isinstance(raw, dict):
+        return None
+    raw_verdict = raw.get("aiWatermarkVerdict")
+    raw_verdict = raw_verdict if isinstance(raw_verdict, dict) else {}
+    hits = []
+    for item in (raw.get("hits") or [])[:24]:
+        if not isinstance(item, dict):
+            continue
+        bbox = _bbox(item.get("bbox"))
+        if bbox is None:
+            continue
+        text_analysis = item.get("textAnalysis")
+        text_analysis = text_analysis if isinstance(text_analysis, dict) else {}
+        source_platform = str(item.get("sourcePlatform") or "")[:80]
+        hits.append({
+            "bbox": bbox,
+            "type": str(item.get("type") or "unknown")[:24],
+            "text": str(item.get("text") or "")[:200] or None,
+            "sourcePlatform": source_platform,
+            "provider": _provider_id(source_platform),
+            "confidence": _clamp01(item.get("confidence")),
+            "detectionConfidence": _clamp01(item.get("detectionConfidence")),
+            "ocrConfidence": _clamp01(item.get("ocrConfidence")),
+            "textAnalysis": {
+                "verdict": str(text_analysis.get("verdict") or "")[:48],
+                "likelyAIgenerated": text_analysis.get("likelyAIgenerated") is True,
+                "aiGenerationConfidence": _clamp01(text_analysis.get("aiGenerationConfidence")),
+                "platformMatch": str(text_analysis.get("platformMatch") or "")[:80] or None,
+            },
+            "retrievalAccepted": item.get("retrievalAccepted") is True,
+            "retrievalSimilarity": _clamp01(item.get("retrievalSimilarity")),
+            "retrievalThreshold": _clamp01(item.get("retrievalThreshold")),
+            "retrievalReferenceId": str(item.get("retrievalReferenceId") or "")[:160] or None,
+            "registryMatched": item.get("registryMatched") is True,
+            "yoloCorroborated": item.get("yoloCorroborated") is True,
+            "detectorLocalized": False,
+        })
+    source_platform = str(raw.get("sourcePlatform") or "")[:80]
+    return {
+        "available": raw.get("available") is True,
+        "detected": raw.get("detected") is True,
+        "type": str(raw.get("type") or "none")[:24],
+        "sourcePlatform": source_platform,
+        "provider": _provider_id(source_platform),
+        "confidence": _clamp01(raw.get("confidence")),
+        "confidenceBand": str(raw.get("confidenceBand") or "")[:24],
+        "aiWatermarkVerdict": {
+            "verdict": str(raw_verdict.get("verdict") or "inconclusive")[:24],
+            "isAiGeneratedWatermark": raw_verdict.get("isAiGeneratedWatermark"),
+            "confidence": _clamp01(raw_verdict.get("confidence")),
+            "reason": str(raw_verdict.get("reason") or "")[:500],
+            "relevantHitCount": _nonnegative_int(raw_verdict.get("relevantHitCount")),
+        },
+        "hits": hits,
+    }
+
+
+def _strong_explicit_hits(explicit: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not explicit:
+        return []
+    verdict = explicit.get("aiWatermarkVerdict") or {}
+    provider = str(explicit.get("provider") or "")
+    if (
+        explicit.get("available") is not True
+        or explicit.get("detected") is not True
+        or provider not in REGISTRY_PROVIDERS
+        or _clamp01(explicit.get("confidence")) < EXPLICIT_MIN_CONFIDENCE
+        or verdict.get("verdict") != "yes"
+        or verdict.get("isAiGeneratedWatermark") is not True
+        or _clamp01(verdict.get("confidence")) < EXPLICIT_MIN_CONFIDENCE
+        or _nonnegative_int(verdict.get("relevantHitCount")) < 1
+    ):
+        return []
+    strong = []
+    for item in explicit.get("hits") or []:
+        if item.get("provider") != provider:
+            continue
+        if _clamp01(item.get("confidence")) < EXPLICIT_PROVIDER_MIN_CONFIDENCE[provider]:
+            continue
+        text = item.get("textAnalysis") or {}
+        text_supported = (
+            text.get("verdict") == "supports_ai_generation"
+            and text.get("likelyAIgenerated") is True
+            and _clamp01(text.get("aiGenerationConfidence")) >= EXPLICIT_MIN_CONFIDENCE
+        )
+        signals = [
+            name
+            for name, present in (
+                ("ocr_ai_generation_text", text_supported),
+                ("faiss_platform_retrieval", item.get("retrievalAccepted") is True),
+                ("known_platform_registry", item.get("registryMatched") is True),
+                ("watermark_detector_localization", item.get("detectorLocalized") is True),
+            )
+            if present
+        ]
+        if len(signals) >= 2:
+            item["strongSignals"] = signals
+            strong.append(item)
+    return strong
+
+
+def _promoted_explicit_hits(explicit: dict[str, Any] | None) -> list[dict[str, Any]]:
+    promoted = []
+    for item in _strong_explicit_hits(explicit):
+        if item.get("detectorLocalized") is not True:
+            continue
+        provider = str(item.get("provider") or "")
+        promoted.append({
+            "provider": provider,
+            "label": f"{PROVIDER_LABELS.get(provider, provider)} AI生成水印",
+            "confidence": _clamp01(item.get("confidence")),
+            "bbox": dict(item.get("bbox") or {}),
+            "method": EXPLICIT_METHOD,
+            "frame": None,
+            "scores": {
+                "ocr": _clamp01(item.get("ocrConfidence")),
+                "retrieval": _clamp01(item.get("retrievalSimilarity")),
+            },
+            "crop": None,
+            "model": EXPLICIT_MODEL,
+            "modelRevision": "explicit-ai-watermark-v2",
+            "decisive": True,
+            "evidenceRole": "decisive_provenance",
+            "registryCorroborated": item.get("registryMatched") is True,
+            "localizationConfirmed": True,
+            "localizationConfidence": _clamp01(item.get("detectionConfidence")),
+            "localizationModel": YOLO_MODEL,
+            "explicitSignals": list(item.get("strongSignals") or []),
+            "ocrText": item.get("text"),
+            "retrievalReferenceId": item.get("retrievalReferenceId"),
+        })
+    return promoted
 
 
 def _registry_hits(precheck: dict[str, Any]) -> list[dict[str, Any]]:
@@ -152,13 +322,42 @@ def merge(analysis: dict[str, Any], precheck: dict[str, Any] | None) -> dict[str
     if not isinstance(precheck, dict):
         return analysis
     detector = precheck.get("genericVisibleWatermark")
+    explicit = _explicit_watermark(precheck)
     registry_hits = _registry_hits(precheck)
+    generic_hits = _generic_hits(precheck)
+    if explicit:
+        localization_hits = [*registry_hits, *generic_hits]
+        for item in explicit.get("hits") or []:
+            item["detectorLocalized"] = any(
+                _boxes_overlap(item.get("bbox") or {}, hit.get("bbox") or {})
+                for hit in localization_hits
+            )
+    promoted_hits = _promoted_explicit_hits(explicit)
+    for hit in registry_hits:
+        hit["decisive"] = any(
+            item.get("provider") == hit.get("provider")
+            and _boxes_overlap(item.get("bbox") or {}, hit.get("bbox") or {})
+            for item in _strong_explicit_hits(explicit)
+        )
+    promoted_hits = [
+        hit
+        for hit in promoted_hits
+        if not any(
+            registry.get("decisive") is True
+            and registry.get("provider") == hit.get("provider")
+            and _boxes_overlap(hit.get("bbox") or {}, registry.get("bbox") or {})
+            for registry in registry_hits
+        )
+    ]
     generic_hits = [
         hit
-        for hit in _generic_hits(precheck)
-        if not any(_boxes_overlap(hit.get("bbox") or {}, registry.get("bbox") or {}) for registry in registry_hits)
+        for hit in generic_hits
+        if not any(
+            _boxes_overlap(hit.get("bbox") or {}, known.get("bbox") or {})
+            for known in [*registry_hits, *promoted_hits]
+        )
     ]
-    if not isinstance(detector, dict) and not registry_hits and not generic_hits:
+    if not isinstance(detector, dict) and not registry_hits and not promoted_hits and not generic_hits:
         return analysis
 
     merged = copy.deepcopy(analysis)
@@ -174,16 +373,19 @@ def merge(analysis: dict[str, Any], precheck: dict[str, Any] | None) -> dict[str
         hit["registryCorroborated"] = False
         hit["localizationConfirmed"] = False
         existing_hits.append(hit)
-    hits = _deduplicate([*registry_hits, *generic_hits, *existing_hits])
+    hits = _deduplicate([*promoted_hits, *registry_hits, *generic_hits, *existing_hits])
     detected = bool(hits)
-    top_pool = registry_hits or hits
+    platform_hits = [*promoted_hits, *registry_hits]
+    decisive_hits = [hit for hit in platform_hits if hit.get("decisive") is True]
+    top_pool = decisive_hits or platform_hits or hits
     top = max(top_pool, key=lambda item: _clamp01(item.get("confidence"))) if top_pool else None
     confidence = _clamp01(top.get("confidence")) if top else 0.0
     engine_version = str(precheck.get("engineVersion") or "")
     registry_available = precheck.get("status") == "ok" and not engine_version.startswith("local-")
     yolo_available = bool(detector.get("available")) if isinstance(detector, dict) else False
     confirmed_hits = [hit for hit in registry_hits if hit.get("localizationConfirmed") is True]
-    available = registry_available or yolo_available
+    explicit_available = bool(explicit and explicit.get("available"))
+    available = registry_available or yolo_available or explicit_available
 
     if generic_hits and confirmed_hits:
         yolo_note = (
@@ -214,7 +416,13 @@ def merge(analysis: dict[str, Any], precheck: dict[str, Any] | None) -> dict[str
     else:
         registry_note = "remove-ai-watermarks 平台标记识别本次不可用。"
 
-    note_parts = [part for part in (registry_note, yolo_note) if part]
+    explicit_note = (
+        f"OCR/FAISS 融合确认 {len(promoted_hits)} 处强 AI 平台水印，"
+        "文字语义、平台检索与定位框相互印证。"
+        if promoted_hits
+        else ""
+    )
+    note_parts = [part for part in (explicit_note, registry_note, yolo_note) if part]
     note = " ".join(dict.fromkeys(note_parts))
     merged["visibleWatermark"] = {
         **existing,
@@ -226,11 +434,11 @@ def merge(analysis: dict[str, Any], precheck: dict[str, Any] | None) -> dict[str
         "coordinateSpace": str(precheck.get("coordinateSpace") or ""),
         "displaySize": dict(precheck.get("displaySize") or {}) if isinstance(precheck.get("displaySize"), dict) else {},
         "registrySupported": registry_available,
-        "positiveEvidenceSupported": registry_available,
+        "positiveEvidenceSupported": registry_available or explicit_available,
         "evidenceLevel": (
             "unavailable"
             if not available
-            else "strong" if registry_hits and confidence >= 0.8 else "medium" if detected else "none"
+            else "strong" if decisive_hits else "medium" if detected else "none"
         ),
         "hits": hits,
         "temporal": existing.get("temporal") or {
@@ -244,6 +452,12 @@ def merge(analysis: dict[str, Any], precheck: dict[str, Any] | None) -> dict[str
             or (detector or {}).get("elapsedMs")
             or existing.get("elapsedMs")
             or 0
+        ),
+        "explicitWatermark": explicit,
+        "pipelineTrace": (
+            copy.deepcopy(precheck.get("pipelineTrace"))
+            if isinstance(precheck.get("pipelineTrace"), dict)
+            else None
         ),
         "detector": {
             "available": available,
@@ -260,6 +474,16 @@ def merge(analysis: dict[str, Any], precheck: dict[str, Any] | None) -> dict[str
                     "count": len(registry_hits),
                     "model": REGISTRY_MODEL,
                     "version": precheck.get("engineVersion"),
+                    "role": "provenance",
+                },
+                {
+                    "id": "explicit_ai_watermark_fusion",
+                    "label": "OCR/检索水印融合",
+                    "available": explicit_available,
+                    "detected": bool(promoted_hits),
+                    "count": len(promoted_hits),
+                    "model": EXPLICIT_MODEL,
+                    "version": "explicit-ai-watermark-v2",
                     "role": "provenance",
                 },
                 {

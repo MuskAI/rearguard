@@ -9,6 +9,8 @@ MIN_EXPLICIT_WATERMARK_CONFIDENCE = 0.80
 MIN_EXPLICIT_VERDICT_CONFIDENCE = 0.80
 DECISIVE_PROVIDERS = frozenset({"gemini", "doubao", "jimeng", "jimeng_pill", "samsung"})
 DECISIVE_METHOD = "remove_ai_watermarks_registry"
+EXPLICIT_DECISIVE_METHOD = "explicit_ai_watermark_fusion"
+DECISIVE_METHODS = frozenset({DECISIVE_METHOD, EXPLICIT_DECISIVE_METHOD})
 MIN_LOCALIZED_AREA = 0.0001
 PROVIDER_MIN_CONFIDENCE = {
     "gemini": 0.72,
@@ -172,7 +174,7 @@ def _strong_explicit_hits(visible: Any) -> list[dict[str, Any]]:
             text_supported,
             hit.get("retrievalAccepted") is True,
             hit.get("registryMatched") is True,
-            hit.get("yoloCorroborated") is True,
+            hit.get("yoloCorroborated") is True or hit.get("detectorLocalized") is True,
         ))
         if signal_count >= 2:
             strong.append(hit)
@@ -188,7 +190,7 @@ def _decisive_hits(visible: Any) -> list[dict[str, Any]]:
         for hit in _localized_hits(visible)
         if hit.get("decisive") is True
         and (provider := str(hit.get("provider") or "").strip().lower()) in DECISIVE_PROVIDERS
-        and str(hit.get("method") or "").strip() == DECISIVE_METHOD
+        and str(hit.get("method") or "").strip() in DECISIVE_METHODS
         and (
             hit.get("registryCorroborated") is True
             or _clamp01(hit.get("confidence")) >= PROVIDER_MIN_CONFIDENCE[provider]
@@ -282,7 +284,7 @@ def apply_to_result(result: dict[str, Any], visible: Any) -> bool:
         "scorePublished": True,
         "watermark_verdict_override": {
             "applied": True,
-            "policyVersion": "explicit-ai-watermark-v1",
+            "policyVersion": "explicit-ai-watermark-v2",
             "decisionAuthority": "decisive_provenance",
             "providers": providers,
             "hitCount": len(decisive_hits),

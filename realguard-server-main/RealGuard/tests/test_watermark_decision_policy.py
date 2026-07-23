@@ -99,6 +99,7 @@ def test_single_signal_watermark_does_not_authorize_verdict():
     explicit_hit = payload["explicitWatermark"]["hits"][0]
     explicit_hit["textAnalysis"] = {}
     explicit_hit["retrievalAccepted"] = False
+    explicit_hit["registryMatched"] = False
     explicit_hit["yoloCorroborated"] = False
     visible = expert._visible_result(payload)
     result = _review_result()
@@ -106,6 +107,43 @@ def test_single_signal_watermark_does_not_authorize_verdict():
     assert watermark_verdict.has_decisive_ai_watermark(visible) is False
     assert watermark_verdict.apply_to_result(result, visible) is False
     assert result["final_label"] == "需人工复核"
+
+
+def test_explicit_ocr_and_retrieval_promote_generic_yolo_box():
+    payload = _strong_precheck()
+    bbox = payload["visibleHits"][0]["bbox"]
+    payload["visibleHits"] = [{
+        "provider": "yolo11x_watermark",
+        "label": "可见水印（平台待确认）",
+        "confidence": 0.8574,
+        "bbox": bbox,
+        "model": "corzent/yolo11x_watermark_detection",
+    }]
+    explicit_hit = payload["explicitWatermark"]["hits"][0]
+    explicit_hit.update({
+        "confidence": 0.901,
+        "detectionConfidence": 0.8574,
+        "ocrConfidence": 0.949,
+        "text": "豆包AI生成",
+        "retrievalSimilarity": 0.9068,
+        "retrievalAccepted": True,
+        "registryMatched": False,
+        "yoloCorroborated": False,
+    })
+    payload["explicitWatermark"]["confidence"] = 0.901
+
+    visible = expert._visible_result(payload)
+    result = _review_result()
+
+    assert len(visible["hits"]) == 1
+    assert visible["hits"][0]["provider"] == "doubao"
+    assert visible["hits"][0]["method"] == "explicit_ai_watermark_fusion"
+    assert visible["hits"][0]["decisive"] is True
+    assert visible["hits"][0]["localizationConfirmed"] is True
+    assert watermark_verdict.apply_to_result(result, visible) is True
+    assert result["final_label"] == "AI生成图像"
+    assert result["probability"] == 0.99
+    assert result["reviewRequired"] is False
 
 
 def test_backend_data_uses_same_strong_watermark_decision():

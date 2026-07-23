@@ -80,10 +80,14 @@ def test_visible_watermark_expert_localizes_without_ai_score(monkeypatch):
     assert result["visibleWatermark"]["hits"][0]["decisive"] is False
     assert result["visibleWatermark"]["hits"][0]["evidenceRole"] == "visual_attribution"
     assert result["visibleWatermark"]["hits"][0]["localizationConfirmed"] is True
-    assert result["visibleWatermark"]["detector"]["engines"][0]["model"] == "wiltodelta/remove-ai-watermarks"
-    assert result["visibleWatermark"]["detector"]["engines"][0]["version"] == "0.15.3"
-    assert result["visibleWatermark"]["detector"]["engines"][1]["id"] == "yolo_visible_watermark"
-    assert result["visibleWatermark"]["detector"]["engines"][1]["count"] == 2
+    engines = {
+        engine["id"]: engine
+        for engine in result["visibleWatermark"]["detector"]["engines"]
+    }
+    assert engines["known_ai_registry"]["model"] == "wiltodelta/remove-ai-watermarks"
+    assert engines["known_ai_registry"]["version"] == "0.15.3"
+    assert engines["explicit_ai_watermark_fusion"]["available"] is False
+    assert engines["yolo_visible_watermark"]["count"] == 2
     assert result["probabilityModel"]["posterior"] == 0.997
     assert result["provenanceReport"]["aiFromMetadata"] is True
 
