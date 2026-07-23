@@ -57,6 +57,16 @@ def _animated_gif_bytes():
     return output.getvalue()
 
 
+def _multi_image_heif_bytes():
+    from pillow_heif import from_pillow
+
+    output = BytesIO()
+    container = from_pillow(Image.new("RGB", (12, 8), "navy"))
+    container.add_from_pillow(Image.new("RGB", (6, 4), "white"))
+    container.save(output, quality=90)
+    return output.getvalue()
+
+
 class _BillingStore:
     def __init__(self, free_total=5):
         self.lock = threading.RLock()
@@ -912,6 +922,13 @@ def test_developer_api_rejects_animated_images(client, monkeypatch):
 
     assert response.status_code == 415
     assert response.get_json()["error"]["code"] == "unsupported_animated_image"
+
+
+def test_developer_image_validation_accepts_multi_image_heif():
+    dimensions, error = platform._validate_image(_multi_image_heif_bytes())
+
+    assert error is None
+    assert dimensions == {"width": 12, "height": 8}
 
 
 def test_developer_upload_requires_content_length_before_multipart_parsing(client, monkeypatch):
