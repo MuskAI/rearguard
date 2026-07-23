@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   BadgeCheck,
   Camera,
   CheckCircle2,
+  ChevronDown,
   CircleDashed,
   Copy,
   Download,
@@ -220,6 +221,31 @@ function EvidenceList({ items }: { items: string[] }) {
         <li key={`${index}-${item}`}><span>{index + 1}</span><p>{item}</p></li>
       ))}
     </ul>
+  );
+}
+
+function ResultDisclosure({
+  icon,
+  title,
+  description,
+  children,
+  open = false,
+}: {
+  icon: ReactNode;
+  title: string;
+  description: string;
+  children: ReactNode;
+  open?: boolean;
+}) {
+  return (
+    <details className="result-disclosure" open={open || undefined}>
+      <summary>
+        <span className="result-disclosure-icon">{icon}</span>
+        <span><strong>{title}</strong><small>{description}</small></span>
+        <ChevronDown className="result-disclosure-chevron" size={17} />
+      </summary>
+      <div className="result-disclosure-content">{children}</div>
+    </details>
   );
 }
 
@@ -598,6 +624,20 @@ export default function AgentResult(props: Props) {
     () => buildEvidenceExplanation(props.outcome, verdict.risk, verdict.label),
     [props.outcome, verdict.label, verdict.risk],
   );
+  const keyExplanationPoints = useMemo(() => {
+    const evidencePoints = explanationPoints.filter((point) => point.label !== "综合结论");
+    const decisive = evidencePoints.filter((point) => point.decisive);
+    const supporting = evidencePoints.filter((point) => !point.decisive);
+    const prioritized = [...decisive, ...supporting];
+    const fallback = explanationPoints.filter((point) => point.label === "综合结论");
+    return [...(prioritized.length > 0 ? prioritized : fallback)]
+      .filter((point, index, items) => items.findIndex((item) => item.label === point.label && item.text === point.text) === index)
+      .slice(0, 3);
+  }, [explanationPoints]);
+  const additionalExplanationPoints = useMemo(() => {
+    const shown = new Set(keyExplanationPoints);
+    return explanationPoints.filter((point) => !shown.has(point));
+  }, [explanationPoints, keyExplanationPoints]);
   const preview = filePreview(props.outcome);
   const canDeepAnalyze = hasImageFile(props.outcome);
   const forensics = props.outcome.kind === "image" || props.outcome.kind === "evidence" ? props.outcome.forensics : undefined;
@@ -703,10 +743,7 @@ export default function AgentResult(props: Props) {
             {verdict.reviewOnly ? (
               <span><FileSearch size={15} /> 自动结论 <strong>未发布</strong></span>
             ) : (
-              <>
-                <span><Gauge size={15} /> {verdict.riskLabel} <strong>{Math.round(verdict.risk * 100)}%</strong></span>
-                <span><BadgeCheck size={15} /> 置信说明 <strong>{verdict.confidence}</strong></span>
-              </>
+              <span><BadgeCheck size={15} /> 置信说明 <strong>{verdict.confidence}</strong></span>
             )}
           </div>
         </div>
@@ -736,31 +773,30 @@ export default function AgentResult(props: Props) {
 
       {tab === "summary" && (
         <div className="result-tab-panel" id="result-panel-summary" role="tabpanel" aria-labelledby="result-tab-summary" tabIndex={0}>
-          <section className="result-band">
-            <div className="section-title"><Sparkles size={18} /><div><h3>为什么这样判断</h3><p>已按水印、主模型、视觉复核与文件来源证据排序。</p></div></div>
-            <div className="result-explanation result-rationale" role="list">
-              {explanationPoints.map((point, index) => (
+          <section className="result-band result-priority-band">
+            <div className="section-title"><Sparkles size={18} /><div><h3>关键依据</h3><p>优先展示对本次结论影响最大的证据。</p></div></div>
+            <div className="result-explanation result-rationale is-priority" role="list">
+              {keyExplanationPoints.map((point, index) => (
                 <div className={point.decisive ? "is-decisive" : ""} role="listitem" key={`${point.label}-${index}`}>
                   <strong>{point.label}</strong>
                   <p>{point.text}</p>
                 </div>
               ))}
             </div>
+            {additionalExplanationPoints.length > 0 && (
+              <details className="rationale-disclosure">
+                <summary>查看完整判断依据 <span>{additionalExplanationPoints.length} 项</span><ChevronDown size={15} /></summary>
+                <div className="result-explanation result-rationale" role="list">
+                  {additionalExplanationPoints.map((point, index) => (
+                    <div className={point.decisive ? "is-decisive" : ""} role="listitem" key={`${point.label}-${index}`}>
+                      <strong>{point.label}</strong>
+                      <p>{point.text}</p>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
           </section>
-          {!verdict.reviewOnly && props.outcome.kind === "image" && props.outcome.result.swarm?.enabled && (
-            <section className="result-band consensus-band">
-              <div className="section-title"><ScanLine size={18} /><div><h3>多源复核共识</h3><p>{props.outcome.result.swarm.disagreement ? "不同证据源存在分歧，建议人工复核原始文件。" : "有效证据源的判断方向较一致。"}</p></div></div>
-              <div className="consensus-line">
-                <span>有效复核 {props.outcome.result.swarm.effectiveExperts || 0}/{props.outcome.result.swarm.totalExperts || props.outcome.result.swarm.experts?.length || 0}</span>
-                <strong>{Math.round(Number(props.outcome.result.swarm.consensusScore || 0) * 100)}% 共识</strong>
-              </div>
-              <div className="consensus-track"><i style={{ width: `${Math.round(Number(props.outcome.result.swarm.consensusScore || 0) * 100)}%` }} /></div>
-            </section>
-          )}
-          <CaptureEvidenceSection report={captureEvidence} />
-          {!verdict.reviewOnly && <ProbabilitySection model={probabilityModel} />}
-          <SynthIDSection report={synthid} />
-          <WatermarkSection report={visibleWatermark} preview={preview} />
           <div className="result-actions">
             <button type="button" className="primary-button" onClick={props.onDownload} disabled={props.downloadBusy}>
               {props.downloadBusy ? <LoaderCircle size={17} className="spin" /> : <Download size={17} />}
@@ -831,8 +867,47 @@ export default function AgentResult(props: Props) {
               {props.onRetryAction && <button type="button" onClick={props.onRetryAction}>重试此操作</button>}
             </div>
           )}
-          <ForensicsSection report={forensics} busy={props.forensicsBusy} previewState={props.forensicsPreviewState} />
-          <ProvenanceSection report={provenance} />
+          {(!verdict.reviewOnly && (probabilityModel || (props.outcome.kind === "image" && props.outcome.result.swarm?.enabled))) && (
+            <ResultDisclosure
+              icon={<Gauge size={18} />}
+              title="模型与风险计算"
+              description="查看多源共识、风险基线和证据融合过程"
+            >
+              {!verdict.reviewOnly && props.outcome.kind === "image" && props.outcome.result.swarm?.enabled && (
+                <section className="result-band consensus-band">
+                  <div className="section-title"><ScanLine size={18} /><div><h3>多源复核共识</h3><p>{props.outcome.result.swarm.disagreement ? "不同证据源存在分歧，建议人工复核原始文件。" : "有效证据源的判断方向较一致。"}</p></div></div>
+                  <div className="consensus-line">
+                    <span>有效复核 {props.outcome.result.swarm.effectiveExperts || 0}/{props.outcome.result.swarm.totalExperts || props.outcome.result.swarm.experts?.length || 0}</span>
+                    <strong>{Math.round(Number(props.outcome.result.swarm.consensusScore || 0) * 100)}% 共识</strong>
+                  </div>
+                  <div className="consensus-track"><i style={{ width: `${Math.round(Number(props.outcome.result.swarm.consensusScore || 0) * 100)}%` }} /></div>
+                </section>
+              )}
+              {!verdict.reviewOnly && <ProbabilitySection model={probabilityModel} />}
+            </ResultDisclosure>
+          )}
+          {(captureEvidence || synthid || visibleWatermark || provenance) && (
+            <ResultDisclosure
+              icon={<Fingerprint size={18} />}
+              title="水印与来源证据"
+              description="查看平台水印、实拍信息、内容凭证与来源核验"
+            >
+              <CaptureEvidenceSection report={captureEvidence} />
+              <SynthIDSection report={synthid} />
+              <WatermarkSection report={visibleWatermark} preview={preview} />
+              <ProvenanceSection report={provenance} />
+            </ResultDisclosure>
+          )}
+          {(forensics || props.forensicsBusy) && (
+            <ResultDisclosure
+              icon={<Microscope size={18} />}
+              title="取证图谱与中间结果"
+              description={props.forensicsBusy ? "图谱正在生成，可展开查看实时进度" : "查看误差、噪声、频域等辅助分析"}
+              open={props.forensicsBusy}
+            >
+              <ForensicsSection report={forensics} busy={props.forensicsBusy} previewState={props.forensicsPreviewState} />
+            </ResultDisclosure>
+          )}
         </div>
       )}
 

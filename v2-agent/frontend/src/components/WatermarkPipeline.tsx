@@ -1,4 +1,4 @@
-import { Activity, Clock3 } from "lucide-react";
+import { Activity, ChevronDown, Clock3 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { WatermarkPipelineStage, WatermarkPipelineTrace } from "../api";
 
@@ -131,24 +131,27 @@ export default function WatermarkPipeline({ trace }: Props) {
   const selected = stages.find((stage) => stage.id === selectedId) || preferred || stages[0];
   const maxElapsed = Math.max(1, ...stages.map((stage) => Number(stage.elapsedMs) || 0));
 
-  return <section className="watermark-pipeline" aria-label="水印检测流水线">
-    <header className="pipeline-heading">
+  return <details className="watermark-pipeline">
+    <summary className="pipeline-heading">
       <div><Activity size={17} /><span><strong>检测流水线</strong><small>逐阶段查看真实输入、输出与阈值</small></span></div>
       <p><Clock3 size={14} /> 总耗时 <strong>{duration(trace.totalElapsedMs)}</strong></p>
-    </header>
-    <div className="pipeline-stage-tabs" role="tablist" aria-label="检测阶段">
-      {stages.map((stage, index) => <button key={stage.id} type="button" role="tab" aria-selected={stage.id === selected.id} className={`${stage.status} ${stage.id === selected.id ? "active" : ""}`} onClick={() => setSelectedId(stage.id)}><i>{String(index + 1).padStart(2, "0")}</i><strong>{stage.label}</strong><small>{duration(stage.elapsedMs)}</small><b aria-hidden="true" /></button>)}
+      <ChevronDown className="pipeline-toggle" size={16} />
+    </summary>
+    <div className="pipeline-body">
+      <div className="pipeline-stage-tabs" role="tablist" aria-label="检测阶段">
+        {stages.map((stage, index) => <button key={stage.id} type="button" role="tab" aria-selected={stage.id === selected.id} className={`${stage.status} ${stage.id === selected.id ? "active" : ""}`} onClick={() => setSelectedId(stage.id)}><i>{String(index + 1).padStart(2, "0")}</i><strong>{stage.label}</strong><small>{duration(stage.elapsedMs)}</small><b aria-hidden="true" /></button>)}
+      </div>
+      <div className="pipeline-workspace">
+        <aside className="pipeline-waterfall" aria-label="阶段耗时">
+          <header><strong>阶段耗时</strong><span>并行分支不累加</span></header>
+          {stages.map((stage) => <button key={stage.id} type="button" className={stage.id === selected.id ? "active" : ""} onClick={() => setSelectedId(stage.id)}><span>{stage.label}</span><i><b className={stage.status} style={{ width: `${Math.max(2, (Number(stage.elapsedMs) || 0) / maxElapsed * 100)}%` }} /></i><em>{duration(stage.elapsedMs)}</em></button>)}
+        </aside>
+        <article className="pipeline-stage-detail" role="tabpanel">
+          <header><div><span>STAGE {String(stages.indexOf(selected) + 1).padStart(2, "0")}</span><h4>{selected.label}</h4></div><b className={selected.status}>{STATUS_LABEL[selected.status] || selected.status}</b></header>
+          <p className="pipeline-summary">{selected.summary}</p>
+          <StageDetails stage={selected} />
+        </article>
+      </div>
     </div>
-    <div className="pipeline-workspace">
-      <aside className="pipeline-waterfall" aria-label="阶段耗时">
-        <header><strong>阶段耗时</strong><span>并行分支不累加</span></header>
-        {stages.map((stage) => <button key={stage.id} type="button" className={stage.id === selected.id ? "active" : ""} onClick={() => setSelectedId(stage.id)}><span>{stage.label}</span><i><b className={stage.status} style={{ width: `${Math.max(2, (Number(stage.elapsedMs) || 0) / maxElapsed * 100)}%` }} /></i><em>{duration(stage.elapsedMs)}</em></button>)}
-      </aside>
-      <article className="pipeline-stage-detail" role="tabpanel">
-        <header><div><span>STAGE {String(stages.indexOf(selected) + 1).padStart(2, "0")}</span><h4>{selected.label}</h4></div><b className={selected.status}>{STATUS_LABEL[selected.status] || selected.status}</b></header>
-        <p className="pipeline-summary">{selected.summary}</p>
-        <StageDetails stage={selected} />
-      </article>
-    </div>
-  </section>;
+  </details>;
 }
