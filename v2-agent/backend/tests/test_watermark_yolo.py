@@ -305,6 +305,6 @@ def test_vlm_forged_registry_watermark_cannot_gain_decision_authority():
     })
     final = main._authorize_analysis(merged, allow_decisive_provenance=True)
 
-    assert final["verdict"] == "unknown"
+    assert final["verdict"] == "highly_suspected_fake"
     assert final["decisionStatus"] == "review_only"
     assert final["decisionAuthority"] == "none"

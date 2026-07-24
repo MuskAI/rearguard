@@ -53,6 +53,7 @@ import {
   startImageAgent,
 } from "./api";
 import type { AgentHistoryEntry, AgentOutcome, AgentProgress, ImageAnalysisMode, PendingFile } from "./agentTypes";
+import { binaryVerdictLabel } from "./binaryVerdict";
 import { generateForensicPreview } from "./clientForensics";
 import { startFastImageAgent, submitImageFeedback } from "./imageInteractionApi";
 import AgentHistory, { MobileHistoryButton } from "./components/AgentHistory";
@@ -115,7 +116,7 @@ function formatBytes(size: number) {
 }
 
 function verdictLabel(verdict: DetectResult["verdict"]) {
-  return { real: "更倾向真实", suspected_fake: "疑似生成", highly_suspected_fake: "高度疑似", unknown: "待复核" }[verdict];
+  return binaryVerdictLabel(verdict);
 }
 
 function timestamp(value: string) {
@@ -133,7 +134,7 @@ function imageHistoryEntry(record: ImageHistoryRecord): AgentHistoryEntry {
     recordId: String(record.itemid),
     title: record.filename || `图像任务 ${record.itemid}`,
     typeLabel: "图像",
-    verdictLabel: record.final_label || (score == null ? "待复核" : score >= 0.5 ? "疑似生成" : "更倾向真实"),
+    verdictLabel: binaryVerdictLabel(record.final_label, score),
     score,
     createdAt: record.createtime || "",
     thumbnail: record.thumbnail_url || record.image_url,
@@ -150,7 +151,7 @@ function videoHistoryEntry(record: VideoHistoryRecord): AgentHistoryEntry {
     recordId: String(record.itemid),
     title: record.filename || `视频任务 ${record.itemid}`,
     typeLabel: "视频",
-    verdictLabel: record.final_label || (score == null ? "待复核" : score >= 0.5 ? "疑似合成" : "更倾向真实"),
+    verdictLabel: binaryVerdictLabel(record.final_label, score),
     score,
     createdAt: record.createtime || "",
   };

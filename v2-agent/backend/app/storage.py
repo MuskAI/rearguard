@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from . import evidence_manifest_v2, privacy_erasure_ledger, watermark_verdict
+from .verdict_labels import binary_verdict
 
 
 DATA_DIR = Path(os.getenv("JIANZHEN_DATA_DIR", Path(__file__).resolve().parents[1] / "data"))
@@ -366,7 +367,7 @@ def is_publishable_analysis(analysis: Any) -> bool:
     return bool(
         status == "review_only"
         and authority == "none"
-        and analysis.get("verdict") == "unknown"
+        and analysis.get("verdict") in {*PUBLISHABLE_VERDICTS, "unknown"}
         and analysis.get("reviewRequired") is True
     )
 
@@ -617,7 +618,7 @@ def _history_summary_from_row(
             or watermark_verdict.has_decisive_ai_watermark(result.get("visibleWatermark"))
         )
     )
-    verdict = result.get("verdict") if authorized_verdict else "unknown"
+    verdict = result.get("verdict") if authorized_verdict else binary_verdict(result)
     confidence = result.get("confidence") if authorized_verdict else None
     return {
         "taskId": row["task_id"],
@@ -1709,7 +1710,7 @@ def _authorized_metrics_result(raw: dict[str, Any]) -> dict[str, Any]:
         and (result.get("source") == "provenance" or decisive)
     )
     if not authorized:
-        result["verdict"] = "unknown"
+        result["verdict"] = binary_verdict(result)
         result["decisionStatus"] = "review_only"
         result["decisionAuthority"] = "none"
     return result

@@ -20,6 +20,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen.canvas import Canvas
 from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from .verdict_labels import binary_verdict
 
 FONT_NAME = "HuijianCJK"
 _FONT_LOCK = Lock()
@@ -37,7 +38,6 @@ LINE = colors.HexColor("#CEDBD8")
 SURFACE = colors.HexColor("#F2F7F5")
 TEAL = colors.HexColor("#138D83")
 RED = colors.HexColor("#D95B43")
-AMBER = colors.HexColor("#C88724")
 
 
 def _register_pdf_font() -> None:
@@ -316,14 +316,10 @@ def build_report_pdf(
         Spacer(1, 4 * mm),
     ]
 
-    verdict = str(result.get("verdict") or "unknown")
+    verdict = binary_verdict(result)
     review_only = result.get("decisionStatus") != "verdict" or result.get("reviewRequired") is True
-    verdict_label = {
-        "real": "更倾向真实",
-        "suspected_fake": "疑似伪造",
-        "highly_suspected_fake": "高度疑似伪造",
-    }.get(verdict, "需要人工复核")
-    verdict_color = TEAL if verdict == "real" else RED if verdict == "highly_suspected_fake" else AMBER
+    verdict_label = "真实图像" if verdict == "real" else "AI生成图像"
+    verdict_color = TEAL if verdict == "real" else RED
     score_label = (
         "未发布自动风险分数"
         if review_only

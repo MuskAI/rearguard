@@ -4,12 +4,13 @@ from datetime import datetime
 from html import escape
 
 from .pdf_report import build_report_pdf
+from .verdict_labels import binary_verdict
 
 
 VERDICT_META = {
-    "real": {"label": "真实内容", "color": "#3fb6a8"},
-    "suspected_fake": {"label": "疑似伪造", "color": "#d99a2b"},
-    "highly_suspected_fake": {"label": "高度疑似伪造", "color": "#d8412f"},
+    "real": {"label": "真实图像", "color": "#3fb6a8"},
+    "suspected_fake": {"label": "AI生成图像", "color": "#d8412f"},
+    "highly_suspected_fake": {"label": "AI生成图像", "color": "#d8412f"},
 }
 
 TYPE_LABEL = {
@@ -336,11 +337,7 @@ def build_report_html(
     evidence_package_url: str | None = None,
 ) -> str:
     review_only = result.get("decisionStatus") != "verdict" or result.get("reviewRequired") is True
-    meta = (
-        {"label": "需人工复核", "color": "#b7791f"}
-        if review_only
-        else VERDICT_META.get(result.get("verdict"), {"label": "未知结论", "color": "#4d423a"})
-    )
+    meta = VERDICT_META[binary_verdict(result)]
     file_meta = result.get("fileMeta", {}) or {}
     preview = file_meta.get("preview") or file_meta.get("thumbnail") or ""
     preview_html = (

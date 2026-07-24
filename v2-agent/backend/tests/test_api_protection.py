@@ -759,7 +759,7 @@ def test_uncalibrated_vlm_is_published_only_as_review_required(client, monkeypat
     )
 
     assert response.status_code == 200
-    assert response.json()["verdict"] == "unknown"
+    assert response.json()["verdict"] == "real"
     assert response.json()["decisionStatus"] == "review_only"
     assert response.json()["decisionAuthority"] == "none"
     assert response.json()["reviewRequired"] is True
@@ -785,7 +785,7 @@ def test_vlm_payload_cannot_self_authorize_a_verdict(client, monkeypatch):
     )
 
     assert response.status_code == 200
-    assert response.json()["verdict"] == "unknown"
+    assert response.json()["verdict"] == "highly_suspected_fake"
     assert response.json()["decisionStatus"] == "review_only"
     assert response.json()["decisionAuthority"] == "none"
 
@@ -833,9 +833,9 @@ def test_legacy_history_without_decision_authorization_fails_closed(client):
     )
 
     item = next(entry for entry in listing.json()["items"] if entry["taskId"] == legacy["taskId"])
-    assert item["verdict"] == "unknown"
+    assert item["verdict"] == "real"
     assert item["reviewRequired"] is True
-    assert detail.json()["verdict"] == "unknown"
+    assert detail.json()["verdict"] == "real"
     assert detail.json()["decisionStatus"] == "review_only"
 
 
@@ -2156,16 +2156,16 @@ def test_history_filters_fail_closed_for_uncalibrated_vlm_verdicts(client, monke
 
     assert listing.status_code == 200
     payload = listing.json()
-    assert payload["filterCounts"]["real"] == 0
+    assert payload["filterCounts"]["real"] == 2
     assert payload["filterCounts"]["suspected"] == 0
-    assert payload["filterCounts"]["highly"] == 0
-    assert payload["filterCounts"]["unknownVerdict"] == 4
+    assert payload["filterCounts"]["highly"] == 2
+    assert payload["filterCounts"]["unknownVerdict"] == 0
     assert unknown.status_code == 200
-    assert real_only.json()["items"] == []
+    assert len(real_only.json()["items"]) == 2
     assert suspected_only.json()["items"] == []
-    assert highly_only.json()["items"] == []
-    assert len(unknown_only.json()["items"]) == 4
-    assert all(item["reviewRequired"] is True for item in unknown_only.json()["items"])
+    assert len(highly_only.json()["items"]) == 2
+    assert unknown_only.json()["items"] == []
+    assert all(item["reviewRequired"] is True for item in listing.json()["items"])
 
 
 def test_metrics_include_source_and_evidence_breakdown(client):

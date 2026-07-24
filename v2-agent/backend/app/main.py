@@ -42,6 +42,7 @@ from . import (
     watermark_verdict,
     watermark_yolo,
 )
+from .verdict_labels import binary_label, binary_verdict
 
 logger = logging.getLogger(__name__)
 ACCESS_TOKEN = os.getenv("JIANZHEN_ACCESS_TOKEN", "").strip()
@@ -932,6 +933,8 @@ def _token_usage_from_payload(payload: dict | None, *, cache_hit: bool = False) 
 def _authorize_analysis(analysis: dict, *, allow_decisive_provenance: bool) -> dict:
     """Normalize every public analysis through an explicit fail-closed decision gate."""
     normalized = dict(analysis or {})
+    forced_verdict = binary_verdict(normalized)
+    forced_label = binary_label({"verdict": forced_verdict})
     authority = normalized.get("decisionAuthority")
     decisive_watermark = watermark_verdict.has_decisive_ai_watermark(
         normalized.get("visibleWatermark")
@@ -970,7 +973,7 @@ def _authorize_analysis(analysis: dict, *, allow_decisive_provenance: bool) -> d
             normalized["visibleWatermark"] = visible
 
     normalized.update({
-        "verdict": "unknown",
+        "verdict": forced_verdict,
         "confidence": 0.0,
         "riskScore": None,
         "aiProbability": None,
@@ -982,8 +985,9 @@ def _authorize_analysis(analysis: dict, *, allow_decisive_provenance: bool) -> d
         "reviewRequired": True,
         "watermarkVerdictOverride": None,
         "explanation": (
-            "自动视觉分析已完成，但该模型尚未通过独立校准门禁，不能直接形成真假结论。"
-            "当前结果仅供人工复核；只有校验通过的内容凭证或签名校准模型可授权自动结论。"
+            f"自动视觉分析已完成，系统按原始模型方向给出“{forced_label}”二元结论。"
+            "由于该模型尚未通过独立校准门禁，结论置信度较低，原始分数不作为已校准概率发布；"
+            "建议结合原始来源和人工复核理解结果。"
         ),
     })
     return normalized

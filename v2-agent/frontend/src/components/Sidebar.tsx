@@ -9,14 +9,13 @@ const FILTER_OPTIONS = [
   { key: "highly", label: "高风险" },
   { key: "suspected", label: "疑似风险" },
   { key: "real", label: "未见异常" },
-  { key: "unknownVerdict", label: "待复核" },
   { key: "forensics", label: "含鉴伪线索" },
   { key: "provenance", label: "含内容凭证" },
   { key: "watermark", label: "含可见水印" },
   { key: "synthid", label: "含隐式水印" },
 ] as const;
 type SidebarFilterKey = HistorySidebarFilter;
-const PRIMARY_FILTER_KEYS = new Set<SidebarFilterKey>(["all", "highly", "suspected", "real", "unknownVerdict"]);
+const PRIMARY_FILTER_KEYS = new Set<SidebarFilterKey>(["all", "highly", "suspected", "real"]);
 const PRIMARY_FILTER_OPTIONS = FILTER_OPTIONS.filter((item) => PRIMARY_FILTER_KEYS.has(item.key as SidebarFilterKey));
 const MORE_FILTER_OPTIONS = FILTER_OPTIONS.filter((item) => !PRIMARY_FILTER_KEYS.has(item.key as SidebarFilterKey));
 const FILTER_ICONS: Partial<Record<SidebarFilterKey, IconfontName>> = {

@@ -152,9 +152,9 @@ def test_metrics_fail_closed_for_legacy_unauthorized_verdicts(isolated_storage):
 
     report = storage.metrics(days=14)
 
-    assert report["byVerdict"]["unknown"] == 1
+    assert report["byVerdict"]["real"] == 1
     assert report["byVerdict"]["highly_suspected_fake"] == 1
-    assert report["byVerdict"].get("real", 0) == 0
+    assert report["byVerdict"].get("unknown", 0) == 0
 
 def test_admin_legacy_history_results_also_remain_immutable(isolated_storage):
     storage = isolated_storage

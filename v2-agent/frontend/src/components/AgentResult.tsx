@@ -25,6 +25,7 @@ import {
   Video,
 } from "lucide-react";
 import type { AgentOutcome } from "../agentTypes";
+import { binaryVerdictLabel, isFakeVerdict } from "../binaryVerdict";
 import {
   createReportShareLink,
   listReportShares,
@@ -160,79 +161,54 @@ function AnnotatedImagePreview({
   );
 }
 
-function riskTone(risk: number): VerdictView["tone"] {
-  if (risk < 0.4) return "real";
-  if (risk < 0.72) return "warn";
-  return "fake";
-}
-
 function verdictFor(outcome: AgentOutcome): VerdictView {
   if (outcome.kind === "image") {
     const reviewOnly = outcome.result.decisionStatus !== "verdict" || outcome.result.reviewRequired === true;
-    if (reviewOnly) {
-      return {
-        label: "需人工复核",
-        description: outcome.result.explanation || "自动分析已完成，但当前证据不足以发布真假结论。",
-        risk: 0,
-        riskLabel: "自动风险分数",
-        tone: "warn",
-        confidence: "不适用",
-        reviewOnly: true,
-      };
-    }
-    const raw = Number(outcome.result.probability || 0);
+    const rawValue = outcome.result.probability ?? outcome.result.detector_probability;
+    const raw = Number(rawValue ?? 0);
     const localizedWatermark = hasDecisiveAiWatermark(outcome.result.visibleWatermark);
     const risk = Math.max(clamp01(raw > 1 ? raw / 100 : raw), localizedWatermark ? 0.95 : 0);
-    const tone = localizedWatermark ? "fake" : outcome.result.final_label.includes("真实") ? "real" : riskTone(risk);
+    const label = binaryVerdictLabel(
+      localizedWatermark ? "AI生成图像" : outcome.result.final_label,
+      rawValue,
+    );
+    const tone = isFakeVerdict(label) ? "fake" : "real";
     return {
-      label: localizedWatermark ? "AI生成图像" : outcome.result.final_label || (tone === "real" ? "更倾向真实" : "存在生成风险"),
-      description: localizedWatermark
-        ? "已确认强 AI 平台水印，平台匹配、区域定位与 OCR/检索证据相互印证。"
-        : tone === "real"
-          ? "本次多源分析未发现足以支持 AI 生成的强证据。"
-          : "检测到需要关注的生成或编辑线索，建议结合原始来源复核。",
+      label,
+      description: reviewOnly
+        ? outcome.result.explanation || `系统给出“${label}”二元结论；当前置信度较低，建议结合原图和证据复核。`
+        : localizedWatermark
+          ? "已确认强 AI 平台水印，平台匹配、区域定位与 OCR/检索证据相互印证。"
+          : tone === "real"
+            ? "本次多源分析未发现足以支持 AI 生成的强证据。"
+            : "检测到需要关注的生成或编辑线索，建议结合原始来源复核。",
       risk,
       riskLabel: outcome.result.swarm?.enabled ? "综合异常风险" : "AI 生成风险",
       tone,
-      confidence: outcome.result.confidence || "未标注",
-      reviewOnly: false,
+      confidence: reviewOnly ? "低，建议复核" : outcome.result.confidence || "未标注",
+      reviewOnly,
     };
   }
   if (outcome.kind === "video") {
-    if (outcome.result.decisionStatus !== "verdict" || outcome.result.reviewRequired === true) {
-      return {
-        label: "需人工复核",
-        description: outcome.result.explanation || "视频分析已完成，但当前模型尚未获得自动判定授权。",
-        risk: 0,
-        riskLabel: "自动风险分数",
-        tone: "warn",
-        confidence: "不适用",
-        reviewOnly: true,
-      };
-    }
-    const risk = clamp01(Number(outcome.result.fake_percentage || 0) / 100);
-    const tone = outcome.result.final_label.includes("真实") ? "real" : riskTone(risk);
+    const reviewOnly = outcome.result.decisionStatus !== "verdict" || outcome.result.reviewRequired === true;
+    const risk = clamp01(Number(outcome.result.fake_percentage ?? 0) / 100);
+    const label = binaryVerdictLabel(outcome.result.final_label, outcome.result.fake_percentage);
+    const tone = isFakeVerdict(label) ? "fake" : "real";
     return {
-      label: outcome.result.final_label || (tone === "real" ? "更倾向真实" : "存在合成风险"),
-      description: tone === "real" ? "抽帧与时序分析未发现明确的合成证据。" : "视频中存在需要人工复核的合成线索。",
+      label,
+      description: reviewOnly
+        ? outcome.result.explanation || `系统给出“${label}”二元结论；当前置信度较低，建议结合原视频复核。`
+        : tone === "real"
+          ? "抽帧与时序分析未发现明确的合成证据。"
+          : "视频中存在需要人工复核的合成线索。",
       risk,
       riskLabel: "合成风险",
       tone,
-      confidence: outcome.result.confidence || "未标注",
-      reviewOnly: false,
+      confidence: reviewOnly ? "低，建议复核" : outcome.result.confidence || "未标注",
+      reviewOnly,
     };
   }
-  if (outcome.result.decisionStatus !== "verdict" || outcome.result.reviewRequired === true) {
-    return {
-      label: "需人工复核",
-      description: outcome.result.explanation || "自动分析已完成，但当前证据不足以发布真假结论。",
-      risk: 0,
-      riskLabel: "自动风险分数",
-      tone: "warn",
-      confidence: "不适用",
-      reviewOnly: true,
-    };
-  }
+  const reviewOnly = outcome.result.decisionStatus !== "verdict" || outcome.result.reviewRequired === true;
   const localizedWatermark = hasDecisiveAiWatermark(outcome.result.visibleWatermark);
   const vector = outcome.result.riskVector;
   const aiRisk = clamp01(Number(outcome.result.aiProbability ?? vector?.aiGenerated ?? outcome.result.confidence ?? 0));
@@ -245,35 +221,27 @@ function verdictFor(outcome: AgentOutcome): VerdictView {
     deepfakeRisk,
     localizedWatermark ? 0.95 : 0,
   );
-  const specializedRisk = Math.max(tamperRisk, deepfakeRisk);
-  const hasSpecializedRisk = specializedRisk >= Math.max(aiRisk, 0.62);
-  const tone = localizedWatermark
-    ? "fake"
-    : hasSpecializedRisk
-      ? riskTone(specializedRisk)
-      : outcome.result.verdict === "real"
-        ? "real"
-        : outcome.result.verdict === "highly_suspected_fake"
-          ? "fake"
-          : "warn";
-  const labels = { real: "更倾向真实", suspected_fake: "疑似 AI 生成", highly_suspected_fake: "高度疑似 AI 生成", unknown: "需要人工复核" };
-  let label = labels[outcome.result.verdict];
-  if (!localizedWatermark && tamperRisk >= Math.max(aiRisk, deepfakeRisk, 0.62)) label = "疑似篡改图像";
-  else if (!localizedWatermark && deepfakeRisk >= Math.max(aiRisk, tamperRisk, 0.62)) label = "疑似人脸深伪";
+  const label = binaryVerdictLabel(
+    localizedWatermark ? "AI生成图像" : outcome.result.verdict,
+    risk,
+  );
+  const tone = isFakeVerdict(label) ? "fake" : "real";
   return {
-    label: localizedWatermark ? labels.highly_suspected_fake : label,
-    description: outcome.result.explanation || "请结合证据维度与原始来源进行判断。",
+    label,
+    description: reviewOnly
+      ? outcome.result.explanation || `系统给出“${label}”二元结论；当前证据有限，建议结合原始来源复核。`
+      : outcome.result.explanation || "请结合证据维度与原始来源进行判断。",
     risk,
     riskLabel: tamperRisk >= Math.max(aiRisk, deepfakeRisk, 0.62) || deepfakeRisk >= Math.max(aiRisk, tamperRisk, 0.62)
       ? "综合异常风险"
       : "AI 生成风险",
     tone,
-    confidence: outcome.result.source === "vlm"
+    confidence: reviewOnly ? "低，建议复核" : outcome.result.source === "vlm"
       ? "模型分析完成"
       : outcome.result.source === "provenance"
         ? "来源证据直接命中"
         : "证据有限",
-    reviewOnly: false,
+    reviewOnly,
   };
 }
 
@@ -841,11 +809,10 @@ export default function AgentResult(props: Props) {
           <h2 id="detection-result-title">{verdict.label}</h2>
           <p>{verdict.description}</p>
           <div className="verdict-meta">
-            {verdict.reviewOnly ? (
-              <span><FileSearch size={15} /> 自动结论 <strong>未发布</strong></span>
-            ) : (
-              <span><BadgeCheck size={15} /> 置信说明 <strong>{verdict.confidence}</strong></span>
-            )}
+            <span>
+              {verdict.reviewOnly ? <FileSearch size={15} /> : <BadgeCheck size={15} />}
+              置信说明 <strong>{verdict.confidence}</strong>
+            </span>
           </div>
         </div>
         {!verdict.reviewOnly && (

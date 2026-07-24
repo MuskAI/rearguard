@@ -1513,10 +1513,10 @@ export async function fetchHealth(): Promise<HealthStatus> {
 }
 
 export const VERDICT_META: Record<Verdict, { label: string; color: string; ring: string }> = {
-  real: { label: "真实", color: "#3fb6a8", ring: "verdict-real" },
-  suspected_fake: { label: "疑似伪造", color: "#d99a2b", ring: "verdict-warn" },
-  highly_suspected_fake: { label: "高度疑似伪造", color: "#d8412f", ring: "verdict-fake" },
-  unknown: { label: "需要人工复核", color: "#7c8aa5", ring: "verdict-unknown" },
+  real: { label: "真实图像", color: "#3fb6a8", ring: "verdict-real" },
+  suspected_fake: { label: "AI生成图像", color: "#d8412f", ring: "verdict-fake" },
+  highly_suspected_fake: { label: "AI生成图像", color: "#d8412f", ring: "verdict-fake" },
+  unknown: { label: "真实图像", color: "#3fb6a8", ring: "verdict-real" },
 };
 
 export const TYPE_LABEL: Record<FileType, string> = {

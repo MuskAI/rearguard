@@ -37,7 +37,7 @@ function confidenceLabel(value?: string) {
 }
 
 function sourceLabel(source?: string, reviewRequired?: boolean) {
-  if (reviewRequired) return "自动分析已完成，等待人工复核";
+  if (reviewRequired) return "已给出二元结论，当前置信度较低";
   if (source === "vlm") return "已完成自动检测";
   if (source === "provenance") return "来源证据直接判定";
   if (source === "mock") return "线索不足，建议复核";
@@ -436,7 +436,7 @@ export default function ResultCard({
             <p className="mt-2 max-w-3xl text-sm leading-relaxed text-ink-500">{result.explanation}</p>
           </div>
           <div className="grid shrink-0 grid-cols-3 gap-3 sm:min-w-[360px]">
-            <MetricCell label={reviewOnly ? "结论状态" : "置信度"} value={reviewOnly ? "待复核" : pct(result.confidence)} tone={meta.color} />
+            <MetricCell label="置信说明" value={reviewOnly ? "低，建议复核" : pct(result.confidence)} tone={meta.color} />
             <MetricCell label="类型" value={fileLabel} />
             <MetricCell label="耗时" value={`${result.elapsedMs}ms`} />
           </div>
@@ -448,8 +448,8 @@ export default function ResultCard({
           <div className="rounded-lg border border-ink-700 bg-ink-900 p-3">
             {reviewOnly ? (
               <div className="rounded-lg border border-ink-700 bg-ink-800 px-3 py-4 text-center">
-                <div className="text-sm font-semibold text-ink-950">未发布自动真假结论</div>
-                <div className="mt-1 text-xs leading-relaxed text-ink-500">模型分数仅作为内部诊断，当前报告需要人工复核。</div>
+                <div className="text-sm font-semibold text-ink-950">已给出二元结论</div>
+                <div className="mt-1 text-xs leading-relaxed text-ink-500">当前置信度较低，未校准模型分数仅作为内部诊断，建议结合原始来源复核。</div>
               </div>
             ) : (
               <ConfidenceRing value={result.confidence} color={meta.color} />
