@@ -1531,6 +1531,88 @@ def test_swarm_detect_async_job_returns_expert_consensus(client, monkeypatch, tm
     assert all("风险评分" not in item for item in result["swarm"]["evidence"])
 
 
+def test_image_job_long_poll_returns_when_version_changes(client, monkeypatch):
+    _login_session(client)
+    running = {
+        "id": "job_long_poll",
+        "status": "running",
+        "mode": "fast",
+        "progress": 38,
+        "updatedAt": "2026-07-24T10:00:00+08:00",
+        "summary": "主鉴伪模型正在 GPU 推理",
+        "actor": {"account_uuid": ACCOUNT_UUID},
+        "result": None,
+    }
+    completed = {
+        **running,
+        "status": "success",
+        "progress": 100,
+        "updatedAt": "2026-07-24T10:00:02+08:00",
+        "summary": "检测完成",
+        "result": {
+            "status": "success",
+            "result": {
+                "itemid": 42,
+                "final_label": "真实图像",
+                "visualReview": {"status": "queued", "nonAuthoritative": True},
+            },
+        },
+    }
+    versions = [running, completed]
+    calls = []
+
+    def load_job(job_id):
+        calls.append(job_id)
+        return versions[min(len(calls) - 1, len(versions) - 1)]
+
+    monkeypatch.setattr(detection, "_load_persistent_web_job", load_job)
+    response = client.get(
+        "/image_upload/jobs/job_long_poll",
+        query_string={
+            "wait": "1",
+            "after": detection._detection_job_version(running),
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()["job"]
+    assert payload["status"] == "success"
+    assert payload["version"] != detection._detection_job_version(running)
+    assert "no-store" in response.headers["Cache-Control"]
+    assert calls == ["job_long_poll", "job_long_poll"]
+
+
+def test_image_job_long_poll_rechecks_owner_after_reload(client, monkeypatch):
+    _login_session(client)
+    running = {
+        "id": "job_owner_reload",
+        "status": "running",
+        "mode": "fast",
+        "progress": 38,
+        "updatedAt": "2026-07-24T10:00:00+08:00",
+        "actor": {"account_uuid": ACCOUNT_UUID},
+        "result": None,
+    }
+    foreign = {
+        **running,
+        "updatedAt": "2026-07-24T10:00:01+08:00",
+        "actor": {"account_uuid": "22222222-2222-4222-8222-222222222222"},
+    }
+    jobs = iter((running, foreign))
+    monkeypatch.setattr(detection, "_load_persistent_web_job", lambda job_id: next(jobs))
+
+    response = client.get(
+        "/image_upload/jobs/job_owner_reload",
+        query_string={
+            "wait": "1",
+            "after": detection._detection_job_version(running),
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.get_json()["message"] == "无权查看该任务"
+
+
 def test_guest_swarm_detection_requires_login(client, monkeypatch):
     queued = []
     monkeypatch.setattr(

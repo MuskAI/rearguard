@@ -51,6 +51,7 @@ import {
   runProvenance,
   SESSION_EXPIRED_EVENT,
   startImageAgent,
+  waitForImageAgentJob,
 } from "./api";
 import type { AgentHistoryEntry, AgentOutcome, AgentProgress, ImageAnalysisMode, PendingFile } from "./agentTypes";
 import { binaryVerdictLabel } from "./binaryVerdict";
@@ -69,7 +70,6 @@ import "./interaction.css";
 const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 256 * 1024 * 1024;
 const AGENT_POLL_INITIAL_MS = 1_200;
-const AGENT_POLL_MAX_MS = 2_400;
 const AGENT_POLL_RATE_LIMIT_RETRIES = 8;
 const ACCEPTED_FILES = "image/jpeg,image/png,image/webp,image/bmp,image/gif,image/heic,image/heif,.heic,.heif,video/mp4,video/quicktime,video/webm,.txt,.md,.csv,.json,.log,.docx,.mp4,.mov,.webm";
 
@@ -508,7 +508,6 @@ export default function App() {
       activeJobIdRef.current = job.id;
       setProgress(progressFromJob(job, mode));
       const startedAt = Date.now();
-      let pollDelay = AGENT_POLL_INITIAL_MS;
       let rateLimitRetries = 0;
       while (Date.now() - startedAt < 180_000) {
         if (job.status === "success") {
@@ -523,6 +522,9 @@ export default function App() {
             analysisMode: mode,
           });
           setOutcome({ kind: "image", id: `image:${result.itemid}`, result, file, previewUrl, analysisMode: mode });
+          if (result.visualReview && ["queued", "running"].includes(result.visualReview.status)) {
+            void watchVisualReview(job.id, job.version || "", result.itemid, token, controller.signal);
+          }
           activeJobIdRef.current = null;
           return;
         }
@@ -531,10 +533,9 @@ export default function App() {
           activeJobIdRef.current = null;
           throw new Error(job.error || (mode === "swarm" ? "Swarm 复核暂不可用" : "快速检测暂不可用"));
         }
-        await wait(pollDelay, controller.signal);
         let polled: Awaited<ReturnType<typeof fetchImageAgentJob>>;
         try {
-          polled = await fetchImageAgentJob(job.id, controller.signal);
+          polled = await waitForImageAgentJob(job.id, job.version || "", controller.signal);
         } catch (error) {
           if (!isRateLimitedError(error) || rateLimitRetries >= AGENT_POLL_RATE_LIMIT_RETRIES) throw error;
           rateLimitRetries += 1;
@@ -542,15 +543,13 @@ export default function App() {
           setProgress({
             ...progressFromJob(job, mode),
             title: "任务仍在运行",
-            detail: "查询较多，已自动放慢进度刷新，不会重新提交文件",
+            detail: "状态连接正在自动恢复，不会重新提交文件",
           });
-          pollDelay = Math.min(AGENT_POLL_MAX_MS, pollDelay + 300);
           await wait(cooldown, controller.signal);
           continue;
         }
         if (runTokenRef.current !== token) return;
         rateLimitRetries = 0;
-        pollDelay = Math.min(AGENT_POLL_MAX_MS, pollDelay + 150);
         job = polled.job;
         setProgress(progressFromJob(job, mode));
       }
@@ -585,6 +584,42 @@ export default function App() {
           ? (terminalFailure ? `文件已提交，但服务器处理失败：${message}` : `${message}；服务器任务 ${jobId} 可能仍在运行`)
           : message,
       });
+    }
+  }
+
+  async function watchVisualReview(
+    jobId: string,
+    initialVersion: string,
+    itemId: number,
+    token: number,
+    signal: AbortSignal,
+  ) {
+    let version = initialVersion;
+    const deadline = Date.now() + 180_000;
+    while (Date.now() < deadline && runTokenRef.current === token && !signal.aborted) {
+      try {
+        const response = await waitForImageAgentJob(jobId, version, signal);
+        if (runTokenRef.current !== token || signal.aborted) return;
+        const nextJob = response.job;
+        version = nextJob.version || version;
+        const nextResult = nextJob.result?.result;
+        if (!nextResult || nextResult.itemid !== itemId) continue;
+        setOutcome((current) => {
+          if (!current || current.kind !== "image" || current.result.itemid !== itemId) return current;
+          return { ...current, result: nextResult };
+        });
+        const status = nextResult.visualReview?.status;
+        if (!status || ["success", "failed"].includes(status)) return;
+      } catch (error) {
+        if (isAbort(error) || runTokenRef.current !== token) return;
+        await wait(AGENT_POLL_INITIAL_MS, signal);
+        try {
+          const response = await fetchImageAgentJob(jobId, signal);
+          version = response.job.version || version;
+        } catch (fallbackError) {
+          if (isAbort(fallbackError) || runTokenRef.current !== token) return;
+        }
+      }
     }
   }
 

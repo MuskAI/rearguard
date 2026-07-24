@@ -207,6 +207,9 @@ def test_web_tasks_cannot_consume_developer_reserved_slot(monkeypatch, tmp_path)
 def test_deploy_backs_up_before_all_migrations_and_installs_worker_unit():
     root = ROOT.parents[1]
     activate = (root / "scripts" / "remote" / "activate_v1.sh").read_text(encoding="utf-8")
+    worker_unit = (root / "deploy" / "systemd" / "realguard-developer-worker.service").read_text(
+        encoding="utf-8"
+    )
     backup = activate.index("backup_output=\"")
     identity = activate.index("identity-db-upgrade")
     admin = activate.index("admin-db-upgrade")
@@ -218,3 +221,4 @@ def test_deploy_backs_up_before_all_migrations_and_installs_worker_unit():
     assert "Existing operator-managed keyrings are never replaced" in activate
     assert "realguard-developer-worker.service" in activate
     assert "Pre-migration backup verified" in activate
+    assert "REALGUARD_WEB_WORKER_CONCURRENCY=2" in worker_unit

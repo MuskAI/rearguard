@@ -939,6 +939,17 @@ export interface ImageAgentReview {
   probabilityModel?: ProbabilityModel;
 }
 
+export interface AsyncVisualReview {
+  status: "queued" | "running" | "success" | "failed" | string;
+  jobId?: string;
+  nonAuthoritative?: boolean;
+  verdict?: string | null;
+  confidence?: string | null;
+  evidence?: string[];
+  latencyMs?: number | null;
+  note?: string;
+}
+
 export interface ImageAgentResult {
   itemid: number;
   final_label: string;
@@ -968,10 +979,12 @@ export interface ImageAgentResult {
   evidenceCompleteness?: boolean;
   evidenceWarnings?: string[];
   capture_evidence?: CaptureEvidence;
+  visualReview?: AsyncVisualReview;
 }
 
 export interface ImageAgentJob {
   id: string;
+  version?: string;
   filename?: string;
   status: "queued" | "running" | "success" | "failed" | string;
   createdAt?: string;
@@ -1203,6 +1216,16 @@ export function fetchImageAgentJob(jobId: string, signal?: AbortSignal) {
     `/image_upload/jobs/${encodeURIComponent(jobId)}`,
     { signal },
     "鉴伪任务状态暂不可用",
+  );
+}
+
+export function waitForImageAgentJob(jobId: string, after: string, signal?: AbortSignal) {
+  const params = new URLSearchParams({ wait: "20" });
+  if (after) params.set("after", after);
+  return accountJson<{ status: string; job: ImageAgentJob }>(
+    `/image_upload/jobs/${encodeURIComponent(jobId)}?${params.toString()}`,
+    { signal },
+    "鉴伪任务状态暂时不可用",
   );
 }
 

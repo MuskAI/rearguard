@@ -287,10 +287,10 @@ def _extract_metadata_field(metadata, *names):
     return None
 
 
-def _run_v1_detect(image_path):
+def _run_v1_detect(image_path, *, use_llm=True):
     from imagedetection.Agent.main import detect
 
-    return detect(image_path)
+    return detect(image_path, use_llm=use_llm)
 
 
 def _consume_remote_inference_evidence():
@@ -601,7 +601,17 @@ def create_app():
         try:
             _ensure_capability_ready()
             _, temp_path = _save_upload(image_bytes, openid or phone or "guest", safe_name)
-            payload = _run_v1_detect(temp_path)
+            defer_visual_llm = str(request.form.get("defer_visual_llm") or "").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+            payload = (
+                _run_v1_detect(temp_path, use_llm=False)
+                if defer_visual_llm
+                else _run_v1_detect(temp_path)
+            )
             remote_evidence = _consume_remote_inference_evidence()
             _apply_remote_model_decision_gate(payload, remote_evidence)
             if remote_evidence:

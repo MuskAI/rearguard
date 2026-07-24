@@ -155,6 +155,7 @@ WEB_TASK_MAX_ATTEMPTS = max(
     1,
     min(5, int(os.environ.get("REALGUARD_WEB_TASK_MAX_ATTEMPTS", "3"))),
 )
+VISUAL_REVIEW_MODE = "visual_review"
 WEB_TASK_SPOOL_ROOT = Path(
     os.environ.get("REALGUARD_WEB_TASK_SPOOL_ROOT", "/opt/realguard-data/web-spool")
 ).expanduser()
@@ -715,9 +716,11 @@ def _queue_capacity_error(incoming_size, queue_class="developer", owner_key=""):
           (SELECT COUNT(*) FROM developer_detection_tasks
            WHERE status IN ('preparing', 'queued', 'running')) AS developer_pending,
           (SELECT COUNT(*) FROM web_detection_tasks
-           WHERE owner_type = %s AND status IN ('queued', 'running')) AS web_pending,
+           WHERE owner_type = %s AND mode <> 'visual_review'
+             AND status IN ('queued', 'running')) AS web_pending,
           (SELECT COUNT(*) FROM web_detection_tasks
            WHERE owner_type = %s AND owner_key = %s
+             AND mode <> 'visual_review'
              AND status IN ('queued', 'running')) AS owner_pending,
           (SELECT COALESCE(SUM(spool_size), 0) FROM developer_detection_tasks
            WHERE status IN ('preparing', 'queued', 'running'))
@@ -931,6 +934,72 @@ def _enqueue_web_detection_task(
             )
         raise
     return job_id, False
+
+
+def _enqueue_visual_review_task(parent_task, image_bytes):
+    """Persist a low-priority visual-LLM supplement without consuming user quota."""
+    if not _ensure_developer_platform_tables():
+        raise TaskRecoveryError("detection queue schema is unavailable")
+    parent_job_id = str((parent_task or {}).get("job_id") or "").strip()
+    if not parent_job_id:
+        raise TaskRecoveryError("visual review parent job is missing")
+    owner_rows = excute_sql(
+        """
+        SELECT owner_type, owner_key, request_context_json
+        FROM web_detection_tasks
+        WHERE job_id = %s
+        LIMIT 1
+        """,
+        (parent_job_id,),
+    )
+    if not owner_rows:
+        raise TaskRecoveryError("visual review parent job is unavailable")
+    owner = owner_rows[0]
+    job_id = f"job_{uuid.uuid4().hex[:20]}"
+    spool_name = None
+    try:
+        spool_name = _write_web_task_spool(job_id, image_bytes)
+        inserted = excute_sql(
+            """
+            INSERT INTO web_detection_tasks (
+                job_id, mode, filename, mime_type, request_sha256,
+                spool_path, spool_size, request_context_json, owner_type,
+                owner_key, idempotency_key, status, next_attempt_at,
+                effect_result_json
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, 'queued',
+                DATE_ADD(NOW(6), INTERVAL 1 SECOND), %s
+            )
+            """,
+            (
+                job_id,
+                VISUAL_REVIEW_MODE,
+                str(parent_task.get("filename") or "upload.img")[:255],
+                str(parent_task.get("mime_type") or "application/octet-stream")[:127],
+                hashlib.sha256(image_bytes).hexdigest(),
+                spool_name,
+                len(image_bytes),
+                owner.get("request_context_json"),
+                owner.get("owner_type"),
+                owner.get("owner_key"),
+                json.dumps(
+                    {"parentJobId": parent_job_id},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            ),
+            fetch=False,
+        )
+        if inserted != 1:
+            raise TaskRecoveryError("failed to persist visual review task")
+    except Exception:
+        if spool_name:
+            try:
+                _web_spool_file_path(spool_name).unlink(missing_ok=True)
+            except (OSError, TaskSpoolError):
+                pass
+        raise
+    return job_id
 
 
 def _cleanup_orphan_spool_files():
@@ -3954,7 +4023,7 @@ def _claim_next_web_task(worker_instance):
           AND lease_expires_at IS NULL
           AND spool_path IS NOT NULL
           AND attempt_count < %s
-        ORDER BY created_at ASC
+        ORDER BY CASE WHEN mode = 'visual_review' THEN 1 ELSE 0 END, created_at ASC
         LIMIT 1
         """,
         (lease_owner, WEB_TASK_LEASE_SECONDS, WEB_TASK_MAX_ATTEMPTS),
@@ -4195,9 +4264,166 @@ def _recover_web_task_effect(task, user_info):
     return normalized
 
 
+def _visual_review_parent_id(task):
+    try:
+        control = json.loads(task.get("effect_result_json") or "")
+    except (TypeError, ValueError):
+        control = {}
+    parent_job_id = str(control.get("parentJobId") or "").strip()
+    if not parent_job_id:
+        raise TaskRecoveryError("visual review parent job is missing")
+    return parent_job_id
+
+
+def _update_parent_visual_review(parent_job_id, review):
+    rows = excute_sql(
+        """
+        SELECT status, result_json
+        FROM web_detection_tasks
+        WHERE job_id = %s
+        LIMIT 1
+        """,
+        (parent_job_id,),
+    )
+    if not rows or str(rows[0].get("status") or "") != "success":
+        return False
+    try:
+        payload = json.loads(rows[0].get("result_json") or "")
+    except (TypeError, ValueError):
+        return False
+    result = payload.get("result") if isinstance(payload, dict) else None
+    if not isinstance(result, dict):
+        return False
+    result["visualReview"] = review
+    updated = excute_sql(
+        """
+        UPDATE web_detection_tasks
+        SET result_json = %s
+        WHERE job_id = %s AND status = 'success'
+        """,
+        (
+            json.dumps(payload, ensure_ascii=False, default=str),
+            parent_job_id,
+        ),
+        fetch=False,
+    )
+    if updated != 1:
+        return False
+    cached = admin_state.get_detection_job(parent_job_id)
+    if cached:
+        admin_state.update_detection_job(parent_job_id, {
+            "result": payload,
+            "summary": (
+                "主结论已完成，视觉复核已补充"
+                if review.get("status") == "success"
+                else "主结论已完成，视觉复核未完成"
+                if review.get("status") == "failed"
+                else "主结论已完成，视觉复核正在后台补充"
+            ),
+        })
+    return True
+
+
+def _wait_for_visual_review_parent(parent_job_id, timeout_seconds=5.0):
+    deadline = time.monotonic() + max(0.1, float(timeout_seconds))
+    while time.monotonic() < deadline:
+        rows = excute_sql(
+            "SELECT status FROM web_detection_tasks WHERE job_id = %s LIMIT 1",
+            (parent_job_id,),
+        )
+        status = str((rows or [{}])[0].get("status") or "")
+        if status == "success":
+            return True
+        if status == "failed":
+            return False
+        time.sleep(0.1)
+    return False
+
+
+def _run_visual_review_job(task):
+    job_id = task["job_id"]
+    parent_job_id = _visual_review_parent_id(task)
+    heartbeat_stop = threading.Event()
+    lease_lost = threading.Event()
+    heartbeat = BACKGROUND_THREAD_CLASS(
+        target=_web_task_heartbeat_loop,
+        args=(job_id, task["lease_owner"], heartbeat_stop, lease_lost),
+        daemon=True,
+    )
+    heartbeat.start()
+    try:
+        if not _wait_for_visual_review_parent(parent_job_id):
+            raise TaskRecoveryError("visual review parent job did not complete")
+        _update_parent_visual_review(parent_job_id, {
+            "status": "running",
+            "nonAuthoritative": True,
+            "note": "视觉 LLM 正在后台补充，只提供解释线索，不改变主结论。",
+        })
+        image_bytes = _read_web_task_spool(task)
+        expert = detection._swarm_v2_expert(
+            image_bytes,
+            task.get("filename") or "upload.img",
+            task.get("mime_type") or "application/octet-stream",
+        )
+        succeeded = expert.get("status") == "success"
+        review = {
+            "status": "success" if succeeded else "failed",
+            "nonAuthoritative": True,
+            "verdict": expert.get("verdict") if succeeded else None,
+            "confidence": expert.get("confidence") if succeeded else None,
+            "evidence": list(expert.get("evidence") or [])[:3] if succeeded else [],
+            "latencyMs": expert.get("latencyMs"),
+            "note": (
+                "视觉 LLM 已完成补充复核；该结果不回写、不推翻已经发布的主结论。"
+                if succeeded
+                else "视觉 LLM 暂未形成补充结果，主模型结论不受影响。"
+            ),
+        }
+        _update_parent_visual_review(parent_job_id, review)
+        heartbeat_stop.set()
+        heartbeat.join(timeout=WEB_TASK_HEARTBEAT_SECONDS + 1)
+        if lease_lost.is_set():
+            raise TaskRecoveryError(f"Web task {job_id} lost its execution lease")
+        _finish_web_task(
+            task,
+            {"status": "success", "result": {"visualReview": review}},
+            200,
+        )
+    except Exception as exc:
+        review = {
+            "status": "failed",
+            "nonAuthoritative": True,
+            "evidence": [],
+            "note": "视觉 LLM 暂未形成补充结果，主模型结论不受影响。",
+        }
+        _update_parent_visual_review(parent_job_id, review)
+        heartbeat_stop.set()
+        heartbeat.join(timeout=WEB_TASK_HEARTBEAT_SECONDS + 1)
+        try:
+            _finish_web_task(
+                task,
+                {"status": "error", "message": str(exc)[:500]},
+                500,
+            )
+        except TaskRecoveryError:
+            pass
+    finally:
+        heartbeat_stop.set()
+        heartbeat.join(timeout=WEB_TASK_HEARTBEAT_SECONDS + 1)
+        rows = excute_sql(
+            "SELECT status, spool_path FROM web_detection_tasks WHERE job_id = %s LIMIT 1",
+            (job_id,),
+        ) or []
+        if rows and rows[0].get("status") in {"success", "failed"} and rows[0].get("spool_path"):
+            _remove_web_task_spool(job_id, rows[0]["spool_path"])
+
+
 def _run_web_detection_job(task):
     job_id = task["job_id"]
     mode = str(task.get("mode") or "fast")
+    if mode == VISUAL_REVIEW_MODE:
+        _run_visual_review_job(task)
+        return
     restored = _web_task_job(task, include_cache=False)
     admin_state.restore_detection_job(restored)
     admin_state.update_detection_job(job_id, {
@@ -4238,8 +4464,27 @@ def _run_web_detection_job(task):
                     is_guest=is_guest,
                     mark_guest=False,
                     source_task_id=job_id,
+                    defer_visual_llm=True,
                 )
             if status_code < 400 and isinstance(payload, dict) and payload.get("status") == "success":
+                if mode == "fast" and isinstance(payload.get("result"), dict):
+                    try:
+                        visual_job_id = _enqueue_visual_review_task(task, image_bytes)
+                        payload["result"]["visualReview"] = {
+                            "status": "queued",
+                            "jobId": visual_job_id,
+                            "nonAuthoritative": True,
+                            "evidence": [],
+                            "note": "主结论已完成；视觉 LLM 将在后台补充解释，不改变当前结论。",
+                        }
+                    except Exception as exc:
+                        print(f"[VISUAL REVIEW QUEUE ERROR] {type(exc).__name__}")
+                        payload["result"]["visualReview"] = {
+                            "status": "failed",
+                            "nonAuthoritative": True,
+                            "evidence": [],
+                            "note": "视觉 LLM 暂未进入后台队列，主模型结论不受影响。",
+                        }
                 _record_web_task_effect(task, user_info, payload)
         heartbeat_stop.set()
         heartbeat.join(timeout=WEB_TASK_HEARTBEAT_SECONDS + 1)
@@ -4445,6 +4690,7 @@ def _execute_or_recover_task(task, user_info, image_bytes):
             user_info,
             is_guest=False,
             mark_guest=False,
+            defer_visual_llm=True,
         )
     payload = _normalize_task_result_filename(payload, task)
     if status_code < 400 and isinstance(payload, dict) and payload.get("status") == "success":

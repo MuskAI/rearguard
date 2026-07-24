@@ -15,7 +15,7 @@ Environment=PYTHONUNBUFFERED=1
 Environment=REALGUARD_DEVELOPER_SPOOL_ROOT=/opt/realguard-data/developer-spool
 Environment=REALGUARD_WEB_TASK_SPOOL_ROOT=/opt/realguard-data/web-spool
 Environment=REALGUARD_DEVELOPER_WORKER_CONCURRENCY=2
-Environment=REALGUARD_WEB_WORKER_CONCURRENCY=1
+Environment=REALGUARD_WEB_WORKER_CONCURRENCY=2
 Environment=REALGUARD_API_WORKER_CONCURRENCY=1
 EnvironmentFile=/etc/realguard/session.env
 EnvironmentFile=/etc/realguard/realguard-backend.env

@@ -1758,6 +1758,7 @@ def _run_image_detection_payload(
     include_internal_evidence=False,
     freeze_evidence=True,
     source_task_id='',
+    defer_visual_llm=False,
 ):
     backend_openid, phone = _backend_identity(user_info)
     safe_name = secure_filename(filename) or filename
@@ -1816,6 +1817,7 @@ def _run_image_detection_payload(
                     'phone': phone,
                     'account_uuid': _account_uuid(user_info),
                     'source_task_id': str(source_task_id or '').strip(),
+                    'defer_visual_llm': '1' if defer_visual_llm else '0',
                 },
                 timeout=primary_timeout,
             )
@@ -2068,6 +2070,7 @@ def image_detect_for_actor(user_info, *, is_guest=False):
             user_info,
             is_guest=is_guest,
             mark_guest=True,
+            defer_visual_llm=True,
         )
     finally:
         BACKGROUND_JOB_SLOTS.release()
@@ -2289,6 +2292,7 @@ def _public_detection_job(job):
         return job
     public_job = copy.deepcopy(job)
     if public_job.get('mode') != 'swarm' and public_job.get('kind') != 'swarm':
+        public_job['version'] = _detection_job_version(public_job)
         return public_job
     recovered_visible = _visible_watermark_from_raw_experts(public_job.get('experts') or [])
     _apply_visible_watermark_to_experts(public_job.get('experts') or [], recovered_visible)
@@ -2323,7 +2327,34 @@ def _public_detection_job(job):
             ]
     if public_job.get('error'):
         public_job['error'] = 'Swarm 专家会诊暂不可用，请稍后重试'
+    public_job['version'] = _detection_job_version(public_job)
     return public_job
+
+
+def _detection_job_version(job):
+    result = (job or {}).get('result')
+    result_body = result.get('result') if isinstance(result, dict) else None
+    visual_review = (
+        result_body.get('visualReview')
+        if isinstance(result_body, dict) and isinstance(result_body.get('visualReview'), dict)
+        else {}
+    )
+    version_payload = {
+        'status': (job or {}).get('status'),
+        'updatedAt': (job or {}).get('updatedAt'),
+        'progress': (job or {}).get('progress'),
+        'summary': (job or {}).get('summary'),
+        'visualStatus': visual_review.get('status'),
+        'visualLatencyMs': visual_review.get('latencyMs'),
+    }
+    return hashlib.sha256(
+        json.dumps(
+            version_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(',', ':'),
+        ).encode('utf-8')
+    ).hexdigest()[:24]
 
 
 def _swarm_set_expert(experts, expert_id, **updates):
@@ -3457,6 +3488,7 @@ def _run_async_image_job(job_id, image_bytes, filename, mimetype, user_info, is_
             user_info,
             is_guest=is_guest,
             mark_guest=False,
+            defer_visual_llm=True,
         )
         if status_code >= 400 or payload.get("status") == "error":
             admin_state.update_detection_job(job_id, {
@@ -3612,27 +3644,64 @@ def image_detect_swarm():
 
 @image_upload_blueprint.route('/image_upload/jobs/<job_id>')
 def image_detection_job(job_id):
-    try:
-        job = _load_persistent_web_job(job_id)
-    except Exception as exc:
-        print(f"[WEB TASK QUERY ERROR] {job_id}: {exc}")
-        return jsonify({
-            'status': 'error',
-            'code': 'queue_unavailable',
-            'message': '任务状态暂时不可用，请稍后重试',
-        }), 503
-    if not job:
-        job = admin_state.get_detection_job(job_id)
-    if not job:
-        return jsonify({'status': 'error', 'message': '任务不存在'}), 404
-    owner = job.get('actor') or {}
+    def load_job():
+        try:
+            loaded = _load_persistent_web_job(job_id)
+        except Exception as exc:
+            print(f"[WEB TASK QUERY ERROR] {job_id}: {exc}")
+            return None, ({
+                'status': 'error',
+                'code': 'queue_unavailable',
+                'message': '任务状态暂时不可用，请稍后重试',
+            }, 503)
+        if not loaded:
+            loaded = admin_state.get_detection_job(job_id)
+        if not loaded:
+            return None, ({'status': 'error', 'message': '任务不存在'}, 404)
+        return loaded, None
+
+    job, load_error = load_job()
+    if load_error:
+        return jsonify(load_error[0]), load_error[1]
     user_id, phone, openid, is_guest = _detection_owner()
-    allowed = _runtime_owner_matches(
-        owner, user_id, phone, openid, is_guest, _account_uuid(session.get('user_info'))
-    )
-    if not allowed:
+    account_uuid = _account_uuid(session.get('user_info'))
+
+    def owns_job(candidate):
+        return _runtime_owner_matches(
+            (candidate or {}).get('actor') or {},
+            user_id,
+            phone,
+            openid,
+            is_guest,
+            account_uuid,
+        )
+
+    if not owns_job(job):
         return jsonify({'status': 'error', 'message': '无权查看该任务'}), 403
-    return jsonify({'status': 'success', 'job': _public_detection_job(job)})
+
+    after = str(request.args.get('after') or '').strip().lower()
+    try:
+        wait_seconds = max(0.0, min(20.0, float(request.args.get('wait') or 0)))
+    except (TypeError, ValueError):
+        wait_seconds = 0.0
+    if after and (len(after) != 24 or any(char not in '0123456789abcdef' for char in after)):
+        return jsonify({'status': 'error', 'message': '任务版本参数无效'}), 400
+
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        public_job = _public_detection_job(job)
+        version = _detection_job_version(public_job)
+        public_job['version'] = version
+        if not after or version != after or time.monotonic() >= deadline:
+            response = jsonify({'status': 'success', 'job': public_job})
+            response.headers['Cache-Control'] = 'no-store'
+            return response
+        time.sleep(0.25)
+        job, load_error = load_job()
+        if load_error:
+            return jsonify(load_error[0]), load_error[1]
+        if not owns_job(job):
+            return jsonify({'status': 'error', 'message': '无权查看该任务'}), 403
 
 
 @image_upload_blueprint.route('/image_upload/feedback', methods=['POST'])

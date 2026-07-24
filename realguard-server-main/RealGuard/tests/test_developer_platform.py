@@ -725,6 +725,81 @@ def test_task_status_is_isolated_by_developer_account(client, monkeypatch):
     assert foreign.status_code == 404
 
 
+def test_visual_review_task_is_low_priority_and_reuses_parent_owner(monkeypatch):
+    inserts = []
+    monkeypatch.setattr(platform, "_ensure_developer_platform_tables", lambda: True)
+    monkeypatch.setattr(platform, "_write_web_task_spool", lambda job_id, payload: f"{job_id}.upload")
+
+    def execute(statement, params=None, fetch=True):
+        normalized = " ".join(statement.split())
+        if normalized.startswith("SELECT owner_type, owner_key, request_context_json"):
+            return [{
+                "owner_type": "account",
+                "owner_key": "account-7",
+                "request_context_json": '{"actor":{"account_uuid":"account-7"}}',
+            }]
+        if normalized.startswith("INSERT INTO web_detection_tasks"):
+            inserts.append((normalized, params))
+            return 1
+        raise AssertionError(f"unexpected SQL: {normalized}")
+
+    monkeypatch.setattr(platform, "excute_sql", execute)
+    child_job_id = platform._enqueue_visual_review_task(
+        {
+            "job_id": "job_parent",
+            "filename": "sample.png",
+            "mime_type": "image/png",
+        },
+        b"image-bytes",
+    )
+
+    statement, params = inserts[0]
+    assert child_job_id.startswith("job_")
+    assert params[1] == platform.VISUAL_REVIEW_MODE
+    assert params[8:10] == ("account", "account-7")
+    assert json.loads(params[-1]) == {"parentJobId": "job_parent"}
+    assert "DATE_ADD(NOW(6), INTERVAL 1 SECOND)" in statement
+
+
+def test_visual_review_update_never_overwrites_primary_verdict(monkeypatch):
+    updates = []
+    parent_payload = {
+        "status": "success",
+        "result": {
+            "itemid": 42,
+            "final_label": "真实图像",
+            "probability": 0.12,
+        },
+    }
+
+    def execute(statement, params=None, fetch=True):
+        normalized = " ".join(statement.split())
+        if normalized.startswith("SELECT status, result_json"):
+            return [{"status": "success", "result_json": json.dumps(parent_payload)}]
+        if normalized.startswith("UPDATE web_detection_tasks SET result_json"):
+            updates.append(json.loads(params[0]))
+            return 1
+        raise AssertionError(f"unexpected SQL: {normalized}")
+
+    monkeypatch.setattr(platform, "excute_sql", execute)
+    monkeypatch.setattr(platform.admin_state, "get_detection_job", lambda job_id: None)
+
+    assert platform._update_parent_visual_review(
+        "job_parent",
+        {
+            "status": "success",
+            "nonAuthoritative": True,
+            "verdict": "AI生成图像",
+            "evidence": ["视觉模型发现一项可疑线索"],
+        },
+    ) is True
+
+    result = updates[0]["result"]
+    assert result["final_label"] == "真实图像"
+    assert result["probability"] == pytest.approx(0.12)
+    assert result["visualReview"]["nonAuthoritative"] is True
+
+
 def test_task_status_is_not_blocked_by_unrelated_reconciliation_failure(client, monkeypatch):
     monkeypatch.setattr(
         platform,

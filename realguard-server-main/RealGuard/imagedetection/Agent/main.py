@@ -41,12 +41,12 @@ def _strict_pipeline_enabled() -> bool:
     )
 
 
-def detect(image_path: str) -> dict:
+def detect(image_path: str, *, use_llm: bool | None = None) -> dict:
     """对外接口：证据采集 → 摘要 → 推理 Agent（LLM 可选）→ 与页面兼容的字段。"""
     global _system
     if _system is None:
         _system = _AIGCAgentSystem()
-    return _system.run(image_path)
+    return _system.run(image_path, use_llm=use_llm)
 
 
 class _AIGCAgentSystem:
@@ -55,7 +55,7 @@ class _AIGCAgentSystem:
         self.strict_pipeline = _strict_pipeline_enabled()
         self.collector = EvidenceCollector(strict=self.strict_pipeline)
 
-    def run(self, image_path: str) -> dict:
+    def run(self, image_path: str, *, use_llm: bool | None = None) -> dict:
         print("[AIGC DETECTION] pipeline started")
 
         print("\n========== Step 1: 取证工具（元数据 + 检测器）==========")
@@ -67,7 +67,8 @@ class _AIGCAgentSystem:
         summary = summarize_evidence(evidence)
 
         cfg = _llm_settings()
-        if self.strict_pipeline and not cfg:
+        should_use_llm = bool(cfg) if use_llm is None else bool(use_llm and cfg)
+        if self.strict_pipeline and use_llm is not False and not cfg:
             raise RuntimeError(
                 "未配置大模型 API Key。请设置 REALGUARD_LLM_API_KEY（或 DASHSCOPE_API_KEY）后重试。"
             )
@@ -80,7 +81,7 @@ class _AIGCAgentSystem:
         )
 
         print("\n========== Step 3: 推理 Agent ==========")
-        if cfg:
+        if should_use_llm:
             print("  模式: 多模态大模型 + 加权融合")
             try:
                 parsed = agent.reason(summary, image_path)
@@ -92,7 +93,7 @@ class _AIGCAgentSystem:
                 parsed = agent.reason_offline(summary)
                 llm_used = False
         else:
-            print("  模式: 规则融合（未配置 LLM API Key）")
+            print("  模式: 规则融合（视觉 LLM 延后或未配置）")
             parsed = agent.reason_offline(summary)
             llm_used = False
 

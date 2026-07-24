@@ -727,6 +727,9 @@ export default function AgentResult(props: Props) {
     : props.outcome.kind === "evidence"
       ? props.outcome.result.captureEvidence || provenance?.captureEvidence
       : undefined;
+  const visualReview = props.outcome.kind === "image"
+    ? props.outcome.result.visualReview
+    : undefined;
   const forensicsActionLabel = props.forensicsBusy
     ? props.forensicsPreviewState === "skipped" ? "服务端判读中" : forensics?.source === "browser-preview" ? "模型判读中" : forensics?.source === "vlm" ? "正在归档" : "本地图谱生成中"
     : forensics ? "重新生成取证图谱" : "生成取证图谱";
@@ -859,6 +862,30 @@ export default function AgentResult(props: Props) {
                     <div className={point.decisive ? "is-decisive" : ""} role="listitem" key={`${point.label}-${index}`}>
                       <strong>{point.label}</strong>
                       <p>{point.text}</p>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+            {visualReview && (
+              <details className="rationale-disclosure">
+                <summary>
+                  {["queued", "running"].includes(visualReview.status)
+                    ? "视觉复核正在后台补充"
+                    : visualReview.status === "success"
+                      ? "视觉复核补充已完成"
+                      : "视觉复核补充未完成"}
+                  <span>不改变主结论</span><ChevronDown size={15} />
+                </summary>
+                <div className="result-explanation result-rationale" role="list">
+                  <div role="listitem">
+                    <strong>补充说明</strong>
+                    <p>{visualReview.note || "视觉 LLM 仅提供补充解释，不回写或推翻已经发布的主结论。"}</p>
+                  </div>
+                  {(visualReview.evidence || []).map((item, index) => (
+                    <div role="listitem" key={`visual-review-${index}`}>
+                      <strong>视觉线索 {index + 1}</strong>
+                      <p>{item}</p>
                     </div>
                   ))}
                 </div>

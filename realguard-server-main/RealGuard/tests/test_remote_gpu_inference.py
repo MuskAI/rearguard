@@ -526,6 +526,50 @@ def test_detector_backend_forwards_remote_evidence(monkeypatch):
     assert remote["modelDecision"]["mode"] == "review_only"
 
 
+def test_detector_backend_can_defer_visual_llm(monkeypatch):
+    calls = []
+    monkeypatch.setattr(detector_backend, "_ensure_capability_ready", lambda: None)
+
+    def fake_detect(image_path, *, use_llm=True):
+        calls.append({"image_path": image_path, "use_llm": use_llm})
+        return {
+            "final_label": "真实图像",
+            "probability": 0.16,
+            "detector_probability": 0.18,
+            "confidence": "高",
+            "explanation": "GPU 主模型已完成。",
+            "visual_issues": [],
+            "all_metadata": {},
+        }
+
+    monkeypatch.setattr(detector_backend, "_run_v1_detect", fake_detect)
+    monkeypatch.setattr(
+        detector_backend,
+        "_save_upload",
+        lambda image_bytes, folder, filename: ("stored-demo.png", "/tmp/stored-demo.png"),
+    )
+    monkeypatch.setattr(detector_backend, "_consume_remote_inference_evidence", lambda: {})
+    monkeypatch.setattr(detector_backend, "get_image_info", lambda path: ("PNG", "320x240"))
+    monkeypatch.setattr(detector_backend, "get_file_size_str", lambda path: "1KB")
+    monkeypatch.setattr(detector_backend, "excute_detection_sql_lastid", lambda sql, params=None: 91)
+    monkeypatch.setattr(detector_backend, "DETECTOR_INTERNAL_TOKEN", "detector-test-token")
+    app = detector_backend.create_app()
+    app.config.update(TESTING=True)
+
+    response = app.test_client().post(
+        "/image",
+        headers={"X-RealGuard-Detector-Token": "detector-test-token"},
+        data={
+            "image_file": (BytesIO(VALID_PNG_BYTES), "demo.png"),
+            "defer_visual_llm": "1",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    assert calls == [{"image_path": "/tmp/stored-demo.png", "use_llm": False}]
+
+
 def test_detector_backend_preserves_gpu_overload_status(monkeypatch):
     error = RuntimeError("GPU inference queue is full")
     error.status_code = 429
