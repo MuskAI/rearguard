@@ -386,11 +386,11 @@ def test_uncalibrated_remote_model_is_forced_to_review_only(monkeypatch):
 
     _apply_remote_model_decision_gate(payload, evidence)
 
-    assert payload["probability"] == 0.5
-    assert payload["detector_probability"] == 0.5
-    assert payload["final_label"] == "需人工复核"
+    assert payload["probability"] == pytest.approx(0.999)
+    assert payload["detector_probability"] == pytest.approx(0.999)
+    assert payload["final_label"] == "AI生成图像"
     assert payload["confidence"] == "低"
-    assert "不能解释为 AI 生成概率" in payload["explanation"]
+    assert "不作为已校准概率发布" in payload["explanation"]
 
 
 def test_missing_remote_model_decision_contract_fails_closed(monkeypatch):
@@ -402,7 +402,7 @@ def test_missing_remote_model_decision_contract_fails_closed(monkeypatch):
 
     detector_backend._apply_remote_model_decision_gate(payload, evidence)
 
-    assert payload["final_label"] == "需人工复核"
+    assert payload["final_label"] == "AI生成图像"
     assert evidence["modelDecision"]["gateReasons"] == ["model_decision_contract_missing"]
 
 
@@ -432,8 +432,8 @@ def test_remote_model_contract_requires_runtime_identity_and_expiry():
 
     detector_backend._apply_remote_model_decision_gate(payload, evidence)
 
-    assert payload["final_label"] == "需人工复核"
-    assert payload["probability"] == 0.5
+    assert payload["final_label"] == "AI生成图像"
+    assert payload["probability"] == pytest.approx(0.98)
     assert "model_decision_contract_invalid" in evidence["modelDecision"]["gateReasons"]
 
 
@@ -2410,7 +2410,7 @@ def test_result_template_never_coerces_review_only_probability_to_real_verdict()
     assert "value===null||value===undefined||value===''" in template
     assert "decisionStatus==='review_only'" in template
     assert "verdictFromResult==='需人工复核'" in template
-    assert "isReview?'需人工复核'" in template
-    assert "当前证据不足，暂不出具真假结论" in template
+    assert "var verdictLabel=isFake?'AI生成图像':'真实图像'" in template
+    assert "已给出二元结论；当前置信度较低" in template
     assert "isReview?'待复核':prob+'%'" in template
     assert "Number(r.probability)" not in template

@@ -18,6 +18,7 @@ import requests
 from PIL import Image
 from flask import Blueprint, Response, jsonify, request, send_file, session, stream_with_context
 
+from imagedetection.decision_labels import binary_final_label
 from imagedetection.views.historical_record import DETECTION_BACKEND_BASE_URL
 from imagedetection.views import (
     admin_state,
@@ -1679,6 +1680,7 @@ def _image_history_record(item, model_run=None):
     legacy_calibration_unknown = decision.get("status") != "verdict" and not stored_review
     review_required = stored_review or legacy_calibration_unknown
     display_fake_pct = None if review_required else fake_pct
+    final_label = binary_final_label(stored_label, fake_pct)
     return {
         "itemid": item.get("itemid"),
         "filename": item.get("filename", ""),
@@ -1686,23 +1688,18 @@ def _image_history_record(item, model_run=None):
         "thumbnail_url": _thumbnail_url(item),
         "real_prob": None if display_fake_pct is None else round(100 - display_fake_pct, 1),
         "fake_prob": display_fake_pct,
-        "final_label": (
-            "需人工复核"
-            if review_required
-            else stored_label or ("AI生成图像" if fake_pct >= 50 else "真实图像")
-        ),
-        "confidence": "不适用" if review_required else item.get("clarity", ""),
+        "final_label": final_label,
+        "confidence": "低" if review_required else item.get("clarity", ""),
         "createtime": format_createtime(item.get("createtime", "")),
         "report_url": (
-            "" if legacy_calibration_unknown
-            else f"/image_upload/report?itemid={item.get('itemid')}"
+            f"/image_upload/report?itemid={item.get('itemid')}"
         ),
         "review_required": review_required,
         "decision_status": "review_only" if review_required else "verdict",
         "decision_authority": decision.get("authority") or "none",
         "legacy_calibration_unknown": legacy_calibration_unknown,
         "report_unavailable_reason": (
-            "该历史记录缺少可验证的自动决策授权，需先完成人工复核。"
+            f"二元结论为“{final_label}”，但缺少可验证的自动决策授权；结论置信度为低。"
             if legacy_calibration_unknown else ""
         ),
         "is_guest_record": _is_guest_detection_record(item),
@@ -1738,14 +1735,15 @@ def _image_history_matches_filter(record, filter_key):
 
 
 def _video_history_record(item):
+    final_label = binary_final_label(item.get("final_label"), item.get("fake"))
     return {
         "itemid": item.get("itemid"),
         "filename": item.get("filename", ""),
         "video_url": f"/api/media/video/{item.get('itemid')}",
         "real_percentage": None,
         "fake_percentage": None,
-        "final_label": "需人工复核",
-        "confidence": "不适用",
+        "final_label": final_label,
+        "confidence": "低",
         "decision_status": "review_only",
         "review_required": True,
         "createtime": format_createtime(item.get("createtime", "")),

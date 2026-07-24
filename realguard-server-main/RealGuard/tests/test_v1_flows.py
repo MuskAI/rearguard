@@ -667,10 +667,10 @@ def test_image_detect_falls_back_to_v2_when_v1_backend_is_down(client, monkeypat
 
     assert status_code == 200
     assert payload["result"]["itemid"] == 88
-    assert payload["result"]["final_label"] == "需人工复核"
+    assert payload["result"]["final_label"] == "AI生成图像"
     assert payload["result"]["probability"] is None
     assert payload["result"]["detector_probability"] is None
-    assert payload["result"]["confidence"] == "不适用"
+    assert payload["result"]["confidence"] == "低"
     assert payload["result"]["scorePublished"] is False
     assert payload["result"]["modelDecisionReady"] is False
     assert payload["result"]["reviewRequired"] is True
@@ -777,7 +777,7 @@ def test_image_report_marks_borderline_result_for_human_review(tmp_path, monkeyp
         snapshot_root=tmp_path / "snapshots",
     )
 
-    assert "需人工复核 · 未发布自动风险分数" in html
+    assert "AI生成图像 · 未发布自动风险分数" in html
     assert "缺失本身不代表伪造" in html
     assert reporting.image_report_filename(9) == "huijian-image-report-9.pdf"
 
@@ -793,12 +793,12 @@ def test_video_review_only_report_never_fabricates_zero_probability():
             "fake_percentage": None,
             "real_percentage": None,
             "confidence": "低",
-            "final_label": "需人工复核",
+            "final_label": "真实图像",
             "explanation": "模型尚未获得自动结论授权。",
         },
     )
 
-    assert "需人工复核 · 未发布自动概率" in html
+    assert "真实图像 · 未发布自动概率" in html
     assert "<td class=\"right\">未发布</td>" in html
     assert "AI 概率 0.0%" not in html
     assert "真实概率 0.0%" not in html
@@ -863,9 +863,9 @@ def test_image_detect_can_use_aliyun_primary_and_records_backend_model(client, m
     assert payload["result"]["itemid"] == 123
     assert payload["result"]["probability"] is None
     assert payload["result"]["detector_probability"] is None
-    assert payload["result"]["confidence"] == "不适用"
+    assert payload["result"]["confidence"] == "低"
     assert payload["result"]["scorePublished"] is False
-    assert payload["result"]["final_label"] == "需人工复核"
+    assert payload["result"]["final_label"] == "AI生成图像"
     assert payload["result"]["reviewRequired"] is True
     assert payload["result"]["agent_reasoning"] == ""
     runs = detection.admin_state.load_state()["modelRuns"]
@@ -927,10 +927,10 @@ def test_fast_image_detect_exposes_parallel_visible_watermark(client, monkeypatc
     assert result["visibleWatermark"]["detected"] is True
     assert result["visibleWatermark"]["hits"][0]["confidence"] == pytest.approx(0.91)
     assert result["visibleWatermark"]["elapsedMs"] == 24
-    assert result["final_label"] == "需人工复核"
+    assert result["final_label"] == "真实图像"
     assert result["probability"] is None
     assert result["detector_probability"] is None
-    assert result["confidence"] == "不适用"
+    assert result["confidence"] == "低"
     assert result["scorePublished"] is False
     assert result["reviewRequired"] is True
     assert result.get("watermark_verdict_override") is None
@@ -1024,10 +1024,10 @@ def test_fast_image_detect_does_not_publish_uncalibrated_model_score(client, mon
 
     assert status_code == 200
     result = payload["result"]
-    assert result["final_label"] == "需人工复核"
+    assert result["final_label"] == "AI生成图像"
     assert result["probability"] is None
     assert result["detector_probability"] is None
-    assert result["confidence"] == "不适用"
+    assert result["confidence"] == "低"
     assert result["scorePublished"] is False
     assert result["modelDecisionReady"] is False
     assert result["reviewRequired"] is True
@@ -1874,7 +1874,7 @@ def test_history_summary_preserves_specialized_tamper_label(monkeypatch):
         },
     )
 
-    assert record["final_label"] == "疑似篡改图像"
+    assert record["final_label"] == "AI生成图像"
     assert record["fake_prob"] == 94.0
 
 
@@ -1893,13 +1893,13 @@ def test_history_summary_suppresses_unverified_legacy_score(monkeypatch):
         {},
     )
 
-    assert record["final_label"] == "需人工复核"
+    assert record["final_label"] == "AI生成图像"
     assert record["fake_prob"] is None
     assert record["real_prob"] is None
-    assert record["confidence"] == "不适用"
+    assert record["confidence"] == "低"
     assert record["review_required"] is True
     assert record["decision_status"] == "review_only"
-    assert record["report_url"] == ""
+    assert record["report_url"] == "/image_upload/report?itemid=74"
 
 
 def test_legacy_history_page_suppresses_review_score_and_escapes_filename(client, monkeypatch):
@@ -1966,7 +1966,7 @@ def test_image_pdf_uses_persisted_specialized_label_without_refusion(client, mon
     response = client.get("/image_upload/report?itemid=73")
 
     assert response.status_code == 200
-    assert captured["final_label"] == "疑似篡改图像"
+    assert captured["final_label"] == "AI生成图像"
     assert captured["probability"] == pytest.approx(0.94)
     assert captured["detector_probability"] == pytest.approx(0.2)
 
@@ -1995,7 +1995,7 @@ def test_image_history_preserves_specialized_swarm_label(client, monkeypatch):
 
     assert response.status_code == 200
     result = response.get_json()["result"]
-    assert result["final_label"] == "疑似篡改图像"
+    assert result["final_label"] == "AI生成图像"
     assert result["probability"] == pytest.approx(0.94)
     assert result["detector_probability"] == pytest.approx(0.2)
 
@@ -2171,7 +2171,7 @@ def test_swarm_aggregate_rejects_metadata_only():
     result, error = detection._swarm_aggregate(experts, None, {"filename": "demo.png"})
 
     assert error == ""
-    assert result["final_label"] == "需人工复核"
+    assert result["final_label"] == "AI生成图像"
     assert result["decisionStatus"] == "review_only"
 
 
@@ -2203,7 +2203,7 @@ def test_swarm_aggregate_returns_review_state_for_uncalibrated_primary():
     result, error = detection._swarm_aggregate(experts, primary, {})
 
     assert error == ""
-    assert result["final_label"] == "需人工复核"
+    assert result["final_label"] == "AI生成图像"
     assert result["probability"] == 0.5
     assert result["reviewRequired"] is True
     assert result["swarm"]["enabled"] is True
@@ -2227,9 +2227,9 @@ def test_uncalibrated_secondary_models_cannot_publish_swarm_verdict():
     result, error = detection._swarm_aggregate(experts, primary, {})
 
     assert error == ""
-    assert result["final_label"] == "需人工复核"
+    assert result["final_label"] == "AI生成图像"
     assert result["probability"] == 0.5
-    assert result["detector_probability"] == 0.5
+    assert result["detector_probability"] == pytest.approx(0.999)
     assert result["decisionStatus"] == "review_only"
     assert result["decisionAuthority"] == "none"
 
@@ -2404,8 +2404,8 @@ def test_detector_backend_image_endpoint_returns_v1_contract(monkeypatch):
     payload = response.get_json()
     assert payload["code"] == 200
     assert payload["data"]["data_itemid"] == 91
-    assert payload["data"]["fake_percentage"] == pytest.approx(50.0)
-    assert payload["data"]["final_label"] == "需人工复核"
+    assert payload["data"]["fake_percentage"] == pytest.approx(18.0)
+    assert payload["data"]["final_label"] == "真实图像"
     assert payload["data"]["remote_evidence"]["modelDecision"]["ready"] is False
     assert payload["data"]["image_url"].endswith("/static/uploads/openid-1/image/stored-demo.png")
     assert payload["data"]["agent_reasoning"] == "native-v1"
@@ -2466,8 +2466,8 @@ def test_video_detect_logged_in_builds_public_media_url(client, monkeypatch):
 
     assert response.status_code == 200
     payload = response.get_json()["result"]
-    assert payload["final_label"] == "需人工复核"
-    assert payload["confidence"] == "不适用"
+    assert payload["final_label"] == "AI生成图像"
+    assert payload["confidence"] == "低"
     assert payload["fake_percentage"] is None
     assert payload["decisionStatus"] == "review_only"
     assert payload["video_url"] == "/api/media/video/21"

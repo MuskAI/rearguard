@@ -17,6 +17,7 @@ import requests
 from werkzeug.utils import secure_filename
 
 from model_decision_contract import validate_inference_audit, validate_model_decision
+from imagedetection.decision_labels import binary_final_label
 from imagedetection.views.utils import (
     create_folder,
     excute_detection_sql,
@@ -348,15 +349,15 @@ def _apply_remote_model_decision_gate(payload, remote_evidence):
             "gateReasons": list(dict.fromkeys([*original_reasons, reason])),
         })
         remote_evidence["modelDecision"] = decision
-    payload["detector_probability"] = 0.5
-    payload["probability"] = 0.5
-    payload["final_label"] = "需人工复核"
+    payload["detector_probability"] = raw_score
+    payload["probability"] = raw_score
+    payload["final_label"] = binary_final_label(fake_probability=raw_score)
     payload["confidence"] = "低"
     payload["model_decision_ready"] = False
     payload["explanation"] = (
-        "主鉴伪模型尚未通过独立数据集校准门禁；原始模型分数仅保存在受限审计记录中，"
-        "不能解释为 AI 生成概率，也不会作为真假结论对外发布。"
-        "本次结果须结合来源凭证、已确认的平台水印和人工复核。"
+        f"系统按主鉴伪模型原始分数的二元阈值给出“{payload['final_label']}”结论。"
+        "由于模型尚未通过独立数据集校准门禁，该结论置信度为低；"
+        "原始分数不作为已校准概率发布，请结合来源凭证、水印证据和人工复核理解结果。"
     )
     return payload
 

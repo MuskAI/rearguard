@@ -1,6 +1,7 @@
 import os
 from flask import Blueprint, render_template, session
 
+from imagedetection.decision_labels import binary_final_label
 from imagedetection.views import admin_state, evidence_manifest
 
 from imagedetection.views.utils import (
@@ -69,7 +70,7 @@ def history_photo():
             if not detection_record_is_publishable(item):
                 continue
             fake_pct = round(float(item.get('fake', 0) or 0), 1)
-            final_label = str(item.get('aigc') or '').strip() or ('AI生成图像' if fake_pct >= 50 else '真实图像')
+            final_label = binary_final_label(item.get('aigc'), fake_pct)
             run = model_runs.get(str(item.get('itemid')))
             try:
                 visible = evidence_manifest._structured_visible_watermark(run)
@@ -77,8 +78,6 @@ def history_photo():
             except Exception:
                 decision = {'status': 'review_only'}
             review_required = decision.get('status') != 'verdict'
-            if review_required:
-                final_label = '需人工复核'
             records.append({
                 "itemid": item['itemid'],
                 "filename": item['filename'],
@@ -86,7 +85,7 @@ def history_photo():
                 "real_prob": None if review_required else round(100 - fake_pct, 1),
                 "fake_prob": None if review_required else fake_pct,
                 "aigc": final_label,
-                "confidence": '不适用' if review_required else item.get('clarity', ''),
+                "confidence": '低' if review_required else item.get('clarity', ''),
                 "decision_status": 'review_only' if review_required else 'verdict',
                 "createtime": format_createtime(item['createtime']),
             })
@@ -109,7 +108,7 @@ def history_video_detect():
     real_count = 0
     if result:
         for item in result:
-            final_label = item.get('final_label', '') or ''
+            final_label = binary_final_label(item.get('final_label'), item.get('fake'))
             if 'AI' in final_label:
                 ai_count += 1
             else:
@@ -120,8 +119,8 @@ def history_video_detect():
                 "video_url": _detection_static_url('video', item),
                 "fake_percentage": None,
                 "real_percentage": None,
-                "final_label": "需人工复核",
-                "confidence": "不适用",
+                "final_label": final_label,
+                "confidence": "低",
                 "decision_status": "review_only",
                 "createtime": format_createtime(item.get('createtime', '')),
             })

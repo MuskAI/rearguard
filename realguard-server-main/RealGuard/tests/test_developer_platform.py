@@ -1024,7 +1024,7 @@ def test_public_result_marks_review_only_as_non_billable():
     assert payload["result"]["billable"] is False
     assert payload["result"]["probability"] is None
     assert payload["result"]["detector_probability"] is None
-    assert payload["result"]["confidence"] == "不适用"
+    assert payload["result"]["confidence"] == "低"
 
 
 def test_public_result_requires_explicit_boolean_true_to_bill():

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from model_decision_contract import validate_inference_audit, validate_model_decision
+from imagedetection.decision_labels import binary_final_label
 
 
 MANIFEST_SCHEMA = "cn.huijian.image-evidence-manifest"
@@ -581,11 +582,7 @@ def build_image_manifest(
     model_inference = _model_inference_audit(selected_run)
     capture = _capture_evidence(recorded_metadata)
     probability = _percent(item.get("fake"))
-    raw_model_label = _stored_text(
-        item,
-        "aigc",
-        "AI生成图像" if probability >= 50 else "真实图像",
-    )
+    raw_model_label = binary_final_label(item.get("aigc"), probability)
     confidence = _stored_text(item, "clarity", "未记录")
     if decision["status"] == "verdict" and decision["authority"] == "calibrated_model":
         try:
@@ -611,11 +608,8 @@ def build_image_manifest(
             }
     conclusion = raw_model_label
     if decision["status"] == "review_only":
-        conclusion = "需人工复核"
         probability = None
         confidence = "不适用"
-    elif 35.0 < probability < 75.0 or confidence in {"低", "较低", "未记录"}:
-        conclusion = "需人工复核"
     evidence_summary = _stored_text(item, "explantation", "服务端未留存详细证据摘要")
     if decision["status"] == "review_only":
         evidence_summary = (

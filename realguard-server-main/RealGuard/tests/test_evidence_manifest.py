@@ -155,7 +155,7 @@ def test_signed_manifest_contains_required_server_evidence_and_verifies(tmp_path
     assert manifest["model"]["version"] == "v1-onnx-mil-2026.07"
     assert manifest["model"]["run_id"] == "run-73"
     assert manifest["policy_version"] == evidence_manifest.DEFAULT_POLICY_VERSION
-    assert manifest["conclusion"]["label"] == "需人工复核"
+    assert manifest["conclusion"]["label"] == "AI生成图像"
     assert manifest["conclusion"]["risk_score_percent"] is None
     assert manifest["conclusion"]["confidence"] == "不适用"
     assert manifest["evidence_summary"]["source"] == "persisted_server_record"
@@ -185,7 +185,7 @@ def test_boundary_score_is_signed_as_manual_review_with_raw_label_preserved(tmp_
     )
 
     conclusion = envelope["manifest"]["conclusion"]
-    assert conclusion["label"] == "需人工复核"
+    assert conclusion["label"] == "AI生成图像"
     assert conclusion["raw_model_label"] == "AI生成图像"
 
 
@@ -468,7 +468,7 @@ def test_repeated_report_downloads_reuse_first_persisted_manifest_and_signature(
     assert second["manifest"] == first["manifest"]
     assert second["signature"] == first["signature"]
     assert second["manifest"]["generated_at"] == "2026-07-19T08:30:00Z"
-    assert second["manifest"]["conclusion"]["label"] == "需人工复核"
+    assert second["manifest"]["conclusion"]["label"] == "AI生成图像"
     assert second["manifest"]["model"]["version"] == "v1-onnx-mil-2026.07"
     snapshots = list(snapshot_root.glob("*.manifest.json"))
     assert len(snapshots) == 1
@@ -733,7 +733,7 @@ def test_report_ignores_unsigned_client_fields_and_renders_signed_server_snapsho
     )
     envelope = evidence_manifest.extract_envelope_from_pdf(pdf)
 
-    assert rendered["result"]["final_label"] == "需人工复核"
+    assert rendered["result"]["final_label"] == "AI生成图像"
     assert rendered["result"]["probability"] is None
     assert rendered["result"]["filename"] == "stored-image.png"
     assert "缺少可验证的已校准模型授权" in rendered["result"]["explanation"]
@@ -759,7 +759,7 @@ def test_html_report_embeds_signed_envelope_and_not_client_verdict(tmp_path):
         snapshot_root=tmp_path / "snapshots",
     )
 
-    assert "需人工复核 · 未发布自动风险分数" in html
+    assert "AI生成图像 · 未发布自动风险分数" in html
     assert "服务端完整性清单" in html
     assert "第三方不能仅凭本报告独立验签" in html
     assert "不属于可靠电子签名" in html

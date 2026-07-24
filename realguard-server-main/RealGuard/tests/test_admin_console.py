@@ -636,9 +636,9 @@ def test_big_screen_recent_items_remove_user_and_file_identifiers(monkeypatch):
     assert "phone" not in queries[-1].lower()
     assert item["modelRoute"]["model"]["id"] == "v1-onnx-mil"
     assert item["decisionStatus"] == "review_only"
-    assert item["label"] == "需人工复核"
+    assert item["label"] == "真实图像"
     assert item["probability"] is None
-    assert item["confidence"] == "不适用"
+    assert item["confidence"] == "低"
     assert "private-person.jpg" not in serialized
     assert "13329825566" not in serialized
     assert "127.0.0.1" not in serialized

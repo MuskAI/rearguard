@@ -66,6 +66,20 @@ const SWARM_PLACEHOLDER_EXPERTS: PublicExpertReviewExpert[] = Array.from({ lengt
   id: `placeholder-${index}`,
   status: "queued"
 }));
+
+function binaryDisplayLabel(label: unknown, score: unknown, lang: Lang) {
+  const text = String(label || "").toLowerCase();
+  const fakeMarkers = ["ai", "生成", "伪造", "篡改", "深伪", "翻拍", "风险", "fake"];
+  const realMarkers = ["真实", "实拍", "real"];
+  if (fakeMarkers.some((marker) => text.includes(marker))) return translate(lang, "AI生成图像", "AI-generated");
+  if (realMarkers.some((marker) => text.includes(marker))) return translate(lang, "真实图像", "Real image");
+  const raw = Number(score);
+  const normalized = Number.isFinite(raw) ? (raw > 1 ? raw / 100 : raw) : 0;
+  return normalized >= 0.5
+    ? translate(lang, "AI生成图像", "AI-generated")
+    : translate(lang, "真实图像", "Real image");
+}
+
 const UI_TEXT = {
   zh: {
     boot: "正在连接慧鉴 AI...",
@@ -2164,8 +2178,12 @@ function ImageResult({
     || !scorePublished
     || (probability !== null && probability > 35 && probability < 75)
     || result.confidence === "低";
-  const verdictLabel = requiresReview ? tr("需人工复核", "Human review required") : result.final_label;
-  const verdictTone = requiresReview ? "review" : result.final_label.includes("AI") ? "danger" : "ok";
+  const verdictLabel = binaryDisplayLabel(
+    result.final_label,
+    result.probability ?? result.detector_probability,
+    lang,
+  );
+  const verdictTone = verdictLabel.includes("AI") ? "danger" : "ok";
 
   useEffect(() => {
     setFeedback(result.feedback ?? null);
@@ -2204,7 +2222,7 @@ function ImageResult({
       </div>
       <p className="result-caveat"><IconfontIcon name="info" size={15} />{scorePublished
         ? tr("模型概率用于辅助判断；边界结果请结合原图、元数据与证据报告复核。", "Model probability supports review. Borderline results should be checked against the source, metadata, and evidence report.")
-        : tr("当前证据不足以发布自动概率或真假结论，请结合来源凭证与人工复核。", "Current evidence does not authorize an automated probability or verdict. Review provenance and the source file.")}</p>
+        : tr(`当前二元结论为“${verdictLabel}”，但置信度较低且不发布已校准概率；请结合来源凭证与人工复核。`, `The binary verdict is "${verdictLabel}", but confidence is low and no calibrated probability is published. Review provenance and the source file.`)}</p>
       {result.evidenceCompleteness === false && (
         <p className="result-caveat" role="status"><IconfontIcon name="alert-triangle" size={15} />{tr(result.evidenceWarnings?.[0] || "可见水印检测未完成，本次证据链不完整。", "Visible-watermark analysis was unavailable, so this evidence chain is incomplete.")}</p>
       )}
@@ -2294,8 +2312,8 @@ function VideoResult({ result, lang, panelRef }: { result: VideoDetectionResult;
   const scorePublished = result.decisionStatus === "verdict" && result.fake_percentage != null;
   const probability = scorePublished ? Math.round(result.fake_percentage! * 10) / 10 : 0;
   const requiresReview = !scorePublished || (probability > 35 && probability < 75);
-  const verdictLabel = requiresReview ? tr("需人工复核", "Human review required") : (result.final_label || tr("未标注", "Unlabeled"));
-  const verdictTone = requiresReview ? "review" : result.final_label.includes("AI") ? "danger" : "ok";
+  const verdictLabel = binaryDisplayLabel(result.final_label, result.fake_percentage, lang);
+  const verdictTone = verdictLabel.includes("AI") ? "danger" : "ok";
   return (
     <div className="result-panel" ref={panelRef} tabIndex={-1}>
       <div className="section-label"><IconfontIcon name="bar-chart" size={17} /> {tr("视频检测结果", "Video detection result")}</div>
@@ -2356,7 +2374,11 @@ function HistoryRecords({
         const mediaUrl = historyMediaUrl(record);
         const previewUrl = historyPreviewUrl(record) || mediaUrl;
         const title = String(record.filename || tr(`历史记录 ${index + 1}`, `History record ${index + 1}`));
-        const verdict = String(record.final_label || "-");
+        const verdict = binaryDisplayLabel(
+          record.final_label,
+          record.fake_prob ?? record.fake_percentage,
+          lang,
+        );
         const meta = String(record.confidence || "-");
         const reportUrl = String(record.report_url || "");
         const guestRecord = Boolean(record.is_guest_record);

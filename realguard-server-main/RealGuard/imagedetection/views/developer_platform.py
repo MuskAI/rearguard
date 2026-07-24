@@ -17,6 +17,7 @@ import requests
 from PIL import Image, UnidentifiedImageError
 from flask import Blueprint, Response, g, has_request_context, jsonify, request
 
+from imagedetection.decision_labels import binary_final_label
 from imagedetection.views import admin_state, reporting
 from imagedetection.views.admin import _admin_required
 from imagedetection.views.api import (
@@ -3414,6 +3415,10 @@ def _public_result_payload(payload, mode):
         public_payload["result"] = detection._public_swarm_result(public_payload["result"])
     result = public_payload.get("result")
     if isinstance(result, dict):
+        result["final_label"] = binary_final_label(
+            result.get("final_label"),
+            result.get("probability", result.get("detector_probability")),
+        )
         explicit_status = result.get("decisionStatus")
         explicit_billable = result.get("billable")
         review_only = not (
@@ -3515,9 +3520,7 @@ def _recovered_business_payload(record):
     metadata = detection._metadata_for_item(item_id) if item_id else {}
     explanation = str(record.get("explantation") or "").strip()
     split_explanation, split_issues = detection._split_reasoning_sections(explanation)
-    final_label = str(record.get("aigc") or "").strip() or (
-        "AI生成图像" if fake_probability >= 0.5 else "真实图像"
-    )
+    final_label = binary_final_label(record.get("aigc"), fake_probability)
     result = {
         "itemid": item_id,
         "final_label": final_label,

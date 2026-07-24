@@ -19,6 +19,7 @@ from PIL import Image, UnidentifiedImageError
 from werkzeug.utils import secure_filename
 
 from model_decision_contract import validate_inference_audit, validate_model_decision
+from imagedetection.decision_labels import binary_final_label, normalized_fake_probability
 from imagedetection.image_formats import is_heif_filename
 
 from imagedetection.views import (
@@ -1056,9 +1057,7 @@ def _persist_and_freeze_completed_image_result(itemid, result, *, actor=None, is
         (result or {}).get('detector_probability'),
         probability,
     )
-    final_label = (result or {}).get('final_label') or (
-        'AI生成图像' if probability >= 0.5 else '真实图像'
-    )
+    final_label = binary_final_label((result or {}).get('final_label'), probability)
     updated = excute_detection_sql(
         """
         UPDATE data
@@ -1254,7 +1253,7 @@ def _insert_local_detection_record(
         detector_value,
         fake_pct / 100.0,
     )
-    final_label = data.get('final_label') or ('AI生成图像' if fake_pct >= 50 else '真实图像')
+    final_label = binary_final_label(data.get('final_label'), fake_pct)
     confidence = data.get('confidence') or data.get('clarity') or _conf_level_from_score(fake_pct / 100.0)
     explanation = str(data.get('explanation') or data.get('explantation') or '').strip()
     visual_issues = [str(item).strip() for item in (data.get('visual_issues') or []) if str(item).strip()]
@@ -1440,16 +1439,10 @@ def _insert_v2_fallback_record(payload, image_bytes, filename, backend_openid, p
         deepfake_probability,
     )
     fake_pct = round(overall_probability * 100.0, 1)
-    if aigc_pct >= 50:
-        final_label = 'AI生成图像'
-    elif tamper_probability >= 0.5:
-        final_label = '疑似篡改图像'
-    elif deepfake_probability >= 0.5:
-        final_label = '疑似深伪图像'
-    elif str(payload.get('verdict') or '') != 'real':
-        final_label = '疑似风险图像'
-    else:
-        final_label = '真实图像'
+    final_label = binary_final_label(
+        payload.get('final_label') or payload.get('verdict'),
+        fake_pct,
+    )
     confidence_level = _conf_level_from_score(_conf_score_from_api(payload.get('confidence'), fake_pct))
     explanation = str(payload.get('explanation') or '').strip() or _to_user_explanation(final_label, confidence_level)
     visual_issues = _extract_v2_visual_issues(payload)
@@ -1901,8 +1894,13 @@ def _run_image_detection_payload(
             'reason': 'model_not_publishable',
         }
         if not model_decision_ready:
-            probability = 0.5
-            detector_probability = 0.5
+            raw_model_score = (
+                model_decision.get('rawModelScore')
+                if isinstance(model_decision, dict)
+                else detector_probability
+            )
+            probability = normalized_fake_probability(raw_model_score, detector_probability)
+            detector_probability = probability
             probability_model = {
                 'version': 'review-only-model-gate-v1',
                 'publishable': False,
@@ -1912,7 +1910,7 @@ def _run_image_detection_payload(
             metadata_probability = _clamp01(
                 _swarm_metadata_expert({'all_metadata': metadata}).get('score'), 0.5
             )
-            final_label = '需人工复核'
+            final_label = binary_final_label(final_label, probability)
             confidence = '低'
         else:
             _diagnostic_probability, probability_model, metadata_probability = _fuse_fast_metadata_probability(
@@ -2007,7 +2005,7 @@ def _run_image_detection_payload(
             )
         if not model_decision_ready:
             evidence_warnings.append(
-                '主鉴伪模型缺少完整且通过验证的独立校准契约，原始分数不用于自动真假结论。'
+                '主鉴伪模型缺少完整且通过验证的独立校准契约；二元结论为低置信度，原始分数不作为已校准概率发布。'
             )
         if probability_model.get('factors'):
             result['probabilityModel'] = probability_model
@@ -2208,13 +2206,19 @@ def _public_provenance_summary(summary):
 
 def _suppress_review_only_scores(result):
     """Remove internal placeholders and uncalibrated scores from public output."""
-    if not isinstance(result, dict) or result.get('decisionStatus') == 'verdict':
+    if not isinstance(result, dict):
+        return result
+    result['final_label'] = binary_final_label(
+        result.get('final_label'),
+        result.get('probability', result.get('detector_probability')),
+    )
+    if result.get('decisionStatus') == 'verdict':
         return result
     result['probability'] = None
     result['detector_probability'] = None
     result['p_visual'] = None
     result['p_metadata'] = None
-    result['confidence'] = '不适用'
+    result['confidence'] = '低'
     result['scorePublished'] = False
     result.pop('probabilityModel', None)
     swarm = result.get('swarm')
@@ -2488,10 +2492,7 @@ def _swarm_primary_expert(
     return result, {
         'status': 'success',
         'score': round(score, 4) if score is not None else None,
-        'verdict': (
-            'AI生成图像' if score is not None and score >= 0.5
-            else ('真实图像' if score is not None else '需人工复核')
-        ),
+        'verdict': binary_final_label(result.get('final_label'), score),
         'confidence': result.get('confidence') or (
             _conf_level_from_score(score) if score is not None else '低'
         ),
@@ -2853,7 +2854,7 @@ def _swarm_fallback_display_result(image_bytes, filename, backend_openid, phone)
         safe_name = secure_filename(filename) or filename
     return {
         'itemid': None,
-        'final_label': '疑似风险图像',
+        'final_label': 'AI生成图像',
         'probability': 0.5,
         'detector_probability': 0.5,
         'p_visual': None,
@@ -2958,10 +2959,18 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
 
     def review_only_result(reason):
         base = dict(primary_result or fallback_result or {})
+        binary_score = _clamp01(
+            base.get('probability'),
+            base.get('detector_probability', probability_model.get('pixelBaseline', 0.5)),
+        )
+        binary_label = binary_final_label(base.get('final_label'), binary_score)
         base.update({
-            'final_label': '需人工复核',
-            'probability': 0.5,
-            'detector_probability': 0.5,
+            'final_label': binary_label,
+            'probability': binary_score,
+            'detector_probability': _clamp01(
+                base.get('detector_probability'),
+                binary_score,
+            ),
             'confidence': '低',
             'modelDecisionReady': False,
             'reviewRequired': True,
@@ -2969,13 +2978,13 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
             'decisionAuthority': 'none',
             'probabilityModel': probability_model,
             'explanation': (
-                'Swarm 已完成可用证据复核，但主鉴伪模型尚未通过独立校准，'
-                f'且当前没有足以独立形成自动结论的证据（{reason}）。请进行人工复核。'
+                f'Swarm 按现有模型与证据给出二元结论“{binary_label}”，但主鉴伪模型尚未通过独立校准，'
+                f'当前结论置信度为低（{reason}）。中立信息仅作解释，请结合原件来源进行人工复核。'
             ),
             'swarm': {
                 'enabled': True,
-                'score': 0.5,
-                'finalLabel': '需人工复核',
+                'score': binary_score,
+                'finalLabel': binary_label,
                 'confidence': '低',
                 'consensusLevel': '低',
                 'consensusScore': 0.0,
@@ -3088,6 +3097,7 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
             probability_model['publishable'] = False
             probability_model['decisionContribution'] = 'diagnostic_only'
 
+    final_label = binary_final_label(final_label, generated_score)
     provenance_summary = _swarm_provenance_summary(experts)
 
     evidence = []
@@ -3694,16 +3704,10 @@ def image_result_api():
     fake = _prob01_from_percent(fake_pct)
     probability_model = {}
     metadata_probability = None
-    final_label = stored_label or ('AI生成图像' if fake >= 0.5 else '真实图像')
+    final_label = binary_final_label(stored_label, fake)
     decision = _stored_decision_authorization_for_item(itemid)
-    legacy_calibration_unknown = (
-        decision.get('status') != 'verdict' and final_label != '需人工复核'
-    )
-    review_required = final_label == '需人工复核' or legacy_calibration_unknown
-    if review_required:
-        fake = 0.5
-        detector_probability = 0.5
-        final_label = '需人工复核'
+    legacy_calibration_unknown = decision.get('status') != 'verdict'
+    review_required = legacy_calibration_unknown
     feedback_raw = item.get('feedback')
     feedback = 1 if feedback_raw in (1, '1', '满意') else (-1 if feedback_raw in (-1, '-1', '不满意') else None)
 
@@ -3721,7 +3725,8 @@ def image_result_api():
         'p_metadata': metadata_probability,
         'confidence': '低' if review_required else item.get('clarity', ''),
         'explanation': (
-            '该历史记录缺少可验证的已校准模型授权或决定性来源证据，原始分数不作为自动真假结论。'
+            f'该记录的二元结论为“{final_label}”，但缺少可验证的已校准模型授权或决定性来源证据；'
+            '结论置信度为低，原始分数不作为已校准概率发布，建议结合原件来源复核。'
             if legacy_calibration_unknown else explanation
         ),
         'agent_reasoning': '',
@@ -3765,22 +3770,9 @@ def image_report_api():
     report_probability = _prob01_from_percent(fake_pct)
     probability_model = {}
     metadata_probability = None
-    report_label = str(item.get('aigc') or '').strip() or (
-        'AI生成图像' if report_probability >= 0.5 else '真实图像'
-    )
+    report_label = binary_final_label(item.get('aigc'), report_probability)
     report_decision = _stored_decision_authorization_for_item(itemid)
-    legacy_calibration_unknown = (
-        report_decision.get('status') != 'verdict' and report_label != '需人工复核'
-    )
-    if legacy_calibration_unknown:
-        return jsonify({
-            'status': 'error',
-            'code': 'legacy_calibration_unknown',
-            'message': '该历史记录缺少可验证的自动决策授权，请完成人工复核后再生成报告。',
-        }), 409
-    report_review_required = report_label == '需人工复核'
-    if report_review_required:
-        detector_probability = report_probability
+    report_review_required = report_decision.get('status') != 'verdict'
     result = {
         'itemid': item.get('itemid'),
         'final_label': report_label,
@@ -3924,12 +3916,12 @@ def video_detect():
         }), 502
     fake_pct = _to_float(data.get('fake_percentage', 0), 0.0)
     conf_score = None
-    final_label = '需人工复核'
+    final_label = binary_final_label(fake_probability=fake_pct)
     explanation = (
-        '视频抽帧与时序分析已完成，但当前视频模型及聚合策略尚未通过独立签名校准，'
-        '自动真假分数不对外发布。请结合原始视频、可疑片段与人工复核形成结论。'
+        f'视频抽帧与时序分析给出二元结论“{final_label}”。当前视频模型及聚合策略尚未通过独立签名校准，'
+        '因此结论置信度为低，自动真假分数不对外发布；请结合原始视频和可疑片段复核。'
     )
-    conf_level = '不适用'
+    conf_level = '低'
     meta = data.get('meta') or {}
 
     duration = meta.get('duration', '')
@@ -3981,6 +3973,7 @@ def video_result_api():
     item = _load_detection_record('video_data', itemid)
     if not item:
         return jsonify({'status': 'error', 'message': '未找到该视频检测记录'}), 404
+    final_label = binary_final_label(item.get('final_label'), item.get('fake'))
     return jsonify({
         'status': 'success',
         'result': {
@@ -3989,13 +3982,16 @@ def video_result_api():
             'video_url': _backend_static_url('video', item),
             'fake_percentage': None,
             'real_percentage': None,
-            'final_label': '需人工复核',
+            'final_label': final_label,
             'confidence_score': None,
-            'confidence': '不适用',
+            'confidence': '低',
             'decisionStatus': 'review_only',
             'decisionAuthority': 'none',
             'reviewRequired': True,
-            'explanation': '该历史视频结果缺少独立签名校准与逐帧聚合审计，只能用于人工复核。',
+            'explanation': (
+                f'该历史视频的二元结论为“{final_label}”，但缺少独立签名校准与逐帧聚合审计；'
+                '结论置信度为低，请结合原始视频复核。'
+            ),
             'd3_std': item.get('d3_std'),
             'encoder': item.get('encoder', ''),
             'frame_count': item.get('frame_count', 0),
@@ -4019,18 +4015,22 @@ def video_report_api():
     if not item:
         return jsonify({'status': 'error', 'message': '未找到该视频检测记录'}), 404
 
+    final_label = binary_final_label(item.get('final_label'), item.get('fake'))
     result = {
         'itemid': item.get('itemid'),
         'filename': item.get('filename', ''),
         'video_url': _backend_static_url('video', item),
         'fake_percentage': None,
         'real_percentage': None,
-        'final_label': '需人工复核',
-        'confidence': '不适用',
+        'final_label': final_label,
+        'confidence': '低',
         'decisionStatus': 'review_only',
         'decisionAuthority': 'none',
         'reviewRequired': True,
-        'explanation': '视频模型与逐帧聚合策略尚未通过独立签名校准，本报告不发布自动真假分数。',
+        'explanation': (
+            f'视频模型给出二元结论“{final_label}”，但逐帧聚合策略尚未通过独立签名校准；'
+            '本报告不发布已校准概率，建议人工复核。'
+        ),
         'frame_count': item.get('frame_count', 0),
         'encoder': item.get('encoder', ''),
         'meta': {

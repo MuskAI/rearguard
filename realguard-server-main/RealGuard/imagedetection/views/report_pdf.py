@@ -16,6 +16,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from xml.sax.saxutils import escape
 
+from imagedetection.decision_labels import binary_final_label
 
 FONT_NAME = "HuijianCJK"
 _FONT_LOCK = Lock()
@@ -295,9 +296,7 @@ def image_report_pdf(item: dict[str, Any], result: dict[str, Any]) -> bytes:
         result.get("final_label"),
         "AI生成图像" if float(item.get("fake", 0) or 0) >= 50 else "真实图像",
     )
-    final_label = "需人工复核" if review_only else (
-        f"{base_label}（需人工复核）" if requires_review and base_label != "需人工复核" else base_label
-    )
+    final_label = binary_final_label(base_label, item.get("fake"))
     issues = "；".join(str(value) for value in (result.get("visual_issues") or []) if str(value).strip())
     return _build_report(
         report_id=f"IMG-{item.get('itemid')}",
@@ -329,7 +328,7 @@ def image_report_pdf(item: dict[str, Any], result: dict[str, Any]) -> bytes:
 def video_report_pdf(item: dict[str, Any], result: dict[str, Any]) -> bytes:
     probability = 0.0
     confidence = "不适用"
-    final_label = "需人工复核"
+    final_label = binary_final_label(result.get("final_label"), item.get("fake"))
     meta = result.get("meta") or {}
     return _build_report(
         report_id=f"VID-{item.get('itemid')}",

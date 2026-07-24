@@ -8,6 +8,7 @@ from typing import Any, Mapping
 from urllib.parse import quote
 from werkzeug.exceptions import UnprocessableEntity
 
+from imagedetection.decision_labels import binary_final_label
 from . import evidence_manifest
 from .report_pdf import image_report_pdf as _render_image_report_pdf
 from .report_pdf import video_report_pdf
@@ -230,9 +231,7 @@ def image_report_content(
     # a second hard-coded 35%-75% boundary here, which can contradict the
     # signed threshold and leave a verdict labeled as review-only.
     requires_review = review_only
-    final_label = "需人工复核" if requires_review else (
-        result.get("final_label") or ("AI生成图像" if float(item.get("fake", 0) or 0) >= 50 else "真实图像")
-    )
+    final_label = binary_final_label(result.get("final_label"), item.get("fake"))
     accent = "#b36a12" if requires_review else ("#d9573f" if "AI" in str(final_label) else "#1b8f7a")
     image_url = escape(_safe_text(result.get("image_url"), ""))
     preview = f'<img class="preview" src="{image_url}" alt="{escape(_safe_text(result.get("filename")))}" />' if image_url else '<div class="preview" style="min-height:260px;"></div>'
@@ -336,7 +335,7 @@ def video_report_content(item: dict, result: dict) -> str:
     probability = None if review_only or raw_probability is None else round(float(raw_probability), 1)
     confidence = _safe_text(result.get("confidence"), "")
     requires_review = review_only or probability is None
-    final_label = "需人工复核" if requires_review else (result.get("final_label") or "视频检测结果")
+    final_label = binary_final_label(result.get("final_label"), item.get("fake"))
     accent = "#b36a12" if requires_review else ("#d9573f" if "AI" in str(final_label) else "#1b8f7a")
     video_url = escape(_safe_text(result.get("video_url"), ""))
     preview = f'<video class="preview" src="{video_url}" controls></video>' if video_url else '<div class="preview" style="min-height:260px;"></div>'

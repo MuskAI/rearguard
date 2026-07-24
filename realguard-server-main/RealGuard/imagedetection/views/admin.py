@@ -23,6 +23,7 @@ import requests
 from flask import Blueprint, Response, g, jsonify, redirect, render_template, request, send_file, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from imagedetection.decision_labels import binary_final_label
 from imagedetection.views import (
     admin_state,
     aliyun_green,
@@ -2003,10 +2004,10 @@ def _authorized_detection_view(row, model_run):
         decision = {"status": "review_only", "authority": "none"}
     authorized = decision.get("status") == "verdict"
     return {
-        "label": (row.get("aigc") or "待判定") if authorized else "需人工复核",
+        "label": binary_final_label(row.get("aigc"), row.get("fake")),
         "probability": row.get("fake") if authorized else None,
         "detectorProbability": row.get("detector_probability") if authorized else None,
-        "confidence": row.get("clarity") if authorized else "不适用",
+        "confidence": row.get("clarity") if authorized else "低",
         "decisionStatus": "verdict" if authorized else "review_only",
         "decisionAuthority": decision.get("authority") if authorized else "none",
     }

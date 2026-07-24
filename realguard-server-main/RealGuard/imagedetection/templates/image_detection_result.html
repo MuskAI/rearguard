@@ -315,8 +315,8 @@
         var verdictFromResult=String(r.final_label||'').trim();
         var isReview=(decisionStatus==='review_only'||r.reviewRequired===true||String(r.reviewRequired).toLowerCase()==='true'||verdictFromResult==='需人工复核'||pNum===null);
         var hasExpertReview = !!(r && r.swarm && r.swarm.enabled);
-        var isFake=!isReview&&(hasExpertReview?(verdictFromResult!=='真实图像'):(pNum>=0.5));
-        var verdictLabel=isReview?'需人工复核':(hasExpertReview&&verdictFromResult?verdictFromResult:(isFake?'AI生成图像':'真实图像'));
+        var isFake=verdictFromResult.indexOf('AI')>=0||verdictFromResult.indexOf('生成')>=0||verdictFromResult.indexOf('伪')>=0||(pNum!==null&&pNum>=0.5);
+        var verdictLabel=isFake?'AI生成图像':'真实图像';
         var prob=isReview?null:(pNum*100).toFixed(1);
         var detectorNum=finiteProbability(r.detector_probability);
         if(detectorNum===null&&!isReview)detectorNum=pNum;
@@ -329,12 +329,12 @@
         }
 
         document.getElementById('resultImg').src=r.image_url;
-        var verdictClass=isReview?'review':(isFake?'fake':'real');
-        var verdictIcon=isReview?'fa-search':(isFake?'fa-times':'fa-check');
+        var verdictClass=isFake?'fake':'real';
+        var verdictIcon=isFake?'fa-times':'fa-check';
         var v=document.getElementById('verdict');v.className='verdict '+verdictClass;
         document.getElementById('verdictIcon').innerHTML='<i class="fa '+verdictIcon+'"></i>';
         document.getElementById('verdictLabel').textContent=verdictLabel;
-        document.getElementById('verdictSub').textContent=isReview?'当前证据不足，暂不出具真假结论':('置信度: '+(r.confidence||'-')+'  |  '+(hasExpertReview?'综合异常风险: ':'AI 生成概率: ')+prob+'%');
+        document.getElementById('verdictSub').textContent=isReview?'已给出二元结论；当前置信度较低，建议结合原图和证据复核。':('置信度: '+(r.confidence||'-')+'  |  '+(hasExpertReview?'综合异常风险: ':'AI 生成概率: ')+prob+'%');
 
         document.getElementById('probLabel').textContent=isReview?'结论状态':(hasExpertReview?'专家会诊综合异常风险':'AI 生成概率');
         document.getElementById('detProbLabel').textContent=isReview?'模型分数':(hasExpertReview?'主检测器 AI 风险':'检测器原始 AI 概率');
@@ -347,7 +347,7 @@
             document.getElementById('detProbBar').style.width=isReview?'0%':detProb+'%';
         });
 
-        document.getElementById('infoConf').textContent=isReview?'待复核':(r.confidence||'-');
+        document.getElementById('infoConf').textContent=isReview?'低（建议复核）':(r.confidence||'-');
         document.getElementById('infoSize').textContent=r.file_size||'-';
         document.getElementById('infoFmt').textContent=r.img_format||'-';
         document.getElementById('infoRes').textContent=r.resolution||'-';
