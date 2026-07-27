@@ -40,6 +40,8 @@ realguard-server-main/RealGuard/admin_state.json
 realguard-server-main/RealGuard/model_registry.json
 .playwright-cli/
 output/
+/reports/
+/research/
 
 # Generated archives
 *.zip
