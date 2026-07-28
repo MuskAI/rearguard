@@ -1,6 +1,5 @@
 import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from "react";
 import {
-  BadgeCheck,
   Bot,
   Check,
   CircleDashed,
@@ -9,11 +8,11 @@ import {
   Image as ImageIcon,
   LoaderCircle,
   LogIn,
+  PanelLeftOpen,
   Paperclip,
   RefreshCw,
   Send,
   ShieldCheck,
-  Sparkles,
   UploadCloud,
   UserRound,
   Video,
@@ -73,7 +72,6 @@ const ACCEPTED_FILES = "image/jpeg,image/png,image/webp,image/bmp,image/gif,imag
 
 type UploadKind = "image" | "video" | "audio" | "document" | "unknown";
 type AppView = "home" | "workspace" | "developer";
-type HealthCheckState = "checking" | "ready" | "failed";
 type FallbackOffer = {
   file: File;
   previewUrl?: string;
@@ -229,7 +227,7 @@ export default function App() {
   const [authReady, setAuthReady] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
   const [health, setHealth] = useState<HealthStatus | null>(null);
-  const [healthCheckState, setHealthCheckState] = useState<HealthCheckState>("checking");
+  const [desktopHistoryVisible, setDesktopHistoryVisible] = useState(() => window.localStorage.getItem("huijian-history-sidebar") !== "hidden");
   const [history, setHistory] = useState<AgentHistoryEntry[]>([]);
   const [historyQuery, setHistoryQuery] = useState("");
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -271,15 +269,17 @@ export default function App() {
   const historyOutcomeCacheRef = useRef(new Map<string, AgentOutcome>());
 
   const refreshHealth = useCallback(async () => {
-    setHealthCheckState("checking");
     try {
       const value = await fetchHealth();
       setHealth(value);
-      setHealthCheckState("ready");
     } catch {
       setHealth(null);
-      setHealthCheckState("failed");
     }
+  }, []);
+
+  const setHistorySidebarVisible = useCallback((visible: boolean) => {
+    setDesktopHistoryVisible(visible);
+    window.localStorage.setItem("huijian-history-sidebar", visible ? "visible" : "hidden");
   }, []);
 
   const loadHistoryForUser = useCallback(async (account: AccountUser) => {
@@ -992,10 +992,6 @@ export default function App() {
     fileInputRef.current?.click();
   }
 
-  const reportedCapabilities = Object.values(health?.capabilities || {});
-  const serviceAvailable = health?.status === "ok"
-    && health.vlmEnabled === true
-    && reportedCapabilities.every((state) => state === "available");
   const screenTitle = pendingFile?.name || "新建鉴伪任务";
 
   return (
@@ -1003,8 +999,6 @@ export default function App() {
       {view === "home" ? (
         <OfficialHome
           authReady={authReady}
-          health={health}
-          healthCheckState={healthCheckState}
           user={user}
           onEnterWorkspace={() => navigateToView("workspace")}
           onDeveloper={() => {
@@ -1023,7 +1017,7 @@ export default function App() {
           onLogout={logout}
         />
       ) : (
-      <div className="agent-app">
+      <div className={`agent-app ${desktopHistoryVisible ? "" : "history-collapsed"}`}>
       <AgentHistory
         entries={history}
         activeKey={activeKey}
@@ -1037,6 +1031,7 @@ export default function App() {
         onDelete={(entry) => void removeHistoryEntry(entry)}
         deletingKey={deletingHistoryKey}
         onNew={resetTask}
+        onCollapse={() => setHistorySidebarVisible(false)}
         onHome={() => navigateToView("home")}
         onLogin={() => setAuthOpen(true)}
         onLogout={logout}
@@ -1047,6 +1042,11 @@ export default function App() {
         <header className="agent-topbar">
           <div className="topbar-title">
             <MobileHistoryButton onClick={() => setMobileHistoryOpen(true)} />
+            {!desktopHistoryVisible && (
+              <button type="button" className="icon-button desktop-history-open" onClick={() => setHistorySidebarVisible(true)} aria-label="显示最近任务" title="显示最近任务">
+                <PanelLeftOpen size={19} />
+              </button>
+            )}
             <HuijianBrand compact onClick={() => navigateToView("home")} />
             <AnalysisModeSwitch mode={imageAnalysisMode} disabled={busy} onChange={setImageAnalysisMode} />
             <div>
@@ -1055,9 +1055,6 @@ export default function App() {
             </div>
           </div>
           <div className="topbar-actions">
-            <button className={`service-pill ${healthCheckState === "checking" ? "checking" : healthCheckState === "failed" ? "limited" : serviceAvailable ? "online" : "limited"}`} type="button" onClick={() => void refreshHealth()} aria-label={healthCheckState === "checking" ? "服务检查中" : healthCheckState === "failed" ? "服务状态读取失败，点击重试" : serviceAvailable ? "检测服务可用，点击刷新" : "服务状态待确认，点击刷新"} title="点击刷新服务状态">
-              <i /> {healthCheckState === "checking" ? "服务检查中" : healthCheckState === "failed" ? "服务状态不可用" : serviceAvailable ? "检测服务可用" : "服务状态待确认"}
-            </button>
             {authReady && (user ? (
               <button type="button" className="user-pill" onClick={() => setMobileHistoryOpen(true)} aria-label={`打开${user.username || "慧鉴用户"}的个人任务`}><UserRound size={16} /><span>{user.username || "慧鉴用户"}</span></button>
             ) : (
@@ -1083,7 +1080,6 @@ export default function App() {
               onDragEnter={() => setDragging(true)}
               onDragLeave={() => setDragging(false)}
               onDrop={dropFile}
-              onLogin={() => setAuthOpen(true)}
             />
           )}
 
@@ -1175,7 +1171,6 @@ function WelcomeWorkspace({
   onDragEnter,
   onDragLeave,
   onDrop,
-  onLogin,
   onGuestConsentChange,
 }: {
   busy: boolean;
@@ -1187,28 +1182,11 @@ function WelcomeWorkspace({
   onDragEnter: () => void;
   onDragLeave: () => void;
   onDrop: (event: DragEvent<HTMLElement>) => void;
-  onLogin: () => void;
   onGuestConsentChange: (checked: boolean) => void;
 }) {
   return (
     <div className="welcome-page">
-      <section className="welcome-workspace" aria-labelledby="welcome-title">
-        <div className="welcome-copy workspace-welcome-copy">
-          <div className="workspace-agent-badge">
-            <img src="/brand/huijian-mascot.webp" alt="慧鉴AI 品牌助手小鉴" width="72" height="96" />
-            <span><Sparkles size={14} /> 工作台已就绪</span>
-          </div>
-          <p className="welcome-eyebrow">新建鉴伪任务</p>
-          <h2 id="welcome-title">上传内容，<br />开始证据分析。</h2>
-          <p className="welcome-description">选择一份图片、视频或文档，慧鉴AI 会根据内容类型进入相应的检测与证据核验链路。</p>
-          <div className="hero-proof-row" aria-label="慧鉴AI 分析链路">
-            <span><i>01</i> 自动识别</span>
-            <span><i>02</i> 多路核验</span>
-            <span><i>03</i> 报告归档</span>
-          </div>
-          {!user && <button type="button" className="welcome-login-link" onClick={onLogin}><BadgeCheck size={16} /> 登录后，历史记录只对你本人可见</button>}
-        </div>
-
+      <section className="welcome-workspace">
         <section
           className={`upload-stage ${dragging ? "dragging" : ""}`}
           onDragEnter={(event) => { event.preventDefault(); onDragEnter(); }}
@@ -1243,12 +1221,6 @@ function WelcomeWorkspace({
           </div>
           <small className="upload-limits">图片支持 HEIC/HEIF 实况照片静态帧 · 图片/文档不超过 25 MB · 视频不超过 256 MB</small>
         </section>
-
-        <div className="trust-notes">
-          <span><ShieldCheck size={16} /> 不生成随机结论</span>
-          <span><BadgeCheck size={16} /> 个人任务严格隔离</span>
-          <span><FileText size={16} /> 支持报告归档</span>
-        </div>
       </section>
     </div>
   );

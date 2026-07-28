@@ -6,6 +6,7 @@ import {
   LogIn,
   LogOut,
   Menu,
+  PanelLeftClose,
   Plus,
   Search,
   Trash2,
@@ -32,6 +33,7 @@ interface Props {
   onDelete: (entry: AgentHistoryEntry) => void;
   deletingKey?: string;
   onNew: () => void;
+  onCollapse: () => void;
   onHome: () => void;
   onLogin: () => void;
   onLogout: () => void;
@@ -59,6 +61,11 @@ function HistoryContent(props: Props & { closeButtonRef?: RefObject<HTMLButtonEl
     <aside className="agent-sidebar" aria-label="任务历史">
       <div className="sidebar-brand-row">
         <HuijianBrand onClick={props.onHome} />
+        {!props.mobileOpen && (
+          <button type="button" className="icon-button sidebar-collapse-button" onClick={props.onCollapse} aria-label="隐藏最近任务" title="隐藏最近任务">
+            <PanelLeftClose size={18} />
+          </button>
+        )}
         {props.mobileOpen && (
           <button ref={props.closeButtonRef} type="button" className="icon-button sidebar-mobile-close" onClick={props.onCloseMobile} aria-label="关闭历史记录" title="关闭">
             <X size={18} />
@@ -97,7 +104,7 @@ function HistoryContent(props: Props & { closeButtonRef?: RefObject<HTMLButtonEl
                   onClick={() => props.onSelect(entry)}
                 >
                   <span className="history-thumb">
-                    {entry.thumbnail ? <img src={entry.thumbnail} alt="" loading="lazy" decoding="async" fetchPriority="low" /> : entryIcon(entry)}
+                    {entry.thumbnail ? <img src={entry.thumbnail} alt="" loading="lazy" decoding="async" /> : entryIcon(entry)}
                   </span>
                   <span className="history-entry-copy">
                     <strong>{entry.title}</strong>

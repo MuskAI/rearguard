@@ -17,6 +17,8 @@ import {
   Layers3,
   Link2,
   LoaderCircle,
+  MousePointer2,
+  ScanSearch,
   ScanLine,
   ShieldCheck,
   ShieldOff,
@@ -186,6 +188,38 @@ function ImageLightbox({
   onClose: () => void;
 }) {
   const closeRef = useRef<HTMLButtonElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const lensRef = useRef<HTMLDivElement>(null);
+  const [mode, setMode] = useState<"view" | "lens">("view");
+
+  const moveLens = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (mode !== "lens") return;
+    const stage = stageRef.current;
+    const lens = lensRef.current;
+    const image = stage?.querySelector("img");
+    if (!stage || !lens || !image || image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
+    const rect = stage.getBoundingClientRect();
+    const scale = Math.min(rect.width / image.naturalWidth, rect.height / image.naturalHeight);
+    const imageWidth = image.naturalWidth * scale;
+    const imageHeight = image.naturalHeight * scale;
+    const imageLeft = (rect.width - imageWidth) / 2;
+    const imageTop = (rect.height - imageHeight) / 2;
+    const localX = Math.max(imageLeft, Math.min(event.clientX - rect.left, imageLeft + imageWidth));
+    const localY = Math.max(imageTop, Math.min(event.clientY - rect.top, imageTop + imageHeight));
+    const normalizedX = (localX - imageLeft) / imageWidth;
+    const normalizedY = (localY - imageTop) / imageHeight;
+    const lensSize = lens.offsetWidth;
+    const zoom = 3;
+    lens.style.opacity = "1";
+    lens.style.transform = `translate(${localX - lensSize / 2}px, ${localY - lensSize / 2}px)`;
+    lens.style.backgroundSize = `${imageWidth * zoom}px ${imageHeight * zoom}px`;
+    lens.style.backgroundPosition = `${lensSize / 2 - normalizedX * imageWidth * zoom}px ${lensSize / 2 - normalizedY * imageHeight * zoom}px`;
+  }, [mode]);
+
+  useEffect(() => {
+    if (mode !== "lens" && lensRef.current) lensRef.current.style.opacity = "0";
+  }, [mode]);
+
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -204,10 +238,38 @@ function ImageLightbox({
     <div className="image-lightbox" role="dialog" aria-modal="true" aria-label={`放大查看${alt}`}>
       <button type="button" className="image-lightbox-backdrop" onClick={onClose} aria-label="关闭图片预览" />
       <div className="image-lightbox-panel">
+        <div className="image-lightbox-modebar" role="group" aria-label="图片查看方式">
+          <button type="button" className={mode === "view" ? "is-active" : ""} aria-pressed={mode === "view"} onClick={() => setMode("view")} title="普通查看">
+            <MousePointer2 size={16} /><span>普通查看</span>
+          </button>
+          <button type="button" className={mode === "lens" ? "is-active" : ""} aria-pressed={mode === "lens"} onClick={() => setMode("lens")} title="局部放大 3 倍">
+            <ScanSearch size={17} /><span>局部放大</span>
+          </button>
+        </div>
         <button ref={closeRef} type="button" className="image-lightbox-close" onClick={onClose} aria-label="关闭图片预览" title="关闭">
           <X size={20} />
         </button>
-        <AnnotatedImagePreview src={src} alt={alt} marks={marks} />
+        <div
+          ref={stageRef}
+          className={`image-lightbox-stage ${mode === "lens" ? "is-lens-active" : ""}`}
+          onPointerMove={moveLens}
+          onPointerDown={(event) => {
+            if (mode !== "lens") return;
+            event.currentTarget.setPointerCapture(event.pointerId);
+            moveLens(event);
+          }}
+          onPointerLeave={() => {
+            if (lensRef.current) lensRef.current.style.opacity = "0";
+          }}
+        >
+          <AnnotatedImagePreview src={src} alt={alt} marks={marks} />
+          <div
+            ref={lensRef}
+            className="image-detail-lens"
+            aria-hidden="true"
+            style={{ backgroundImage: `url("${src.replace(/"/g, "%22")}")` }}
+          />
+        </div>
         <p>{alt}</p>
       </div>
     </div>,

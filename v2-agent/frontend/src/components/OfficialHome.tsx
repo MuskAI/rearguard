@@ -16,33 +16,18 @@ import {
   Video,
   Waypoints,
 } from "lucide-react";
-import type { AccountUser, HealthStatus } from "../api";
+import type { AccountUser } from "../api";
 import HuijianBrand from "./HuijianBrand";
 
 interface Props {
   authReady: boolean;
-  health: HealthStatus | null;
-  healthCheckState: "checking" | "ready" | "failed";
   user: AccountUser | null;
   onEnterWorkspace: () => void;
   onDeveloper: () => void;
   onLogin: () => void;
 }
 
-function getServiceState(health: HealthStatus | null, healthCheckState: Props["healthCheckState"]) {
-  if (healthCheckState === "failed") return { tone: "limited", label: "服务状态暂不可用" };
-  if (healthCheckState === "checking" || !health) return { tone: "checking", label: "正在检查服务" };
-  const capabilityStates = Object.values(health.capabilities || {});
-  const hasLimitedCapability = capabilityStates.some((state) => state !== "available");
-  if (health.status === "ok" && health.vlmEnabled && !hasLimitedCapability) {
-    return { tone: "online", label: "核心服务正常" };
-  }
-  return { tone: "limited", label: "服务状态待确认" };
-}
-
-export default function OfficialHome({ authReady, health, healthCheckState, user, onEnterWorkspace, onDeveloper, onLogin }: Props) {
-  const service = getServiceState(health, healthCheckState);
-
+export default function OfficialHome({ authReady, user, onEnterWorkspace, onDeveloper, onLogin }: Props) {
   return (
     <div className="official-site">
       <header className="official-header">
@@ -56,7 +41,6 @@ export default function OfficialHome({ authReady, health, healthCheckState, user
           <button type="button" onClick={onDeveloper}>开发者平台</button>
         </nav>
         <div className="official-header-actions">
-          <span className={`official-service-state ${service.tone}`}><i />{service.label}</span>
           {authReady && (user ? (
             <button type="button" className="official-account-button" onClick={onEnterWorkspace} aria-label={`进入${user.username || "当前用户"}的工作台`}>
               <UserRound size={17} />
