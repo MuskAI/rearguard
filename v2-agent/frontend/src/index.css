@@ -1205,6 +1205,10 @@ video {
   outline-offset: 4px;
 }
 
+.topbar-title h1:focus {
+  outline: none;
+}
+
 .user-file-message {
   align-self: flex-end;
   width: min(470px, 84%);
