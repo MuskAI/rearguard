@@ -17,13 +17,15 @@ import {
   Layers3,
   Link2,
   LoaderCircle,
-  Microscope,
   ScanLine,
   ShieldCheck,
   ShieldOff,
   Sparkles,
   Video,
+  X,
+  ZoomIn,
 } from "lucide-react";
+import { createPortal } from "react-dom";
 import type { AgentOutcome } from "../agentTypes";
 import { binaryVerdictLabel, isFakeVerdict } from "../binaryVerdict";
 import {
@@ -31,7 +33,6 @@ import {
   listReportShares,
   revokeReportShare,
   type CaptureEvidence,
-  type ForensicReport,
   type ProbabilityModel,
   type ProvenanceReport,
   type ReportShareItem,
@@ -43,17 +44,13 @@ import { buildEvidenceExplanation, hasDecisiveAiWatermark, localizedWatermarkHit
 import WatermarkPipeline from "./WatermarkPipeline";
 
 type ResultTab = "summary" | "evidence" | "file";
-type ForensicsPreviewState = "idle" | "running" | "complete" | "skipped";
 
 interface Props {
   outcome: AgentOutcome;
-  forensicsBusy: boolean;
-  forensicsPreviewState: ForensicsPreviewState;
   provenanceBusy: boolean;
   downloadBusy: boolean;
   actionError?: string;
   onRetryAction?: () => void;
-  onForensics: () => void;
   onProvenance: () => void;
   onDownload: () => void;
 }
@@ -90,10 +87,12 @@ function AnnotatedImagePreview({
   src,
   alt,
   marks,
+  onOpen,
 }: {
   src: string;
   alt: string;
   marks: PreviewWatermarkMark[];
+  onOpen?: () => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
@@ -128,7 +127,20 @@ function AnnotatedImagePreview({
   }, [src, updateFrame]);
 
   return (
-    <div className="result-preview-image" ref={hostRef}>
+    <div
+      className={`result-preview-image ${onOpen ? "is-interactive" : ""}`}
+      ref={hostRef}
+      role={onOpen ? "button" : undefined}
+      tabIndex={onOpen ? 0 : undefined}
+      aria-label={onOpen ? `放大查看${alt}` : undefined}
+      onClick={onOpen}
+      onKeyDown={onOpen ? (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpen();
+        }
+      } : undefined}
+    >
       <img ref={imageRef} src={src} alt={alt} onLoad={updateFrame} />
       {frame && marks.length > 0 && (
         <div
@@ -157,7 +169,49 @@ function AnnotatedImagePreview({
           })}
         </div>
       )}
+      {onOpen && <span className="result-preview-zoom" aria-hidden="true"><ZoomIn size={15} /></span>}
     </div>
+  );
+}
+
+function ImageLightbox({
+  src,
+  alt,
+  marks,
+  onClose,
+}: {
+  src: string;
+  alt: string;
+  marks: PreviewWatermarkMark[];
+  onClose: () => void;
+}) {
+  const closeRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    closeRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [onClose]);
+
+  return createPortal(
+    <div className="image-lightbox" role="dialog" aria-modal="true" aria-label={`放大查看${alt}`}>
+      <button type="button" className="image-lightbox-backdrop" onClick={onClose} aria-label="关闭图片预览" />
+      <div className="image-lightbox-panel">
+        <button ref={closeRef} type="button" className="image-lightbox-close" onClick={onClose} aria-label="关闭图片预览" title="关闭">
+          <X size={20} />
+        </button>
+        <AnnotatedImagePreview src={src} alt={alt} marks={marks} />
+        <p>{alt}</p>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -304,48 +358,6 @@ function ResultDisclosure({
       </summary>
       <div className="result-disclosure-content">{children}</div>
     </details>
-  );
-}
-
-function ForensicsSection({ report, busy, previewState }: { report?: ForensicReport; busy: boolean; previewState: ForensicsPreviewState }) {
-  if (!report && !busy) return null;
-  const isBrowserPreview = report?.source === "browser-preview";
-  const completed = report?.items.length || 0;
-  const pending = busy && previewState === "running" && (!report || isBrowserPreview) ? Math.max(0, 7 - completed) : 0;
-  const status = !report
-    ? previewState === "skipped" ? "本地预览已跳过，服务端无损图谱判读中" : "浏览器正在生成第 1 组本地预览"
-    : isBrowserPreview && busy
-      ? previewState === "skipped"
-        ? `本地预览停在 ${completed}/7，服务端无损图谱判读中`
-        : `本地预览 ${completed}/7，服务端无损图谱判读中`
-      : isBrowserPreview
-        ? "本地预览已完成，服务端判读暂时不可用"
-        : report.source === "vlm"
-          ? "服务端模型判读完成"
-          : "服务端取证分析完成";
-  return (
-    <section className="result-band forensic-band">
-      <div className="section-title"><Microscope size={18} /><div><h3>{isBrowserPreview || !report ? "取证图谱预览" : "取证图谱"}</h3><p>{report?.summary || "低分辨率预览在本机逐项生成，服务端同时判读无损图谱。"}</p></div></div>
-      <div className={`forensic-progress ${busy ? "is-running" : "is-complete"}`} role="status" aria-live="polite" aria-atomic="true">
-        {busy ? <LoaderCircle size={14} className="spin" /> : <CheckCircle2 size={14} />}
-        <span>{status}</span>
-        {report?.elapsedMs ? <time>{(report.elapsedMs / 1000).toFixed(1)}s</time> : null}
-      </div>
-      <div className="forensic-grid">
-        {report?.items.map((item) => (
-          <figure key={item.key}>
-            <img src={item.image} alt={item.title} />
-            <figcaption><strong>{item.title}</strong><span>{item.finding}</span></figcaption>
-          </figure>
-        ))}
-        {Array.from({ length: pending }, (_, index) => (
-          <figure className="forensic-pending" key={`forensic-pending-${completed + index}`} aria-hidden="true">
-            <div className="forensic-placeholder" />
-            <figcaption><strong>正在生成图谱</strong><span>本地信号计算进行中</span></figcaption>
-          </figure>
-        ))}
-      </div>
-    </section>
   );
 }
 
@@ -666,6 +678,28 @@ function ProbabilitySection({ model }: { model?: ProbabilityModel }) {
   );
 }
 
+interface MetadataRow {
+  path: string;
+  value: string;
+}
+
+function metadataRows(value: unknown, path = "", rows: MetadataRow[] = []): MetadataRow[] {
+  if (Array.isArray(value)) {
+    if (value.length === 0 && path) rows.push({ path, value: "[]" });
+    value.forEach((item, index) => metadataRows(item, `${path}[${index}]`, rows));
+    return rows;
+  }
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 0 && path) rows.push({ path, value: "{}" });
+    entries.forEach(([key, item]) => metadataRows(item, path ? `${path}.${key}` : key, rows));
+    return rows;
+  }
+  const text = value == null ? String(value) : typeof value === "boolean" ? (value ? "true" : "false") : String(value);
+  rows.push({ path: path || "metadata", value: text });
+  return rows;
+}
+
 export default function AgentResult(props: Props) {
   const [tab, setTab] = useState<ResultTab>("summary");
   const [shareBusy, setShareBusy] = useState(false);
@@ -673,12 +707,14 @@ export default function AgentResult(props: Props) {
   const [shareMessage, setShareMessage] = useState("");
   const [createdShareUrl, setCreatedShareUrl] = useState("");
   const [shares, setShares] = useState<ReportShareItem[]>([]);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
   useEffect(() => {
     setTab("summary");
     setShareOpen(false);
     setShareMessage("");
     setCreatedShareUrl("");
     setShares([]);
+    setLightboxOpen(false);
   }, [props.outcome.id]);
   const verdict = useMemo(() => verdictFor(props.outcome), [props.outcome]);
   const explanationPoints = useMemo(
@@ -701,7 +737,6 @@ export default function AgentResult(props: Props) {
   }, [explanationPoints, keyExplanationPoints]);
   const preview = filePreview(props.outcome);
   const canDeepAnalyze = hasImageFile(props.outcome);
-  const forensics = props.outcome.kind === "image" || props.outcome.kind === "evidence" ? props.outcome.forensics : undefined;
   const provenance = props.outcome.kind === "image" || props.outcome.kind === "evidence"
     ? props.outcome.provenance || (props.outcome.kind === "evidence" ? props.outcome.result.provenance || undefined : undefined)
     : undefined;
@@ -730,9 +765,11 @@ export default function AgentResult(props: Props) {
   const visualReview = props.outcome.kind === "image"
     ? props.outcome.result.visualReview
     : undefined;
-  const forensicsActionLabel = props.forensicsBusy
-    ? props.forensicsPreviewState === "skipped" ? "服务端判读中" : forensics?.source === "browser-preview" ? "模型判读中" : forensics?.source === "vlm" ? "正在归档" : "本地图谱生成中"
-    : forensics ? "重新生成取证图谱" : "生成取证图谱";
+  const completeMetadata = useMemo(() => {
+    if (props.outcome.kind === "image") return metadataRows(props.outcome.result.all_metadata || {});
+    if (props.outcome.kind === "video") return metadataRows(props.outcome.result.meta || {});
+    return metadataRows(provenance?.metadata || {});
+  }, [props.outcome, provenance]);
 
   async function refreshShares() {
     if (props.outcome.kind !== "evidence") return;
@@ -802,7 +839,7 @@ export default function AgentResult(props: Props) {
           {props.outcome.kind === "video" && preview ? (
             <video src={preview} controls preload="metadata" />
           ) : preview ? (
-            <AnnotatedImagePreview src={preview} alt={fileName(props.outcome)} marks={previewWatermarkMarks} />
+            <AnnotatedImagePreview src={preview} alt={fileName(props.outcome)} marks={previewWatermarkMarks} onOpen={() => setLightboxOpen(true)} />
           ) : (
             <span>{props.outcome.kind === "video" ? <Video size={30} /> : props.outcome.kind === "image" ? <ImageIcon size={30} /> : <FileText size={30} />}</span>
           )}
@@ -897,10 +934,6 @@ export default function AgentResult(props: Props) {
               {props.downloadBusy ? <LoaderCircle size={17} className="spin" /> : <Download size={17} />}
               {props.downloadBusy ? "正在整理报告" : "下载鉴伪报告"}
             </button>
-            <button type="button" className="secondary-button" onClick={props.onForensics} disabled={!canDeepAnalyze || props.forensicsBusy} title={canDeepAnalyze ? "生成像素级取证图谱" : "历史任务需重新上传原文件后生成取证图谱"}>
-              {props.forensicsBusy ? <LoaderCircle size={17} className="spin" /> : <Microscope size={17} />}
-              {forensicsActionLabel}
-            </button>
             <button type="button" className="secondary-button" onClick={props.onProvenance} disabled={!canDeepAnalyze || props.provenanceBusy} title={canDeepAnalyze ? "验证 C2PA 与文件元数据" : "历史任务需重新上传原文件后验证内容凭证"}>
               {props.provenanceBusy ? <LoaderCircle size={17} className="spin" /> : <Fingerprint size={17} />}
               {provenance ? "重新验证内容凭证" : "验证内容凭证"}
@@ -993,16 +1026,6 @@ export default function AgentResult(props: Props) {
               <ProvenanceSection report={provenance} />
             </ResultDisclosure>
           )}
-          {(forensics || props.forensicsBusy) && (
-            <ResultDisclosure
-              icon={<Microscope size={18} />}
-              title="取证图谱与中间结果"
-              description={props.forensicsBusy ? "图谱正在生成，可展开查看实时进度" : "查看误差、噪声、频域等辅助分析"}
-              open={props.forensicsBusy}
-            >
-              <ForensicsSection report={forensics} busy={props.forensicsBusy} previewState={props.forensicsPreviewState} />
-            </ResultDisclosure>
-          )}
         </div>
       )}
 
@@ -1042,7 +1065,6 @@ export default function AgentResult(props: Props) {
               </div>
             </section>
           )}
-          <ForensicsSection report={forensics} busy={props.forensicsBusy} previewState={props.forensicsPreviewState} />
           <ProvenanceSection report={provenance} />
         </div>
       )}
@@ -1059,8 +1081,23 @@ export default function AgentResult(props: Props) {
               {props.outcome.kind === "evidence" && <><div><dt>文件大小</dt><dd>{props.outcome.result.fileMeta.size}</dd></div><div><dt>分辨率</dt><dd>{props.outcome.result.fileMeta.resolution || "不适用"}</dd></div><div><dt>文件指纹</dt><dd className="mono-value">{props.outcome.result.fileMeta.sha256 || "未返回"}</dd></div><div><dt>报告编号</dt><dd>{props.outcome.result.reportId}</dd></div></>}
             </dl>
           </section>
+          <section className="result-band metadata-band">
+            <div className="section-title"><Fingerprint size={18} /><div><h3>完整元数据</h3><p>展示服务器从原始文件中读取到的全部字段，不省略嵌套信息。</p></div></div>
+            {completeMetadata.length > 0 ? (
+              <dl className="metadata-list">
+                {completeMetadata.map((row, index) => (
+                  <div key={`${row.path}-${index}`}><dt>{row.path}</dt><dd>{row.value}</dd></div>
+                ))}
+              </dl>
+            ) : (
+              <div className="metadata-empty"><Info size={16} /> 当前文件未读取到可展示的元数据。</div>
+            )}
+          </section>
           <div className="result-disclaimer"><Info size={16} /><p>鉴伪结果是辅助判断，不等同于司法鉴定结论。高风险场景请结合原始文件、来源链路和人工复核。</p></div>
         </div>
+      )}
+      {lightboxOpen && preview && (
+        <ImageLightbox src={preview} alt={fileName(props.outcome)} marks={previewWatermarkMarks} onClose={() => setLightboxOpen(false)} />
       )}
     </article>
   );

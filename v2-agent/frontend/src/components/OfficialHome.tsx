@@ -37,7 +37,7 @@ function getServiceState(health: HealthStatus | null, healthCheckState: Props["h
   if (health.status === "ok" && health.vlmEnabled && !hasLimitedCapability) {
     return { tone: "online", label: "核心服务正常" };
   }
-  return { tone: "limited", label: "部分能力受限" };
+  return { tone: "limited", label: "服务状态待确认" };
 }
 
 export default function OfficialHome({ authReady, health, healthCheckState, user, onEnterWorkspace, onDeveloper, onLogin }: Props) {

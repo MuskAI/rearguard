@@ -6,7 +6,6 @@ import {
   CircleDashed,
   Code2,
   FileText,
-  Home,
   Image as ImageIcon,
   LoaderCircle,
   LogIn,
@@ -47,7 +46,6 @@ import {
   fetchVideoHistory,
   isRateLimitedError,
   logoutAccount,
-  runForensics,
   runProvenance,
   SESSION_EXPIRED_EVENT,
   startImageAgent,
@@ -55,13 +53,13 @@ import {
 } from "./api";
 import type { AgentHistoryEntry, AgentOutcome, AgentProgress, ImageAnalysisMode, PendingFile } from "./agentTypes";
 import { binaryVerdictLabel } from "./binaryVerdict";
-import { generateForensicPreview } from "./clientForensics";
 import { startFastImageAgent, submitImageFeedback } from "./imageInteractionApi";
 import AgentHistory, { MobileHistoryButton } from "./components/AgentHistory";
 import AnalysisModeSwitch from "./components/AnalysisModeSwitch";
 import AgentResult from "./components/AgentResult";
 import AuthDialog from "./components/AuthDialog";
 import DeveloperPlatform from "./components/DeveloperPlatform";
+import HuijianBrand from "./components/HuijianBrand";
 import OfficialHome from "./components/OfficialHome";
 import ResultFeedback from "./components/ResultFeedback";
 import { trackPageview } from "./analytics";
@@ -244,10 +242,8 @@ export default function App() {
   const [outcome, setOutcome] = useState<AgentOutcome | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
   const [actionError, setActionError] = useState("");
-  const [failedAction, setFailedAction] = useState<"forensics" | "provenance" | "download" | null>(null);
+  const [failedAction, setFailedAction] = useState<"provenance" | "download" | null>(null);
   const [busy, setBusy] = useState(false);
-  const [forensicsBusy, setForensicsBusy] = useState(false);
-  const [forensicsPreviewState, setForensicsPreviewState] = useState<"idle" | "running" | "complete" | "skipped">("idle");
   const [provenanceBusy, setProvenanceBusy] = useState(false);
   const [downloadBusy, setDownloadBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -261,9 +257,7 @@ export default function App() {
   const workspaceRef = useRef<HTMLDivElement>(null);
   const resultRef = useRef<HTMLDivElement>(null);
   const runControllerRef = useRef<AbortController | null>(null);
-  const forensicsControllerRef = useRef<{ request: AbortController; preview: AbortController } | null>(null);
   const runTokenRef = useRef(0);
-  const forensicsTokenRef = useRef(0);
   const historyTokenRef = useRef(0);
   const detailTokenRef = useRef(0);
   const userIdRef = useRef<number | null>(null);
@@ -274,6 +268,7 @@ export default function App() {
   const pendingSwarmFileRef = useRef<File | null>(null);
   const activeJobIdRef = useRef<string | null>(null);
   const webRequestKeysRef = useRef(new WeakMap<File, Partial<Record<ImageAnalysisMode, string>>>());
+  const historyOutcomeCacheRef = useRef(new Map<string, AgentOutcome>());
 
   const refreshHealth = useCallback(async () => {
     setHealthCheckState("checking");
@@ -346,9 +341,6 @@ export default function App() {
     return () => {
       active = false;
       runControllerRef.current?.abort();
-      forensicsTokenRef.current += 1;
-      forensicsControllerRef.current?.request.abort();
-      forensicsControllerRef.current?.preview.abort();
       if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
     };
   }, [loadHistoryForUser, refreshHealth]);
@@ -374,6 +366,11 @@ export default function App() {
 
   const outcomeId = outcome?.id;
   useEffect(() => {
+    if (!user || !outcome || !activeKey || outcome.id !== activeKey) return;
+    historyOutcomeCacheRef.current.set(`${user.Userid}:${activeKey}`, outcome);
+  }, [activeKey, outcome, user]);
+
+  useEffect(() => {
     if (!progress && !outcomeId && !errorMessage && !fallbackOffer) return;
     window.requestAnimationFrame(() => {
       if (outcomeId) {
@@ -390,11 +387,7 @@ export default function App() {
     detailTokenRef.current += 1;
     runControllerRef.current?.abort();
     runControllerRef.current = null;
-    forensicsTokenRef.current += 1;
     feedbackTokenRef.current += 1;
-    forensicsControllerRef.current?.request.abort();
-    forensicsControllerRef.current?.preview.abort();
-    forensicsControllerRef.current = null;
     if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
     previewUrlRef.current = null;
     retryFileRef.current = null;
@@ -405,8 +398,6 @@ export default function App() {
     setActionError("");
     setFailedAction(null);
     setBusy(false);
-    setForensicsBusy(false);
-    setForensicsPreviewState("idle");
     setFeedbackBusy(false);
     setFeedbackError("");
     setFallbackOffer(null);
@@ -419,6 +410,7 @@ export default function App() {
       if (userIdRef.current == null) return;
       resetTask();
       historyTokenRef.current += 1;
+      historyOutcomeCacheRef.current.clear();
       userIdRef.current = null;
       setUser(null);
       setHistory([]);
@@ -454,6 +446,7 @@ export default function App() {
     pendingSwarmFileRef.current = null;
     resetTask();
     historyTokenRef.current += 1;
+    historyOutcomeCacheRef.current.clear();
     userIdRef.current = nextUser.Userid;
     setHistory([]);
     setUser(nextUser);
@@ -472,6 +465,7 @@ export default function App() {
     }
     resetTask();
     historyTokenRef.current += 1;
+    historyOutcomeCacheRef.current.clear();
     userIdRef.current = null;
     setUser(null);
     setHistory([]);
@@ -531,7 +525,7 @@ export default function App() {
         if (job.status === "failed") {
           terminalFailure = true;
           activeJobIdRef.current = null;
-          throw new Error(job.error || (mode === "swarm" ? "Swarm 复核暂不可用" : "快速检测暂不可用"));
+          throw new Error(job.error || (mode === "swarm" ? "Soar 模式暂不可用" : "快速检测暂不可用"));
         }
         let polled: Awaited<ReturnType<typeof fetchImageAgentJob>>;
         try {
@@ -566,7 +560,7 @@ export default function App() {
       return;
     } catch (error) {
       if (isAbort(error) || runTokenRef.current !== token) throw error;
-      const message = error instanceof Error ? error.message : (mode === "swarm" ? "Swarm 复核暂不可用" : "快速检测暂不可用");
+      const message = error instanceof Error ? error.message : (mode === "swarm" ? "Soar 模式暂不可用" : "快速检测暂不可用");
       if (isAuthenticationRequiredError(error) || isUploadConsentRequiredError(error)) throw error;
       if (isRateLimitedError(error)) {
         throw new Error("当前提交任务较多，请稍候几秒后重试当前文件");
@@ -846,45 +840,45 @@ export default function App() {
     }
     const requestToken = ++detailTokenRef.current;
     const expectedUserId = user.Userid;
+    const cacheKey = `${expectedUserId}:${entry.key}`;
+    const cachedOutcome = historyOutcomeCacheRef.current.get(cacheKey);
     runControllerRef.current?.abort();
-    forensicsTokenRef.current += 1;
     feedbackTokenRef.current += 1;
-    forensicsControllerRef.current?.request.abort();
-    forensicsControllerRef.current?.preview.abort();
-    forensicsControllerRef.current = null;
-    setForensicsBusy(false);
-    setForensicsPreviewState("idle");
     setFeedbackBusy(false);
     setFeedbackError("");
-    setBusy(true);
+    setBusy(false);
     setMobileHistoryOpen(false);
     setActiveKey(entry.key);
     setPendingFile({ name: entry.title, size: 0, typeLabel: entry.typeLabel, previewUrl: entry.thumbnail || undefined });
-    setOutcome(null);
     setErrorMessage("");
-    setProgress({ title: "正在读取个人归档", detail: "校验任务归属并恢复检测结果", percent: 64, stage: "report" });
+    setProgress(null);
+    setFallbackOffer(null);
+    if (cachedOutcome) {
+      setOutcome(cachedOutcome);
+      return;
+    }
+    setOutcome(null);
     try {
+      let nextOutcome: AgentOutcome;
       if (entry.origin === "image") {
         const response = await fetchImageAgentResult(Number(entry.recordId));
         if (detailTokenRef.current !== requestToken || userIdRef.current !== expectedUserId) return;
         const analysisMode: ImageAnalysisMode = response.result.swarm?.enabled ? "swarm" : "fast";
-        setOutcome({ kind: "image", id: entry.key, result: response.result, analysisMode });
+        nextOutcome = { kind: "image", id: entry.key, result: response.result, analysisMode };
       } else if (entry.origin === "video") {
         const response = await fetchVideoAgentResult(Number(entry.recordId));
         if (detailTokenRef.current !== requestToken || userIdRef.current !== expectedUserId) return;
-        setOutcome({ kind: "video", id: entry.key, result: response.result });
+        nextOutcome = { kind: "video", id: entry.key, result: response.result };
       } else {
         const result = await fetchHistoryItem(entry.recordId);
         if (detailTokenRef.current !== requestToken || userIdRef.current !== expectedUserId) return;
-        setOutcome({ kind: "evidence", id: entry.key, result, forensics: result.forensics || undefined, provenance: result.provenance || undefined });
+        nextOutcome = { kind: "evidence", id: entry.key, result, provenance: result.provenance || undefined };
       }
-      setProgress(null);
+      historyOutcomeCacheRef.current.set(cacheKey, nextOutcome);
+      setOutcome(nextOutcome);
     } catch (error) {
       if (detailTokenRef.current !== requestToken || userIdRef.current !== expectedUserId) return;
-      setProgress(null);
       setErrorMessage(error instanceof Error ? error.message : "历史任务暂时无法读取");
-    } finally {
-      if (detailTokenRef.current === requestToken) setBusy(false);
     }
   }
 
@@ -897,94 +891,13 @@ export default function App() {
       if (entry.origin === "evidence") await deleteHistory(entry.recordId);
       else if (entry.origin === "image") await deleteImageHistory(Number(entry.recordId));
       else await deleteVideoHistory(Number(entry.recordId));
+      historyOutcomeCacheRef.current.delete(`${user.Userid}:${entry.key}`);
       setHistory((current) => current.filter((item) => item.key !== entry.key));
       if (activeKey === entry.key) resetTask();
     } catch (error) {
       setHistoryMessage(error instanceof Error ? error.message : "记录删除失败，请稍后重试");
     } finally {
       setDeletingHistoryKey(undefined);
-    }
-  }
-
-  async function createForensics() {
-    if (!outcome?.file || forensicsBusy) return;
-    const outcomeId = outcome.id;
-    const targetTaskId = outcome.kind === "evidence" ? outcome.result.taskId : null;
-    const file = outcome.file;
-    const requestController = new AbortController();
-    const previewController = new AbortController();
-    const requestToken = ++forensicsTokenRef.current;
-    forensicsControllerRef.current?.request.abort();
-    forensicsControllerRef.current?.preview.abort();
-    forensicsControllerRef.current = { request: requestController, preview: previewController };
-    let authoritativeReady = false;
-    let previewRendered = false;
-    const isCurrent = () => forensicsTokenRef.current === requestToken && !requestController.signal.aborted;
-
-    const updateReport = (report: Awaited<ReturnType<typeof runForensics>>) => {
-      if (!isCurrent()) return;
-      setOutcome((current) => current && current.id === outcomeId && (current.kind === "image" || current.kind === "evidence")
-        ? { ...current, forensics: report }
-        : current);
-    };
-
-    setForensicsBusy(true);
-    setForensicsPreviewState("running");
-    setActionError("");
-    setFailedAction(null);
-
-    const serverRequest = runForensics(file, requestController.signal, targetTaskId || undefined);
-    const previewTask = generateForensicPreview(file, (report) => {
-      if (authoritativeReady || !isCurrent()) return;
-      previewRendered = true;
-      updateReport(report);
-    }, previewController.signal).then(
-      (report) => {
-        if (isCurrent()) setForensicsPreviewState("complete");
-        return { ok: true as const, report };
-      },
-      (error: unknown) => {
-        if (isCurrent() && !isAbort(error)) setForensicsPreviewState("skipped");
-        return { ok: false as const, error };
-      },
-    );
-    const serverTask = serverRequest.then(async (report) => {
-      if (!isCurrent()) return { ok: false as const, cancelled: true as const };
-      authoritativeReady = true;
-      previewController.abort();
-      updateReport(report);
-      return { ok: true as const, report };
-    }).catch((error: unknown) => ({
-      ok: false as const,
-      error,
-      cancelled: isAbort(error) || forensicsTokenRef.current !== requestToken,
-    }));
-
-    const [serverResult, previewResult] = await Promise.all([serverTask, previewTask]);
-    if (!isCurrent()) return;
-    if (!serverResult.ok && !("cancelled" in serverResult && serverResult.cancelled)) {
-      if (previewResult.ok || previewRendered) {
-        setOutcome((current) => {
-          if (!current || current.id !== outcomeId || (current.kind !== "image" && current.kind !== "evidence")) return current;
-          if (current.forensics?.source !== "browser-preview") return current;
-          return {
-            ...current,
-            forensics: {
-              ...current.forensics,
-              summary: "低分辨率预览已在浏览器本地生成；服务端模型判读暂时不可用，当前预览不作为最终鉴伪结论。",
-            },
-          };
-        });
-        setActionError("本地预览已生成，但服务端模型判读失败，请稍后重试。");
-        setFailedAction("forensics");
-      } else {
-        setActionError(serverResult.error instanceof Error ? serverResult.error.message : "取证图谱生成失败");
-        setFailedAction("forensics");
-      }
-    }
-    if (forensicsTokenRef.current === requestToken) {
-      forensicsControllerRef.current = null;
-      setForensicsBusy(false);
     }
   }
 
@@ -1028,8 +941,7 @@ export default function App() {
   }
 
   function retryFailedAction() {
-    if (failedAction === "forensics") void createForensics();
-    else if (failedAction === "provenance") void verifyProvenance();
+    if (failedAction === "provenance") void verifyProvenance();
     else if (failedAction === "download") void downloadOutcome();
   }
 
@@ -1125,6 +1037,7 @@ export default function App() {
         onDelete={(entry) => void removeHistoryEntry(entry)}
         deletingKey={deletingHistoryKey}
         onNew={resetTask}
+        onHome={() => navigateToView("home")}
         onLogin={() => setAuthOpen(true)}
         onLogout={logout}
         onCloseMobile={() => setMobileHistoryOpen(false)}
@@ -1134,17 +1047,16 @@ export default function App() {
         <header className="agent-topbar">
           <div className="topbar-title">
             <MobileHistoryButton onClick={() => setMobileHistoryOpen(true)} />
-            <button type="button" className="workspace-home-button" onClick={() => navigateToView("home")} aria-label="返回慧鉴AI官网首页" title="官网首页">
-              <Home size={16} /><span>官网首页</span>
-            </button>
+            <HuijianBrand compact onClick={() => navigateToView("home")} />
+            <AnalysisModeSwitch mode={imageAnalysisMode} disabled={busy} onChange={setImageAnalysisMode} />
             <div>
               <h1 tabIndex={-1}><span className="desktop-task-title">{screenTitle}</span><span className="mobile-task-title">{pendingFile?.name || "慧鉴AI"}</span></h1>
               <p>{pendingFile ? "慧鉴AI 正在为这份内容整理可信证据" : "一个入口完成检测、取证、凭证核验与报告归档"}</p>
             </div>
           </div>
           <div className="topbar-actions">
-            <button className={`service-pill ${healthCheckState === "checking" ? "checking" : healthCheckState === "failed" ? "limited" : serviceAvailable ? "online" : "limited"}`} type="button" onClick={() => void refreshHealth()} aria-label={healthCheckState === "checking" ? "服务检查中" : healthCheckState === "failed" ? "服务状态读取失败，点击重试" : serviceAvailable ? "检测服务可用，点击刷新" : "部分能力受限，点击刷新"} title="点击刷新服务状态">
-              <i /> {healthCheckState === "checking" ? "服务检查中" : healthCheckState === "failed" ? "服务状态不可用" : serviceAvailable ? "检测服务可用" : "部分能力受限"}
+            <button className={`service-pill ${healthCheckState === "checking" ? "checking" : healthCheckState === "failed" ? "limited" : serviceAvailable ? "online" : "limited"}`} type="button" onClick={() => void refreshHealth()} aria-label={healthCheckState === "checking" ? "服务检查中" : healthCheckState === "failed" ? "服务状态读取失败，点击重试" : serviceAvailable ? "检测服务可用，点击刷新" : "服务状态待确认，点击刷新"} title="点击刷新服务状态">
+              <i /> {healthCheckState === "checking" ? "服务检查中" : healthCheckState === "failed" ? "服务状态不可用" : serviceAvailable ? "检测服务可用" : "服务状态待确认"}
             </button>
             {authReady && (user ? (
               <button type="button" className="user-pill" onClick={() => setMobileHistoryOpen(true)} aria-label={`打开${user.username || "慧鉴用户"}的个人任务`}><UserRound size={16} /><span>{user.username || "慧鉴用户"}</span></button>
@@ -1161,8 +1073,6 @@ export default function App() {
               busy={busy}
               dragging={dragging}
               user={user}
-              analysisMode={imageAnalysisMode}
-              onAnalysisModeChange={setImageAnalysisMode}
               guestConsent={guestConsent}
               consentWarning={consentWarning}
               onGuestConsentChange={(checked) => {
@@ -1180,7 +1090,7 @@ export default function App() {
           {pendingFile && (
             <div className="conversation-flow">
               <div className="user-file-message">
-                <div className="file-message-copy"><span>请帮我鉴别这份内容</span><strong>{pendingFile.name}</strong><small>{pendingFile.typeLabel}{pendingFile.size ? ` · ${formatBytes(pendingFile.size)}` : " · 已归档任务"}{pendingFile.analysisMode ? <span className="pending-mode-chip">{pendingFile.analysisMode === "swarm" ? "Swarm 复核" : "快速检测"}</span> : null}</small></div>
+                <div className="file-message-copy"><span>请帮我鉴别这份内容</span><strong>{pendingFile.name}</strong><small>{pendingFile.typeLabel}{pendingFile.size ? ` · ${formatBytes(pendingFile.size)}` : " · 已归档任务"}{pendingFile.analysisMode ? <span className="pending-mode-chip">{pendingFile.analysisMode === "swarm" ? "Soar 模式" : "快速检测"}</span> : null}</small></div>
                 {pendingFile.previewUrl ? <img src={pendingFile.previewUrl} alt="待检测文件预览" /> : <span className="file-message-icon"><Paperclip size={20} /></span>}
               </div>
               {(progress || busy) && !outcome && <AgentProgressPanel progress={progress} onStopWaiting={stopWaitingForTask} />}
@@ -1188,7 +1098,7 @@ export default function App() {
                 <div className="fallback-choice" role="alert" aria-live="polite">
                   <span><ShieldCheck size={19} /></span>
                   <div>
-                    <strong>{fallbackOffer.jobId ? "任务仍在服务器运行" : fallbackOffer.mode === "swarm" ? "Swarm 复核未完成" : "快速检测未完成"}</strong>
+                    <strong>{fallbackOffer.jobId ? "任务仍在服务器运行" : fallbackOffer.mode === "swarm" ? "Soar 模式未完成" : "快速检测未完成"}</strong>
                     <p>{fallbackOffer.reason}。{fallbackOffer.jobId ? "继续查询不会重复提交，也不会重复扣减额度。" : fallbackOffer.submitted ? "文件已经提交到服务器，本次未形成可用结论；你可以重试原模式，或明确选择备用证据链。" : "文件尚未提交到备用模型，你可以重试原模式，或明确选择备用证据链。"}</p>
                     <div className="fallback-choice-actions">
                       {fallbackOffer.jobId ? (
@@ -1213,13 +1123,10 @@ export default function App() {
                 <div ref={resultRef} className="result-anchor" role="region" aria-label="检测结果" aria-live="polite" tabIndex={-1}>
                   <AgentResult
                     outcome={outcome}
-                    forensicsBusy={forensicsBusy}
-                    forensicsPreviewState={forensicsPreviewState}
                     provenanceBusy={provenanceBusy}
                     downloadBusy={downloadBusy}
                     actionError={actionError}
                     onRetryAction={failedAction ? retryFailedAction : undefined}
-                    onForensics={() => void createForensics()}
                     onProvenance={() => void verifyProvenance()}
                     onDownload={() => void downloadOutcome()}
                   />
@@ -1242,7 +1149,7 @@ export default function App() {
           <div className="composer-dock">
             <button type="button" className="composer-compact" disabled={busy} onClick={() => fileInputRef.current?.click()}>
               <span className="composer-attach"><Paperclip size={18} /></span>
-              <span><strong>{busy ? "小鉴正在分析，请稍候" : "继续上传新的内容"}</strong><small>图片使用{imageAnalysisMode === "swarm" ? " Swarm 复核" : "快速检测"}，视频与文档自动分流</small></span>
+              <span><strong>{busy ? "小鉴正在分析，请稍候" : "继续上传新的内容"}</strong><small>图片使用{imageAnalysisMode === "swarm" ? " Soar 模式" : "快速检测"}，视频与文档自动分流</small></span>
               <span className="composer-send"><Send size={17} /></span>
             </button>
             <p>检测结果仅作辅助判断，高风险场景请结合原始来源和人工复核。</p>
@@ -1264,8 +1171,6 @@ function WelcomeWorkspace({
   user,
   guestConsent,
   consentWarning,
-  analysisMode,
-  onAnalysisModeChange,
   onOpenFile,
   onDragEnter,
   onDragLeave,
@@ -1278,8 +1183,6 @@ function WelcomeWorkspace({
   user: AccountUser | null;
   guestConsent: boolean;
   consentWarning: boolean;
-  analysisMode: ImageAnalysisMode;
-  onAnalysisModeChange: (mode: ImageAnalysisMode) => void;
   onOpenFile: () => void;
   onDragEnter: () => void;
   onDragLeave: () => void;
@@ -1319,7 +1222,6 @@ function WelcomeWorkspace({
             <span><i /> 统一鉴伪入口</span>
             <small>按所选模式调度</small>
           </div>
-          <AnalysisModeSwitch mode={analysisMode} disabled={busy} onChange={onAnalysisModeChange} />
           {!user && (
             <label className={`guest-upload-consent ${consentWarning ? "has-error" : ""}`}>
               <input type="checkbox" checked={guestConsent} onChange={(event) => onGuestConsentChange(event.target.checked)} />

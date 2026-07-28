@@ -23,12 +23,12 @@ export default function ResultFeedback({ outcome, submitting, upgradeBusy, requi
           <Layers3 size={20} aria-hidden="true" />
           <div>
             <span className="result-mode-label">备用链路结果</span>
-            <strong>{requestedSwarm ? "Swarm 未完成，当前展示备用模型结果" : "主模型未完成，当前展示备用模型结果"}</strong>
+            <strong>{requestedSwarm ? "Soar 模式未完成，当前展示备用模型结果" : "主模型未完成，当前展示备用模型结果"}</strong>
             <p>当前报告来自备用视觉链路，已与原请求模式明确区分。</p>
           </div>
           {!requestedSwarm && (
             <button type="button" className="swarm-upgrade-button" disabled={upgradeBusy} onClick={onUpgrade}>
-              {requiresLogin ? <LogIn size={16} /> : null}{requiresLogin ? "登录后使用 Swarm" : "使用 Swarm 重新复核"}{requiresLogin ? null : <ArrowRight size={16} />}
+              {requiresLogin ? <LogIn size={16} /> : null}{requiresLogin ? "登录后使用 Soar 模式" : "使用 Soar 模式重新复核"}{requiresLogin ? null : <ArrowRight size={16} />}
             </button>
           )}
         </div>
@@ -46,7 +46,7 @@ export default function ResultFeedback({ outcome, submitting, upgradeBusy, requi
       <div className="result-feedback-main">
         <div className="result-feedback-copy">
           <span className={`result-mode-label ${isSwarm ? "is-swarm" : ""}`}>
-            {isSwarm ? <Layers3 size={13} /> : null}{isSwarm ? "Swarm 复核" : "快速检测"}
+            {isSwarm ? <Layers3 size={13} /> : null}{isSwarm ? "Soar 模式" : "快速检测"}
           </span>
           <div>
             <strong id="result-feedback-title">这个结果对你有帮助吗？</strong>
@@ -88,12 +88,12 @@ export default function ResultFeedback({ outcome, submitting, upgradeBusy, requi
           <Layers3 size={20} aria-hidden="true" />
           <div>
             <strong>{isSwarm ? "你的复核反馈已记录" : "需要更充分的交叉核验？"}</strong>
-            <p>{isSwarm ? "当前已经是 Swarm 结果，高风险场景建议结合原始来源与人工复核。" : "Swarm 会调度更多证据源，耗时更长，适合对当前结果存疑时使用。"}</p>
+            <p>{isSwarm ? "当前已经是 Soar 模式结果，高风险场景建议结合原始来源与人工复核。" : "Soar 模式会调度更多证据源，耗时更长，适合对当前结果存疑时使用。"}</p>
           </div>
           {!isSwarm && (
             <button type="button" className="swarm-upgrade-button" disabled={upgradeBusy} onClick={onUpgrade}>
               {requiresLogin ? <LogIn size={16} /> : null}
-              {requiresLogin ? "登录后使用 Swarm" : canReuseFile ? "使用 Swarm 重新复核" : "重新上传并使用 Swarm"}
+              {requiresLogin ? "登录后使用 Soar 模式" : canReuseFile ? "使用 Soar 模式重新复核" : "重新上传并使用 Soar 模式"}
               {requiresLogin ? null : <ArrowRight size={16} />}
             </button>
           )}

@@ -1,127 +1,81 @@
-.analysis-mode-control {
-  width: 100%;
-  padding: 14px 0 4px;
-  border-bottom: 1px solid var(--border);
-}
-
-.analysis-mode-heading {
-  min-height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
-  text-align: left;
-}
-
-.analysis-mode-heading strong {
-  color: var(--ink-strong);
-  font-size: 13px;
-  font-weight: 760;
-}
-
-.analysis-mode-heading small {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.analysis-mode-options {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-  padding: 4px;
-  background: var(--surface-strong);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-
-.analysis-mode-option {
-  min-width: 0;
+.analysis-mode-select {
   position: relative;
-  display: block;
+  width: 156px;
+  min-width: 156px;
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 9px;
+  color: var(--ink);
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: 7px;
   cursor: pointer;
 }
 
-.analysis-mode-frame {
-  min-height: 58px;
-  display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 7px;
-  padding: 6px 9px;
-  text-align: left;
-  color: var(--muted-strong);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 6px;
-}
-
-.analysis-mode-option:hover .analysis-mode-frame {
-  color: var(--ink-strong);
-  background: rgba(255, 255, 255, 0.6);
-}
-
-.analysis-mode-option.is-selected .analysis-mode-frame {
-  color: var(--primary-strong);
+.analysis-mode-select:hover {
   background: var(--surface);
-  border-color: #9ecac7;
-  box-shadow: 0 2px 8px rgba(16, 69, 78, 0.08);
+  border-color: #8ab7b3;
 }
 
-.analysis-mode-option > input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.analysis-mode-option.is-disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-.analysis-mode-option > input:focus-visible + .analysis-mode-frame {
+.analysis-mode-select:focus-within {
   outline: 3px solid var(--focus);
   outline-offset: 2px;
 }
 
-.analysis-mode-copy {
+.analysis-mode-select select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.analysis-mode-select.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.analysis-mode-select.is-disabled select {
+  cursor: not-allowed;
+}
+
+.analysis-mode-select-icon {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  color: var(--primary-strong);
+  background: var(--primary-soft);
+  border-radius: 5px;
+}
+
+.analysis-mode-select-copy {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  line-height: 1.15;
 }
 
-.analysis-mode-copy strong {
-  color: currentColor;
-  font-size: 13px;
-  font-weight: 720;
-}
-
-.analysis-mode-copy small {
+.analysis-mode-select-copy small {
   color: var(--muted);
+  font-size: 8px;
+}
+
+.analysis-mode-select-copy strong {
+  overflow: hidden;
+  color: var(--ink-strong);
   font-size: 11px;
-  line-height: 1.35;
+  font-weight: 730;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.analysis-mode-marker {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  color: var(--border-strong);
-}
-
-.analysis-mode-option.is-selected .analysis-mode-marker {
-  color: var(--primary);
-}
-
-.analysis-mode-marker em {
-  color: var(--blue);
-  font-size: 9px;
-  font-style: normal;
-  font-weight: 760;
+.analysis-mode-select-chevron {
+  color: var(--muted);
 }
 
 .upload-stage-core {
@@ -339,22 +293,9 @@
 }
 
 @media (max-width: 720px) {
-  .analysis-mode-frame {
-    grid-template-columns: 20px minmax(0, 1fr) 18px;
-    min-height: 64px;
-    padding: 7px;
-  }
-
-  .analysis-mode-copy strong {
-    font-size: 12px;
-  }
-
-  .analysis-mode-copy small {
-    font-size: 10px;
-  }
-
-  .analysis-mode-marker em {
-    display: none;
+  .analysis-mode-select {
+    width: 132px;
+    min-width: 132px;
   }
 
   .result-feedback-main,
@@ -382,12 +323,9 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  .analysis-mode-option:hover .analysis-mode-frame {
-    background: rgba(255, 255, 255, 0.05);
-  }
-
-  .analysis-mode-option.is-selected .analysis-mode-frame {
-    border-color: #477c79;
+  .analysis-mode-select {
+    background: #17272e;
+    border-color: #3a535a;
   }
 
   .pending-mode-chip {
