@@ -4,9 +4,11 @@ import io
 import os
 import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+import requests
 from flask import Flask, jsonify, request
 from PIL import Image, ImageOps, UnidentifiedImageError
 
@@ -29,8 +31,41 @@ INTRA_OP_THREADS = max(0, int(os.environ.get("DINOV3_INTRA_OP_THREADS", "16")))
 MAX_UPLOAD_BYTES = max(1, int(os.environ.get("DINOV3_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024))))
 MAX_IMAGE_PIXELS = max(1, int(os.environ.get("DINOV3_MAX_IMAGE_PIXELS", "24000000")))
 QUEUE_WAIT_SECONDS = max(1.0, float(os.environ.get("DINOV3_QUEUE_WAIT_SECONDS", "20")))
+VISIBLE_PRECHECK_URL = os.environ.get(
+    "DINOV3_VISIBLE_PRECHECK_URL",
+    "http://127.0.0.1:5066/v1/precheck",
+).strip()
+VISIBLE_PRECHECK_TOKEN = (
+    os.environ.get("DINOV3_VISIBLE_PRECHECK_TOKEN")
+    or os.environ.get("WATERMARK_PRECHECK_TOKEN")
+    or ""
+).strip()
+VISIBLE_PRECHECK_TIMEOUT = max(
+    1.0,
+    float(os.environ.get("DINOV3_VISIBLE_PRECHECK_TIMEOUT", "12")),
+)
 MODEL_ID = "dinov3-vit7b16-linear-fp16"
 MODEL_VERSION = "2026-08-02"
+_PRECHECK_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="dinov3-precheck")
+_PRECHECK_FIELDS = (
+    "status",
+    "elapsedMs",
+    "engine",
+    "engineVersion",
+    "detections",
+    "visibleHits",
+    "genericVisibleWatermark",
+    "explicitWatermark",
+    "coordinateSpace",
+    "displaySize",
+    "encodedSize",
+    "sourceOrientation",
+    "decision",
+    "report",
+    "pipelineTrace",
+    "positiveEvidenceAvailable",
+    "completeVisibleScan",
+)
 
 
 class ModelRuntime:
@@ -141,6 +176,8 @@ def _health_payload() -> dict[str, Any]:
         warnings.append("66 服务器单卡显存为 12 GB，ViT-7B 无法单卡常驻，当前使用 CPUExecutionProvider。")
     elif PROVIDER == "split-cuda":
         warnings.append("ViT-7B 已按 20+20 层切分并常驻两张 GPU；当前仅允许单路串行推理。")
+    if not VISIBLE_PRECHECK_URL or not VISIBLE_PRECHECK_TOKEN:
+        warnings.append("可见水印预检尚未配置，快速检测证据链将不完整。")
     return {
         "status": "ok" if ready else runtime.state,
         "service": "realguard-dinov3-vit7b16",
@@ -157,6 +194,7 @@ def _health_payload() -> dict[str, Any]:
         "modelVersion": MODEL_VERSION,
         "modelPath": str(MODEL_PATH),
         "splitModelPath": str(SPLIT_DIR) if PROVIDER == "split-cuda" else "",
+        "visiblePrecheckConfigured": bool(VISIBLE_PRECHECK_URL and VISIBLE_PRECHECK_TOKEN),
         "threshold": 0.5,
         "loadSeconds": runtime.load_seconds,
         "loadedAt": runtime.loaded_at,
@@ -179,7 +217,7 @@ def ready():
     return jsonify(payload), 200 if payload["capabilityReady"] else 503
 
 
-def _read_image() -> tuple[Image.Image, str]:
+def _read_image() -> tuple[Image.Image, str, bytes, str]:
     uploaded = request.files.get("image_file") or request.files.get("file")
     if uploaded is None or not uploaded.filename:
         raise ValueError("image_file is required")
@@ -194,7 +232,67 @@ def _read_image() -> tuple[Image.Image, str]:
         if width <= 0 or height <= 0 or width * height > MAX_IMAGE_PIXELS:
             raise OverflowError("decoded image exceeds the 24 megapixel limit")
         image = ImageOps.exif_transpose(source).convert("RGB")
-    return image, uploaded.filename
+    return image, uploaded.filename, raw, uploaded.mimetype or "application/octet-stream"
+
+
+def _run_visible_precheck(
+    image_bytes: bytes,
+    filename: str,
+    mimetype: str,
+) -> dict[str, Any] | None:
+    if not VISIBLE_PRECHECK_URL or not VISIBLE_PRECHECK_TOKEN:
+        return None
+    started = time.monotonic()
+    with requests.Session() as session:
+        session.trust_env = False
+        response = session.post(
+            VISIBLE_PRECHECK_URL,
+            headers={"Authorization": f"Bearer {VISIBLE_PRECHECK_TOKEN}"},
+            files={"file": (filename, image_bytes, mimetype)},
+            timeout=(2, VISIBLE_PRECHECK_TIMEOUT),
+        )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict) or payload.get("status") != "ok":
+        raise ValueError("visible watermark precheck returned an invalid response")
+    generic = payload.get("genericVisibleWatermark")
+    payload.setdefault(
+        "positiveEvidenceAvailable",
+        bool(payload.get("visibleHits")),
+    )
+    payload.setdefault(
+        "completeVisibleScan",
+        isinstance(generic, dict) and generic.get("available") is True,
+    )
+    payload.setdefault("elapsedMs", int((time.monotonic() - started) * 1000))
+    return {key: payload.get(key) for key in _PRECHECK_FIELDS if key in payload}
+
+
+def _collect_visible_precheck(
+    future: Future[dict[str, Any] | None],
+    started: float,
+) -> dict[str, Any]:
+    try:
+        payload = future.result(timeout=VISIBLE_PRECHECK_TIMEOUT + 2)
+        if payload:
+            return payload
+        return {
+            "status": "unavailable",
+            "errorCode": "visible_watermark_not_configured",
+            "message": "可见水印检测服务未配置，本次证据不完整。",
+            "elapsedMs": int((time.monotonic() - started) * 1000),
+            "completeVisibleScan": False,
+        }
+    except Exception as exc:
+        future.cancel()
+        return {
+            "status": "failed",
+            "errorCode": "visible_watermark_unavailable",
+            "message": "可见水印检测暂不可用，本次证据不完整。",
+            "elapsedMs": int((time.monotonic() - started) * 1000),
+            "failureType": type(exc).__name__,
+            "completeVisibleScan": False,
+        }
 
 
 @app.post("/image")
@@ -204,12 +302,21 @@ def predict_image():
         response.status_code = 429
         response.headers["Retry-After"] = str(int(QUEUE_WAIT_SECONDS))
         return response
+    precheck_future: Future[dict[str, Any] | None] | None = None
     try:
-        image, filename = _read_image()
+        image, filename, image_bytes, mimetype = _read_image()
+        precheck_started = time.monotonic()
+        precheck_future = _PRECHECK_EXECUTOR.submit(
+            _run_visible_precheck,
+            image_bytes,
+            filename,
+            mimetype,
+        )
         started = time.monotonic()
         detector = runtime.load()
         result = detector.predict_pil(image)
         latency_ms = int((time.monotonic() - started) * 1000)
+        visible_precheck = _collect_visible_precheck(precheck_future, precheck_started)
     except ValueError as exc:
         return jsonify({"code": 400, "msg": str(exc)}), 400
     except OverflowError as exc:
@@ -219,6 +326,8 @@ def predict_image():
     except Exception as exc:
         return jsonify({"code": 503, "msg": f"model inference failed: {type(exc).__name__}: {exc}"}), 503
     finally:
+        if precheck_future is not None and not precheck_future.done():
+            precheck_future.cancel()
         runtime.release()
 
     fake_probability = max(0.0, min(1.0, float(result["fake_probability"])))
@@ -255,6 +364,7 @@ def predict_image():
             "latencyMs": latency_ms,
         },
         "remote_evidence": {
+            "visibleWatermarkPrecheck": visible_precheck,
             "modelDecision": {
                 "ready": False,
                 "mode": "review_only",

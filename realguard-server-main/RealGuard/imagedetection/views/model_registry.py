@@ -65,6 +65,8 @@ def allowed_model_origins():
         os.environ.get("REALGUARD_V1_LEGACY_BACKEND_URL", "http://127.0.0.1:15000"),
         os.environ.get("REALGUARD_V2_INTERNAL_DETECT_URL", "http://127.0.0.1:8848/api/detect"),
         os.environ.get("REALGUARD_V2_HEALTH_URL", "http://127.0.0.1:8848/api/health"),
+        os.environ.get("REALGUARD_DINOV3_DETECT_URL", "http://127.0.0.1:15002/image"),
+        os.environ.get("REALGUARD_DINOV3_HEALTH_URL", "http://127.0.0.1:15002/health"),
     )
     extras = tuple(
         item.strip()
@@ -93,6 +95,14 @@ def _default_registry():
     detector_base = os.environ.get("REALGUARD_DETECTION_BACKEND_URL", "http://127.0.0.1:15000").rstrip("/")
     legacy_v1_base = os.environ.get("REALGUARD_V1_LEGACY_BACKEND_URL", "http://127.0.0.1:15000").rstrip("/")
     v2_detect_url = os.environ.get("REALGUARD_V2_INTERNAL_DETECT_URL", "http://127.0.0.1:8848/api/detect").strip()
+    dinov3_detect_url = os.environ.get(
+        "REALGUARD_DINOV3_DETECT_URL",
+        "http://127.0.0.1:15002/image",
+    ).strip()
+    dinov3_health_url = os.environ.get(
+        "REALGUARD_DINOV3_HEALTH_URL",
+        "http://127.0.0.1:15002/health",
+    ).strip()
     artifact_root = PROJECT_ROOT / "imagedetection" / "Agent" / "tools" / "AIGC_Detection"
     return {
         "version": 1,
@@ -144,6 +154,22 @@ def _default_registry():
                 "artifactPath": "",
                 "externalDataPath": "",
                 "description": "Legacy V1 API currently exposed through port 15000. Keep it visible as a model route, but migrate to managed v1-onnx-mil once the external ONNX weight file is restored.",
+            },
+            {
+                "id": "dinov3-vit7b16-linear-fp16",
+                "name": "DINOv3 ViT-7B Linear FP16",
+                "family": "DINOv3 image classifier",
+                "version": "2026-08-02",
+                "role": "candidate",
+                "modality": "image",
+                "enabled": True,
+                "endpoint": dinov3_detect_url,
+                "healthUrl": dinov3_health_url,
+                "timeoutSeconds": int(os.environ.get("REALGUARD_IMAGE_DETECT_TIMEOUT", "180")),
+                "runtime": "onnxruntime-split-cuda-remote",
+                "artifactPath": "/mnt/sda1/ymk/dinov3_split_fp16",
+                "externalDataPath": "",
+                "description": "DINOv3 ViT-7B split after block 20 and served by isolated workers on two Titan Xp GPUs. The endpoint runs visible-watermark evidence in parallel.",
             },
             {
                 "id": "v2-qwen-vlm",

@@ -17,6 +17,8 @@ Environment=REALGUARD_WEB_TASK_SPOOL_ROOT=/opt/realguard-data/web-spool
 Environment=REALGUARD_DEVELOPER_WORKER_CONCURRENCY=2
 Environment=REALGUARD_WEB_WORKER_CONCURRENCY=2
 Environment=REALGUARD_API_WORKER_CONCURRENCY=1
+Environment=REALGUARD_MODEL_REGISTRY_PATH=/opt/realguard-data/admin/model_registry.json
+Environment=REALGUARD_MODEL_ALLOWED_ORIGINS=http://127.0.0.1:15002
 EnvironmentFile=/etc/realguard/session.env
 EnvironmentFile=/etc/realguard/realguard-backend.env
 EnvironmentFile=/etc/realguard/detector-db.env

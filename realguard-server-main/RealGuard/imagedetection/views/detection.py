@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from flask import Blueprint, render_template, request, session, jsonify, Response, redirect
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 from werkzeug.utils import secure_filename
 
 from model_decision_contract import validate_inference_audit, validate_model_decision
@@ -96,6 +96,18 @@ MAX_IMAGE_UPLOAD_BYTES = max(
 MAX_IMAGE_SOURCE_PIXELS = max(
     1,
     int(os.environ.get('REALGUARD_MAX_IMAGE_SOURCE_PIXELS', '24000000')),
+)
+REMOTE_MODEL_MAX_DIMENSION = max(
+    512,
+    int(os.environ.get('REALGUARD_REMOTE_MODEL_MAX_DIMENSION', '2048')),
+)
+REMOTE_MODEL_RECOMPRESS_BYTES = max(
+    256 * 1024,
+    int(os.environ.get('REALGUARD_REMOTE_MODEL_RECOMPRESS_BYTES', str(1024 * 1024))),
+)
+REMOTE_MODEL_JPEG_QUALITY = max(
+    75,
+    min(95, int(os.environ.get('REALGUARD_REMOTE_MODEL_JPEG_QUALITY', '90'))),
 )
 MAX_VIDEO_UPLOAD_BYTES = max(
     1024,
@@ -1105,6 +1117,56 @@ def _primary_image_endpoint():
     return endpoint, timeout, ''
 
 
+def _remote_model_analysis_upload(image_bytes, filename, mimetype, model):
+    """Create a smaller transport copy for remote GPU models; keep the source untouched."""
+    runtime = str((model or {}).get('runtime') or '').lower()
+    model_id = str((model or {}).get('id') or '').lower()
+    if 'remote' not in runtime and not model_id.startswith('dinov3-'):
+        return image_bytes, filename, mimetype
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as source:
+            source.seek(0)
+            image = ImageOps.exif_transpose(source)
+            width, height = image.size
+            should_resize = max(width, height) > REMOTE_MODEL_MAX_DIMENSION
+            should_recompress = len(image_bytes) > REMOTE_MODEL_RECOMPRESS_BYTES
+            if not should_resize and not should_recompress:
+                return image_bytes, filename, mimetype
+
+            if image.mode in ('RGBA', 'LA') or 'transparency' in image.info:
+                rgba = image.convert('RGBA')
+                rgb = Image.new('RGB', rgba.size, 'white')
+                rgb.paste(rgba, mask=rgba.getchannel('A'))
+                image = rgb
+            else:
+                image = image.convert('RGB')
+            if should_resize:
+                image.thumbnail(
+                    (REMOTE_MODEL_MAX_DIMENSION, REMOTE_MODEL_MAX_DIMENSION),
+                    Image.Resampling.LANCZOS,
+                )
+            output = io.BytesIO()
+            save_options = {
+                'format': 'JPEG',
+                'quality': REMOTE_MODEL_JPEG_QUALITY,
+                'optimize': True,
+                'progressive': True,
+            }
+            exif = source.getexif()
+            if exif:
+                save_options['exif'] = exif.tobytes()
+            xmp = source.info.get('xmp') or source.info.get('XML:com.adobe.xmp')
+            if xmp:
+                save_options['xmp'] = xmp.encode('utf-8') if isinstance(xmp, str) else xmp
+            image.save(output, **save_options)
+            optimized = output.getvalue()
+            if len(optimized) >= len(image_bytes):
+                return image_bytes, filename, mimetype
+            return optimized, filename, 'image/jpeg'
+    except (UnidentifiedImageError, OSError, ValueError):
+        return image_bytes, filename, mimetype
+
+
 def _route_data(model, role, **extra):
     return {
         '_route_model_id': (model or {}).get('id') or '',
@@ -1809,9 +1871,21 @@ def _run_image_detection_payload(
                 }, 502
     elif primary_endpoint:
         try:
+            model_bytes, model_filename, model_mimetype = _remote_model_analysis_upload(
+                image_bytes,
+                safe_name,
+                mimetype,
+                primary_model,
+            )
             api_resp = _backend_post(
                 primary_endpoint,
-                files={'image_file': (safe_name, io.BytesIO(image_bytes), mimetype)},
+                files={
+                    'image_file': (
+                        model_filename,
+                        io.BytesIO(model_bytes),
+                        model_mimetype,
+                    )
+                },
                 data={
                     'openid': backend_openid,
                     'phone': phone,

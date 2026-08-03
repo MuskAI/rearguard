@@ -6,7 +6,7 @@ import sys
 import threading
 
 import pytest
-from PIL import Image
+from PIL import Image, PngImagePlugin
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1140,6 +1140,46 @@ def test_fast_detection_preserves_gpu_queue_overload_without_model_fallback(monk
     assert payload["code"] == "gpu_queue_full"
     assert payload["retryAfter"] == "6"
     assert fallback_calls == []
+
+
+def test_remote_model_transport_copy_downsamples_large_image(monkeypatch):
+    monkeypatch.setattr(detection, "REMOTE_MODEL_MAX_DIMENSION", 2048)
+    monkeypatch.setattr(detection, "REMOTE_MODEL_RECOMPRESS_BYTES", 1024 * 1024)
+    output = BytesIO()
+    source = Image.new("RGB", (2848, 1600), "white")
+    source.getexif()[272] = "Camera Model"
+    png_info = PngImagePlugin.PngInfo()
+    png_info.add_itxt("XML:com.adobe.xmp", "<TC260:AIGC>doubao</TC260:AIGC>")
+    source.save(output, format="PNG", exif=source.getexif(), pnginfo=png_info)
+
+    optimized, filename, mimetype = detection._remote_model_analysis_upload(
+        output.getvalue(),
+        "camera-original.png",
+        "image/png",
+        {"id": "dinov3-vit7b16-linear-fp16", "runtime": "onnxruntime-split-cuda-remote"},
+    )
+
+    with Image.open(BytesIO(optimized)) as image:
+        assert image.size == (2048, 1151)
+        assert image.format == "JPEG"
+        assert image.getexif()[272] == "Camera Model"
+        assert b"TC260:AIGC" in image.info["xmp"]
+    assert filename == "camera-original.png"
+    assert mimetype == "image/jpeg"
+    assert len(optimized) < len(output.getvalue())
+
+
+def test_local_model_transport_keeps_original_bytes():
+    optimized, filename, mimetype = detection._remote_model_analysis_upload(
+        VALID_PNG_BYTES,
+        "sample.png",
+        "image/png",
+        {"id": "local-model", "runtime": "onnxruntime-cuda"},
+    )
+
+    assert optimized == VALID_PNG_BYTES
+    assert filename == "sample.png"
+    assert mimetype == "image/png"
 
 
 def test_partial_watermark_scan_cannot_claim_complete_negative_evidence():

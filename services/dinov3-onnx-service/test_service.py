@@ -54,6 +54,10 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(payload["data"]["final_label"], "AI生成图像")
         self.assertEqual(payload["data"]["fake_percentage"], 87.0)
         self.assertEqual(payload["data"]["decisionStatus"], "review_only")
+        self.assertEqual(
+            payload["data"]["remote_evidence"]["visibleWatermarkPrecheck"]["status"],
+            "unavailable",
+        )
         self.assertFalse(payload["data"]["remote_evidence"]["modelDecision"]["ready"])
 
     def test_image_rejects_missing_upload(self):
