@@ -36,10 +36,6 @@ DB_PATH = Path(
     os.environ.get("REALGUARD_INTERNAL_TEST_DB", str(DATA_ROOT / "internal-testing.sqlite3"))
 )
 MAX_UPLOAD_BYTES = 24 * 1024 * 1024
-MAX_DATASET_BYTES = 128 * 1024 * 1024
-MAX_EXTRACTED_DATASET_BYTES = int(
-    os.environ.get("REALGUARD_INTERNAL_TEST_MAX_EXTRACTED_BYTES", str(192 * 1024 * 1024))
-)
 # A value of zero means there is no count-based ingestion limit. Byte and storage
 # boundaries remain in place so large datasets fail predictably instead of exhausting RAM.
 MAX_DATASET_SAMPLES = max(0, int(os.environ.get("REALGUARD_INTERNAL_TEST_MAX_SAMPLES", "0")))
@@ -51,8 +47,9 @@ MAX_LOAD_CONCURRENCY = 16
 MAX_LOAD_REQUESTS = 1000
 MAX_LOAD_DURATION_SECONDS = 120
 MAX_STORED_DATASETS = max(0, int(os.environ.get("REALGUARD_INTERNAL_TEST_MAX_DATASETS", "0")))
-MAX_STORED_BYTES = int(
-    os.environ.get("REALGUARD_INTERNAL_TEST_MAX_BYTES", str(10 * 1024 * 1024 * 1024))
+MIN_FREE_STORAGE_BYTES = max(
+    0,
+    int(os.environ.get("REALGUARD_INTERNAL_TEST_MIN_FREE_BYTES", str(2 * 1024 * 1024 * 1024))),
 )
 ALLOWED_IMAGE_FORMATS = {"JPEG", "PNG", "WEBP", "BMP", "GIF", "TIFF", "HEIF", "HEIC"}
 ALLOWED_LABELS = {"real", "fake", "unlabeled"}
@@ -257,7 +254,34 @@ def _limit_reached(count: int, limit: int) -> bool:
 
 
 def _source_upload_limit(filename: str) -> int:
-    return MAX_DATASET_BYTES if Path(str(filename or "")).suffix.lower() == ".zip" else MAX_UPLOAD_BYTES
+    return 0 if Path(str(filename or "")).suffix.lower() == ".zip" else MAX_UPLOAD_BYTES
+
+
+def available_storage_bytes() -> int:
+    DATA_ROOT.mkdir(parents=True, exist_ok=True)
+    return max(0, int(shutil.disk_usage(DATA_ROOT).free) - MIN_FREE_STORAGE_BYTES)
+
+
+def _ensure_storage_capacity(required_bytes: int) -> None:
+    if max(0, int(required_bytes or 0)) > available_storage_bytes():
+        raise ValueError("服务器磁盘剩余空间不足，无法继续导入该数据集")
+
+
+def _source_stream(source):
+    stream = io.BytesIO(source) if isinstance(source, (bytes, bytearray)) else source
+    try:
+        stream.seek(0)
+    except (AttributeError, OSError):
+        pass
+    return stream
+
+
+def _read_source(source, limit: int = MAX_UPLOAD_BYTES) -> bytes:
+    stream = _source_stream(source)
+    data = stream.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("单个图片或文档超过 24 MB")
+    return data
 
 
 def _path_label(relative_path: str) -> tuple[str, str]:
@@ -472,25 +496,37 @@ def _docx_images(data: bytes, source_name: str) -> list[tuple[str, bytes, str, s
     return images
 
 
-def _zip_images(data: bytes, source_name: str) -> list[tuple[str, bytes, str, str]]:
-    images: list[tuple[str, bytes, str, str]] = []
-    extracted_bytes = 0
+def _zip_relative_paths(source) -> list[str]:
     try:
-        archive = zipfile.ZipFile(io.BytesIO(data))
+        archive = zipfile.ZipFile(_source_stream(source))
     except (OSError, zipfile.BadZipFile) as exc:
         raise ValueError("ZIP 数据集无法解析") from exc
+    paths = []
     with archive:
         for member in archive.infolist():
             if member.is_dir() or member.flag_bits & 0x1:
                 continue
             relative_path = _safe_relative_path(member.filename)
-            if not relative_path or relative_path == "sample":
+            suffix = Path(relative_path).suffix.lower()
+            if (
+                relative_path
+                and relative_path != "sample"
+                and suffix in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".heic", ".heif"}
+            ):
+                paths.append(relative_path)
+    return paths
+
+
+def _iter_zip_images(source, source_name: str):
+    try:
+        archive = zipfile.ZipFile(_source_stream(source))
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise ValueError("ZIP 数据集无法解析") from exc
+    with archive:
+        for member in archive.infolist():
+            if member.is_dir() or member.flag_bits & 0x1 or member.file_size > MAX_UPLOAD_BYTES:
                 continue
-            if member.file_size > MAX_UPLOAD_BYTES:
-                continue
-            extracted_bytes += max(0, int(member.file_size or 0))
-            if extracted_bytes > MAX_EXTRACTED_DATASET_BYTES:
-                raise ValueError("ZIP 解压后的图片总量超过内部测试存储边界")
+            relative_path = _safe_relative_path(member.filename)
             suffix = Path(relative_path).suffix.lower()
             if suffix not in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".heic", ".heif"}:
                 continue
@@ -499,10 +535,11 @@ def _zip_images(data: bytes, source_name: str) -> list[tuple[str, bytes, str, st
                 _image_payload(payload)
             except (KeyError, OSError, RuntimeError, ValueError, zipfile.BadZipFile):
                 continue
-            images.append((Path(relative_path).stem, payload, f"zip:{source_name}", relative_path))
-            if _limit_reached(len(images), MAX_DATASET_SAMPLES):
-                break
-    return images
+            yield Path(relative_path).stem, payload, f"zip:{source_name}", relative_path
+
+
+def _zip_images(source, source_name: str) -> list[tuple[str, bytes, str, str]]:
+    return list(_iter_zip_images(source, source_name))
 
 
 def _public_https_url(value: str) -> str:
@@ -614,21 +651,29 @@ def _web_images(url: str) -> list[tuple[str, bytes, str, str]]:
     return images
 
 
-def _extract_source(name: str, data: bytes) -> list[tuple[str, bytes, str, str]]:
+def _iter_source(name: str, source):
     relative_path = _safe_relative_path(name)
     suffix = Path(relative_path).suffix.lower()
     if suffix == ".pdf":
-        return _pdf_images(data, relative_path)
+        yield from _pdf_images(_read_source(source), relative_path)
+        return
     if suffix == ".docx":
-        return _docx_images(data, relative_path)
+        yield from _docx_images(_read_source(source), relative_path)
+        return
     if suffix == ".zip":
-        return _zip_images(data, relative_path)
+        yield from _iter_zip_images(source, relative_path)
+        return
+    data = _read_source(source)
     _image_payload(data)
-    return [(Path(relative_path).stem or "image", data, "upload", relative_path)]
+    yield Path(relative_path).stem or "image", data, "upload", relative_path
+
+
+def _extract_source(name: str, data: bytes) -> list[tuple[str, bytes, str, str]]:
+    return list(_iter_source(name, data))
 
 
 def create_dataset(
-    uploads: list[tuple[str, bytes]],
+    uploads: list[tuple[str, object]],
     *,
     source_url: str = "",
     name: str = "",
@@ -640,12 +685,6 @@ def create_dataset(
         raise ValueError("请上传图片、文件夹、ZIP、PDF、DOCX，或填写网页地址")
     if MAX_UPLOAD_FILES > 0 and len(uploads) > MAX_UPLOAD_FILES:
         raise ValueError(f"单次上传文件数不能超过 {MAX_UPLOAD_FILES}")
-    total_upload = sum(len(data) for _, data in uploads)
-    if total_upload > MAX_DATASET_BYTES:
-        raise ValueError("单个数据集上传总量不能超过 128 MB")
-    for filename, data in uploads:
-        if len(data) > _source_upload_limit(filename):
-            raise ValueError(f"{_safe_name(filename)} 超过允许的文件大小")
     ensure_schema()
     with _connect() as connection:
         usage = connection.execute(
@@ -653,12 +692,9 @@ def create_dataset(
         ).fetchone()
     if _limit_reached(int(usage["datasets"] or 0), MAX_STORED_DATASETS):
         raise ValueError("内部测试数据集已达到数量上限，请先删除不再使用的数据集")
-    if int(usage["bytes"] or 0) + total_upload > MAX_STORED_BYTES:
-        raise ValueError("内部测试存储空间已达到上限，请先清理旧数据集")
-
-    extracted: list[tuple[str, bytes, str, str]] = []
     source_types: set[str] = set()
-    for filename, data in uploads:
+    profile_paths: list[str] = []
+    for filename, source in uploads:
         relative_name = _safe_relative_path(filename)
         suffix = Path(relative_name).suffix.lower()
         source_types.add(
@@ -667,16 +703,12 @@ def create_dataset(
             else "directory" if "/" in relative_name
             else "upload"
         )
-        extracted.extend(_extract_source(relative_name, data))
-        if _limit_reached(len(extracted), MAX_DATASET_SAMPLES):
-            break
-    if source_url and not _limit_reached(len(extracted), MAX_DATASET_SAMPLES):
+        if suffix == ".zip":
+            profile_paths.extend(_zip_relative_paths(source))
+        else:
+            profile_paths.append(relative_name)
+    if source_url:
         source_types.add("web")
-        extracted.extend(_web_images(source_url))
-    if MAX_DATASET_SAMPLES > 0:
-        extracted = extracted[:MAX_DATASET_SAMPLES]
-    if not extracted:
-        raise ValueError("没有提取到符合要求的图片")
 
     dataset_id = f"ds_{uuid.uuid4().hex[:20]}"
     dataset_dir = DATA_ROOT / "datasets" / dataset_id
@@ -691,9 +723,25 @@ def create_dataset(
     seen: set[str] = set()
     samples: list[dict] = []
     total_bytes = 0
-    profile = _detect_dataset_profile([item[3] for item in extracted])
+    profile = _detect_dataset_profile(profile_paths)
+
+    def extracted_items():
+        count = 0
+        for filename, source in uploads:
+            for item in _iter_source(filename, source):
+                yield item
+                count += 1
+                if _limit_reached(count, MAX_DATASET_SAMPLES):
+                    return
+        if source_url:
+            for item in _web_images(source_url):
+                yield item
+                count += 1
+                if _limit_reached(count, MAX_DATASET_SAMPLES):
+                    return
+
     try:
-        for index, (sample_name, payload, source, relative_path) in enumerate(extracted, 1):
+        for index, (sample_name, payload, source, relative_path) in enumerate(extracted_items(), 1):
             digest = hashlib.sha256(payload).hexdigest()
             if digest in seen:
                 continue
@@ -701,6 +749,7 @@ def create_dataset(
             mime, width, height, suffix = _image_payload(payload)
             stored_name = f"{index:04d}-{digest[:16]}{suffix}"
             path = dataset_dir / stored_name
+            _ensure_storage_capacity(len(payload))
             path.write_bytes(payload)
             os.chmod(path, 0o600)
             safe_sample_name = _safe_name(sample_name, f"sample-{index}")
@@ -744,9 +793,7 @@ def create_dataset(
             })
             total_bytes += len(payload)
         if not samples:
-            raise ValueError("图片均为重复内容或不符合要求")
-        if int(usage["bytes"] or 0) + total_bytes > MAX_STORED_BYTES:
-            raise ValueError("网页或文档提取结果超过内部测试存储上限")
+            raise ValueError("没有提取到符合要求的图片，或图片内容全部重复")
         created_at = _now()
         taxonomy = _taxonomy(samples, profile)
         source_type = "mixed" if len(source_types) > 1 else next(iter(source_types), "upload")
@@ -1557,13 +1604,15 @@ def overview() -> dict:
         },
         "limits": {
             "maxSamplesPerDataset": MAX_DATASET_SAMPLES or None,
-            "maxDatasetBytes": MAX_DATASET_BYTES,
-            "maxExtractedDatasetBytes": MAX_EXTRACTED_DATASET_BYTES,
+            "maxDatasetBytes": None,
+            "maxExtractedDatasetBytes": None,
             "maxEvaluationConcurrency": MAX_EVALUATION_CONCURRENCY,
             "maxLoadConcurrency": MAX_LOAD_CONCURRENCY,
             "maxLoadRequests": MAX_LOAD_REQUESTS,
             "maxLoadDurationSeconds": MAX_LOAD_DURATION_SECONDS,
             "maxStoredDatasets": MAX_STORED_DATASETS or None,
-            "maxStoredBytes": MAX_STORED_BYTES,
+            "maxStoredBytes": None,
+            "availableStorageBytes": available_storage_bytes(),
+            "minimumFreeStorageBytes": MIN_FREE_STORAGE_BYTES,
         },
     }

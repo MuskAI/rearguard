@@ -2789,18 +2789,17 @@ def admin_testing_create_dataset():
     user, error = _admin_required("testing.run")
     if error:
         return error
+    content_length = max(0, int(request.content_length or 0))
+    if content_length and content_length > internal_testing.available_storage_bytes():
+        return jsonify({
+            "status": "error",
+            "message": "服务器磁盘剩余空间不足，无法接收该数据集",
+        }), 507
     uploads = []
     for uploaded in request.files.getlist("files"):
         if not uploaded or not uploaded.filename:
             continue
-        upload_limit = internal_testing._source_upload_limit(uploaded.filename)
-        data = uploaded.stream.read(upload_limit + 1)
-        if len(data) > upload_limit:
-            return jsonify({
-                "status": "error",
-                "message": f"{uploaded.filename} 超过允许的文件大小",
-            }), 413
-        uploads.append((uploaded.filename, data))
+        uploads.append((uploaded.filename, uploaded.stream))
     labels = {}
     raw_labels = str(request.form.get("labels") or "").strip()
     if raw_labels:

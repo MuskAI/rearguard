@@ -94,6 +94,29 @@ def test_dataset_ingestion_has_no_sample_count_cap():
     assert dataset["classification"]["automaticCount"] == 205
 
 
+def test_dataset_ingestion_accepts_streams_without_total_byte_quota():
+    streams = [
+        (f"dataset/real/sample-{index}.png", io.BytesIO(_png_bytes((index * 30, 80, 120))))
+        for index in range(6)
+    ]
+
+    dataset = internal_testing.create_dataset(streams, default_label="unlabeled")
+    limits = internal_testing.overview()["limits"]
+
+    assert dataset["sample_count"] == 6
+    assert limits["maxDatasetBytes"] is None
+    assert limits["maxExtractedDatasetBytes"] is None
+    assert limits["maxStoredBytes"] is None
+    assert internal_testing._source_upload_limit("large-dataset.zip") == 0
+
+
+def test_dataset_storage_uses_free_space_guard(monkeypatch):
+    monkeypatch.setattr(internal_testing, "available_storage_bytes", lambda: 10)
+
+    with pytest.raises(ValueError, match="磁盘剩余空间不足"):
+        internal_testing._ensure_storage_capacity(11)
+
+
 def test_directory_structure_infers_labels_at_different_depths():
     dataset = internal_testing.create_dataset(
         [
@@ -384,6 +407,21 @@ def test_operator_can_use_admin_testing_api(client, monkeypatch):
     assert overview.get_json()["summary"]["datasetCount"] == 1
 
 
+def test_admin_dataset_rejects_only_when_disk_cannot_receive_request(client, monkeypatch):
+    _login(client, "operator")
+    monkeypatch.setattr(internal_testing, "available_storage_bytes", lambda: 1)
+
+    response = client.post(
+        "/api/admin/testing/datasets",
+        data={"files": (io.BytesIO(_png_bytes()), "sample.png")},
+        headers=_csrf(client),
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 507
+    assert "磁盘剩余空间不足" in response.get_json()["message"]
+
+
 def test_admin_dataset_upload_preserves_relative_filename(client):
     _login(client, "operator")
     created = client.post(
@@ -449,6 +487,8 @@ def test_admin_page_contains_internal_testing_workspace(client):
     assert "受控压力测试" in html
     assert 'id="testingDirectory"' in html
     assert "非 JSON 响应" not in html
+    assert "单次数据集总上传量 128 MB" not in html
+    assert "不限制数据集总大小" in html
 
 
 def test_internal_testing_has_a_cache_busting_direct_entry(client):

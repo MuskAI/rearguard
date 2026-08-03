@@ -542,7 +542,7 @@
                   <strong><i class="fa fa-files-o"></i> 上传文件、ZIP 或完整目录</strong>
                   <input id="testingFiles" type="file" multiple accept="image/*,.pdf,.docx,.zip">
                   <input id="testingDirectory" type="file" multiple webkitdirectory directory>
-                  <span class="testing-help">不限制图片数量；单张图片或文档 24 MB，ZIP 和单次数据集总上传量 128 MB。支持任意深度目录，并自动识别 FraudBench、RRDataset 及通用真假目录。</span>
+                  <span class="testing-help">不限制数据集总大小和图片数量；单张图片或文档不超过 24 MB。支持任意深度目录，并自动识别 FraudBench、RRDataset 及通用真假目录。</span>
                 </label>
                 <label class="span-2">或从网页提取图片
                   <input class="input" id="testingSourceUrl" type="url" inputmode="url" placeholder="https://example.com/article">
@@ -1609,8 +1609,6 @@
       const selected=[...$('testingFiles').files,...$('testingDirectory').files];
       selected.forEach(file=>form.append('files',file,file.webkitRelativePath || file.name));
       if(!selected.length && !$('testingSourceUrl').value.trim()){ toast('请选择文件、目录或填写网页地址'); return; }
-      const totalBytes=selected.reduce((sum,file)=>sum+Number(file.size || 0),0);
-      if(totalBytes>128*1024*1024){ toast('单次数据集上传总量不能超过 128 MB'); return; }
       button.disabled=true; button.textContent='准备上传…';
       try{
         const data=await uploadApi('/api/admin/testing/datasets',form,progress=>{
