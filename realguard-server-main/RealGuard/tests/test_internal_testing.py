@@ -711,6 +711,9 @@ def test_admin_page_contains_internal_testing_workspace(client):
     assert 'webkitdirectory' in html
     assert 'id="testingStreamEvaluation"' in html
     assert "边上传边测试" in html
+    assert "captureTestingFolder(this,true)" in html
+    assert "waitForTestingFiles" in html
+    assert "testingFolderFiles" in html
     assert "非 JSON 响应" not in html
     assert "单次数据集总上传量 128 MB" not in html
     assert "不限制数据集总大小" in html

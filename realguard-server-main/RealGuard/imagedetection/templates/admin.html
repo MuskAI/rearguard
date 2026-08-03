@@ -549,7 +549,7 @@
                 </label>
                 <label class="span-2 testing-upload">
                   <strong><i class="fa fa-folder-open"></i> 选择数据集文件夹</strong>
-                  <input id="testingDirectory" type="file" multiple webkitdirectory directory onchange="summarizeTestingFolder()">
+                  <input id="testingDirectory" type="file" multiple webkitdirectory directory onchange="captureTestingFolder(this,true)">
                   <span class="testing-folder-summary" id="testingFolderSummary">请选择包含测试图片及分类子目录的完整文件夹</span>
                   <span class="testing-help">不限制数据集总大小和图片数量；保留文件夹的全部相对路径，多级目录会自动提取真值与子类，大文件分块上传，网络异常自动重试。</span>
                 </label>
@@ -563,7 +563,7 @@
                 </div>
                 <details class="span-2 testing-detail-fold">
                   <summary>其他数据来源</summary>
-                  <label>上传 ZIP、PDF、DOCX 或散图<input id="testingFiles" type="file" multiple accept="image/*,.pdf,.docx,.zip"></label>
+                  <label>上传 ZIP、PDF、DOCX 或散图<input id="testingFiles" type="file" multiple accept="image/*,.pdf,.docx,.zip" onchange="captureTestingFiles(this,true)"></label>
                 </details>
                 <label class="span-2">或从网页提取图片
                   <input class="input" id="testingSourceUrl" type="url" inputmode="url" placeholder="https://example.com/article">
@@ -756,7 +756,7 @@
       return Array.isArray(required) ? required.some(can) : can(required);
     };
     const mutationRequests = new Map();
-    let state = {metrics:null, models:[], routing:{}, routingHistory:[], detections:[], users:[], admins:[], keys:[], services:[], host:null, serviceSummary:null, performance:null, assurance:null, swarm:null, alerts:null, alertDeliveries:[], audit:[], testing:null, testingDetail:null, testingImportId:'', testingImportedPaths:new Set(), pages:{}, selectedUser:null, selectedDetection:null};
+    let state = {metrics:null, models:[], routing:{}, routingHistory:[], detections:[], users:[], admins:[], keys:[], services:[], host:null, serviceSummary:null, performance:null, assurance:null, swarm:null, alerts:null, alertDeliveries:[], audit:[], testing:null, testingDetail:null, testingImportId:'', testingImportedPaths:new Set(), testingFolderFiles:[], testingExtraFiles:[], pages:{}, selectedUser:null, selectedDetection:null};
     let testingRefreshTimer = null;
     const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
     const can = (permission) => PERMISSIONS.has(permission);
@@ -1739,8 +1739,37 @@
         await loadTesting(false);
       }catch(err){ toast(err?.message || '取消上传失败'); }
     }
+    function testingFileKey(file){
+      return `${file.webkitRelativePath || file.name}\u0000${Number(file.size || 0)}\u0000${Number(file.lastModified || 0)}`;
+    }
+    function testingSelectedFiles(){
+      const candidates=[
+        ...(state.testingFolderFiles || []),
+        ...(state.testingExtraFiles || []),
+        ...Array.from($('testingDirectory')?.files || []),
+        ...Array.from($('testingFiles')?.files || []),
+      ];
+      const unique=new Map();
+      candidates.forEach(file=>unique.set(testingFileKey(file),file));
+      return [...unique.values()];
+    }
+    function captureTestingFolder(input,replace=false){
+      const files=Array.from(input?.files || []);
+      if(replace || files.length) state.testingFolderFiles=files;
+      summarizeTestingFolder();
+      setTimeout(()=>{
+        const settled=Array.from(input?.files || []);
+        if(settled.length){ state.testingFolderFiles=settled; summarizeTestingFolder(); }
+      },120);
+    }
+    function captureTestingFiles(input,replace=false){
+      const files=Array.from(input?.files || []);
+      if(replace || files.length) state.testingExtraFiles=files;
+    }
     function summarizeTestingFolder(){
-      const files=[...($('testingDirectory')?.files || [])];
+      const files=(state.testingFolderFiles || []).length
+        ? state.testingFolderFiles
+        : Array.from($('testingDirectory')?.files || []);
       const summary=$('testingFolderSummary');
       if(!summary) return;
       if(!files.length){ summary.textContent='请选择包含测试图片及分类子目录的完整文件夹'; return; }
@@ -1748,6 +1777,19 @@
       const bytes=files.reduce((sum,file)=>sum+Number(file.size || 0),0);
       summary.innerHTML=`<strong>${esc(root)}</strong><span>${files.length} 个文件</span><span>${testingBytes(bytes)}</span>`;
       if(!$('testingDatasetName').value.trim()) $('testingDatasetName').value=root;
+    }
+    async function waitForTestingFiles(){
+      let files=testingSelectedFiles();
+      const hasPendingSelection=Boolean($('testingDirectory')?.value || $('testingFiles')?.value);
+      if(files.length || !hasPendingSelection) return files;
+      for(let attempt=0;attempt<12;attempt++){
+        await new Promise(resolve=>setTimeout(resolve,150));
+        captureTestingFolder($('testingDirectory'));
+        captureTestingFiles($('testingFiles'));
+        files=testingSelectedFiles();
+        if(files.length) return files;
+      }
+      return files;
     }
     function toggleTestingStreamMode(){
       const enabled=$('testingStreamEvaluation').checked;
@@ -1757,9 +1799,13 @@
     async function createTestingDataset(event){
       event.preventDefault();
       const button=$('testingCreateDataset');
-      const selected=[...$('testingFiles').files,...$('testingDirectory').files];
+      const selected=await waitForTestingFiles();
       const sourceUrl=$('testingSourceUrl').value.trim();
-      if(!selected.length && !sourceUrl){ toast('请选择文件、目录或填写网页地址'); return; }
+      if(!selected.length && !sourceUrl){
+        const hadSelection=Boolean($('testingDirectory')?.value || $('testingFiles')?.value);
+        toast(hadSelection?'浏览器没有读取到文件夹内容，请重新选择并确认显示了文件数量':'请选择数据集文件夹或填写网页地址');
+        return;
+      }
       const totalBytes=selected.reduce((sum,file)=>sum+Number(file.size || 0),0);
       const streamEvaluation=$('testingStreamEvaluation').checked;
       if(streamEvaluation && !$('testingStreamModel').value){ toast('请选择边上传边测试使用的模型'); return; }
@@ -1834,6 +1880,7 @@
         const completed=await waitForTestingImport(importId);
         toast(`数据集已创建：校验通过 ${completed.validatedFiles} 个文件，拒绝 ${completed.rejectedFiles} 个${completed.runId?'，同步评测已完成':''}`);
         $('testingDatasetForm').reset();
+        state.testingFolderFiles=[]; state.testingExtraFiles=[];
         summarizeTestingFolder();
         toggleTestingStreamMode();
         state.testingImportId=''; state.testingImportedPaths=new Set();
