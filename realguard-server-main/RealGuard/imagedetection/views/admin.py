@@ -2838,6 +2838,12 @@ def admin_testing_create_import():
     if error:
         return error
     payload = request.get_json(silent=True) or {}
+    stream_evaluation = bool(payload.get("streamEvaluation"))
+    model = None
+    if stream_evaluation:
+        model, model_error = _internal_testing_model(payload.get("modelId"))
+        if model_error:
+            return jsonify({"status": "error", "message": model_error}), 400
     try:
         import_session = internal_testing.create_import_session(
             name=payload.get("name") or "",
@@ -2845,6 +2851,9 @@ def admin_testing_create_import():
             source_url=payload.get("sourceUrl") or "",
             expected_files=payload.get("expectedFiles") or 0,
             expected_bytes=payload.get("expectedBytes") or 0,
+            stream_evaluation=stream_evaluation,
+            model=model,
+            concurrency=payload.get("concurrency") or 1,
             actor=user,
         )
     except (TypeError, ValueError) as exc:
@@ -2856,6 +2865,8 @@ def admin_testing_create_import():
         meta={
             "expectedFiles": import_session.get("expectedFiles"),
             "expectedBytes": import_session.get("expectedBytes"),
+            "streamEvaluation": import_session.get("streamEvaluation"),
+            "modelId": import_session.get("modelId"),
         },
     )
     return jsonify({"status": "success", "importSession": import_session}), 201

@@ -30,6 +30,7 @@ def isolated_testing_store(monkeypatch, tmp_path):
     monkeypatch.setattr(internal_testing, "DB_PATH", root / "testing.sqlite3")
     monkeypatch.setattr(internal_testing, "_SCHEMA_READY", False)
     monkeypatch.setattr(internal_testing, "_ACTIVE_IMPORTS", set())
+    monkeypatch.setattr(internal_testing, "_ACTIVE_IMPORT_DETECTIONS", set())
 
 
 @pytest.fixture
@@ -254,6 +255,63 @@ def test_resumable_import_validates_each_file_and_builds_async():
     assert completed["processedSamples"] == 2
     assert dataset["sample_count"] == 2
     assert {item["ground_truth"] for item in dataset["samples"]} == {"real", "fake"}
+
+
+def test_folder_import_tests_images_while_upload_is_still_open(monkeypatch):
+    calls = []
+
+    def fake_model(_model, _image, filename, _mime_type):
+        calls.append(filename)
+        predicted = "fake" if "render" in filename else "real"
+        return {
+            "ok": True,
+            "httpStatus": 200,
+            "latencyMs": 12,
+            "predictedLabel": predicted,
+            "score": 0.9 if predicted == "fake" else 0.1,
+            "payload": {"label": predicted},
+            "error": "",
+        }
+
+    monkeypatch.setattr(internal_testing, "run_model", fake_model)
+    session = internal_testing.create_import_session(
+        name="streaming folder",
+        expected_files=2,
+        stream_evaluation=True,
+        model={
+            "id": "model-a",
+            "name": "Model A",
+            "endpoint": "http://127.0.0.1:9000/image",
+        },
+        concurrency=2,
+    )
+    first = internal_testing.add_import_files(session["id"], [
+        ("folder/real/phone.png", io.BytesIO(_png_bytes((20, 80, 140)))),
+    ])
+    deadline = time.time() + 3
+    while time.time() < deadline:
+        first = internal_testing.get_import_session(session["id"])
+        if first["detection"]["completed"] == 1:
+            break
+        time.sleep(0.02)
+
+    assert first["status"] == "uploading"
+    assert first["detection"]["completed"] == 1
+    assert calls == ["phone.png"]
+
+    internal_testing.add_import_files(session["id"], [
+        ("folder/fake/render.png", io.BytesIO(_png_bytes((180, 40, 80)))),
+    ])
+    internal_testing.finalize_import(session["id"])
+    completed = _wait_for_import(session["id"])
+    run = internal_testing.get_run(completed["runId"])
+
+    assert completed["status"] == "completed"
+    assert completed["detection"]["completed"] == 2
+    assert run["completed_count"] == run["total_count"] == 2
+    assert run["configuration"]["streamedDuringUpload"] is True
+    assert run["metrics"]["accuracy"] == 1
+    assert sorted(calls) == ["phone.png", "render.png"]
 
 
 def test_chunked_zip_upload_is_ordered_and_idempotent():
@@ -557,6 +615,35 @@ def test_admin_resumable_dataset_import_api(client):
     assert status.get_json()["importSession"]["datasetId"] == completed["datasetId"]
 
 
+def test_admin_can_start_streaming_folder_evaluation(client, monkeypatch):
+    _login(client, "operator")
+    monkeypatch.setattr(admin, "_internal_testing_model", lambda model_id: ({
+        "id": model_id,
+        "name": "Folder Model",
+        "endpoint": "http://127.0.0.1:9000/image",
+    }, ""))
+
+    response = client.post(
+        "/api/admin/testing/dataset-imports",
+        json={
+            "name": "folder import",
+            "expectedFiles": 10,
+            "streamEvaluation": True,
+            "modelId": "folder-model",
+            "concurrency": 2,
+        },
+        headers=_csrf(client),
+    )
+
+    assert response.status_code == 201
+    session = response.get_json()["importSession"]
+    assert session["streamEvaluation"] is True
+    assert session["modelId"] == "folder-model"
+    assert session["modelName"] == "Folder Model"
+    assert session["concurrency"] == 2
+    assert "model" not in session
+
+
 def test_admin_dataset_upload_preserves_relative_filename(client):
     _login(client, "operator")
     created = client.post(
@@ -621,6 +708,9 @@ def test_admin_page_contains_internal_testing_workspace(client):
     assert 'id="view-testing"' in html
     assert "受控压力测试" in html
     assert 'id="testingDirectory"' in html
+    assert 'webkitdirectory' in html
+    assert 'id="testingStreamEvaluation"' in html
+    assert "边上传边测试" in html
     assert "非 JSON 响应" not in html
     assert "单次数据集总上传量 128 MB" not in html
     assert "不限制数据集总大小" in html

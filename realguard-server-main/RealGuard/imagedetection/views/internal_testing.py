@@ -70,7 +70,12 @@ _SCHEMA_LOCK = threading.Lock()
 _IMPORT_LOCK = threading.RLock()
 _SCHEMA_READY = False
 _EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="internal-testing")
+_IMPORT_DETECTION_EXECUTOR = ThreadPoolExecutor(
+    max_workers=4,
+    thread_name_prefix="internal-testing-upload-detection",
+)
 _ACTIVE_IMPORTS: set[str] = set()
+_ACTIVE_IMPORT_DETECTIONS: set[str] = set()
 
 
 def _now() -> str:
@@ -907,6 +912,23 @@ def _import_db(import_id: str) -> sqlite3.Connection:
             message TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS detections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id TEXT NOT NULL UNIQUE,
+            relative_path TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'queued',
+            predicted_label TEXT,
+            score REAL,
+            latency_ms INTEGER,
+            http_status INTEGER,
+            error TEXT,
+            response_json TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_import_detections_status
+            ON detections(status, id);
         """
     )
     return connection
@@ -961,7 +983,10 @@ def _save_import(payload: dict) -> None:
 def _public_import(payload: dict | None) -> dict | None:
     if not payload:
         return None
-    public = {key: value for key, value in payload.items() if key != "actor"}
+    public = {
+        key: value for key, value in payload.items()
+        if key not in {"actor", "model"}
+    }
     with _import_db(str(payload.get("id") or "")) as connection:
         file_rows = connection.execute(
             "SELECT * FROM files ORDER BY created_at DESC,id DESC LIMIT 100"
@@ -973,6 +998,18 @@ def _public_import(payload: dict | None) -> dict | None:
         rejection_rows = connection.execute(
             "SELECT relative_path,message,created_at FROM rejections ORDER BY id DESC LIMIT 200"
         ).fetchall()
+        detection_rows = connection.execute(
+            """
+            SELECT relative_path,status,predicted_label,score,latency_ms,error,updated_at
+            FROM detections ORDER BY id DESC LIMIT 20
+            """
+        ).fetchall()
+        detection_counts = {
+            str(row["status"]): int(row["count"] or 0)
+            for row in connection.execute(
+                "SELECT status,COUNT(*) AS count FROM detections GROUP BY status"
+            ).fetchall()
+        }
     public["files"] = [
         {key: value for key, value in _file_row(row).items() if key != "storagePath"}
         for row in reversed(file_rows)
@@ -997,6 +1034,26 @@ def _public_import(payload: dict | None) -> dict | None:
         }
         for row in reversed(rejection_rows)
     ]
+    public["detection"] = {
+        "total": sum(detection_counts.values()),
+        "queued": detection_counts.get("queued", 0),
+        "running": detection_counts.get("running", 0),
+        "completed": detection_counts.get("success", 0) + detection_counts.get("failed", 0),
+        "success": detection_counts.get("success", 0),
+        "failed": detection_counts.get("failed", 0),
+        "recent": [
+            {
+                "relativePath": row["relative_path"],
+                "status": row["status"],
+                "predictedLabel": row["predicted_label"],
+                "score": row["score"],
+                "latencyMs": row["latency_ms"],
+                "error": row["error"],
+                "updatedAt": row["updated_at"],
+            }
+            for row in reversed(detection_rows)
+        ],
+    }
     return public
 
 
@@ -1007,12 +1064,19 @@ def create_import_session(
     source_url: str = "",
     expected_files: int = 0,
     expected_bytes: int = 0,
+    stream_evaluation: bool = False,
+    model: dict | None = None,
+    concurrency: int = 1,
     actor: dict | None = None,
 ) -> dict:
     if expected_bytes > available_storage_bytes():
         raise ValueError("服务器磁盘剩余空间不足，无法接收该数据集")
     import_id = f"imp_{uuid.uuid4().hex[:20]}"
     actor_id, actor_name = _actor_fields(actor)
+    stream_evaluation = bool(stream_evaluation)
+    concurrency = max(1, min(int(concurrency or 1), MAX_EVALUATION_CONCURRENCY))
+    if stream_evaluation and not model:
+        raise ValueError("边上传边测试必须选择目标模型")
     now = _now()
     payload = {
         "id": import_id,
@@ -1029,6 +1093,12 @@ def create_import_session(
         "processedSamples": 0,
         "totalSamples": 0,
         "datasetId": None,
+        "runId": None,
+        "streamEvaluation": stream_evaluation,
+        "modelId": str((model or {}).get("id") or ""),
+        "modelName": str((model or {}).get("name") or (model or {}).get("id") or ""),
+        "concurrency": concurrency,
+        "model": dict(model or {}) if stream_evaluation else {},
         "error": "",
         "actor": {"adminId": actor_id, "username": actor_name},
         "createdAt": now,
@@ -1056,6 +1126,19 @@ def list_import_sessions(limit: int = 20) -> list[dict]:
     with _IMPORT_LOCK:
         for directory in IMPORT_ROOT.glob("imp_*"):
             raw = _load_import(directory.name)
+            if (
+                raw
+                and raw.get("streamEvaluation")
+                and raw.get("status") in {"uploading", "queued", "processing"}
+                and directory.name not in _ACTIVE_IMPORT_DETECTIONS
+            ):
+                with _import_db(directory.name) as connection:
+                    connection.execute(
+                        "UPDATE detections SET status='queued',updated_at=? WHERE status='running'",
+                        (_now(),),
+                    )
+                    connection.commit()
+                _submit_import_detections(directory.name)
             if raw and raw.get("status") in {"queued", "processing"} and directory.name not in _ACTIVE_IMPORTS:
                 raw["status"] = "queued"
                 _save_import(raw)
@@ -1111,6 +1194,161 @@ def _insert_rejection(
     )
 
 
+def _queue_import_detection(
+    connection: sqlite3.Connection,
+    payload: dict,
+    item: dict,
+) -> bool:
+    if not payload.get("streamEvaluation") or item.get("kind") != "image":
+        return False
+    now = _now()
+    cursor = connection.execute(
+        """
+        INSERT OR IGNORE INTO detections
+            (file_id,relative_path,status,created_at,updated_at)
+        VALUES (?,?, 'queued', ?, ?)
+        """,
+        (item["id"], item["relativePath"], now, now),
+    )
+    return bool(cursor.rowcount)
+
+
+def _claim_import_detection(import_id: str) -> dict | None:
+    with _IMPORT_LOCK:
+        payload = _load_import(import_id)
+        if not payload or payload.get("status") not in {"uploading", "queued", "processing"}:
+            return None
+        with _import_db(import_id) as connection:
+            row = connection.execute(
+                """
+                SELECT d.id,d.file_id,d.relative_path,f.name,f.storage_path,
+                       f.inspection_json
+                FROM detections d
+                JOIN files f ON f.id = d.file_id
+                WHERE d.status = 'queued' ORDER BY d.id LIMIT 1
+                """
+            ).fetchone()
+            if not row:
+                return None
+            connection.execute(
+                "UPDATE detections SET status='running',updated_at=? WHERE id=? AND status='queued'",
+                (_now(), row["id"]),
+            )
+            connection.commit()
+        return dict(row)
+
+
+def _detect_import_file(import_id: str, item: dict) -> None:
+    payload = _load_import(import_id) or {}
+    model = payload.get("model") or {}
+    path = Path(str(item.get("storage_path") or ""))
+    try:
+        inspection = json.loads(item.get("inspection_json") or "{}")
+    except json.JSONDecodeError:
+        inspection = {}
+    try:
+        if not path.is_file() or _import_dir(import_id) not in path.resolve().parents:
+            raise ValueError("上传暂存文件已丢失")
+        result = run_model(
+            model,
+            path.read_bytes(),
+            str(item.get("name") or "sample"),
+            str(inspection.get("mimeType") or "application/octet-stream"),
+        )
+    except Exception as exc:
+        result = {
+            "ok": False,
+            "predictedLabel": "unknown",
+            "score": None,
+            "latencyMs": None,
+            "httpStatus": None,
+            "payload": {},
+            "error": str(exc)[:500],
+        }
+    with _IMPORT_LOCK:
+        if not _load_import(import_id):
+            return
+        with _import_db(import_id) as connection:
+            connection.execute(
+                """
+                UPDATE detections
+                SET status=?,predicted_label=?,score=?,latency_ms=?,http_status=?,
+                    error=?,response_json=?,updated_at=?
+                WHERE id=?
+                """,
+                (
+                    "success" if result.get("ok") else "failed",
+                    result.get("predictedLabel"), result.get("score"),
+                    result.get("latencyMs"), result.get("httpStatus"),
+                    str(result.get("error") or "")[:500],
+                    json.dumps(result.get("payload") or {}, ensure_ascii=False)[:200000],
+                    _now(), item["id"],
+                ),
+            )
+            connection.commit()
+
+
+def _execute_import_detections(import_id: str) -> None:
+    try:
+        payload = _load_import(import_id) or {}
+        concurrency = max(
+            1,
+            min(int(payload.get("concurrency") or 1), MAX_EVALUATION_CONCURRENCY),
+        )
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            futures = set()
+            while True:
+                while len(futures) < concurrency:
+                    item = _claim_import_detection(import_id)
+                    if not item:
+                        break
+                    futures.add(pool.submit(_detect_import_file, import_id, item))
+                if not futures:
+                    break
+                done, futures = wait(futures, return_when=FIRST_COMPLETED)
+                for future in done:
+                    future.result()
+    finally:
+        resubmit = False
+        with _IMPORT_LOCK:
+            _ACTIVE_IMPORT_DETECTIONS.discard(import_id)
+            if _load_import(import_id):
+                with _import_db(import_id) as connection:
+                    resubmit = bool(connection.execute(
+                        "SELECT 1 FROM detections WHERE status='queued' LIMIT 1"
+                    ).fetchone())
+        if resubmit:
+            _submit_import_detections(import_id)
+
+
+def _submit_import_detections(import_id: str) -> None:
+    with _IMPORT_LOCK:
+        payload = _load_import(import_id)
+        if (
+            not payload
+            or not payload.get("streamEvaluation")
+            or import_id in _ACTIVE_IMPORT_DETECTIONS
+        ):
+            return
+        _ACTIVE_IMPORT_DETECTIONS.add(import_id)
+    _IMPORT_DETECTION_EXECUTOR.submit(_execute_import_detections, import_id)
+
+
+def _wait_for_import_detections(import_id: str) -> None:
+    while True:
+        _submit_import_detections(import_id)
+        with _IMPORT_LOCK:
+            if not _load_import(import_id):
+                raise ValueError("数据集上传会话已被删除")
+            with _import_db(import_id) as connection:
+                pending = int(connection.execute(
+                    "SELECT COUNT(*) FROM detections WHERE status IN ('queued','running')"
+                ).fetchone()[0])
+        if not pending:
+            return
+        time.sleep(0.1)
+
+
 def _stage_stream(import_id: str, relative_path: str, stream) -> dict:
     safe_path = _safe_relative_path(relative_path)
     suffix = Path(safe_path).suffix.lower()
@@ -1147,6 +1385,7 @@ def _stage_stream(import_id: str, relative_path: str, stream) -> dict:
 
 
 def add_import_files(import_id: str, uploads: list[tuple[str, object]]) -> dict:
+    should_submit = False
     with _IMPORT_LOCK:
         payload = _load_import(import_id)
         if not payload:
@@ -1194,6 +1433,7 @@ def add_import_files(import_id: str, uploads: list[tuple[str, object]]) -> dict:
                         _now(),
                     ),
                 )
+                should_submit = _queue_import_detection(connection, payload, item) or should_submit
                 accepted.append({key: value for key, value in item.items() if key != "storagePath"})
                 payload["uploadedFiles"] = int(payload.get("uploadedFiles") or 0) + 1
                 payload["validatedFiles"] = int(payload.get("validatedFiles") or 0) + 1
@@ -1202,7 +1442,9 @@ def add_import_files(import_id: str, uploads: list[tuple[str, object]]) -> dict:
         _save_import(payload)
         result = _public_import(payload) or {}
         result["accepted"] = accepted
-        return result
+    if should_submit:
+        _submit_import_detections(import_id)
+    return result
 
 
 def add_import_chunk(
@@ -1221,6 +1463,7 @@ def add_import_chunk(
     if chunk_index < 0 or total_chunks < 1 or chunk_index >= total_chunks:
         raise ValueError("分块序号无效")
     data = _read_source(chunk, MAX_IMPORT_CHUNK_BYTES)
+    should_submit = False
     with _IMPORT_LOCK:
         payload = _load_import(import_id)
         if not payload:
@@ -1322,6 +1565,7 @@ def add_import_chunk(
                             item["byteSize"], item["status"], json.dumps(inspection, ensure_ascii=False), _now(),
                         ),
                     )
+                    should_submit = _queue_import_detection(connection, payload, item)
                     connection.execute(
                         "UPDATE chunks SET part_path=NULL,status='completed',file_id=?,updated_at=? WHERE upload_id=?",
                         (item["id"], _now(), upload_id),
@@ -1330,7 +1574,155 @@ def add_import_chunk(
                     payload["validatedFiles"] = int(payload.get("validatedFiles") or 0) + 1
             connection.commit()
         _save_import(payload)
-        return _public_import(payload) or {}
+        result = _public_import(payload) or {}
+    if should_submit:
+        _submit_import_detections(import_id)
+    return result
+
+
+def _create_stream_evaluation(import_id: str, dataset_id: str, payload: dict) -> dict:
+    model = payload.get("model") or {}
+    concurrency = max(
+        1,
+        min(int(payload.get("concurrency") or 1), MAX_EVALUATION_CONCURRENCY),
+    )
+    with _connect() as connection:
+        samples = connection.execute(
+            "SELECT * FROM samples WHERE dataset_id=? ORDER BY created_at,id",
+            (dataset_id,),
+        ).fetchall()
+    with _import_db(import_id) as connection:
+        cached_rows = connection.execute(
+            "SELECT * FROM detections WHERE status IN ('success','failed')"
+        ).fetchall()
+    cached = {str(row["relative_path"]).lower(): row for row in cached_rows}
+    run_id = f"eval_{uuid.uuid4().hex[:20]}"
+    actor_id, actor_name = _actor_fields(payload.get("actor") or {})
+    created_at = _now()
+    model_snapshot = {
+        "id": str(model.get("id") or ""),
+        "name": str(model.get("name") or model.get("id") or ""),
+        "version": str(model.get("version") or model.get("modelVersion") or ""),
+        "runtime": str(model.get("runtime") or ""),
+        "endpointSha256": hashlib.sha256(
+            str(model.get("endpoint") or "").encode("utf-8")
+        ).hexdigest(),
+        "timeoutSeconds": min(max(int(model.get("timeoutSeconds") or 45), 2), 120),
+    }
+    with _connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO runs
+                (id,kind,dataset_id,model_id,model_name,status,configuration_json,
+                 completed_count,total_count,created_at,started_at,updated_at,actor_id,actor_name)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                run_id, "evaluation", dataset_id, str(model.get("id") or ""),
+                str(model.get("name") or model.get("id") or ""), "running",
+                json.dumps(
+                    {
+                        "concurrency": concurrency,
+                        "modelSnapshot": model_snapshot,
+                        "streamedDuringUpload": True,
+                    },
+                    ensure_ascii=False,
+                ),
+                0, len(samples), created_at, created_at, created_at, actor_id, actor_name,
+            ),
+        )
+        connection.commit()
+
+    def result_from_cache(sample: sqlite3.Row, row: sqlite3.Row) -> dict:
+        try:
+            response_payload = json.loads(row["response_json"] or "{}")
+        except json.JSONDecodeError:
+            response_payload = {}
+        return {
+            "ok": row["status"] == "success",
+            "sampleId": sample["id"],
+            "groundTruth": sample["ground_truth"],
+            "predictedLabel": row["predicted_label"] or "unknown",
+            "score": row["score"],
+            "latencyMs": row["latency_ms"],
+            "httpStatus": row["http_status"],
+            "payload": response_payload,
+            "error": row["error"] or "",
+            "subclasses": json.loads(sample["subclasses_json"] or "{}"),
+            "groupId": sample["group_id"] or "",
+        }
+
+    def evaluate(sample: sqlite3.Row) -> dict:
+        path = Path(sample["storage_path"])
+        result = run_model(model, path.read_bytes(), sample["name"], sample["mime_type"])
+        return {
+            **result,
+            "sampleId": sample["id"],
+            "groundTruth": sample["ground_truth"],
+            "subclasses": json.loads(sample["subclasses_json"] or "{}"),
+            "groupId": sample["group_id"] or "",
+        }
+
+    completed: list[dict] = []
+    missing: list[sqlite3.Row] = []
+    for sample in samples:
+        cached_row = cached.get(str(sample["relative_path"] or "").lower())
+        if cached_row:
+            completed.append(result_from_cache(sample, cached_row))
+        else:
+            missing.append(sample)
+    if missing:
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            futures = {pool.submit(evaluate, sample): sample for sample in missing}
+            for future in as_completed(futures):
+                sample = futures[future]
+                try:
+                    completed.append(future.result())
+                except Exception as exc:
+                    completed.append({
+                        "ok": False,
+                        "sampleId": sample["id"],
+                        "groundTruth": sample["ground_truth"],
+                        "predictedLabel": "unknown",
+                        "score": None,
+                        "latencyMs": None,
+                        "httpStatus": None,
+                        "payload": {},
+                        "error": str(exc)[:500],
+                        "subclasses": json.loads(sample["subclasses_json"] or "{}"),
+                        "groupId": sample["group_id"] or "",
+                    })
+                _set_run(run_id, completed_count=len(completed))
+    with _connect() as connection:
+        connection.executemany(
+            """
+            INSERT INTO results
+                (run_id,sample_id,status,predicted_label,score,latency_ms,
+                 http_status,error,response_json,created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+            """,
+            [
+                (
+                    run_id, result["sampleId"],
+                    "success" if result.get("ok") else "failed",
+                    result.get("predictedLabel"), result.get("score"),
+                    result.get("latencyMs"), result.get("httpStatus"),
+                    str(result.get("error") or "")[:500],
+                    json.dumps(result.get("payload") or {}, ensure_ascii=False)[:200000],
+                    _now(),
+                )
+                for result in completed
+            ],
+        )
+        connection.commit()
+    _set_run(
+        run_id,
+        status="completed",
+        completed_count=len(completed),
+        metrics_json=json.dumps(_evaluation_metrics(completed), ensure_ascii=False),
+        finished_at=_now(),
+    )
+    return _run_row(run_id) or {}
 
 
 def _execute_import(import_id: str) -> None:
@@ -1345,6 +1737,8 @@ def _execute_import(import_id: str) -> None:
     streams = []
     try:
         payload = _load_import(import_id) or {}
+        if payload.get("streamEvaluation"):
+            _wait_for_import_detections(import_id)
         with _import_db(import_id) as connection:
             file_rows = connection.execute(
                 "SELECT * FROM files ORDER BY created_at,id"
@@ -1384,10 +1778,16 @@ def _execute_import(import_id: str) -> None:
             progress_callback=progress,
             source_consumed_callback=consumed,
         )
+        run = (
+            _create_stream_evaluation(import_id, str(dataset.get("id") or ""), payload)
+            if payload.get("streamEvaluation")
+            else {}
+        )
         with _IMPORT_LOCK:
             current = _load_import(import_id) or payload
             current["status"] = "completed"
             current["datasetId"] = dataset.get("id")
+            current["runId"] = run.get("id")
             current["processedSamples"] = int(dataset.get("sample_count") or 0)
             current["totalSamples"] = int(dataset.get("sample_count") or 0)
             _save_import(current)
@@ -1453,7 +1853,10 @@ def delete_import_session(import_id: str) -> bool:
         payload = _load_import(import_id)
         if not payload:
             return False
-        if payload.get("status") in {"queued", "processing"}:
+        if (
+            payload.get("status") in {"queued", "processing"}
+            or import_id in _ACTIVE_IMPORT_DETECTIONS
+        ):
             raise ValueError("数据集正在建库，暂时不能取消")
         directory = _import_dir(import_id)
         if directory.exists():

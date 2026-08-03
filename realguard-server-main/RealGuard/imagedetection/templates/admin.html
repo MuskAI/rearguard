@@ -278,6 +278,15 @@
     .testing-upload{border:1px dashed #9caeb9;background:#f8fbfa;border-radius:var(--radius);padding:16px;display:grid;gap:8px;min-height:106px}
     .testing-upload:hover{border-color:var(--cyan);background:#f3fbfd}
     .testing-upload input[type=file]{max-width:100%}
+    .testing-folder-summary{display:flex;gap:10px;align-items:center;flex-wrap:wrap;color:var(--muted);font-size:11px}
+    .testing-stream-mode{border:1px solid var(--line);background:#fff;padding:12px;display:grid;grid-template-columns:minmax(180px,1fr) minmax(180px,1fr) 110px;gap:10px;align-items:end;border-radius:var(--radius)}
+    .testing-stream-mode .input,.testing-stream-mode .select{width:100%;min-width:0}
+    .testing-stream-toggle{display:flex;align-items:flex-start;gap:9px;padding:7px 0;cursor:pointer}
+    .testing-stream-toggle input{margin-top:2px}
+    .testing-stream-toggle strong{display:block;font-size:12px}
+    .testing-stream-toggle span{display:block;color:var(--muted);font-size:10px;margin-top:2px}
+    .testing-progress-lane{display:grid;grid-template-columns:84px minmax(0,1fr) 42px;gap:9px;align-items:center;margin-top:9px;font-size:11px}
+    .testing-progress-lane strong{text-align:right;font-variant-numeric:tabular-nums}
     .testing-help{color:var(--muted);font-size:11px;line-height:1.6;margin:0}
     .testing-risk{border-left:3px solid var(--amber);background:#fff8ed;padding:12px 14px;color:#7a4a08;font-size:12px;line-height:1.6}
     .testing-table-actions{display:flex;gap:5px;justify-content:flex-end}
@@ -305,7 +314,7 @@
     @media(max-width:1280px){.dashboard-grid,.model-workbench{grid-template-columns:1fr}.side-stack{position:static}.models{grid-template-columns:1fr}.host-strip{grid-template-columns:repeat(3,minmax(0,1fr))}}
     @media(max-width:1280px){.assurance-grid{grid-template-columns:1fr}}
     @media(max-width:960px){.app{grid-template-columns:76px minmax(0,1fr)}.brand-title,.brand-sub,.nav-text,.nav-label{display:none}.nav-item{justify-content:center}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.secondary-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.secondary-item:nth-child(3){padding-left:0;border-left:0}.account-name{display:none}}
-    @media(max-width:720px){.app{display:block}.sidebar{height:auto;position:relative;display:flex;gap:8px;padding:8px 10px;overflow-x:auto}.brand{flex:0 0 auto}.nav-group{display:flex;margin-top:0;gap:5px}.nav-label{display:none}.nav-item{width:auto;min-width:max-content;flex:0 0 auto;padding:0 11px}.nav-text{display:inline!important}.topbar{height:56px;padding:0 12px}.crumbs>span{display:none}.top-actions{gap:6px}.sync-status{display:none}.account-popover{position:fixed;right:12px;top:62px}.content{padding:16px 12px 36px}.workspace-heading{align-items:flex-start}.overall-health{max-width:54%;align-items:flex-start}.metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.metric{padding:13px}.metric strong{font-size:22px}.secondary-grid{grid-template-columns:1fr}.secondary-item,.secondary-item:nth-child(3){padding:8px 0;border-left:0;border-top:1px solid var(--line-soft)}.secondary-item:first-child{border-top:0}.model-card.editor .kv,.kv{grid-template-columns:1fr}.panel{padding:14px}.disclosure{padding:0}.panel-head{align-items:flex-start;flex-direction:column}.panel-head .action-row{width:100%}.toolbar{align-items:stretch}.toolbar .input,.toolbar .select,.toolbar .btn{width:100%;flex:1 1 auto;justify-content:center}.route-summary-row{display:grid}.data-table{min-width:640px}.compact-table table{min-width:520px}.host-strip{grid-template-columns:1fr}.host-stat{border-right:0;border-bottom:1px solid var(--line)}.operation-row{grid-template-columns:30px minmax(0,1fr)}.operation-value{grid-column:2;text-align:left}#view-testing .workspace-heading{display:block}#view-testing .workspace-heading>.action-row{width:auto;margin-top:12px}#view-testing .workspace-heading>.action-row .btn{width:auto}.testing-status,.testing-form-grid,.testing-metrics{grid-template-columns:1fr}.testing-status-item{border-right:0;border-bottom:1px solid var(--line-soft)}.testing-status-item:last-child{border-bottom:0}.testing-form-grid .span-2{grid-column:auto}.toast{left:14px;right:14px;bottom:14px}.dialog-actions{display:grid;grid-template-columns:1fr 1fr}.dialog-actions .btn{justify-content:center;min-height:44px}}
+    @media(max-width:720px){.app{display:block}.sidebar{height:auto;position:relative;display:flex;gap:8px;padding:8px 10px;overflow-x:auto}.brand{flex:0 0 auto}.nav-group{display:flex;margin-top:0;gap:5px}.nav-label{display:none}.nav-item{width:auto;min-width:max-content;flex:0 0 auto;padding:0 11px}.nav-text{display:inline!important}.topbar{height:56px;padding:0 12px}.crumbs>span{display:none}.top-actions{gap:6px}.sync-status{display:none}.account-popover{position:fixed;right:12px;top:62px}.content{padding:16px 12px 36px}.workspace-heading{align-items:flex-start}.overall-health{max-width:54%;align-items:flex-start}.metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.metric{padding:13px}.metric strong{font-size:22px}.secondary-grid{grid-template-columns:1fr}.secondary-item,.secondary-item:nth-child(3){padding:8px 0;border-left:0;border-top:1px solid var(--line-soft)}.secondary-item:first-child{border-top:0}.model-card.editor .kv,.kv{grid-template-columns:1fr}.panel{padding:14px}.disclosure{padding:0}.panel-head{align-items:flex-start;flex-direction:column}.panel-head .action-row{width:100%}.toolbar{align-items:stretch}.toolbar .input,.toolbar .select,.toolbar .btn{width:100%;flex:1 1 auto;justify-content:center}.route-summary-row{display:grid}.data-table{min-width:640px}.compact-table table{min-width:520px}.host-strip{grid-template-columns:1fr}.host-stat{border-right:0;border-bottom:1px solid var(--line)}.operation-row{grid-template-columns:30px minmax(0,1fr)}.operation-value{grid-column:2;text-align:left}#view-testing .workspace-heading{display:block}#view-testing .workspace-heading>.action-row{width:auto;margin-top:12px}#view-testing .workspace-heading>.action-row .btn{width:auto}.testing-status,.testing-form-grid,.testing-metrics,.testing-stream-mode{grid-template-columns:1fr}.testing-status-item{border-right:0;border-bottom:1px solid var(--line-soft)}.testing-status-item:last-child{border-bottom:0}.testing-form-grid .span-2{grid-column:auto}.toast{left:14px;right:14px;bottom:14px}.dialog-actions{display:grid;grid-template-columns:1fr 1fr}.dialog-actions .btn{justify-content:center;min-height:44px}}
     @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
   </style>
 </head>
@@ -539,11 +548,23 @@
                   </select>
                 </label>
                 <label class="span-2 testing-upload">
-                  <strong><i class="fa fa-files-o"></i> 上传文件、ZIP 或完整目录</strong>
-                  <input id="testingFiles" type="file" multiple accept="image/*,.pdf,.docx,.zip">
-                  <input id="testingDirectory" type="file" multiple webkitdirectory directory>
-                  <span class="testing-help">不限制数据集总大小和图片数量；大文件自动分块，小文件分批校验，网络中断会自动重试。单张图片或文档不超过 24 MB。</span>
+                  <strong><i class="fa fa-folder-open"></i> 选择数据集文件夹</strong>
+                  <input id="testingDirectory" type="file" multiple webkitdirectory directory onchange="summarizeTestingFolder()">
+                  <span class="testing-folder-summary" id="testingFolderSummary">请选择包含测试图片及分类子目录的完整文件夹</span>
+                  <span class="testing-help">不限制数据集总大小和图片数量；保留文件夹的全部相对路径，多级目录会自动提取真值与子类，大文件分块上传，网络异常自动重试。</span>
                 </label>
+                <div class="span-2 testing-stream-mode">
+                  <label class="testing-stream-toggle">
+                    <input id="testingStreamEvaluation" type="checkbox" checked onchange="toggleTestingStreamMode()">
+                    <span><strong>边上传边测试</strong><span>每批图片校验后立即检测，无需等待整个文件夹上传完成</span></span>
+                  </label>
+                  <label>目标模型<select class="select" id="testingStreamModel" required></select></label>
+                  <label>并发数<input class="input" id="testingStreamConcurrency" type="number" min="1" max="4" value="2"></label>
+                </div>
+                <details class="span-2 testing-detail-fold">
+                  <summary>其他数据来源</summary>
+                  <label>上传 ZIP、PDF、DOCX 或散图<input id="testingFiles" type="file" multiple accept="image/*,.pdf,.docx,.zip"></label>
+                </details>
                 <label class="span-2">或从网页提取图片
                   <input class="input" id="testingSourceUrl" type="url" inputmode="url" placeholder="https://example.com/article">
                   <span class="testing-help">仅允许公网 HTTPS，自动拒绝本机、内网和保留地址。</span>
@@ -554,6 +575,7 @@
                 <div class="span-2 testing-progress-card" id="testingImportProgress" hidden>
                   <div class="testing-progress-head"><strong id="testingImportPercent">0%</strong><span id="testingImportStage">等待上传</span></div>
                   <div class="testing-progress"><span id="testingImportBar" style="transform:scaleX(0)"></span></div>
+                  <div class="testing-progress-lane" id="testingDetectionLane" hidden><span>模型检测</span><div class="testing-progress"><span id="testingDetectionBar" style="transform:scaleX(0)"></span></div><strong id="testingDetectionPercent">0%</strong></div>
                   <div class="testing-progress-meta" id="testingImportMeta"><span>尚未开始</span></div>
                   <div class="testing-help" id="testingImportIssues" hidden></div>
                   <button class="btn mini secondary" id="testingCancelImport" type="button" onclick="cancelTestingImport()" hidden>取消本次上传</button>
@@ -1550,7 +1572,7 @@
 
       const models=(system.models || []).filter(model=>model.enabled !== false);
       const modelOptions=models.map(model=>`<option value="${esc(model.id)}">${esc(model.name || model.id)}${model.health?.ok ? '' : ' · 未就绪'}</option>`).join('');
-      ['testingEvalModel','testingLoadModel'].forEach(id=>{
+      ['testingEvalModel','testingLoadModel','testingStreamModel'].forEach(id=>{
         const select=$(id); if(!select) return;
         const previous=select.value;
         select.innerHTML=modelOptions || '<option value="">暂无可测试模型</option>';
@@ -1616,7 +1638,8 @@
       const status=session.status || 'uploading';
       if(status==='uploading') state.testingImportId=session.id || state.testingImportId;
       let percent=Number(uploadPercent);
-      let stage='正在分批上传并校验';
+      const detection=session.detection || {};
+      let stage=session.streamEvaluation?'正在上传，同时进行模型检测':'正在分批上传并校验';
       if(!Number.isFinite(percent)){
         if(['queued','processing'].includes(status)){
           const total=Number(session.totalSamples || 0), done=Number(session.processedSamples || 0);
@@ -1635,17 +1658,31 @@
       $('testingImportBar').style.transform=`scaleX(${Math.max(0,Math.min(100,percent))/100})`;
       const expected=Number(session.expectedFiles || 0), validated=Number(session.validatedFiles || 0), rejected=Number(session.rejectedFiles || 0);
       const processed=Number(session.processedSamples || 0), totalSamples=Number(session.totalSamples || 0);
+      const detectionTotal=Number(detection.total || 0), detectionCompleted=Number(detection.completed || 0);
+      const detectionPercent=detectionTotal?Math.min(100,Math.round(detectionCompleted/detectionTotal*100)):0;
+      const detectionLane=$('testingDetectionLane');
+      detectionLane.hidden=!session.streamEvaluation;
+      if(session.streamEvaluation){
+        $('testingDetectionPercent').textContent=`${detectionPercent}%`;
+        $('testingDetectionBar').style.transform=`scaleX(${detectionPercent/100})`;
+      }
       $('testingImportMeta').innerHTML=[
         `<span>已校验 ${validated}${expected?` / ${expected}`:''} 个文件</span>`,
         `<span>不合格 ${rejected}</span>`,
+        session.streamEvaluation?`<span>已检测 ${detectionCompleted} / ${detectionTotal} · 失败 ${Number(detection.failed || 0)}</span>`:'',
         totalSamples?`<span>已建库 ${processed} / ${totalSamples} 张</span>`:'',
         session.id?`<span class="mono">${esc(session.id)}</span>`:'',
       ].filter(Boolean).join('');
       const issues=$('testingImportIssues');
       const recentRejections=(session.rejections || []).slice(-3);
       const recentFile=(session.files || []).slice(-1)[0];
+      const recentDetection=(detection.recent || []).slice(-1)[0];
       const inspection=[];
       if(recentFile) inspection.push(`最近通过：${esc(recentFile.relativePath || recentFile.name)}`);
+      if(recentDetection && ['success','failed'].includes(recentDetection.status)){
+        const verdict=recentDetection.status==='success'?(recentDetection.predictedLabel==='fake'?'判定 AI 生成':'判定真实'):`检测失败：${recentDetection.error || '模型未返回结果'}`;
+        inspection.push(`最近检测：${esc(recentDetection.relativePath)} · ${esc(verdict)}${recentDetection.latencyMs?` · ${Number(recentDetection.latencyMs)} ms`:''}`);
+      }
       recentRejections.forEach(item=>inspection.push(`未通过：${esc(item.relativePath)} · ${esc(item.message)}`));
       issues.innerHTML=inspection.join('<br>');
       issues.hidden=!inspection.length;
@@ -1702,6 +1739,21 @@
         await loadTesting(false);
       }catch(err){ toast(err?.message || '取消上传失败'); }
     }
+    function summarizeTestingFolder(){
+      const files=[...($('testingDirectory')?.files || [])];
+      const summary=$('testingFolderSummary');
+      if(!summary) return;
+      if(!files.length){ summary.textContent='请选择包含测试图片及分类子目录的完整文件夹'; return; }
+      const root=(files[0].webkitRelativePath || '').split('/')[0] || '已选文件夹';
+      const bytes=files.reduce((sum,file)=>sum+Number(file.size || 0),0);
+      summary.innerHTML=`<strong>${esc(root)}</strong><span>${files.length} 个文件</span><span>${testingBytes(bytes)}</span>`;
+      if(!$('testingDatasetName').value.trim()) $('testingDatasetName').value=root;
+    }
+    function toggleTestingStreamMode(){
+      const enabled=$('testingStreamEvaluation').checked;
+      $('testingStreamModel').disabled=!enabled;
+      $('testingStreamConcurrency').disabled=!enabled;
+    }
     async function createTestingDataset(event){
       event.preventDefault();
       const button=$('testingCreateDataset');
@@ -1709,6 +1761,8 @@
       const sourceUrl=$('testingSourceUrl').value.trim();
       if(!selected.length && !sourceUrl){ toast('请选择文件、目录或填写网页地址'); return; }
       const totalBytes=selected.reduce((sum,file)=>sum+Number(file.size || 0),0);
+      const streamEvaluation=$('testingStreamEvaluation').checked;
+      if(streamEvaluation && !$('testingStreamModel').value){ toast('请选择边上传边测试使用的模型'); return; }
       button.disabled=true; button.textContent='正在创建上传会话…';
       let importId=state.testingImportId || '';
       try{
@@ -1725,6 +1779,9 @@
             sourceUrl,
             expectedFiles:selected.length,
             expectedBytes:totalBytes,
+            streamEvaluation,
+            modelId:streamEvaluation?$('testingStreamModel').value:'',
+            concurrency:streamEvaluation?Number($('testingStreamConcurrency').value || 1):1,
           })});
           session=created.importSession;
           importId=session.id;
@@ -1775,8 +1832,10 @@
         const finalized=await api(`/api/admin/testing/dataset-imports/${encodeURIComponent(importId)}/finalize`,{method:'POST',body:'{}'});
         renderTestingImport(finalized.importSession);
         const completed=await waitForTestingImport(importId);
-        toast(`数据集已创建：校验通过 ${completed.validatedFiles} 个文件，拒绝 ${completed.rejectedFiles} 个`);
+        toast(`数据集已创建：校验通过 ${completed.validatedFiles} 个文件，拒绝 ${completed.rejectedFiles} 个${completed.runId?'，同步评测已完成':''}`);
         $('testingDatasetForm').reset();
+        summarizeTestingFolder();
+        toggleTestingStreamMode();
         state.testingImportId=''; state.testingImportedPaths=new Set();
         $('testingCancelImport').hidden=true;
         await loadTesting(true);
