@@ -58,13 +58,13 @@ ALLOWED_IMAGE_FORMATS = {"JPEG", "PNG", "WEBP", "BMP", "GIF", "TIFF", "HEIF", "H
 ALLOWED_LABELS = {"real", "fake", "unlabeled"}
 REAL_PATH_LABELS = {
     "real", "reals", "authentic", "genuine", "natural", "camera", "captured",
-    "photograph", "photo", "original", "human", "negative", "0",
+    "photograph", "photo", "original", "human", "0",
     "真实", "真图", "实拍", "自然图像", "相机", "原图",
 }
 FAKE_PATH_LABELS = {
     "fake", "fakes", "synthetic", "generated", "generation", "ai", "aigc",
-    "ai_generated", "diffusion", "gan", "sdxl", "stable_diffusion", "midjourney",
-    "dalle", "flux", "positive", "1", "生成", "生成图", "假图", "合成图", "人工合成",
+    "ai_generated", "deepfake", "diffusion", "gan", "sdxl", "stable_diffusion", "midjourney",
+    "dalle", "flux", "1", "生成", "生成图", "假图", "合成图", "人工合成",
     "即梦", "豆包",
 }
 _SCHEMA_LOCK = threading.Lock()
@@ -111,7 +111,9 @@ def ensure_schema() -> None:
                     total_bytes INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
                     actor_id TEXT,
-                    actor_name TEXT
+                    actor_name TEXT,
+                    profile_name TEXT NOT NULL DEFAULT 'generic',
+                    taxonomy_json TEXT NOT NULL DEFAULT '{}'
                 );
                 CREATE TABLE IF NOT EXISTS samples (
                     id TEXT PRIMARY KEY,
@@ -127,6 +129,9 @@ def ensure_schema() -> None:
                     storage_path TEXT NOT NULL,
                     relative_path TEXT,
                     label_source TEXT NOT NULL DEFAULT 'default',
+                    class_path TEXT,
+                    subclasses_json TEXT NOT NULL DEFAULT '{}',
+                    group_id TEXT,
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(dataset_id) REFERENCES datasets(id) ON DELETE CASCADE,
                     UNIQUE(dataset_id, sha256)
@@ -180,6 +185,25 @@ def ensure_schema() -> None:
                 connection.execute(
                     "ALTER TABLE samples ADD COLUMN label_source TEXT NOT NULL DEFAULT 'default'"
                 )
+            if "class_path" not in sample_columns:
+                connection.execute("ALTER TABLE samples ADD COLUMN class_path TEXT")
+            if "subclasses_json" not in sample_columns:
+                connection.execute(
+                    "ALTER TABLE samples ADD COLUMN subclasses_json TEXT NOT NULL DEFAULT '{}'"
+                )
+            if "group_id" not in sample_columns:
+                connection.execute("ALTER TABLE samples ADD COLUMN group_id TEXT")
+            dataset_columns = {
+                str(row[1]) for row in connection.execute("PRAGMA table_info(datasets)").fetchall()
+            }
+            if "profile_name" not in dataset_columns:
+                connection.execute(
+                    "ALTER TABLE datasets ADD COLUMN profile_name TEXT NOT NULL DEFAULT 'generic'"
+                )
+            if "taxonomy_json" not in dataset_columns:
+                connection.execute(
+                    "ALTER TABLE datasets ADD COLUMN taxonomy_json TEXT NOT NULL DEFAULT '{}'"
+                )
             connection.commit()
             os.chmod(DB_PATH, 0o600)
         finally:
@@ -191,7 +215,10 @@ def _row_dict(row: sqlite3.Row | None) -> dict | None:
     if row is None:
         return None
     payload = dict(row)
-    for key in ("configuration_json", "metrics_json", "response_json"):
+    for key in (
+        "configuration_json", "metrics_json", "response_json", "taxonomy_json",
+        "subclasses_json",
+    ):
         if key not in payload:
             continue
         target = key.removesuffix("_json")
@@ -246,6 +273,126 @@ def _path_label(relative_path: str) -> tuple[str, str]:
             label = "real" if real else "fake"
             return label, f"directory:{part}"
     return "unlabeled", "unresolved"
+
+
+def _path_parts(relative_path: str) -> list[str]:
+    return list(PurePosixPath(_safe_relative_path(relative_path)).parts[:-1])
+
+
+def _detect_dataset_profile(relative_paths: list[str]) -> str:
+    """Recognize known benchmarks without assuming their selected root depth."""
+    paths = [[part.lower() for part in _path_parts(path)] for path in relative_paths]
+    if any("deepfake" in parts for parts in paths) and any(
+        {"positive", "negative"} & set(parts) for parts in paths
+    ):
+        return "fraudbench"
+    transforms = {"original", "redigital", "transfer"}
+    for parts in paths:
+        for index, part in enumerate(parts[:-1]):
+            if part in transforms and parts[index + 1] in {"real", "ai"}:
+                return "rrdataset"
+    return "generic"
+
+
+def _review_part(parts: list[str]) -> str:
+    return next((part for part in parts if re.fullmatch(r"Review_\d+", part, re.I)), "")
+
+
+def _classify_path(relative_path: str, profile: str) -> dict:
+    """Return binary truth plus lossless, semantic directory dimensions."""
+    safe_path = _safe_relative_path(relative_path)
+    parts = _path_parts(safe_path)
+    class_path = "/".join(parts)
+    subclasses: dict[str, str] = {
+        f"level_{index}": part for index, part in enumerate(parts, 1)
+    }
+    ground_truth = "unlabeled"
+    label_source = "unresolved"
+    group_id = ""
+
+    if profile == "fraudbench":
+        marker_index = next(
+            (index for index, part in enumerate(parts) if part.lower() in {"positive", "negative", "deepfake"}),
+            -1,
+        )
+        if marker_index >= 0:
+            source_class = parts[marker_index]
+            domain = parts[marker_index - 1] if marker_index else "unknown"
+            tail = parts[marker_index + 1:]
+            review_group = _review_part(tail)
+            subclasses.update({
+                "dataset_profile": "FraudBench",
+                "domain": domain,
+                "source_class": source_class,
+                "generation_type": "ai_edit" if source_class.lower() == "deepfake" else "original",
+            })
+            if review_group:
+                subclasses["review_group"] = review_group
+            if source_class.lower() == "deepfake":
+                generator = tail[0] if tail and not tail[0].lower().startswith("review_") else "unknown"
+                subclasses["generator"] = generator
+                ground_truth = "fake"
+            else:
+                subclasses["review_sentiment"] = source_class
+                ground_truth = "real"
+            stem = PurePosixPath(safe_path).stem
+            source_branch = "Positive" if source_class.lower() == "deepfake" else source_class
+            group_id = "/".join(filter(None, ("FraudBench", domain, source_branch, review_group, stem)))
+            label_source = f"profile:fraudbench:{source_class}"
+
+    elif profile == "rrdataset":
+        transforms = {"original", "redigital", "transfer"}
+        transform_index = next(
+            (index for index, part in enumerate(parts[:-1]) if part.lower() in transforms),
+            -1,
+        )
+        if transform_index >= 0:
+            transform = parts[transform_index]
+            source_class = parts[transform_index + 1]
+            normalized_class = source_class.lower()
+            subclasses.update({
+                "dataset_profile": "RRDataset",
+                "transform": transform,
+                "source_class": source_class,
+                "generation_type": "original" if normalized_class == "real" else "ai_generated",
+            })
+            ground_truth = "real" if normalized_class == "real" else "fake"
+            stem = PurePosixPath(safe_path).stem
+            content_key = re.sub(r"^(?:redigital|transfer)_", "", stem, flags=re.I)
+            group_id = f"RRDataset/{normalized_class}/{content_key}"
+            label_source = f"profile:rrdataset:{transform}/{source_class}"
+
+    if ground_truth == "unlabeled":
+        ground_truth, label_source = _path_label(safe_path)
+        if not group_id:
+            group_id = "/".join(parts) or PurePosixPath(safe_path).stem
+    return {
+        "groundTruth": ground_truth,
+        "labelSource": label_source,
+        "classPath": class_path,
+        "subclasses": subclasses,
+        "groupId": group_id[:1000],
+    }
+
+
+def _taxonomy(samples: list[dict], profile: str) -> dict:
+    dimensions: dict[str, Counter] = {}
+    for sample in samples:
+        for key, value in (sample.get("subclasses") or {}).items():
+            if key.startswith("level_") or not value:
+                continue
+            dimensions.setdefault(key, Counter())[str(value)] += 1
+    return {
+        "profile": profile,
+        "dimensions": {
+            key: dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
+            for key, counts in dimensions.items()
+        },
+        "maxDepth": max(
+            (len(_path_parts(str(sample.get("relativePath") or ""))) for sample in samples),
+            default=0,
+        ),
+    }
 
 
 def _normalize_label(value: str | None) -> str:
@@ -544,6 +691,7 @@ def create_dataset(
     seen: set[str] = set()
     samples: list[dict] = []
     total_bytes = 0
+    profile = _detect_dataset_profile([item[3] for item in extracted])
     try:
         for index, (sample_name, payload, source, relative_path) in enumerate(extracted, 1):
             digest = hashlib.sha256(payload).hexdigest()
@@ -567,7 +715,9 @@ def create_dataset(
                 (label_map[key] for key in explicit_candidates if key in label_map),
                 None,
             )
-            inferred_label, inferred_source = _path_label(safe_relative_path)
+            classification = _classify_path(safe_relative_path, profile)
+            inferred_label = classification["groundTruth"]
+            inferred_source = classification["labelSource"]
             if explicit_label is not None:
                 label, label_source = explicit_label, "explicit"
             elif inferred_label != "unlabeled":
@@ -588,6 +738,9 @@ def create_dataset(
                 "storagePath": str(path),
                 "relativePath": safe_relative_path,
                 "labelSource": label_source,
+                "classPath": classification["classPath"],
+                "subclasses": classification["subclasses"],
+                "groupId": classification["groupId"],
             })
             total_bytes += len(payload)
         if not samples:
@@ -595,6 +748,7 @@ def create_dataset(
         if int(usage["bytes"] or 0) + total_bytes > MAX_STORED_BYTES:
             raise ValueError("网页或文档提取结果超过内部测试存储上限")
         created_at = _now()
+        taxonomy = _taxonomy(samples, profile)
         source_type = "mixed" if len(source_types) > 1 else next(iter(source_types), "upload")
         dataset_name = _safe_name(name, f"测试集 {created_at[:10]}")
         with _connect() as connection:
@@ -602,29 +756,33 @@ def create_dataset(
                 """
                 INSERT INTO datasets
                     (id,name,source_type,source_name,default_label,sample_count,labeled_count,
-                     total_bytes,created_at,actor_id,actor_name)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                     total_bytes,created_at,actor_id,actor_name,profile_name,taxonomy_json)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     dataset_id, dataset_name, source_type, source_url[:500],
                     normalized_default, len(samples),
                     sum(1 for item in samples if item["groundTruth"] != "unlabeled"),
                     total_bytes, created_at, actor_id, actor_name,
+                    profile, json.dumps(taxonomy, ensure_ascii=False),
                 ),
             )
             connection.executemany(
                 """
                 INSERT INTO samples
                     (id,dataset_id,name,source,sha256,mime_type,width,height,byte_size,
-                     ground_truth,storage_path,relative_path,label_source,created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     ground_truth,storage_path,relative_path,label_source,class_path,
+                     subclasses_json,group_id,created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 [
                     (
                         item["id"], dataset_id, item["name"], item["source"], item["sha256"],
                         item["mimeType"], item["width"], item["height"], item["byteSize"],
                         item["groundTruth"], item["storagePath"], item["relativePath"],
-                        item["labelSource"], created_at,
+                        item["labelSource"], item["classPath"],
+                        json.dumps(item["subclasses"], ensure_ascii=False), item["groupId"],
+                        created_at,
                     )
                     for item in samples
                 ],
@@ -648,18 +806,18 @@ def get_dataset(dataset_id: str, *, include_samples: bool = False) -> dict | Non
             samples = connection.execute(
                 """
                 SELECT id,name,source,sha256,mime_type,width,height,byte_size,ground_truth,
-                       relative_path,label_source,created_at
+                       relative_path,label_source,class_path,subclasses_json,group_id,created_at
                 FROM samples WHERE dataset_id = ? ORDER BY created_at,id
                 """,
                 (dataset_id,),
             ).fetchall()
-            payload["samples"] = [dict(item) for item in samples]
+            payload["samples"] = [_row_dict(item) or {} for item in samples]
             source_counts = Counter(str(item["label_source"] or "unresolved") for item in samples)
             label_counts = Counter(str(item["ground_truth"] or "unlabeled") for item in samples)
             payload["classification"] = {
                 "automaticCount": sum(
                     count for source, count in source_counts.items()
-                    if source.startswith("directory:")
+                    if source.startswith(("directory:", "profile:"))
                 ),
                 "explicitCount": int(source_counts.get("explicit", 0)),
                 "defaultCount": int(source_counts.get("default", 0)),
@@ -721,13 +879,13 @@ def update_sample_label(sample_id: str, ground_truth: str) -> dict | None:
         updated = connection.execute(
             """
             SELECT id,name,source,sha256,mime_type,width,height,byte_size,ground_truth,
-                   relative_path,label_source,created_at
+                   relative_path,label_source,class_path,subclasses_json,group_id,created_at
             FROM samples WHERE id = ?
             """,
             (sample_id,),
         ).fetchone()
         connection.commit()
-    return dict(updated) if updated else None
+    return _row_dict(updated)
 
 
 def delete_dataset(dataset_id: str) -> bool:
@@ -938,7 +1096,7 @@ def _is_cancelled(run_id: str) -> bool:
     return bool(row and row.get("status") == "cancel_requested")
 
 
-def _evaluation_metrics(results: list[dict]) -> dict:
+def _base_evaluation_metrics(results: list[dict]) -> dict:
     latencies = [int(item["latencyMs"]) for item in results if item.get("ok")]
     labeled = [
         item for item in results
@@ -977,6 +1135,36 @@ def _evaluation_metrics(results: list[dict]) -> dict:
     }
 
 
+def _evaluation_metrics(results: list[dict]) -> dict:
+    metrics = _base_evaluation_metrics(results)
+    dimensions: dict[str, dict[str, list[dict]]] = {}
+    for item in results:
+        for dimension, value in (item.get("subclasses") or {}).items():
+            if dimension.startswith("level_") or not value:
+                continue
+            dimensions.setdefault(dimension, {}).setdefault(str(value), []).append(item)
+    grouped = []
+    for dimension, values in sorted(dimensions.items()):
+        if len(values) > 60:
+            continue
+        for value, items in sorted(values.items(), key=lambda pair: (-len(pair[1]), pair[0])):
+            item_metrics = _base_evaluation_metrics(items)
+            grouped.append({
+                "dimension": dimension,
+                "value": value,
+                "sampleCount": item_metrics["sampleCount"],
+                "successCount": item_metrics["successCount"],
+                "labeledCount": item_metrics["labeledCount"],
+                "accuracy": item_metrics["accuracy"],
+                "precision": item_metrics["precision"],
+                "recall": item_metrics["recall"],
+                "f1": item_metrics["f1"],
+                "confusionMatrix": item_metrics["confusionMatrix"],
+            })
+    metrics["groupMetrics"] = grouped
+    return metrics
+
+
 def _execute_evaluation(run_id: str, model: dict, concurrency: int) -> None:
     _set_run(run_id, status="running", started_at=_now())
     with _connect() as connection:
@@ -994,6 +1182,8 @@ def _execute_evaluation(run_id: str, model: dict, concurrency: int) -> None:
             **result,
             "sampleId": row["id"],
             "groundTruth": row["ground_truth"],
+            "subclasses": json.loads(row["subclasses_json"] or "{}"),
+            "groupId": row["group_id"] or "",
         }
 
     try:
@@ -1031,6 +1221,8 @@ def _execute_evaluation(run_id: str, model: dict, concurrency: int) -> None:
                             "httpStatus": None,
                             "payload": {},
                             "error": str(exc)[:500],
+                            "subclasses": json.loads(row["subclasses_json"] or "{}"),
+                            "groupId": row["group_id"] or "",
                         }
                     completed.append(result)
                     with _connect() as connection:
@@ -1318,14 +1510,15 @@ def get_run(
                 f"""
                 SELECT r.id,r.sample_id,r.status,r.predicted_label,r.score,r.latency_ms,
                        r.http_status,r.error,r.created_at,s.name AS sample_name,
-                       s.ground_truth,s.relative_path,s.label_source
+                       s.ground_truth,s.relative_path,s.label_source,s.class_path,
+                       s.subclasses_json,s.group_id
                 FROM results r
                 LEFT JOIN samples s ON s.id = r.sample_id
                 WHERE r.run_id = ? ORDER BY r.id{limit_sql}
                 """,
                 params,
             ).fetchall()
-        run["results"] = [dict(row) for row in rows]
+        run["results"] = [_row_dict(row) or {} for row in rows]
         run["resultSummary"] = {
             "count": int(summary["count"] or 0),
             "successCount": int(summary["success_count"] or 0),

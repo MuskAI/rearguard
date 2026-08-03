@@ -2997,13 +2997,16 @@ def admin_testing_export_run(run_id):
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
-        "sample_id", "sample_name", "ground_truth", "predicted_label", "score",
-        "status", "latency_ms", "http_status", "error",
+        "sample_id", "sample_name", "relative_path", "class_path", "group_id",
+        "subclasses", "ground_truth", "predicted_label", "score", "status",
+        "latency_ms", "http_status", "error",
     ])
     for item in run.get("results") or []:
         writer.writerow([
-            item.get("sample_id"), item.get("sample_name"), item.get("ground_truth"),
-            item.get("predicted_label"), item.get("score"), item.get("status"),
+            item.get("sample_id"), item.get("sample_name"), item.get("relative_path"),
+            item.get("class_path"), item.get("group_id"),
+            json.dumps(item.get("subclasses") or {}, ensure_ascii=False),
+            item.get("ground_truth"), item.get("predicted_label"), item.get("score"), item.get("status"),
             item.get("latency_ms"), item.get("http_status"), item.get("error"),
         ])
     response = Response(output.getvalue(), content_type="text/csv; charset=utf-8")

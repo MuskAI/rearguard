@@ -114,6 +114,58 @@ def test_directory_structure_infers_labels_at_different_depths():
     assert dataset["classification"]["unresolvedCount"] == 1
 
 
+def test_fraudbench_profile_preserves_semantic_subclasses():
+    dataset = internal_testing.create_dataset(
+        [
+            ("FraudBench/Electronics/Positive/Review_004/Image_004_01.jpg", _png_bytes((20, 80, 140))),
+            ("FraudBench/Electronics/Negative/Review_007/Image_007_02.jpg", _png_bytes((80, 140, 20))),
+            ("FraudBench/Electronics/DeepFake/gpt-image-2/Review_004/Image_004_01.jpg", _png_bytes((180, 40, 90))),
+        ],
+        default_label="unlabeled",
+    )
+    by_path = {item["relative_path"]: item for item in dataset["samples"]}
+
+    assert dataset["profile_name"] == "fraudbench"
+    assert dataset["taxonomy"]["dimensions"]["domain"] == {"Electronics": 3}
+    positive = by_path["FraudBench/Electronics/Positive/Review_004/Image_004_01.jpg"]
+    negative = by_path["FraudBench/Electronics/Negative/Review_007/Image_007_02.jpg"]
+    generated = by_path["FraudBench/Electronics/DeepFake/gpt-image-2/Review_004/Image_004_01.jpg"]
+    assert positive["ground_truth"] == negative["ground_truth"] == "real"
+    assert generated["ground_truth"] == "fake"
+    assert generated["subclasses"]["generator"] == "gpt-image-2"
+    assert generated["group_id"] == positive["group_id"]
+    assert negative["group_id"] != positive["group_id"]
+
+
+def test_rrdataset_profile_tracks_transform_and_groups_variants():
+    dataset = internal_testing.create_dataset(
+        [
+            ("RRDataset_final/original/real/real_000021.jpg", _png_bytes((20, 80, 140))),
+            ("RRDataset_final/redigital/real/redigital_real_000021.jpg", _png_bytes((40, 100, 180))),
+            ("RRDataset_final/transfer/ai/transfer_ai_000021.jpg", _png_bytes((180, 50, 20))),
+        ]
+    )
+    samples = dataset["samples"]
+    by_path = {item["relative_path"]: item for item in samples}
+
+    assert dataset["profile_name"] == "rrdataset"
+    assert dataset["taxonomy"]["dimensions"]["transform"] == {
+        "original": 1, "redigital": 1, "transfer": 1,
+    }
+    original = by_path["RRDataset_final/original/real/real_000021.jpg"]
+    redigital = by_path["RRDataset_final/redigital/real/redigital_real_000021.jpg"]
+    generated = by_path["RRDataset_final/transfer/ai/transfer_ai_000021.jpg"]
+    assert original["ground_truth"] == redigital["ground_truth"] == "real"
+    assert generated["ground_truth"] == "fake"
+    assert original["group_id"] == redigital["group_id"]
+    assert generated["group_id"] != original["group_id"]
+
+
+def test_positive_and_negative_are_not_generic_truth_keywords():
+    assert internal_testing._path_label("benchmark/Positive/a.png")[0] == "unlabeled"
+    assert internal_testing._path_label("benchmark/Negative/b.png")[0] == "unlabeled"
+
+
 def test_manual_label_overrides_directory_inference():
     dataset = internal_testing.create_dataset(
         [("dataset/real/photo.png", _png_bytes())],
@@ -157,6 +209,17 @@ def test_evaluation_metrics_use_only_labeled_valid_predictions():
     assert metrics["recall"] == pytest.approx(1)
     assert metrics["f1"] == pytest.approx(2 / 3)
     assert metrics["latency"]["p95Ms"] == 400
+
+
+def test_evaluation_metrics_include_subclass_breakdown():
+    metrics = internal_testing._evaluation_metrics([
+        {"ok": True, "groundTruth": "real", "predictedLabel": "real", "latencyMs": 100, "subclasses": {"transform": "original"}},
+        {"ok": True, "groundTruth": "fake", "predictedLabel": "real", "latencyMs": 120, "subclasses": {"transform": "transfer"}},
+    ])
+    grouped = {(item["dimension"], item["value"]): item for item in metrics["groupMetrics"]}
+
+    assert grouped[("transform", "original")]["accuracy"] == 1
+    assert grouped[("transform", "transfer")]["accuracy"] == 0
 
 
 def test_evaluation_run_persists_reproducible_metrics(monkeypatch):
