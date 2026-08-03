@@ -2832,6 +2832,122 @@ def admin_testing_create_dataset():
     return jsonify({"status": "success", "dataset": dataset}), 201
 
 
+@admin_blueprint.route("/api/admin/testing/dataset-imports", methods=["POST"])
+def admin_testing_create_import():
+    user, error = _admin_required("testing.run")
+    if error:
+        return error
+    payload = request.get_json(silent=True) or {}
+    try:
+        import_session = internal_testing.create_import_session(
+            name=payload.get("name") or "",
+            default_label=payload.get("defaultLabel") or "unlabeled",
+            source_url=payload.get("sourceUrl") or "",
+            expected_files=payload.get("expectedFiles") or 0,
+            expected_bytes=payload.get("expectedBytes") or 0,
+            actor=user,
+        )
+    except (TypeError, ValueError) as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    _audit(
+        user,
+        "testing.dataset_import.create",
+        import_session.get("id") or "dataset-import",
+        meta={
+            "expectedFiles": import_session.get("expectedFiles"),
+            "expectedBytes": import_session.get("expectedBytes"),
+        },
+    )
+    return jsonify({"status": "success", "importSession": import_session}), 201
+
+
+@admin_blueprint.route("/api/admin/testing/dataset-imports/<import_id>")
+def admin_testing_import(import_id):
+    _, error = _admin_required("testing.view")
+    if error:
+        return error
+    import_session = internal_testing.get_import_session(import_id)
+    if not import_session:
+        return jsonify({"status": "error", "message": "数据集上传会话不存在"}), 404
+    return jsonify({"status": "success", "importSession": import_session})
+
+
+@admin_blueprint.route("/api/admin/testing/dataset-imports/<import_id>", methods=["DELETE"])
+def admin_testing_delete_import(import_id):
+    user, error = _admin_required("testing.run")
+    if error:
+        return error
+    try:
+        deleted = internal_testing.delete_import_session(import_id)
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 409
+    if not deleted:
+        return jsonify({"status": "error", "message": "数据集上传会话不存在"}), 404
+    _audit(user, "testing.dataset_import.delete", import_id)
+    return jsonify({"status": "success", "deleted": import_id})
+
+
+@admin_blueprint.route("/api/admin/testing/dataset-imports/<import_id>/files", methods=["POST"])
+def admin_testing_upload_import_files(import_id):
+    _, error = _admin_required("testing.run")
+    if error:
+        return error
+    if int(request.content_length or 0) > internal_testing.available_storage_bytes():
+        return jsonify({"status": "error", "message": "服务器磁盘剩余空间不足"}), 507
+    uploads = [
+        (uploaded.filename, uploaded.stream)
+        for uploaded in request.files.getlist("files")
+        if uploaded and uploaded.filename
+    ]
+    if not uploads:
+        return jsonify({"status": "error", "message": "本批次没有文件"}), 400
+    try:
+        import_session = internal_testing.add_import_files(import_id, uploads)
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    return jsonify({"status": "success", "importSession": import_session})
+
+
+@admin_blueprint.route("/api/admin/testing/dataset-imports/<import_id>/chunks", methods=["POST"])
+def admin_testing_upload_import_chunk(import_id):
+    _, error = _admin_required("testing.run")
+    if error:
+        return error
+    uploaded = request.files.get("chunk")
+    if not uploaded:
+        return jsonify({"status": "error", "message": "缺少文件分块"}), 400
+    try:
+        import_session = internal_testing.add_import_chunk(
+            import_id,
+            upload_id=request.form.get("uploadId") or "",
+            relative_path=request.form.get("relativePath") or uploaded.filename or "archive.zip",
+            chunk_index=int(request.form.get("chunkIndex") or 0),
+            total_chunks=int(request.form.get("totalChunks") or 0),
+            chunk=uploaded.stream,
+        )
+    except (TypeError, ValueError) as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    return jsonify({"status": "success", "importSession": import_session})
+
+
+@admin_blueprint.route("/api/admin/testing/dataset-imports/<import_id>/finalize", methods=["POST"])
+def admin_testing_finalize_import(import_id):
+    user, error = _admin_required("testing.run")
+    if error:
+        return error
+    try:
+        import_session = internal_testing.finalize_import(import_id)
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    _audit(
+        user,
+        "testing.dataset_import.finalize",
+        import_id,
+        meta={"validatedFiles": import_session.get("validatedFiles")},
+    )
+    return jsonify({"status": "success", "importSession": import_session}), 202
+
+
 @admin_blueprint.route("/api/admin/testing/datasets/<dataset_id>")
 def admin_testing_dataset(dataset_id):
     _, error = _admin_required("testing.view")

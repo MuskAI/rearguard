@@ -80,6 +80,17 @@ def test_public_default_nginx_rejects_ip_host_and_internal_preview_is_loopback_o
     assert "listen 8081;" not in body
 
 
+def test_internal_dataset_import_uses_bounded_resumable_requests():
+    body = (
+        ROOT / "realguard-server-main" / "deploy" / "nginx-realguard-frontend.conf"
+    ).read_text(encoding="utf-8")
+
+    location = body.split("location ~ ^/api/admin/testing/dataset-imports", 1)[1].split("}", 1)[0]
+    assert "client_max_body_size 32m;" in location
+    assert "proxy_request_buffering off;" in location
+    assert "proxy_read_timeout 600s;" in location
+
+
 def test_big_screen_page_disables_access_log_and_never_uses_query_token_auth():
     for config in (
         ROOT / "deploy" / "nginx" / "realguard.conf",

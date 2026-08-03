@@ -542,7 +542,7 @@
                   <strong><i class="fa fa-files-o"></i> 上传文件、ZIP 或完整目录</strong>
                   <input id="testingFiles" type="file" multiple accept="image/*,.pdf,.docx,.zip">
                   <input id="testingDirectory" type="file" multiple webkitdirectory directory>
-                  <span class="testing-help">不限制数据集总大小和图片数量；单张图片或文档不超过 24 MB。支持任意深度目录，并自动识别 FraudBench、RRDataset 及通用真假目录。</span>
+                  <span class="testing-help">不限制数据集总大小和图片数量；大文件自动分块，小文件分批校验，网络中断会自动重试。单张图片或文档不超过 24 MB。</span>
                 </label>
                 <label class="span-2">或从网页提取图片
                   <input class="input" id="testingSourceUrl" type="url" inputmode="url" placeholder="https://example.com/article">
@@ -550,6 +550,13 @@
                 </label>
                 <div class="span-2 action-row">
                   <button class="btn green" id="testingCreateDataset" type="submit"><i class="fa fa-database"></i>创建数据集</button>
+                </div>
+                <div class="span-2 testing-progress-card" id="testingImportProgress" hidden>
+                  <div class="testing-progress-head"><strong id="testingImportPercent">0%</strong><span id="testingImportStage">等待上传</span></div>
+                  <div class="testing-progress"><span id="testingImportBar" style="transform:scaleX(0)"></span></div>
+                  <div class="testing-progress-meta" id="testingImportMeta"><span>尚未开始</span></div>
+                  <div class="testing-help" id="testingImportIssues" hidden></div>
+                  <button class="btn mini secondary" id="testingCancelImport" type="button" onclick="cancelTestingImport()" hidden>取消本次上传</button>
                 </div>
               </form>
             </section>
@@ -727,7 +734,7 @@
       return Array.isArray(required) ? required.some(can) : can(required);
     };
     const mutationRequests = new Map();
-    let state = {metrics:null, models:[], routing:{}, routingHistory:[], detections:[], users:[], admins:[], keys:[], services:[], host:null, serviceSummary:null, performance:null, assurance:null, swarm:null, alerts:null, alertDeliveries:[], audit:[], testing:null, testingDetail:null, pages:{}, selectedUser:null, selectedDetection:null};
+    let state = {metrics:null, models:[], routing:{}, routingHistory:[], detections:[], users:[], admins:[], keys:[], services:[], host:null, serviceSummary:null, performance:null, assurance:null, swarm:null, alerts:null, alertDeliveries:[], audit:[], testing:null, testingDetail:null, testingImportId:'', testingImportedPaths:new Set(), pages:{}, selectedUser:null, selectedDetection:null};
     let testingRefreshTimer = null;
     const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
     const can = (permission) => PERMISSIONS.has(permission);
@@ -1550,6 +1557,9 @@
         if([...select.options].some(option=>option.value===previous)) select.value=previous;
       });
       const datasets=data.datasets || [];
+      const imports=data.imports || [];
+      const activeImport=imports.find(item=>['uploading','queued','processing'].includes(item.status));
+      if(activeImport) renderTestingImport(activeImport);
       if($('testingEvalDataset')){
         const select=$('testingEvalDataset');
         const previous=select.value;
@@ -1596,31 +1606,186 @@
       }catch(err){
         if(showError) toast(err?.message || '内部测试平台加载失败');
       }
-      const active=(state.testing?.runs || []).some(run=>['queued','running','cancel_requested'].includes(run.status));
+      const active=(state.testing?.runs || []).some(run=>['queued','running','cancel_requested'].includes(run.status))
+        || (state.testing?.imports || []).some(item=>['uploading','queued','processing'].includes(item.status));
       if(active && location.hash==='#testing') testingRefreshTimer=setTimeout(()=>loadTesting(false),3000);
+    }
+    function renderTestingImport(session, uploadPercent=null){
+      const card=$('testingImportProgress');
+      if(!card || !session) return;
+      const status=session.status || 'uploading';
+      if(status==='uploading') state.testingImportId=session.id || state.testingImportId;
+      let percent=Number(uploadPercent);
+      let stage='正在分批上传并校验';
+      if(!Number.isFinite(percent)){
+        if(['queued','processing'].includes(status)){
+          const total=Number(session.totalSamples || 0), done=Number(session.processedSamples || 0);
+          percent=total?Math.min(99,Math.round(done/total*100)):0;
+          stage=status==='queued'?'等待后台建库':'正在提取、分类并建库';
+        }else if(status==='completed'){ percent=100; stage='数据集创建完成'; }
+        else if(status==='failed'){ percent=0; stage='数据集创建失败'; }
+        else{
+          const total=Number(session.expectedBytes || 0), done=Number(session.uploadedBytes || 0);
+          percent=total?Math.min(99,Math.round(done/total*100)):0;
+        }
+      }
+      card.hidden=false;
+      $('testingImportPercent').textContent=`${Math.max(0,Math.min(100,Math.round(percent)))}%`;
+      $('testingImportStage').textContent=stage;
+      $('testingImportBar').style.transform=`scaleX(${Math.max(0,Math.min(100,percent))/100})`;
+      const expected=Number(session.expectedFiles || 0), validated=Number(session.validatedFiles || 0), rejected=Number(session.rejectedFiles || 0);
+      const processed=Number(session.processedSamples || 0), totalSamples=Number(session.totalSamples || 0);
+      $('testingImportMeta').innerHTML=[
+        `<span>已校验 ${validated}${expected?` / ${expected}`:''} 个文件</span>`,
+        `<span>不合格 ${rejected}</span>`,
+        totalSamples?`<span>已建库 ${processed} / ${totalSamples} 张</span>`:'',
+        session.id?`<span class="mono">${esc(session.id)}</span>`:'',
+      ].filter(Boolean).join('');
+      const issues=$('testingImportIssues');
+      const recentRejections=(session.rejections || []).slice(-3);
+      const recentFile=(session.files || []).slice(-1)[0];
+      const inspection=[];
+      if(recentFile) inspection.push(`最近通过：${esc(recentFile.relativePath || recentFile.name)}`);
+      recentRejections.forEach(item=>inspection.push(`未通过：${esc(item.relativePath)} · ${esc(item.message)}`));
+      issues.innerHTML=inspection.join('<br>');
+      issues.hidden=!inspection.length;
+      const cancel=$('testingCancelImport');
+      cancel.hidden=!['uploading','failed'].includes(status);
+    }
+    async function retryTestingUpload(action, attempts=3){
+      let lastError;
+      for(let attempt=1;attempt<=attempts;attempt++){
+        try{ return await action(); }
+        catch(err){ lastError=err; if(attempt<attempts) await new Promise(resolve=>setTimeout(resolve,attempt*700)); }
+      }
+      throw lastError;
+    }
+    async function uploadTestingChunkedFile(importId,file,relativePath,onBytes){
+      const chunkSize=8*1024*1024;
+      const totalChunks=Math.max(1,Math.ceil(file.size/chunkSize));
+      const uploadId=(globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`).replace(/[^0-9a-zA-Z_-]/g,'');
+      let latest=null;
+      for(let index=0;index<totalChunks;index++){
+        const start=index*chunkSize, end=Math.min(file.size,start+chunkSize);
+        const form=new FormData();
+        form.set('uploadId',uploadId);
+        form.set('relativePath',relativePath);
+        form.set('chunkIndex',String(index));
+        form.set('totalChunks',String(totalChunks));
+        form.set('chunk',file.slice(start,end),file.name);
+        const data=await retryTestingUpload(()=>uploadApi(`/api/admin/testing/dataset-imports/${encodeURIComponent(importId)}/chunks`,form,progress=>{
+          onBytes(start+(progress.loaded || 0));
+        }));
+        latest=data.importSession;
+        onBytes(end);
+      }
+      return latest;
+    }
+    async function waitForTestingImport(importId){
+      while(true){
+        const data=await api(`/api/admin/testing/dataset-imports/${encodeURIComponent(importId)}`);
+        const session=data.importSession;
+        renderTestingImport(session);
+        if(session.status==='completed') return session;
+        if(session.status==='failed') throw new Error(session.error || '后台建库失败');
+        await new Promise(resolve=>setTimeout(resolve,1200));
+      }
+    }
+    async function cancelTestingImport(){
+      const importId=state.testingImportId;
+      if(!importId) return;
+      try{
+        await api(`/api/admin/testing/dataset-imports/${encodeURIComponent(importId)}`,{method:'DELETE'});
+        state.testingImportId=''; state.testingImportedPaths=new Set();
+        $('testingImportProgress').hidden=true;
+        toast('本次数据集上传已取消，暂存文件已清理');
+        await loadTesting(false);
+      }catch(err){ toast(err?.message || '取消上传失败'); }
     }
     async function createTestingDataset(event){
       event.preventDefault();
       const button=$('testingCreateDataset');
-      const form=new FormData();
-      form.set('name',$('testingDatasetName').value);
-      form.set('defaultLabel',$('testingDefaultLabel').value);
-      form.set('sourceUrl',$('testingSourceUrl').value);
       const selected=[...$('testingFiles').files,...$('testingDirectory').files];
-      selected.forEach(file=>form.append('files',file,file.webkitRelativePath || file.name));
-      if(!selected.length && !$('testingSourceUrl').value.trim()){ toast('请选择文件、目录或填写网页地址'); return; }
-      button.disabled=true; button.textContent='准备上传…';
+      const sourceUrl=$('testingSourceUrl').value.trim();
+      if(!selected.length && !sourceUrl){ toast('请选择文件、目录或填写网页地址'); return; }
+      const totalBytes=selected.reduce((sum,file)=>sum+Number(file.size || 0),0);
+      button.disabled=true; button.textContent='正在创建上传会话…';
+      let importId=state.testingImportId || '';
       try{
-        const data=await uploadApi('/api/admin/testing/datasets',form,progress=>{
-          button.textContent=progress.processing?'正在提取并自动分类…':`正在上传 ${progress.percent}%`;
-        });
-        const classification=data.dataset.classification || {};
-        toast(`已创建数据集：${data.dataset.sample_count} 张，目录自动标注 ${classification.automaticCount || 0} 张`);
+        let session=null;
+        if(importId){
+          const existing=await api(`/api/admin/testing/dataset-imports/${encodeURIComponent(importId)}`);
+          if(existing.importSession?.status==='uploading') session=existing.importSession;
+          else{ importId=''; state.testingImportId=''; state.testingImportedPaths=new Set(); }
+        }
+        if(!session){
+          const created=await api('/api/admin/testing/dataset-imports',{method:'POST',body:JSON.stringify({
+            name:$('testingDatasetName').value,
+            defaultLabel:$('testingDefaultLabel').value,
+            sourceUrl,
+            expectedFiles:selected.length,
+            expectedBytes:totalBytes,
+          })});
+          session=created.importSession;
+          importId=session.id;
+          state.testingImportId=importId;
+          state.testingImportedPaths=new Set();
+        }
+        renderTestingImport(session,0);
+        let sentBytes=selected.reduce((sum,file)=>sum+(state.testingImportedPaths.has(file.webkitRelativePath || file.name)?file.size:0),0);
+        const direct=[];
+        const flushDirect=async()=>{
+          if(!direct.length) return;
+          const batch=direct.splice(0,direct.length);
+          const batchBytes=batch.reduce((sum,item)=>sum+item.file.size,0);
+          const form=new FormData();
+          batch.forEach(item=>form.append('files',item.file,item.relativePath));
+          const base=sentBytes;
+          const data=await retryTestingUpload(()=>uploadApi(`/api/admin/testing/dataset-imports/${encodeURIComponent(importId)}/files`,form,progress=>{
+            const approximate=base+batchBytes*((progress.percent || 0)/100);
+            renderTestingImport(session,totalBytes?approximate/totalBytes*100:0);
+            button.textContent=`正在上传 ${totalBytes?Math.min(99,Math.round(approximate/totalBytes*100)):0}%`;
+          }));
+          session=data.importSession;
+          sentBytes+=batchBytes;
+          batch.forEach(item=>state.testingImportedPaths.add(item.relativePath));
+          renderTestingImport(session,totalBytes?sentBytes/totalBytes*100:0);
+        };
+        let directBytes=0;
+        for(const file of selected){
+          const relativePath=file.webkitRelativePath || file.name;
+          if(state.testingImportedPaths.has(relativePath)) continue;
+          if(file.size>8*1024*1024){
+            await flushDirect(); directBytes=0;
+            const base=sentBytes;
+            session=await uploadTestingChunkedFile(importId,file,relativePath,current=>{
+              const approximate=base+current;
+              renderTestingImport(session,totalBytes?approximate/totalBytes*100:0);
+              button.textContent=`正在上传 ${totalBytes?Math.min(99,Math.round(approximate/totalBytes*100)):0}%`;
+            }) || session;
+            sentBytes+=file.size;
+            state.testingImportedPaths.add(relativePath);
+          }else{
+            if(direct.length>=30 || directBytes+file.size>16*1024*1024){ await flushDirect(); directBytes=0; }
+            direct.push({file,relativePath}); directBytes+=file.size;
+          }
+        }
+        await flushDirect();
+        button.textContent='正在提交后台建库…';
+        const finalized=await api(`/api/admin/testing/dataset-imports/${encodeURIComponent(importId)}/finalize`,{method:'POST',body:'{}'});
+        renderTestingImport(finalized.importSession);
+        const completed=await waitForTestingImport(importId);
+        toast(`数据集已创建：校验通过 ${completed.validatedFiles} 个文件，拒绝 ${completed.rejectedFiles} 个`);
         $('testingDatasetForm').reset();
+        state.testingImportId=''; state.testingImportedPaths=new Set();
+        $('testingCancelImport').hidden=true;
         await loadTesting(true);
-        await openTestingDataset(data.dataset.id);
-      }catch(err){ toast(err?.message || '数据集创建失败'); }
-      finally{ button.disabled=false; button.innerHTML='<i class="fa fa-database"></i>创建数据集'; }
+        if(completed.datasetId) await openTestingDataset(completed.datasetId);
+      }catch(err){
+        toast(`${err?.message || '数据集创建失败'}${importId?`（会话 ${importId} 已保留）`:''}`);
+      }finally{
+        button.disabled=false; button.innerHTML='<i class="fa fa-database"></i>创建数据集';
+      }
     }
     async function openTestingDataset(id){
       const data=await api(`/api/admin/testing/datasets/${encodeURIComponent(id)}`);

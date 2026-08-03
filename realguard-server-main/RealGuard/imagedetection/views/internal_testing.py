@@ -32,10 +32,12 @@ from imagedetection import legal_documents
 DATA_ROOT = Path(
     os.environ.get("REALGUARD_INTERNAL_TEST_ROOT", "/opt/realguard-data/internal-testing")
 )
+IMPORT_ROOT = DATA_ROOT / "imports"
 DB_PATH = Path(
     os.environ.get("REALGUARD_INTERNAL_TEST_DB", str(DATA_ROOT / "internal-testing.sqlite3"))
 )
 MAX_UPLOAD_BYTES = 24 * 1024 * 1024
+MAX_IMPORT_CHUNK_BYTES = 8 * 1024 * 1024
 # A value of zero means there is no count-based ingestion limit. Byte and storage
 # boundaries remain in place so large datasets fail predictably instead of exhausting RAM.
 MAX_DATASET_SAMPLES = max(0, int(os.environ.get("REALGUARD_INTERNAL_TEST_MAX_SAMPLES", "0")))
@@ -65,8 +67,10 @@ FAKE_PATH_LABELS = {
     "即梦", "豆包",
 }
 _SCHEMA_LOCK = threading.Lock()
+_IMPORT_LOCK = threading.RLock()
 _SCHEMA_READY = False
 _EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="internal-testing")
+_ACTIVE_IMPORTS: set[str] = set()
 
 
 def _now() -> str:
@@ -268,6 +272,8 @@ def _ensure_storage_capacity(required_bytes: int) -> None:
 
 
 def _source_stream(source):
+    if isinstance(source, Path):
+        return source.open("rb")
     stream = io.BytesIO(source) if isinstance(source, (bytes, bytearray)) else source
     try:
         stream.seek(0)
@@ -277,8 +283,12 @@ def _source_stream(source):
 
 
 def _read_source(source, limit: int = MAX_UPLOAD_BYTES) -> bytes:
-    stream = _source_stream(source)
-    data = stream.read(limit + 1)
+    if isinstance(source, Path):
+        with source.open("rb") as stream:
+            data = stream.read(limit + 1)
+    else:
+        stream = _source_stream(source)
+        data = stream.read(limit + 1)
     if len(data) > limit:
         raise ValueError("单个图片或文档超过 24 MB")
     return data
@@ -498,7 +508,7 @@ def _docx_images(data: bytes, source_name: str) -> list[tuple[str, bytes, str, s
 
 def _zip_relative_paths(source) -> list[str]:
     try:
-        archive = zipfile.ZipFile(_source_stream(source))
+        archive = zipfile.ZipFile(source if isinstance(source, Path) else _source_stream(source))
     except (OSError, zipfile.BadZipFile) as exc:
         raise ValueError("ZIP 数据集无法解析") from exc
     paths = []
@@ -519,7 +529,7 @@ def _zip_relative_paths(source) -> list[str]:
 
 def _iter_zip_images(source, source_name: str):
     try:
-        archive = zipfile.ZipFile(_source_stream(source))
+        archive = zipfile.ZipFile(source if isinstance(source, Path) else _source_stream(source))
     except (OSError, zipfile.BadZipFile) as exc:
         raise ValueError("ZIP 数据集无法解析") from exc
     with archive:
@@ -680,6 +690,9 @@ def create_dataset(
     default_label: str = "unlabeled",
     labels: dict[str, str] | None = None,
     actor: dict | None = None,
+    include_samples: bool = True,
+    progress_callback=None,
+    source_consumed_callback=None,
 ) -> dict:
     if not uploads and not source_url:
         raise ValueError("请上传图片、文件夹、ZIP、PDF、DOCX，或填写网页地址")
@@ -724,15 +737,20 @@ def create_dataset(
     samples: list[dict] = []
     total_bytes = 0
     profile = _detect_dataset_profile(profile_paths)
+    estimated_samples = len(profile_paths)
 
     def extracted_items():
         count = 0
         for filename, source in uploads:
-            for item in _iter_source(filename, source):
-                yield item
-                count += 1
-                if _limit_reached(count, MAX_DATASET_SAMPLES):
-                    return
+            try:
+                for item in _iter_source(filename, source):
+                    yield item
+                    count += 1
+                    if _limit_reached(count, MAX_DATASET_SAMPLES):
+                        return
+            finally:
+                if source_consumed_callback:
+                    source_consumed_callback(filename, source)
         if source_url:
             for item in _web_images(source_url):
                 yield item
@@ -792,6 +810,8 @@ def create_dataset(
                 "groupId": classification["groupId"],
             })
             total_bytes += len(payload)
+            if progress_callback:
+                progress_callback(index, estimated_samples)
         if not samples:
             raise ValueError("没有提取到符合要求的图片，或图片内容全部重复")
         created_at = _now()
@@ -840,7 +860,605 @@ def create_dataset(
             path.unlink(missing_ok=True)
         dataset_dir.rmdir()
         raise
-    return get_dataset(dataset_id, include_samples=True) or {}
+    return get_dataset(dataset_id, include_samples=include_samples) or {}
+
+
+def _import_dir(import_id: str) -> Path:
+    if not re.fullmatch(r"imp_[0-9a-f]{20}", str(import_id or "")):
+        raise ValueError("数据集上传会话无效")
+    return IMPORT_ROOT / import_id
+
+
+def _import_state_path(import_id: str) -> Path:
+    return _import_dir(import_id) / "session.json"
+
+
+def _import_db(import_id: str) -> sqlite3.Connection:
+    connection = sqlite3.connect(_import_dir(import_id) / "manifest.sqlite3", timeout=30)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA journal_mode = WAL")
+    connection.execute("PRAGMA busy_timeout = 30000")
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS files (
+            id TEXT PRIMARY KEY,
+            relative_path TEXT NOT NULL COLLATE NOCASE UNIQUE,
+            name TEXT NOT NULL,
+            storage_path TEXT NOT NULL,
+            byte_size INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            inspection_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS chunks (
+            upload_id TEXT PRIMARY KEY,
+            relative_path TEXT NOT NULL,
+            part_path TEXT,
+            next_chunk INTEGER NOT NULL,
+            total_chunks INTEGER NOT NULL,
+            byte_size INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'pending',
+            file_id TEXT,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS rejections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            relative_path TEXT NOT NULL,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    return connection
+
+
+def _file_row(row: sqlite3.Row) -> dict:
+    item = {
+        "id": row["id"],
+        "relativePath": row["relative_path"],
+        "name": row["name"],
+        "storagePath": row["storage_path"],
+        "byteSize": int(row["byte_size"] or 0),
+        "status": row["status"],
+    }
+    try:
+        item.update(json.loads(row["inspection_json"] or "{}"))
+    except json.JSONDecodeError:
+        pass
+    return item
+
+
+def _load_import(import_id: str) -> dict | None:
+    try:
+        path = _import_state_path(import_id)
+    except ValueError:
+        return None
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _save_import(payload: dict) -> None:
+    import_id = str(payload.get("id") or "")
+    directory = _import_dir(import_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    os.chmod(directory, 0o700)
+    payload["updatedAt"] = _now()
+    target = _import_state_path(import_id)
+    temporary = target.with_suffix(".json.tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, target)
+
+
+def _public_import(payload: dict | None) -> dict | None:
+    if not payload:
+        return None
+    public = {key: value for key, value in payload.items() if key != "actor"}
+    with _import_db(str(payload.get("id") or "")) as connection:
+        file_rows = connection.execute(
+            "SELECT * FROM files ORDER BY created_at DESC,id DESC LIMIT 100"
+        ).fetchall()
+        file_count = int(connection.execute("SELECT COUNT(*) FROM files").fetchone()[0])
+        chunk_rows = connection.execute(
+            "SELECT upload_id,relative_path,next_chunk,total_chunks,byte_size FROM chunks WHERE status = 'pending' ORDER BY updated_at"
+        ).fetchall()
+        rejection_rows = connection.execute(
+            "SELECT relative_path,message,created_at FROM rejections ORDER BY id DESC LIMIT 200"
+        ).fetchall()
+    public["files"] = [
+        {key: value for key, value in _file_row(row).items() if key != "storagePath"}
+        for row in reversed(file_rows)
+    ]
+    public["filePreviewCount"] = len(public["files"])
+    public["hasMoreFiles"] = file_count > len(public["files"])
+    public["pendingChunks"] = [
+        {
+            "uploadId": row["upload_id"],
+            "relativePath": row["relative_path"],
+            "nextChunk": row["next_chunk"],
+            "totalChunks": row["total_chunks"],
+            "byteSize": row["byte_size"],
+        }
+        for row in chunk_rows
+    ]
+    public["rejections"] = [
+        {
+            "relativePath": row["relative_path"],
+            "message": row["message"],
+            "createdAt": row["created_at"],
+        }
+        for row in reversed(rejection_rows)
+    ]
+    return public
+
+
+def create_import_session(
+    *,
+    name: str = "",
+    default_label: str = "unlabeled",
+    source_url: str = "",
+    expected_files: int = 0,
+    expected_bytes: int = 0,
+    actor: dict | None = None,
+) -> dict:
+    if expected_bytes > available_storage_bytes():
+        raise ValueError("服务器磁盘剩余空间不足，无法接收该数据集")
+    import_id = f"imp_{uuid.uuid4().hex[:20]}"
+    actor_id, actor_name = _actor_fields(actor)
+    now = _now()
+    payload = {
+        "id": import_id,
+        "status": "uploading",
+        "name": str(name or "").strip()[:180],
+        "defaultLabel": _normalize_label(default_label),
+        "sourceUrl": str(source_url or "").strip()[:1000],
+        "expectedFiles": max(0, int(expected_files or 0)),
+        "expectedBytes": max(0, int(expected_bytes or 0)),
+        "uploadedFiles": 0,
+        "uploadedBytes": 0,
+        "validatedFiles": 0,
+        "rejectedFiles": 0,
+        "processedSamples": 0,
+        "totalSamples": 0,
+        "datasetId": None,
+        "error": "",
+        "actor": {"adminId": actor_id, "username": actor_name},
+        "createdAt": now,
+        "updatedAt": now,
+    }
+    with _IMPORT_LOCK:
+        payload_dir = _import_dir(import_id) / "payloads"
+        payload_dir.mkdir(parents=True, exist_ok=False)
+        os.chmod(payload_dir, 0o700)
+        with _import_db(import_id):
+            pass
+        _save_import(payload)
+    return _public_import(payload) or {}
+
+
+def get_import_session(import_id: str) -> dict | None:
+    with _IMPORT_LOCK:
+        return _public_import(_load_import(import_id))
+
+
+def list_import_sessions(limit: int = 20) -> list[dict]:
+    if not IMPORT_ROOT.exists():
+        return []
+    sessions = []
+    with _IMPORT_LOCK:
+        for directory in IMPORT_ROOT.glob("imp_*"):
+            raw = _load_import(directory.name)
+            if raw and raw.get("status") in {"queued", "processing"} and directory.name not in _ACTIVE_IMPORTS:
+                raw["status"] = "queued"
+                _save_import(raw)
+                _submit_import(directory.name)
+            payload = _public_import(raw)
+            if payload:
+                sessions.append(payload)
+    sessions.sort(key=lambda item: str(item.get("updatedAt") or ""), reverse=True)
+    return sessions[:max(1, int(limit))]
+
+
+def _validate_staged_file(path: Path, relative_path: str) -> dict:
+    suffix = Path(relative_path).suffix.lower()
+    if suffix == ".zip":
+        try:
+            with zipfile.ZipFile(path) as archive:
+                image_count = sum(
+                    1 for item in archive.infolist()
+                    if not item.is_dir()
+                    and not item.flag_bits & 0x1
+                    and Path(_safe_relative_path(item.filename)).suffix.lower()
+                    in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".heic", ".heif"}
+                )
+        except (OSError, zipfile.BadZipFile) as exc:
+            raise ValueError("ZIP 文件损坏或无法读取") from exc
+        if not image_count:
+            raise ValueError("ZIP 中没有可检测图片")
+        return {"kind": "archive", "imageCount": image_count}
+    if suffix == ".pdf":
+        with path.open("rb") as source:
+            if source.read(5) != b"%PDF-":
+                raise ValueError("PDF 文件头无效")
+        return {"kind": "document"}
+    if suffix == ".docx":
+        if not zipfile.is_zipfile(path):
+            raise ValueError("DOCX 文件损坏或无法读取")
+        return {"kind": "document"}
+    data = path.read_bytes()
+    mime, width, height, _ = _image_payload(data)
+    return {"kind": "image", "mimeType": mime, "width": width, "height": height}
+
+
+def _insert_rejection(
+    connection: sqlite3.Connection,
+    payload: dict,
+    relative_path: str,
+    message: str,
+) -> None:
+    payload["rejectedFiles"] = int(payload.get("rejectedFiles") or 0) + 1
+    connection.execute(
+        "INSERT INTO rejections (relative_path,message,created_at) VALUES (?,?,?)",
+        (relative_path[:1000], str(message)[:300], _now()),
+    )
+
+
+def _stage_stream(import_id: str, relative_path: str, stream) -> dict:
+    safe_path = _safe_relative_path(relative_path)
+    suffix = Path(safe_path).suffix.lower()
+    token = uuid.uuid4().hex
+    target = _import_dir(import_id) / "payloads" / f"{token}{suffix[:12]}"
+    total = 0
+    try:
+        with target.open("xb") as output:
+            while True:
+                chunk = stream.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if suffix != ".zip" and total > MAX_UPLOAD_BYTES:
+                    raise ValueError("单个图片或文档超过 24 MB")
+                _ensure_storage_capacity(len(chunk))
+                output.write(chunk)
+        os.chmod(target, 0o600)
+        if not total:
+            raise ValueError("文件为空")
+        inspection = _validate_staged_file(target, safe_path)
+        return {
+            "id": f"file_{token[:20]}",
+            "name": _safe_name(safe_path),
+            "relativePath": safe_path,
+            "storagePath": str(target),
+            "byteSize": total,
+            "status": "validated",
+            **inspection,
+        }
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+
+
+def add_import_files(import_id: str, uploads: list[tuple[str, object]]) -> dict:
+    with _IMPORT_LOCK:
+        payload = _load_import(import_id)
+        if not payload:
+            raise ValueError("数据集上传会话不存在")
+        if payload.get("status") != "uploading":
+            raise ValueError("当前上传会话不能继续接收文件")
+        accepted = []
+        with _import_db(import_id) as connection:
+            for filename, source in uploads:
+                relative_path = _safe_relative_path(filename)
+                existing_row = connection.execute(
+                    "SELECT * FROM files WHERE relative_path = ? COLLATE NOCASE",
+                    (relative_path,),
+                ).fetchone()
+                if existing_row:
+                    accepted.append({
+                        **{
+                            key: value for key, value in _file_row(existing_row).items()
+                            if key != "storagePath"
+                        },
+                        "alreadyUploaded": True,
+                    })
+                    continue
+                try:
+                    item = _stage_stream(import_id, relative_path, _source_stream(source))
+                except (OSError, ValueError) as exc:
+                    _insert_rejection(connection, payload, relative_path, str(exc))
+                    continue
+                connection.execute(
+                    """
+                    INSERT INTO files
+                        (id,relative_path,name,storage_path,byte_size,status,inspection_json,created_at)
+                    VALUES (?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        item["id"], item["relativePath"], item["name"], item["storagePath"],
+                        item["byteSize"], item["status"],
+                        json.dumps(
+                            {
+                                key: value for key, value in item.items()
+                                if key not in {"id", "relativePath", "name", "storagePath", "byteSize", "status"}
+                            },
+                            ensure_ascii=False,
+                        ),
+                        _now(),
+                    ),
+                )
+                accepted.append({key: value for key, value in item.items() if key != "storagePath"})
+                payload["uploadedFiles"] = int(payload.get("uploadedFiles") or 0) + 1
+                payload["validatedFiles"] = int(payload.get("validatedFiles") or 0) + 1
+                payload["uploadedBytes"] = int(payload.get("uploadedBytes") or 0) + int(item["byteSize"])
+            connection.commit()
+        _save_import(payload)
+        result = _public_import(payload) or {}
+        result["accepted"] = accepted
+        return result
+
+
+def add_import_chunk(
+    import_id: str,
+    *,
+    upload_id: str,
+    relative_path: str,
+    chunk_index: int,
+    total_chunks: int,
+    chunk,
+) -> dict:
+    if not re.fullmatch(r"[0-9a-zA-Z_-]{8,80}", str(upload_id or "")):
+        raise ValueError("分块上传标识无效")
+    chunk_index = int(chunk_index)
+    total_chunks = int(total_chunks)
+    if chunk_index < 0 or total_chunks < 1 or chunk_index >= total_chunks:
+        raise ValueError("分块序号无效")
+    data = _read_source(chunk, MAX_IMPORT_CHUNK_BYTES)
+    with _IMPORT_LOCK:
+        payload = _load_import(import_id)
+        if not payload:
+            raise ValueError("数据集上传会话不存在")
+        if payload.get("status") != "uploading":
+            raise ValueError("当前上传会话不能继续接收分块")
+        safe_path = _safe_relative_path(relative_path)
+        with _import_db(import_id) as connection:
+            state = connection.execute(
+                "SELECT * FROM chunks WHERE upload_id = ?", (upload_id,)
+            ).fetchone()
+            if state and state["status"] in {"completed", "rejected"}:
+                return _public_import(payload) or {}
+            existing = connection.execute(
+                "SELECT id FROM files WHERE relative_path = ? COLLATE NOCASE", (safe_path,)
+            ).fetchone()
+            if existing:
+                connection.execute(
+                    """
+                    INSERT OR REPLACE INTO chunks
+                        (upload_id,relative_path,part_path,next_chunk,total_chunks,byte_size,status,file_id,updated_at)
+                    VALUES (?,?,?,?,?,?,?,?,?)
+                    """,
+                    (upload_id, safe_path, None, total_chunks, total_chunks, 0, "completed", existing["id"], _now()),
+                )
+                connection.commit()
+                return _public_import(payload) or {}
+            if state is None:
+                if chunk_index != 0:
+                    raise ValueError("必须从第 1 个分块开始上传")
+                part_path = _import_dir(import_id) / "payloads" / f"chunk-{upload_id}.part"
+                connection.execute(
+                    """
+                    INSERT INTO chunks
+                        (upload_id,relative_path,part_path,next_chunk,total_chunks,byte_size,status,updated_at)
+                    VALUES (?,?,?,?,?,?,?,?)
+                    """,
+                    (upload_id, safe_path, str(part_path), 0, total_chunks, 0, "pending", _now()),
+                )
+                connection.commit()
+                state = connection.execute(
+                    "SELECT * FROM chunks WHERE upload_id = ?", (upload_id,)
+                ).fetchone()
+            if state["relative_path"] != safe_path or int(state["total_chunks"] or 0) != total_chunks:
+                raise ValueError("分块文件信息与上传会话不一致")
+            expected = int(state["next_chunk"] or 0)
+            if chunk_index < expected:
+                return _public_import(payload) or {}
+            if chunk_index != expected:
+                raise ValueError(f"请先上传第 {expected + 1} 个分块")
+            _ensure_storage_capacity(len(data))
+            part_path = Path(state["part_path"])
+            with part_path.open("ab") as output:
+                output.write(data)
+            os.chmod(part_path, 0o600)
+            next_chunk = expected + 1
+            byte_size = int(state["byte_size"] or 0) + len(data)
+            payload["uploadedBytes"] = int(payload.get("uploadedBytes") or 0) + len(data)
+            connection.execute(
+                "UPDATE chunks SET next_chunk=?,byte_size=?,updated_at=? WHERE upload_id=?",
+                (next_chunk, byte_size, _now(), upload_id),
+            )
+            if next_chunk == total_chunks:
+                suffix = Path(safe_path).suffix.lower()
+                rejection = "" if suffix == ".zip" or byte_size <= MAX_UPLOAD_BYTES else "单个图片或文档超过 24 MB"
+                final_path = part_path.with_name(f"{uuid.uuid4().hex}{suffix[:12]}")
+                if not rejection:
+                    os.replace(part_path, final_path)
+                    try:
+                        inspection = _validate_staged_file(final_path, safe_path)
+                    except (OSError, ValueError) as exc:
+                        rejection = str(exc)
+                if rejection:
+                    part_path.unlink(missing_ok=True)
+                    final_path.unlink(missing_ok=True)
+                    _insert_rejection(connection, payload, safe_path, rejection)
+                    connection.execute(
+                        "UPDATE chunks SET part_path=NULL,status='rejected',updated_at=? WHERE upload_id=?",
+                        (_now(), upload_id),
+                    )
+                else:
+                    item = {
+                        "id": f"file_{uuid.uuid4().hex[:20]}",
+                        "name": _safe_name(safe_path),
+                        "relativePath": safe_path,
+                        "storagePath": str(final_path),
+                        "byteSize": byte_size,
+                        "status": "validated",
+                        **inspection,
+                    }
+                    connection.execute(
+                        """
+                        INSERT INTO files
+                            (id,relative_path,name,storage_path,byte_size,status,inspection_json,created_at)
+                        VALUES (?,?,?,?,?,?,?,?)
+                        """,
+                        (
+                            item["id"], item["relativePath"], item["name"], item["storagePath"],
+                            item["byteSize"], item["status"], json.dumps(inspection, ensure_ascii=False), _now(),
+                        ),
+                    )
+                    connection.execute(
+                        "UPDATE chunks SET part_path=NULL,status='completed',file_id=?,updated_at=? WHERE upload_id=?",
+                        (item["id"], _now(), upload_id),
+                    )
+                    payload["uploadedFiles"] = int(payload.get("uploadedFiles") or 0) + 1
+                    payload["validatedFiles"] = int(payload.get("validatedFiles") or 0) + 1
+            connection.commit()
+        _save_import(payload)
+        return _public_import(payload) or {}
+
+
+def _execute_import(import_id: str) -> None:
+    with _IMPORT_LOCK:
+        payload = _load_import(import_id)
+        if not payload or payload.get("status") != "queued":
+            _ACTIVE_IMPORTS.discard(import_id)
+            return
+        payload["status"] = "processing"
+        payload["error"] = ""
+        _save_import(payload)
+    streams = []
+    try:
+        payload = _load_import(import_id) or {}
+        with _import_db(import_id) as connection:
+            file_rows = connection.execute(
+                "SELECT * FROM files ORDER BY created_at,id"
+            ).fetchall()
+        for row in file_rows:
+            item = _file_row(row)
+            path = Path(str(item.get("storagePath") or ""))
+            if not path.is_file() or _import_dir(import_id) not in path.resolve().parents:
+                raise ValueError(f"暂存文件丢失：{item.get('relativePath') or item.get('name')}")
+            streams.append((str(item.get("relativePath") or item.get("name") or "sample"), path))
+
+        def progress(processed: int, total: int) -> None:
+            with _IMPORT_LOCK:
+                current = _load_import(import_id)
+                if not current:
+                    return
+                current["processedSamples"] = processed
+                current["totalSamples"] = max(total, processed)
+                _save_import(current)
+
+        staged_paths = {filename: path for filename, path in streams}
+
+        def consumed(filename: str, source) -> None:
+            if not isinstance(source, Path):
+                source.close()
+            path = staged_paths.get(filename)
+            if path:
+                path.unlink(missing_ok=True)
+
+        dataset = create_dataset(
+            streams,
+            source_url=str(payload.get("sourceUrl") or ""),
+            name=str(payload.get("name") or ""),
+            default_label=str(payload.get("defaultLabel") or "unlabeled"),
+            actor=payload.get("actor") or {},
+            include_samples=False,
+            progress_callback=progress,
+            source_consumed_callback=consumed,
+        )
+        with _IMPORT_LOCK:
+            current = _load_import(import_id) or payload
+            current["status"] = "completed"
+            current["datasetId"] = dataset.get("id")
+            current["processedSamples"] = int(dataset.get("sample_count") or 0)
+            current["totalSamples"] = int(dataset.get("sample_count") or 0)
+            _save_import(current)
+        payload_dir = _import_dir(import_id) / "payloads"
+        if payload_dir.exists():
+            shutil.rmtree(payload_dir)
+    except Exception as exc:
+        with _IMPORT_LOCK:
+            current = _load_import(import_id) or {"id": import_id}
+            current["status"] = "failed"
+            current["error"] = str(exc)[:1000]
+            _save_import(current)
+    finally:
+        for _, source in streams:
+            if not isinstance(source, Path):
+                source.close()
+        with _IMPORT_LOCK:
+            _ACTIVE_IMPORTS.discard(import_id)
+
+
+def _submit_import(import_id: str) -> None:
+    with _IMPORT_LOCK:
+        if import_id in _ACTIVE_IMPORTS:
+            return
+        _ACTIVE_IMPORTS.add(import_id)
+    _EXECUTOR.submit(_execute_import, import_id)
+
+
+def finalize_import(import_id: str) -> dict:
+    with _IMPORT_LOCK:
+        payload = _load_import(import_id)
+        if not payload:
+            raise ValueError("数据集上传会话不存在")
+        if payload.get("status") != "uploading":
+            raise ValueError("当前上传会话不能提交建库")
+        with _import_db(import_id) as connection:
+            pending_count = int(connection.execute(
+                "SELECT COUNT(*) FROM chunks WHERE status = 'pending'"
+            ).fetchone()[0])
+            file_rows = connection.execute(
+                "SELECT inspection_json FROM files"
+            ).fetchall()
+        if pending_count:
+            raise ValueError("仍有文件分块尚未上传完成")
+        if not file_rows and not payload.get("sourceUrl"):
+            raise ValueError("没有通过校验的文件")
+        payload["status"] = "queued"
+        total_samples = 0
+        for row in file_rows:
+            try:
+                inspection = json.loads(row["inspection_json"] or "{}")
+            except json.JSONDecodeError:
+                inspection = {}
+            total_samples += int(inspection.get("imageCount") or 1)
+        payload["totalSamples"] = total_samples
+        _save_import(payload)
+    _submit_import(import_id)
+    return _public_import(payload) or {}
+
+
+def delete_import_session(import_id: str) -> bool:
+    with _IMPORT_LOCK:
+        payload = _load_import(import_id)
+        if not payload:
+            return False
+        if payload.get("status") in {"queued", "processing"}:
+            raise ValueError("数据集正在建库，暂时不能取消")
+        directory = _import_dir(import_id)
+        if directory.exists():
+            shutil.rmtree(directory)
+        return True
 
 
 def get_dataset(dataset_id: str, *, include_samples: bool = False) -> dict | None:
@@ -1581,6 +2199,10 @@ def overview() -> dict:
     datasets = list_datasets(None)
     runs = list_runs(None)
     active = [run for run in runs if run.get("status") in {"queued", "running", "cancel_requested"}]
+    imports = list_import_sessions(20)
+    active_imports = [
+        item for item in imports if item.get("status") in {"uploading", "queued", "processing"}
+    ]
     with _connect() as connection:
         totals = connection.execute(
             """
@@ -1594,6 +2216,7 @@ def overview() -> dict:
     return {
         "datasets": datasets,
         "runs": runs,
+        "imports": imports,
         "summary": {
             "datasetCount": int(totals["dataset_count"] or 0),
             "sampleCount": int(totals["sample_count"] or 0),
@@ -1601,6 +2224,7 @@ def overview() -> dict:
             "storedBytes": int(totals["total_bytes"] or 0),
             "runCount": int(run_count["count"] or 0),
             "activeRunCount": len(active),
+            "activeImportCount": len(active_imports),
         },
         "limits": {
             "maxSamplesPerDataset": MAX_DATASET_SAMPLES or None,

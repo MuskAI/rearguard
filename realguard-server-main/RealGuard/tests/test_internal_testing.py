@@ -26,8 +26,10 @@ def _png_bytes(color=(34, 139, 94)) -> bytes:
 def isolated_testing_store(monkeypatch, tmp_path):
     root = tmp_path / "internal-testing"
     monkeypatch.setattr(internal_testing, "DATA_ROOT", root)
+    monkeypatch.setattr(internal_testing, "IMPORT_ROOT", root / "imports")
     monkeypatch.setattr(internal_testing, "DB_PATH", root / "testing.sqlite3")
     monkeypatch.setattr(internal_testing, "_SCHEMA_READY", False)
+    monkeypatch.setattr(internal_testing, "_ACTIVE_IMPORTS", set())
 
 
 @pytest.fixture
@@ -214,6 +216,109 @@ def test_zip_dataset_preserves_paths_and_infers_labels():
         "benchmark/fake/render.png": "fake",
         "benchmark/real/photo.png": "real",
     }
+
+
+def _wait_for_import(import_id: str, timeout: float = 3) -> dict:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        session = internal_testing.get_import_session(import_id)
+        if session and session["status"] in {"completed", "failed"}:
+            return session
+        time.sleep(0.02)
+    raise AssertionError("dataset import did not finish")
+
+
+def test_resumable_import_validates_each_file_and_builds_async():
+    session = internal_testing.create_import_session(
+        name="resumable dataset",
+        default_label="unlabeled",
+        expected_files=3,
+        expected_bytes=1000,
+        actor={"adminId": 3, "username": "operator"},
+    )
+    uploaded = internal_testing.add_import_files(session["id"], [
+        ("benchmark/real/photo.png", io.BytesIO(_png_bytes((10, 80, 140)))),
+        ("benchmark/fake/render.png", io.BytesIO(_png_bytes((180, 40, 80)))),
+        ("benchmark/fake/broken.png", io.BytesIO(b"not-an-image")),
+    ])
+
+    assert uploaded["validatedFiles"] == 2
+    assert uploaded["rejectedFiles"] == 1
+    assert uploaded["rejections"][0]["relativePath"].endswith("broken.png")
+    queued = internal_testing.finalize_import(session["id"])
+    completed = _wait_for_import(session["id"])
+    dataset = internal_testing.get_dataset(completed["datasetId"], include_samples=True)
+
+    assert queued["status"] == "queued"
+    assert completed["status"] == "completed"
+    assert completed["processedSamples"] == 2
+    assert dataset["sample_count"] == 2
+    assert {item["ground_truth"] for item in dataset["samples"]} == {"real", "fake"}
+
+
+def test_chunked_zip_upload_is_ordered_and_idempotent():
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as output:
+        output.writestr("nested/real/photo.png", _png_bytes())
+    data = archive.getvalue()
+    middle = len(data) // 2
+    session = internal_testing.create_import_session(expected_files=1, expected_bytes=len(data))
+
+    with pytest.raises(ValueError, match="第 1 个分块"):
+        internal_testing.add_import_chunk(
+            session["id"], upload_id="upload_zip_001", relative_path="nested.zip",
+            chunk_index=1, total_chunks=2, chunk=io.BytesIO(data[middle:]),
+        )
+    first = internal_testing.add_import_chunk(
+        session["id"], upload_id="upload_zip_001", relative_path="nested.zip",
+        chunk_index=0, total_chunks=2, chunk=io.BytesIO(data[:middle]),
+    )
+    completed_upload = internal_testing.add_import_chunk(
+        session["id"], upload_id="upload_zip_001", relative_path="nested.zip",
+        chunk_index=1, total_chunks=2, chunk=io.BytesIO(data[middle:]),
+    )
+    retry = internal_testing.add_import_chunk(
+        session["id"], upload_id="upload_zip_001", relative_path="nested.zip",
+        chunk_index=1, total_chunks=2, chunk=io.BytesIO(data[middle:]),
+    )
+
+    assert first["pendingChunks"][0]["nextChunk"] == 1
+    assert completed_upload["validatedFiles"] == 1
+    assert completed_upload["files"][0]["imageCount"] == 1
+    assert retry["validatedFiles"] == 1
+    assert retry["uploadedBytes"] == len(data)
+
+
+def test_duplicate_batch_retry_does_not_create_rejection():
+    session = internal_testing.create_import_session(expected_files=1)
+    payload = _png_bytes()
+    first = internal_testing.add_import_files(
+        session["id"], [("real/photo.png", io.BytesIO(payload))]
+    )
+    retry = internal_testing.add_import_files(
+        session["id"], [("real/photo.png", io.BytesIO(payload))]
+    )
+
+    assert first["validatedFiles"] == retry["validatedFiles"] == 1
+    assert retry["rejectedFiles"] == 0
+    assert retry["accepted"][0]["alreadyUploaded"] is True
+
+
+def test_processing_import_resumes_after_worker_restart():
+    session = internal_testing.create_import_session(expected_files=1)
+    internal_testing.add_import_files(
+        session["id"], [("real/photo.png", io.BytesIO(_png_bytes()))]
+    )
+    raw = internal_testing._load_import(session["id"])
+    raw["status"] = "processing"
+    internal_testing._save_import(raw)
+    internal_testing._ACTIVE_IMPORTS.clear()
+
+    listed = internal_testing.list_import_sessions()
+    completed = _wait_for_import(session["id"])
+
+    assert listed[0]["id"] == session["id"]
+    assert completed["status"] == "completed"
 
 
 def test_evaluation_metrics_use_only_labeled_valid_predictions():
@@ -422,6 +527,36 @@ def test_admin_dataset_rejects_only_when_disk_cannot_receive_request(client, mon
     assert "磁盘剩余空间不足" in response.get_json()["message"]
 
 
+def test_admin_resumable_dataset_import_api(client):
+    _login(client, "operator")
+    created = client.post(
+        "/api/admin/testing/dataset-imports",
+        json={"name": "API import", "expectedFiles": 1, "expectedBytes": 1000},
+        headers=_csrf(client),
+    )
+    import_id = created.get_json()["importSession"]["id"]
+    uploaded = client.post(
+        f"/api/admin/testing/dataset-imports/{import_id}/files",
+        data={"files": (io.BytesIO(_png_bytes()), "nested/real/photo.png")},
+        headers=_csrf(client),
+        content_type="multipart/form-data",
+    )
+    finalized = client.post(
+        f"/api/admin/testing/dataset-imports/{import_id}/finalize",
+        json={},
+        headers=_csrf(client),
+    )
+    completed = _wait_for_import(import_id)
+    status = client.get(f"/api/admin/testing/dataset-imports/{import_id}")
+
+    assert created.status_code == 201
+    assert uploaded.status_code == 200
+    assert uploaded.get_json()["importSession"]["validatedFiles"] == 1
+    assert finalized.status_code == 202
+    assert completed["status"] == "completed"
+    assert status.get_json()["importSession"]["datasetId"] == completed["datasetId"]
+
+
 def test_admin_dataset_upload_preserves_relative_filename(client):
     _login(client, "operator")
     created = client.post(
@@ -489,6 +624,8 @@ def test_admin_page_contains_internal_testing_workspace(client):
     assert "非 JSON 响应" not in html
     assert "单次数据集总上传量 128 MB" not in html
     assert "不限制数据集总大小" in html
+    assert "/api/admin/testing/dataset-imports" in html
+    assert "uploadTestingChunkedFile" in html
 
 
 def test_internal_testing_has_a_cache_busting_direct_entry(client):
