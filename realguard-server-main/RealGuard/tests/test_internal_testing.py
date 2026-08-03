@@ -714,6 +714,10 @@ def test_admin_page_contains_internal_testing_workspace(client):
     assert "captureTestingFolder(this,true)" in html
     assert "waitForTestingFiles" in html
     assert "testingFolderFiles" in html
+    assert 'id="testingFolderDropzone"' in html
+    assert "showDirectoryPicker" in html
+    assert "handleTestingFolderDrop" in html
+    assert "张可检测图片" in html
     assert "非 JSON 响应" not in html
     assert "单次数据集总上传量 128 MB" not in html
     assert "不限制数据集总大小" in html
