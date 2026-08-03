@@ -2793,9 +2793,13 @@ def admin_testing_create_dataset():
     for uploaded in request.files.getlist("files"):
         if not uploaded or not uploaded.filename:
             continue
-        data = uploaded.stream.read(internal_testing.MAX_UPLOAD_BYTES + 1)
-        if len(data) > internal_testing.MAX_UPLOAD_BYTES:
-            return jsonify({"status": "error", "message": f"{uploaded.filename} 超过 24 MB"}), 413
+        upload_limit = internal_testing._source_upload_limit(uploaded.filename)
+        data = uploaded.stream.read(upload_limit + 1)
+        if len(data) > upload_limit:
+            return jsonify({
+                "status": "error",
+                "message": f"{uploaded.filename} 超过允许的文件大小",
+            }), 413
         uploads.append((uploaded.filename, data))
     labels = {}
     raw_labels = str(request.form.get("labels") or "").strip()
@@ -2804,7 +2808,7 @@ def admin_testing_create_dataset():
             labels = json.loads(raw_labels)
         except json.JSONDecodeError:
             return jsonify({"status": "error", "message": "标签映射必须是 JSON 对象"}), 400
-        if not isinstance(labels, dict) or len(labels) > internal_testing.MAX_DATASET_SAMPLES:
+        if not isinstance(labels, dict):
             return jsonify({"status": "error", "message": "标签映射格式或数量无效"}), 400
     try:
         dataset = internal_testing.create_dataset(
@@ -2964,7 +2968,7 @@ def admin_testing_run(run_id):
     _, error = _admin_required("testing.view")
     if error:
         return error
-    run = internal_testing.get_run(run_id, include_results=True)
+    run = internal_testing.get_run(run_id, include_results=True, result_limit=200)
     if not run:
         return jsonify({"status": "error", "message": "测试任务不存在"}), 404
     return jsonify({"status": "success", "run": run})
@@ -2987,7 +2991,7 @@ def admin_testing_export_run(run_id):
     _, error = _admin_required("testing.view")
     if error:
         return error
-    run = internal_testing.get_run(run_id, include_results=True)
+    run = internal_testing.get_run(run_id, include_results=True, result_limit=None)
     if not run:
         return jsonify({"status": "error", "message": "测试任务不存在"}), 404
     output = io.StringIO()

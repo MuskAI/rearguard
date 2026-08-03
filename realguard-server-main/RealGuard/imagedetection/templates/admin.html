@@ -283,6 +283,12 @@
     .testing-table-actions{display:flex;gap:5px;justify-content:flex-end}
     .testing-progress{height:6px;border-radius:999px;background:#e8eeec;overflow:hidden;margin-top:7px}
     .testing-progress>span{display:block;height:100%;background:var(--green);transition:transform .2s;transform-origin:left}
+    .testing-progress-card{border:1px solid var(--line);background:#f8faf9;padding:14px;margin:12px 0;border-radius:var(--radius)}
+    .testing-progress-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:8px}
+    .testing-progress-head strong{font-size:22px;font-variant-numeric:tabular-nums}
+    .testing-progress-head span{color:var(--muted);font-size:12px}
+    .testing-progress-card .testing-progress{height:9px;margin:0}
+    .testing-progress-meta{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:11px;margin-top:8px}
     .testing-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:12px 0}
     .testing-metric{border:1px solid var(--line-soft);background:#f8faf9;padding:11px;border-radius:var(--radius)}
     .testing-metric small{display:block;color:var(--muted);font-size:10px}
@@ -519,21 +525,22 @@
           <div class="testing-workbench">
             <section class="panel">
               <div class="panel-head">
-                <div><h2>1. 准备测试数据</h2><p>支持图片、PDF、DOCX 和公网网页；相同图片按 SHA-256 自动去重。</p></div>
+                <div><h2>1. 准备测试数据</h2><p>支持图片、目录、ZIP、PDF、DOCX 和公网网页；目录层级会自动识别真值分类。</p></div>
               </div>
               <form id="testingDatasetForm" class="testing-form-grid" onsubmit="createTestingDataset(event)">
                 <label>数据集名称<input class="input" id="testingDatasetName" maxlength="180" placeholder="例如：真实相机样本 2026-07"></label>
                 <label>默认真值
                   <select class="select" id="testingDefaultLabel">
-                    <option value="unlabeled">未标注，稍后逐张设置</option>
-                    <option value="real">全部为真实图像</option>
-                    <option value="fake">全部为 AI 生成图像</option>
+                    <option value="unlabeled">自动识别，无法判断时不标注</option>
+                    <option value="real">无法判断时按真实图像</option>
+                    <option value="fake">无法判断时按 AI 生成</option>
                   </select>
                 </label>
                 <label class="span-2 testing-upload">
-                  <strong><i class="fa fa-files-o"></i> 上传图片或文档</strong>
-                  <input id="testingFiles" type="file" multiple accept="image/*,.pdf,.docx">
-                  <span class="testing-help">最多 50 个文件、提取 200 张图片；单文件 24 MB、单数据集 128 MB。</span>
+                  <strong><i class="fa fa-files-o"></i> 上传文件、ZIP 或完整目录</strong>
+                  <input id="testingFiles" type="file" multiple accept="image/*,.pdf,.docx,.zip">
+                  <input id="testingDirectory" type="file" multiple webkitdirectory directory>
+                  <span class="testing-help">不限制图片数量；单张图片或文档 24 MB，ZIP 和单次数据集总上传量 128 MB。目录中的 real、fake、authentic、generated、实拍、生成图等分类会自动识别。</span>
                 </label>
                 <label class="span-2">或从网页提取图片
                   <input class="input" id="testingSourceUrl" type="url" inputmode="url" placeholder="https://example.com/article">
@@ -772,6 +779,19 @@
         dialog.querySelector('input')?.focus();
       });
     }
+    function parseApiPayload(status,statusText,text){
+      try{
+        const payload=JSON.parse(text || '{}');
+        if(payload && typeof payload==='object' && !Array.isArray(payload)) return payload;
+      }catch(_error){}
+      let message='服务器响应格式异常';
+      if(status===413) message='上传内容超过网关允许大小，请缩小单次数据集总字节数';
+      else if([502,503,504].includes(status)) message=`服务暂不可用（HTTP ${status}），请稍后重试`;
+      else if(status) message=`服务器返回 HTTP ${status}${statusText?` ${statusText}`:''}，但没有返回可读取的 JSON`;
+      const clean=String(text || '').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
+      if(clean && clean.length<240) message+=`：${clean}`;
+      return {status:'error',message};
+    }
     async function api(url, options={}){
       const method = String(options.method || 'GET').toUpperCase();
       const mutationKey = ['GET','HEAD','OPTIONS'].includes(method) ? '' : `${method}:${url}`;
@@ -779,7 +799,7 @@
       const requestPromise = (async() => {
         const headers = {'Content-Type':'application/json', 'X-CSRF-Token': CSRF_TOKEN, ...(options.headers || {})};
         const res = await fetch(url, {...options, headers});
-        const data = await res.json().catch(()=>({status:'error', message:'非 JSON 响应'}));
+        const data = parseApiPayload(res.status,res.statusText,await res.text());
         if(res.status === 401){ location.href='/admin/login'; throw new Error('后台会话已过期，请重新登录'); }
         if(!res.ok || data.status === 'error') throw new Error(data.message || `HTTP ${res.status}`);
         return data;
@@ -788,16 +808,29 @@
       try{ return await requestPromise; }
       finally{ if(mutationKey) mutationRequests.delete(mutationKey); }
     }
-    async function uploadApi(url, formData){
+    async function uploadApi(url, formData, onProgress){
       const mutationKey = `POST:${url}`;
       if(mutationRequests.has(mutationKey)) throw new Error('该操作正在处理中，请稍候');
-      const requestPromise = (async() => {
-        const res = await fetch(url, {method:'POST', headers:{'X-CSRF-Token':CSRF_TOKEN}, body:formData});
-        const data = await res.json().catch(()=>({status:'error',message:'非 JSON 响应'}));
-        if(res.status === 401){ location.href='/admin/login'; throw new Error('后台会话已过期，请重新登录'); }
-        if(!res.ok || data.status === 'error') throw new Error(data.message || `HTTP ${res.status}`);
-        return data;
-      })();
+      const requestPromise = new Promise((resolve,reject)=>{
+        const xhr=new XMLHttpRequest();
+        xhr.open('POST',url,true);
+        xhr.setRequestHeader('X-CSRF-Token',CSRF_TOKEN);
+        xhr.upload.onprogress=(event)=>{
+          if(typeof onProgress==='function' && event.lengthComputable){
+            onProgress({loaded:event.loaded,total:event.total,percent:Math.min(100,Math.round(event.loaded/event.total*100)),processing:false});
+          }
+        };
+        xhr.upload.onload=()=>{ if(typeof onProgress==='function') onProgress({percent:100,processing:true}); };
+        xhr.onerror=()=>reject(new Error('网络连接失败，上传未完成'));
+        xhr.ontimeout=()=>reject(new Error('上传超时，请检查网络后重试'));
+        xhr.onload=()=>{
+          const data=parseApiPayload(xhr.status,xhr.statusText,xhr.responseText);
+          if(xhr.status===401){ location.href='/admin/login'; reject(new Error('后台会话已过期，请重新登录')); return; }
+          if(xhr.status<200 || xhr.status>=300 || data.status==='error'){ reject(new Error(data.message || `HTTP ${xhr.status}`)); return; }
+          resolve(data);
+        };
+        xhr.send(formData);
+      });
       mutationRequests.set(mutationKey, requestPromise);
       try{ return await requestPromise; }
       finally{ mutationRequests.delete(mutationKey); }
@@ -1571,12 +1604,18 @@
       form.set('name',$('testingDatasetName').value);
       form.set('defaultLabel',$('testingDefaultLabel').value);
       form.set('sourceUrl',$('testingSourceUrl').value);
-      [...$('testingFiles').files].forEach(file=>form.append('files',file));
-      if(!$('testingFiles').files.length && !$('testingSourceUrl').value.trim()){ toast('请选择文件或填写网页地址'); return; }
-      button.disabled=true; button.textContent='正在提取…';
+      const selected=[...$('testingFiles').files,...$('testingDirectory').files];
+      selected.forEach(file=>form.append('files',file,file.webkitRelativePath || file.name));
+      if(!selected.length && !$('testingSourceUrl').value.trim()){ toast('请选择文件、目录或填写网页地址'); return; }
+      const totalBytes=selected.reduce((sum,file)=>sum+Number(file.size || 0),0);
+      if(totalBytes>128*1024*1024){ toast('单次数据集上传总量不能超过 128 MB'); return; }
+      button.disabled=true; button.textContent='准备上传…';
       try{
-        const data=await uploadApi('/api/admin/testing/datasets',form);
-        toast(`已创建数据集，共 ${data.dataset.sample_count} 张图片`);
+        const data=await uploadApi('/api/admin/testing/datasets',form,progress=>{
+          button.textContent=progress.processing?'正在提取并自动分类…':`正在上传 ${progress.percent}%`;
+        });
+        const classification=data.dataset.classification || {};
+        toast(`已创建数据集：${data.dataset.sample_count} 张，目录自动标注 ${classification.automaticCount || 0} 张`);
         $('testingDatasetForm').reset();
         await loadTesting(true);
         await openTestingDataset(data.dataset.id);
@@ -1588,18 +1627,19 @@
       const dataset=data.dataset || {};
       state.testingDetail={type:'dataset',data:dataset};
       const samples=dataset.samples || [];
+      const classification=dataset.classification || {};
       $('testingDetailPanel').hidden=false;
       $('testingDetail').innerHTML=`
         <div class="panel-head">
-          <div><h2>${esc(dataset.name)}</h2><p>${samples.length} 张图片 · ${dataset.labeled_count} 张已标注 · ${testingBytes(dataset.total_bytes)}</p></div>
+          <div><h2>${esc(dataset.name)}</h2><p>${samples.length} 张图片 · 自动分类 ${classification.automaticCount || 0} 张 · 未识别 ${classification.unresolvedCount || 0} 张 · ${testingBytes(dataset.total_bytes)}</p></div>
           <button class="btn mini secondary" onclick="$('testingDetailPanel').hidden=true">关闭</button>
         </div>
         <div class="testing-samples">${samples.slice(0,60).map(sample=>`
           <article class="testing-sample">
             <img loading="lazy" src="/api/admin/testing/samples/${encodeURIComponent(sample.id)}/image" alt="${esc(sample.name)}">
             <div class="testing-sample-body">
-              <strong title="${esc(sample.name)}">${esc(sample.name)}</strong>
-              <span class="testing-help">${sample.width}×${sample.height} · ${testingBytes(sample.byte_size)}</span>
+              <strong title="${esc(sample.relative_path || sample.name)}">${esc(sample.relative_path || sample.name)}</strong>
+              <span class="testing-help">${sample.width}×${sample.height} · ${testingBytes(sample.byte_size)} · ${String(sample.label_source || '').startsWith('directory:')?'目录识别':sample.label_source==='manual'?'人工标注':sample.label_source==='explicit'?'映射标注':'默认规则'}</span>
               <select class="select" aria-label="设置 ${esc(sample.name)} 的真值" ${can('testing.run')?'': 'disabled'} onchange="setTestingSampleLabel('${esc(sample.id)}',this.value)">
                 <option value="unlabeled" ${sample.ground_truth==='unlabeled'?'selected':''}>未标注</option>
                 <option value="real" ${sample.ground_truth==='real'?'selected':''}>真实图像</option>
@@ -1665,10 +1705,14 @@
       const metrics=run.metrics || {};
       const latency=metrics.latency || {};
       const isEvaluation=run.kind==='evaluation';
+      const total=Number(run.total_count || 0);
+      const completed=Number(run.completed_count || 0);
+      const progress=total ? Math.min(100,Math.round(completed/total*100)) : 0;
+      const resultSummary=run.resultSummary || {};
       const metricItems=isEvaluation ? [
         ['Accuracy',testingPercent(metrics.accuracy)],['Precision',testingPercent(metrics.precision)],
         ['Recall',testingPercent(metrics.recall)],['F1',testingPercent(metrics.f1)],
-        ['成功样本',metrics.successCount ?? '--'],['失败样本',metrics.failureCount ?? '--'],
+        ['成功样本',metrics.successCount ?? resultSummary.successCount ?? 0],['失败样本',metrics.failureCount ?? resultSummary.failureCount ?? 0],
         ['P50',latency.p50Ms == null?'--':`${latency.p50Ms} ms`],['P95',latency.p95Ms == null?'--':`${latency.p95Ms} ms`],
       ] : [
         ['吞吐',metrics.throughputRps == null?'--':`${metrics.throughputRps} req/s`],
@@ -1685,14 +1729,20 @@
           <div class="action-row">${isEvaluation?`<a class="btn mini secondary" href="/api/admin/testing/runs/${encodeURIComponent(run.id)}/export"><i class="fa fa-download"></i>导出 CSV</a>`:''}<button class="btn mini secondary" onclick="$('testingDetailPanel').hidden=true">关闭</button></div>
         </div>
         ${run.error?`<div class="inline-state error"><strong>任务失败</strong><span>${esc(run.error)}</span></div>`:''}
+        <div class="testing-progress-card">
+          <div class="testing-progress-head"><strong>${progress}%</strong><span>${completed} / ${total} 已处理</span></div>
+          <div class="testing-progress"><span style="transform:scaleX(${progress/100})"></span></div>
+          <div class="testing-progress-meta"><span>成功 ${resultSummary.successCount ?? metrics.successCount ?? 0}</span><span>失败 ${resultSummary.failureCount ?? metrics.failureCount ?? 0}</span><span>${['queued','running','cancel_requested'].includes(run.status)?'结果持续刷新中':'任务已停止更新'}</span></div>
+        </div>
         <div class="testing-metrics">${metricItems.map(([label,value])=>`<div class="testing-metric"><small>${esc(label)}</small><strong>${esc(value)}</strong></div>`).join('')}</div>
         ${isEvaluation&&metrics.labeledCount?`<div class="route-summary">
           <div class="route-summary-row"><span>混淆矩阵</span><strong>TP ${confusion.tp ?? 0} · TN ${confusion.tn ?? 0} · FP ${confusion.fp ?? 0} · FN ${confusion.fn ?? 0}</strong></div>
           <div class="route-summary-row"><span>科学口径</span><strong>${metrics.labeledCount} 个有真值且产生有效预测的样本</strong></div>
         </div>`:isEvaluation?'<div class="warning-band">当前数据集没有足够真值标签，已统计延迟与成功率，但不计算准确率指标。</div>':''}
-        ${isEvaluation?table(['样本','真值','预测','分数','耗时','状态'],(run.results||[]).slice(0,200).map(item=>`<tr><td>${esc(item.sample_name || item.sample_id)}</td><td>${esc(item.ground_truth)}</td><td>${esc(item.predicted_label)}</td><td>${item.score == null?'--':testingPercent(item.score)}</td><td>${item.latency_ms == null?'--':`${item.latency_ms} ms`}</td><td>${item.status==='success'?'<span class="status ok">成功</span>':`<span class="status">${esc(item.error || '失败')}</span>`}</td></tr>`),'任务尚未产生样本结果'):''}`;
+        ${isEvaluation?table(['样本','真值','预测','分数','耗时','状态'],(run.results||[]).map(item=>`<tr><td>${esc(item.relative_path || item.sample_name || item.sample_id)}</td><td>${esc(item.ground_truth)}</td><td>${esc(item.predicted_label)}</td><td>${item.score == null?'--':testingPercent(item.score)}</td><td>${item.latency_ms == null?'--':`${item.latency_ms} ms`}</td><td>${item.status==='success'?'<span class="status ok">成功</span>':`<span class="status">${esc(item.error || '失败')}</span>`}</td></tr>`),'任务尚未产生样本结果'):''}
+        ${resultSummary.hasMore?`<p class="testing-help">当前展示前 ${resultSummary.returnedCount} 条；完整结果可通过 CSV 导出。</p>`:''}`;
       $('testingDetailPanel').scrollIntoView({behavior:'smooth',block:'start'});
-      if(['queued','running','cancel_requested'].includes(run.status)) setTimeout(()=>{ if(state.testingDetail?.data?.id===id) openTestingRun(id); },2500);
+      if(['queued','running','cancel_requested'].includes(run.status)) setTimeout(()=>{ if(state.testingDetail?.data?.id===id) openTestingRun(id); },1200);
     }
     async function loadAll(){
       updateSync('正在同步…');

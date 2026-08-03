@@ -2,6 +2,7 @@ from pathlib import Path
 import io
 import sys
 import time
+import zipfile
 
 from PIL import Image
 import pytest
@@ -80,6 +81,66 @@ def test_create_dataset_deduplicates_and_persists_labels():
     assert internal_testing.sample_path(dataset["samples"][0]["id"])[0].is_file()
 
 
+def test_dataset_ingestion_has_no_sample_count_cap():
+    uploads = [
+        (f"dataset/real/sample-{index}.png", _png_bytes((index % 255, index // 255, 90)))
+        for index in range(205)
+    ]
+
+    dataset = internal_testing.create_dataset(uploads, default_label="unlabeled")
+
+    assert dataset["sample_count"] == 205
+    assert dataset["labeled_count"] == 205
+    assert dataset["classification"]["automaticCount"] == 205
+
+
+def test_directory_structure_infers_labels_at_different_depths():
+    dataset = internal_testing.create_dataset(
+        [
+            ("set-a/train/authentic/camera.png", _png_bytes((20, 80, 140))),
+            ("set-a/generated/sdxl.png", _png_bytes((180, 40, 90))),
+            ("set-a/validation/实拍/phone.png", _png_bytes((40, 140, 60))),
+            ("set-a/misc/unknown.png", _png_bytes((100, 100, 100))),
+        ],
+        default_label="unlabeled",
+    )
+    by_path = {item["relative_path"]: item for item in dataset["samples"]}
+
+    assert by_path["set-a/train/authentic/camera.png"]["ground_truth"] == "real"
+    assert by_path["set-a/generated/sdxl.png"]["ground_truth"] == "fake"
+    assert by_path["set-a/validation/实拍/phone.png"]["ground_truth"] == "real"
+    assert by_path["set-a/misc/unknown.png"]["ground_truth"] == "unlabeled"
+    assert dataset["classification"]["automaticCount"] == 3
+    assert dataset["classification"]["unresolvedCount"] == 1
+
+
+def test_manual_label_overrides_directory_inference():
+    dataset = internal_testing.create_dataset(
+        [("dataset/real/photo.png", _png_bytes())],
+        default_label="unlabeled",
+    )
+
+    updated = internal_testing.update_sample_label(dataset["samples"][0]["id"], "fake")
+
+    assert updated["ground_truth"] == "fake"
+    assert updated["label_source"] == "manual"
+
+
+def test_zip_dataset_preserves_paths_and_infers_labels():
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as output:
+        output.writestr("benchmark/real/photo.png", _png_bytes((20, 100, 180)))
+        output.writestr("benchmark/fake/render.png", _png_bytes((180, 50, 20)))
+
+    dataset = internal_testing.create_dataset([("benchmark.zip", archive.getvalue())])
+    labels = {item["relative_path"]: item["ground_truth"] for item in dataset["samples"]}
+
+    assert labels == {
+        "benchmark/fake/render.png": "fake",
+        "benchmark/real/photo.png": "real",
+    }
+
+
 def test_evaluation_metrics_use_only_labeled_valid_predictions():
     metrics = internal_testing._evaluation_metrics([
         {"ok": True, "groundTruth": "fake", "predictedLabel": "fake", "latencyMs": 100},
@@ -144,6 +205,47 @@ def test_evaluation_run_persists_reproducible_metrics(monkeypatch):
     assert completed["configuration"]["modelSnapshot"]["version"] == "2026.07"
     assert len(completed["configuration"]["modelSnapshot"]["endpointSha256"]) == 64
     assert len(completed["results"]) == 2
+    assert completed["completed_count"] == completed["total_count"] == 2
+    assert completed["resultSummary"] == {
+        "count": 2,
+        "successCount": 2,
+        "failureCount": 0,
+        "returnedCount": 2,
+        "hasMore": False,
+    }
+
+
+def test_model_non_json_response_is_a_diagnostic_failure(monkeypatch):
+    class Response:
+        status_code = 413
+        headers = {"Content-Type": "text/html"}
+        text = "<html><h1>Request Entity Too Large</h1></html>"
+
+        def json(self):
+            raise ValueError("not json")
+
+    class Session:
+        trust_env = True
+
+        def post(self, *_args, **_kwargs):
+            return Response()
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(internal_testing.requests, "Session", Session)
+
+    result = internal_testing.run_model(
+        {"endpoint": "http://127.0.0.1:9000/image"},
+        _png_bytes(),
+        "sample.png",
+        "image/png",
+    )
+
+    assert result["ok"] is False
+    assert result["httpStatus"] == 413
+    assert "请求体过大" in result["error"]
+    assert result["payload"]["responseFormat"] == "non_json"
 
 
 def test_web_ingestion_rejects_private_network(monkeypatch):
@@ -219,6 +321,24 @@ def test_operator_can_use_admin_testing_api(client, monkeypatch):
     assert overview.get_json()["summary"]["datasetCount"] == 1
 
 
+def test_admin_dataset_upload_preserves_relative_filename(client):
+    _login(client, "operator")
+    created = client.post(
+        "/api/admin/testing/datasets",
+        data={
+            "defaultLabel": "unlabeled",
+            "files": (io.BytesIO(_png_bytes()), "benchmark/train/fake/render.png"),
+        },
+        headers=_csrf(client),
+        content_type="multipart/form-data",
+    )
+
+    assert created.status_code == 201
+    sample = created.get_json()["dataset"]["samples"][0]
+    assert sample["relative_path"] == "benchmark/train/fake/render.png"
+    assert sample["ground_truth"] == "fake"
+
+
 def test_reviewer_can_view_but_cannot_mutate_testing_data(client, monkeypatch):
     _login(client, "reviewer")
     monkeypatch.setattr(internal_testing, "overview", lambda: {
@@ -264,6 +384,8 @@ def test_admin_page_contains_internal_testing_workspace(client):
     assert "内部测试平台" in html
     assert 'id="view-testing"' in html
     assert "受控压力测试" in html
+    assert 'id="testingDirectory"' in html
+    assert "非 JSON 响应" not in html
 
 
 def test_internal_testing_has_a_cache_busting_direct_entry(client):

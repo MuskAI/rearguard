@@ -8,6 +8,7 @@ import json
 import math
 import mimetypes
 import os
+import re
 import shutil
 import socket
 import sqlite3
@@ -15,9 +16,11 @@ import statistics
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import zipfile
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
+from collections import Counter
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -34,19 +37,36 @@ DB_PATH = Path(
 )
 MAX_UPLOAD_BYTES = 24 * 1024 * 1024
 MAX_DATASET_BYTES = 128 * 1024 * 1024
-MAX_DATASET_SAMPLES = 200
-MAX_WEB_IMAGES = 80
+MAX_EXTRACTED_DATASET_BYTES = int(
+    os.environ.get("REALGUARD_INTERNAL_TEST_MAX_EXTRACTED_BYTES", str(192 * 1024 * 1024))
+)
+# A value of zero means there is no count-based ingestion limit. Byte and storage
+# boundaries remain in place so large datasets fail predictably instead of exhausting RAM.
+MAX_DATASET_SAMPLES = max(0, int(os.environ.get("REALGUARD_INTERNAL_TEST_MAX_SAMPLES", "0")))
+MAX_WEB_IMAGES = max(0, int(os.environ.get("REALGUARD_INTERNAL_TEST_MAX_WEB_IMAGES", "0")))
+MAX_UPLOAD_FILES = max(0, int(os.environ.get("REALGUARD_INTERNAL_TEST_MAX_UPLOAD_FILES", "0")))
 MAX_REDIRECTS = 4
 MAX_EVALUATION_CONCURRENCY = 4
 MAX_LOAD_CONCURRENCY = 16
 MAX_LOAD_REQUESTS = 1000
 MAX_LOAD_DURATION_SECONDS = 120
-MAX_STORED_DATASETS = int(os.environ.get("REALGUARD_INTERNAL_TEST_MAX_DATASETS", "200"))
+MAX_STORED_DATASETS = max(0, int(os.environ.get("REALGUARD_INTERNAL_TEST_MAX_DATASETS", "0")))
 MAX_STORED_BYTES = int(
     os.environ.get("REALGUARD_INTERNAL_TEST_MAX_BYTES", str(10 * 1024 * 1024 * 1024))
 )
 ALLOWED_IMAGE_FORMATS = {"JPEG", "PNG", "WEBP", "BMP", "GIF", "TIFF", "HEIF", "HEIC"}
 ALLOWED_LABELS = {"real", "fake", "unlabeled"}
+REAL_PATH_LABELS = {
+    "real", "reals", "authentic", "genuine", "natural", "camera", "captured",
+    "photograph", "photo", "original", "human", "negative", "0",
+    "真实", "真图", "实拍", "自然图像", "相机", "原图",
+}
+FAKE_PATH_LABELS = {
+    "fake", "fakes", "synthetic", "generated", "generation", "ai", "aigc",
+    "ai_generated", "diffusion", "gan", "sdxl", "stable_diffusion", "midjourney",
+    "dalle", "flux", "positive", "1", "生成", "生成图", "假图", "合成图", "人工合成",
+    "即梦", "豆包",
+}
 _SCHEMA_LOCK = threading.Lock()
 _SCHEMA_READY = False
 _EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="internal-testing")
@@ -105,6 +125,8 @@ def ensure_schema() -> None:
                     byte_size INTEGER NOT NULL,
                     ground_truth TEXT NOT NULL,
                     storage_path TEXT NOT NULL,
+                    relative_path TEXT,
+                    label_source TEXT NOT NULL DEFAULT 'default',
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(dataset_id) REFERENCES datasets(id) ON DELETE CASCADE,
                     UNIQUE(dataset_id, sha256)
@@ -149,6 +171,15 @@ def ensure_schema() -> None:
                 CREATE INDEX IF NOT EXISTS idx_results_run ON results(run_id, id);
                 """
             )
+            sample_columns = {
+                str(row[1]) for row in connection.execute("PRAGMA table_info(samples)").fetchall()
+            }
+            if "relative_path" not in sample_columns:
+                connection.execute("ALTER TABLE samples ADD COLUMN relative_path TEXT")
+            if "label_source" not in sample_columns:
+                connection.execute(
+                    "ALTER TABLE samples ADD COLUMN label_source TEXT NOT NULL DEFAULT 'default'"
+                )
             connection.commit()
             os.chmod(DB_PATH, 0o600)
         finally:
@@ -185,6 +216,38 @@ def _safe_name(value: str, fallback: str = "sample") -> str:
     return (name or fallback)[:180]
 
 
+def _safe_relative_path(value: str, fallback: str = "sample") -> str:
+    raw = str(value or "").replace("\\", "/").replace("\x00", "").strip()
+    parts = [part.strip() for part in PurePosixPath(raw).parts if part not in ("", ".", "/")]
+    if not parts or any(part == ".." for part in parts):
+        return _safe_name(fallback)
+    cleaned = [re.sub(r"[\x00-\x1f]", "", part)[:180] for part in parts]
+    return "/".join(part for part in cleaned if part)[:1000] or _safe_name(fallback)
+
+
+def _limit_reached(count: int, limit: int) -> bool:
+    return bool(limit > 0 and count >= limit)
+
+
+def _source_upload_limit(filename: str) -> int:
+    return MAX_DATASET_BYTES if Path(str(filename or "")).suffix.lower() == ".zip" else MAX_UPLOAD_BYTES
+
+
+def _path_label(relative_path: str) -> tuple[str, str]:
+    path = _safe_relative_path(relative_path)
+    parts = list(PurePosixPath(path).parts[:-1])
+    for part in reversed(parts):
+        normalized = str(part).strip().lower().replace("-", "_").replace(" ", "_")
+        tokens = {token for token in re.split(r"[^0-9a-z_\u4e00-\u9fff]+|_+", normalized) if token}
+        candidates = tokens | {normalized}
+        real = bool(candidates & REAL_PATH_LABELS)
+        fake = bool(candidates & FAKE_PATH_LABELS)
+        if real != fake:
+            label = "real" if real else "fake"
+            return label, f"directory:{part}"
+    return "unlabeled", "unresolved"
+
+
 def _normalize_label(value: str | None) -> str:
     label = str(value or "unlabeled").strip().lower()
     return label if label in ALLOWED_LABELS else "unlabeled"
@@ -210,12 +273,12 @@ def _image_payload(data: bytes) -> tuple[str, int, int, str]:
     return mime, width, height, suffix
 
 
-def _pdf_images(data: bytes, source_name: str) -> list[tuple[str, bytes, str]]:
+def _pdf_images(data: bytes, source_name: str) -> list[tuple[str, bytes, str, str]]:
     try:
         import pdfplumber
     except ImportError as exc:
         raise ValueError("服务器尚未安装 PDF 图片提取组件") from exc
-    images: list[tuple[str, bytes, str]] = []
+    images: list[tuple[str, bytes, str, str]] = []
     try:
         with pdfplumber.open(io.BytesIO(data)) as document:
             for page_number, page in enumerate(document.pages, 1):
@@ -229,15 +292,16 @@ def _pdf_images(data: bytes, source_name: str) -> list[tuple[str, bytes, str]]:
                         f"{Path(source_name).stem}-p{page_number}-img{image_number}",
                         payload,
                         f"pdf:{page_number}",
+                        source_name,
                     ))
-                    if len(images) >= MAX_DATASET_SAMPLES:
+                    if _limit_reached(len(images), MAX_DATASET_SAMPLES):
                         return images
     except Exception as exc:
         raise ValueError("PDF 无法解析或未包含可提取图片") from exc
     return images
 
 
-def _docx_images(data: bytes, source_name: str) -> list[tuple[str, bytes, str]]:
+def _docx_images(data: bytes, source_name: str) -> list[tuple[str, bytes, str, str]]:
     try:
         from docx import Document
     except ImportError as exc:
@@ -246,7 +310,7 @@ def _docx_images(data: bytes, source_name: str) -> list[tuple[str, bytes, str]]:
         document = Document(io.BytesIO(data))
     except Exception as exc:
         raise ValueError("Word 文档无法解析") from exc
-    images: list[tuple[str, bytes, str]] = []
+    images: list[tuple[str, bytes, str, str]] = []
     for index, relation in enumerate(document.part.rels.values(), 1):
         if "image" not in str(relation.target_ref):
             continue
@@ -255,9 +319,42 @@ def _docx_images(data: bytes, source_name: str) -> list[tuple[str, bytes, str]]:
             _image_payload(payload)
         except (AttributeError, ValueError, OSError):
             continue
-        images.append((f"{Path(source_name).stem}-img{index}", payload, "docx"))
-        if len(images) >= MAX_DATASET_SAMPLES:
+        images.append((f"{Path(source_name).stem}-img{index}", payload, "docx", source_name))
+        if _limit_reached(len(images), MAX_DATASET_SAMPLES):
             break
+    return images
+
+
+def _zip_images(data: bytes, source_name: str) -> list[tuple[str, bytes, str, str]]:
+    images: list[tuple[str, bytes, str, str]] = []
+    extracted_bytes = 0
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(data))
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise ValueError("ZIP 数据集无法解析") from exc
+    with archive:
+        for member in archive.infolist():
+            if member.is_dir() or member.flag_bits & 0x1:
+                continue
+            relative_path = _safe_relative_path(member.filename)
+            if not relative_path or relative_path == "sample":
+                continue
+            if member.file_size > MAX_UPLOAD_BYTES:
+                continue
+            extracted_bytes += max(0, int(member.file_size or 0))
+            if extracted_bytes > MAX_EXTRACTED_DATASET_BYTES:
+                raise ValueError("ZIP 解压后的图片总量超过内部测试存储边界")
+            suffix = Path(relative_path).suffix.lower()
+            if suffix not in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".heic", ".heif"}:
+                continue
+            try:
+                payload = archive.read(member)
+                _image_payload(payload)
+            except (KeyError, OSError, RuntimeError, ValueError, zipfile.BadZipFile):
+                continue
+            images.append((Path(relative_path).stem, payload, f"zip:{source_name}", relative_path))
+            if _limit_reached(len(images), MAX_DATASET_SAMPLES):
+                break
     return images
 
 
@@ -335,7 +432,7 @@ def _read_response(response: requests.Response) -> bytes:
     return b"".join(chunks)
 
 
-def _web_images(url: str) -> list[tuple[str, bytes, str]]:
+def _web_images(url: str) -> list[tuple[str, bytes, str, str]]:
     try:
         from bs4 import BeautifulSoup
     except ImportError as exc:
@@ -357,27 +454,30 @@ def _web_images(url: str) -> list[tuple[str, bytes, str]]:
         absolute = urljoin(url, source)
         if absolute not in candidates:
             candidates.append(absolute)
-        if len(candidates) >= MAX_WEB_IMAGES:
+        if _limit_reached(len(candidates), MAX_WEB_IMAGES):
             break
-    images: list[tuple[str, bytes, str]] = []
+    images: list[tuple[str, bytes, str, str]] = []
     for index, source in enumerate(candidates, 1):
         try:
             payload = _read_response(_bounded_get(session, source, accept_image=True))
             _image_payload(payload)
         except (ValueError, requests.RequestException):
             continue
-        images.append((f"web-image-{index}", payload, source[:500]))
+        images.append((f"web-image-{index}", payload, source[:500], source[:1000]))
     return images
 
 
-def _extract_source(name: str, data: bytes) -> list[tuple[str, bytes, str]]:
-    suffix = Path(name).suffix.lower()
+def _extract_source(name: str, data: bytes) -> list[tuple[str, bytes, str, str]]:
+    relative_path = _safe_relative_path(name)
+    suffix = Path(relative_path).suffix.lower()
     if suffix == ".pdf":
-        return _pdf_images(data, name)
+        return _pdf_images(data, relative_path)
     if suffix == ".docx":
-        return _docx_images(data, name)
+        return _docx_images(data, relative_path)
+    if suffix == ".zip":
+        return _zip_images(data, relative_path)
     _image_payload(data)
-    return [(Path(name).stem or "image", data, "upload")]
+    return [(Path(relative_path).stem or "image", data, "upload", relative_path)]
 
 
 def create_dataset(
@@ -390,38 +490,44 @@ def create_dataset(
     actor: dict | None = None,
 ) -> dict:
     if not uploads and not source_url:
-        raise ValueError("请上传图片、PDF、DOCX，或填写网页地址")
-    if len(uploads) > 50:
-        raise ValueError("单次最多上传 50 个文件")
+        raise ValueError("请上传图片、文件夹、ZIP、PDF、DOCX，或填写网页地址")
+    if MAX_UPLOAD_FILES > 0 and len(uploads) > MAX_UPLOAD_FILES:
+        raise ValueError(f"单次上传文件数不能超过 {MAX_UPLOAD_FILES}")
     total_upload = sum(len(data) for _, data in uploads)
     if total_upload > MAX_DATASET_BYTES:
         raise ValueError("单个数据集上传总量不能超过 128 MB")
-    for _, data in uploads:
-        if len(data) > MAX_UPLOAD_BYTES:
-            raise ValueError("单个文件不能超过 24 MB")
+    for filename, data in uploads:
+        if len(data) > _source_upload_limit(filename):
+            raise ValueError(f"{_safe_name(filename)} 超过允许的文件大小")
     ensure_schema()
     with _connect() as connection:
         usage = connection.execute(
             "SELECT COUNT(*) AS datasets, COALESCE(SUM(total_bytes),0) AS bytes FROM datasets"
         ).fetchone()
-    if int(usage["datasets"] or 0) >= MAX_STORED_DATASETS:
+    if _limit_reached(int(usage["datasets"] or 0), MAX_STORED_DATASETS):
         raise ValueError("内部测试数据集已达到数量上限，请先删除不再使用的数据集")
     if int(usage["bytes"] or 0) + total_upload > MAX_STORED_BYTES:
         raise ValueError("内部测试存储空间已达到上限，请先清理旧数据集")
 
-    extracted: list[tuple[str, bytes, str]] = []
+    extracted: list[tuple[str, bytes, str, str]] = []
     source_types: set[str] = set()
     for filename, data in uploads:
-        safe_name = _safe_name(filename)
-        suffix = Path(safe_name).suffix.lower()
-        source_types.add("document" if suffix in {".pdf", ".docx"} else "upload")
-        extracted.extend(_extract_source(safe_name, data))
-        if len(extracted) >= MAX_DATASET_SAMPLES:
+        relative_name = _safe_relative_path(filename)
+        suffix = Path(relative_name).suffix.lower()
+        source_types.add(
+            "archive" if suffix == ".zip"
+            else "document" if suffix in {".pdf", ".docx"}
+            else "directory" if "/" in relative_name
+            else "upload"
+        )
+        extracted.extend(_extract_source(relative_name, data))
+        if _limit_reached(len(extracted), MAX_DATASET_SAMPLES):
             break
-    if source_url and len(extracted) < MAX_DATASET_SAMPLES:
+    if source_url and not _limit_reached(len(extracted), MAX_DATASET_SAMPLES):
         source_types.add("web")
         extracted.extend(_web_images(source_url))
-    extracted = extracted[:MAX_DATASET_SAMPLES]
+    if MAX_DATASET_SAMPLES > 0:
+        extracted = extracted[:MAX_DATASET_SAMPLES]
     if not extracted:
         raise ValueError("没有提取到符合要求的图片")
 
@@ -432,14 +538,14 @@ def create_dataset(
     actor_id, actor_name = _actor_fields(actor)
     normalized_default = _normalize_label(default_label)
     label_map = {
-        _safe_name(key): _normalize_label(value)
+        _safe_relative_path(key).lower(): _normalize_label(value)
         for key, value in (labels or {}).items()
     }
     seen: set[str] = set()
     samples: list[dict] = []
     total_bytes = 0
     try:
-        for index, (sample_name, payload, source) in enumerate(extracted, 1):
+        for index, (sample_name, payload, source, relative_path) in enumerate(extracted, 1):
             digest = hashlib.sha256(payload).hexdigest()
             if digest in seen:
                 continue
@@ -450,7 +556,25 @@ def create_dataset(
             path.write_bytes(payload)
             os.chmod(path, 0o600)
             safe_sample_name = _safe_name(sample_name, f"sample-{index}")
-            label = label_map.get(safe_sample_name, normalized_default)
+            safe_relative_path = _safe_relative_path(relative_path, safe_sample_name)
+            explicit_candidates = (
+                safe_relative_path.lower(),
+                Path(safe_relative_path).name.lower(),
+                Path(safe_relative_path).stem.lower(),
+                safe_sample_name.lower(),
+            )
+            explicit_label = next(
+                (label_map[key] for key in explicit_candidates if key in label_map),
+                None,
+            )
+            inferred_label, inferred_source = _path_label(safe_relative_path)
+            if explicit_label is not None:
+                label, label_source = explicit_label, "explicit"
+            elif inferred_label != "unlabeled":
+                label, label_source = inferred_label, inferred_source
+            else:
+                label = normalized_default
+                label_source = "default" if label != "unlabeled" else "unresolved"
             samples.append({
                 "id": f"sm_{uuid.uuid4().hex[:20]}",
                 "name": safe_sample_name,
@@ -462,6 +586,8 @@ def create_dataset(
                 "byteSize": len(payload),
                 "groundTruth": label,
                 "storagePath": str(path),
+                "relativePath": safe_relative_path,
+                "labelSource": label_source,
             })
             total_bytes += len(payload)
         if not samples:
@@ -490,14 +616,15 @@ def create_dataset(
                 """
                 INSERT INTO samples
                     (id,dataset_id,name,source,sha256,mime_type,width,height,byte_size,
-                     ground_truth,storage_path,created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                     ground_truth,storage_path,relative_path,label_source,created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 [
                     (
                         item["id"], dataset_id, item["name"], item["source"], item["sha256"],
                         item["mimeType"], item["width"], item["height"], item["byteSize"],
-                        item["groundTruth"], item["storagePath"], created_at,
+                        item["groundTruth"], item["storagePath"], item["relativePath"],
+                        item["labelSource"], created_at,
                     )
                     for item in samples
                 ],
@@ -520,21 +647,37 @@ def get_dataset(dataset_id: str, *, include_samples: bool = False) -> dict | Non
         if include_samples:
             samples = connection.execute(
                 """
-                SELECT id,name,source,sha256,mime_type,width,height,byte_size,ground_truth,created_at
+                SELECT id,name,source,sha256,mime_type,width,height,byte_size,ground_truth,
+                       relative_path,label_source,created_at
                 FROM samples WHERE dataset_id = ? ORDER BY created_at,id
                 """,
                 (dataset_id,),
             ).fetchall()
             payload["samples"] = [dict(item) for item in samples]
+            source_counts = Counter(str(item["label_source"] or "unresolved") for item in samples)
+            label_counts = Counter(str(item["ground_truth"] or "unlabeled") for item in samples)
+            payload["classification"] = {
+                "automaticCount": sum(
+                    count for source, count in source_counts.items()
+                    if source.startswith("directory:")
+                ),
+                "explicitCount": int(source_counts.get("explicit", 0)),
+                "defaultCount": int(source_counts.get("default", 0)),
+                "unresolvedCount": int(label_counts.get("unlabeled", 0)),
+                "labels": dict(label_counts),
+            }
         return payload
 
 
-def list_datasets(limit: int = 40) -> list[dict]:
-    limit = max(1, min(int(limit), 100))
+def list_datasets(limit: int | None = None) -> list[dict]:
     with _connect() as connection:
-        rows = connection.execute(
-            "SELECT * FROM datasets ORDER BY created_at DESC LIMIT ?", (limit,)
-        ).fetchall()
+        if limit is None:
+            rows = connection.execute("SELECT * FROM datasets ORDER BY created_at DESC").fetchall()
+        else:
+            rows = connection.execute(
+                "SELECT * FROM datasets ORDER BY created_at DESC LIMIT ?",
+                (max(1, int(limit)),),
+            ).fetchall()
     return [_row_dict(row) or {} for row in rows]
 
 
@@ -561,7 +704,8 @@ def update_sample_label(sample_id: str, ground_truth: str) -> dict | None:
         if not row:
             return None
         connection.execute(
-            "UPDATE samples SET ground_truth = ? WHERE id = ?", (label, sample_id)
+            "UPDATE samples SET ground_truth = ?, label_source = 'manual' WHERE id = ?",
+            (label, sample_id),
         )
         connection.execute(
             """
@@ -576,7 +720,8 @@ def update_sample_label(sample_id: str, ground_truth: str) -> dict | None:
         )
         updated = connection.execute(
             """
-            SELECT id,name,source,sha256,mime_type,width,height,byte_size,ground_truth,created_at
+            SELECT id,name,source,sha256,mime_type,width,height,byte_size,ground_truth,
+                   relative_path,label_source,created_at
             FROM samples WHERE id = ?
             """,
             (sample_id,),
@@ -701,19 +846,56 @@ def run_model(model: dict, image: bytes, filename: str, mime_type: str) -> dict:
             allow_redirects=False,
         )
         latency = int((time.monotonic() - started) * 1000)
+        content_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        response_text = response.text[:1000]
         try:
             payload = response.json()
         except ValueError:
-            payload = {}
+            payload = None
+        if not isinstance(payload, dict):
+            snippet = re.sub(r"\s+", " ", response_text).strip()
+            if snippet.startswith("<"):
+                snippet = ""
+            detail = (
+                f"模型返回非 JSON 对象（HTTP {response.status_code}，"
+                f"Content-Type: {content_type or 'unknown'}）"
+            )
+            if response.status_code == 413:
+                detail = "模型或反向代理拒绝了图片：请求体过大（HTTP 413）"
+            elif response.status_code in {502, 503, 504}:
+                detail = f"模型网关暂不可用（HTTP {response.status_code}）"
+            if snippet:
+                detail = f"{detail}：{snippet[:300]}"
+            return {
+                "ok": False,
+                "httpStatus": response.status_code,
+                "latencyMs": latency,
+                "predictedLabel": "unknown",
+                "score": None,
+                "payload": {"responseFormat": "non_json", "contentType": content_type},
+                "error": detail[:500],
+            }
         predicted, score = _prediction(payload)
+        application_code = payload.get("code")
+        application_error = application_code not in (None, 0, 200, "0", "200")
+        http_ok = 200 <= response.status_code < 300
+        prediction_ok = predicted in {"real", "fake"}
+        ok = bool(http_ok and not application_error and prediction_ok)
+        error = ""
+        if not http_ok:
+            error = str(payload.get("message") or payload.get("msg") or response_text)[:500]
+        elif application_error:
+            error = str(payload.get("message") or payload.get("msg") or f"模型业务错误 code={application_code}")[:500]
+        elif not prediction_ok:
+            error = "模型返回了 JSON，但缺少可解析的 real/fake 结论"
         return {
-            "ok": 200 <= response.status_code < 300,
+            "ok": ok,
             "httpStatus": response.status_code,
             "latencyMs": latency,
             "predictedLabel": predicted,
             "score": score,
             "payload": payload,
-            "error": "" if 200 <= response.status_code < 300 else response.text[:500],
+            "error": error,
         }
     except requests.RequestException as exc:
         return {
@@ -816,47 +998,61 @@ def _execute_evaluation(run_id: str, model: dict, concurrency: int) -> None:
 
     try:
         with ThreadPoolExecutor(max_workers=concurrency) as pool:
-            futures = {pool.submit(evaluate, row): row for row in samples}
-            for future in as_completed(futures):
+            sample_iterator = iter(samples)
+            futures: dict = {}
+
+            def fill_pending() -> None:
+                while len(futures) < concurrency:
+                    try:
+                        row = next(sample_iterator)
+                    except StopIteration:
+                        return
+                    futures[pool.submit(evaluate, row)] = row
+
+            fill_pending()
+            while futures:
                 if _is_cancelled(run_id):
                     for pending in futures:
                         pending.cancel()
                     break
-                row = futures[future]
-                try:
-                    result = future.result()
-                except Exception as exc:
-                    result = {
-                        "ok": False,
-                        "sampleId": row["id"],
-                        "groundTruth": row["ground_truth"],
-                        "predictedLabel": "unknown",
-                        "score": None,
-                        "latencyMs": None,
-                        "httpStatus": None,
-                        "payload": {},
-                        "error": str(exc)[:500],
-                    }
-                completed.append(result)
-                with _connect() as connection:
-                    connection.execute(
-                        """
-                        INSERT INTO results
-                            (run_id,sample_id,status,predicted_label,score,latency_ms,
-                             http_status,error,response_json,created_at)
-                        VALUES (?,?,?,?,?,?,?,?,?,?)
-                        """,
-                        (
-                            run_id, result["sampleId"],
-                            "success" if result["ok"] else "failed",
-                            result["predictedLabel"], result["score"], result["latencyMs"],
-                            result["httpStatus"], result["error"],
-                            json.dumps(result["payload"], ensure_ascii=False)[:200000],
-                            _now(),
-                        ),
-                    )
-                    connection.commit()
-                _set_run(run_id, completed_count=len(completed))
+                done, _ = wait(tuple(futures), return_when=FIRST_COMPLETED)
+                for future in done:
+                    row = futures.pop(future)
+                    try:
+                        result = future.result()
+                    except Exception as exc:
+                        result = {
+                            "ok": False,
+                            "sampleId": row["id"],
+                            "groundTruth": row["ground_truth"],
+                            "predictedLabel": "unknown",
+                            "score": None,
+                            "latencyMs": None,
+                            "httpStatus": None,
+                            "payload": {},
+                            "error": str(exc)[:500],
+                        }
+                    completed.append(result)
+                    with _connect() as connection:
+                        connection.execute(
+                            """
+                            INSERT INTO results
+                                (run_id,sample_id,status,predicted_label,score,latency_ms,
+                                 http_status,error,response_json,created_at)
+                            VALUES (?,?,?,?,?,?,?,?,?,?)
+                            """,
+                            (
+                                run_id, result["sampleId"],
+                                "success" if result["ok"] else "failed",
+                                result["predictedLabel"], result["score"], result["latencyMs"],
+                                result["httpStatus"], result["error"],
+                                json.dumps(result["payload"], ensure_ascii=False)[:200000],
+                                _now(),
+                            ),
+                        )
+                        connection.commit()
+                    _set_run(run_id, completed_count=len(completed))
+                fill_pending()
         status = "cancelled" if _is_cancelled(run_id) else "completed"
         _set_run(
             run_id,
@@ -1064,12 +1260,14 @@ def cancel_run(run_id: str) -> dict | None:
     return _run_row(run_id)
 
 
-def list_runs(limit: int = 60) -> list[dict]:
-    limit = max(1, min(int(limit), 200))
+def list_runs(limit: int | None = 60) -> list[dict]:
     with _connect() as connection:
-        rows = connection.execute(
-            "SELECT * FROM runs ORDER BY created_at DESC LIMIT ?", (limit,)
-        ).fetchall()
+        if limit is None:
+            rows = connection.execute("SELECT * FROM runs ORDER BY created_at DESC").fetchall()
+        else:
+            rows = connection.execute(
+                "SELECT * FROM runs ORDER BY created_at DESC LIMIT ?", (max(1, int(limit)),)
+            ).fetchall()
     return [_row_dict(row) or {} for row in rows]
 
 
@@ -1094,31 +1292,54 @@ def reconcile_stale_runs(max_idle_seconds: int = 600) -> int:
         return int(cursor.rowcount or 0)
 
 
-def get_run(run_id: str, *, include_results: bool = True) -> dict | None:
+def get_run(
+    run_id: str,
+    *,
+    include_results: bool = True,
+    result_limit: int | None = 200,
+) -> dict | None:
     run = _run_row(run_id)
     if not run:
         return None
     if include_results:
         with _connect() as connection:
-            rows = connection.execute(
+            summary = connection.execute(
                 """
-                SELECT r.id,r.sample_id,r.status,r.predicted_label,r.score,r.latency_ms,
-                       r.http_status,r.error,r.created_at,s.name AS sample_name,
-                       s.ground_truth
-                FROM results r
-                LEFT JOIN samples s ON s.id = r.sample_id
-                WHERE r.run_id = ? ORDER BY r.id
+                SELECT COUNT(*) AS count,
+                       SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_count,
+                       SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failure_count
+                FROM results WHERE run_id = ?
                 """,
                 (run_id,),
+            ).fetchone()
+            limit_sql = "" if result_limit is None else " LIMIT ?"
+            params = (run_id,) if result_limit is None else (run_id, max(1, int(result_limit)))
+            rows = connection.execute(
+                f"""
+                SELECT r.id,r.sample_id,r.status,r.predicted_label,r.score,r.latency_ms,
+                       r.http_status,r.error,r.created_at,s.name AS sample_name,
+                       s.ground_truth,s.relative_path,s.label_source
+                FROM results r
+                LEFT JOIN samples s ON s.id = r.sample_id
+                WHERE r.run_id = ? ORDER BY r.id{limit_sql}
+                """,
+                params,
             ).fetchall()
         run["results"] = [dict(row) for row in rows]
+        run["resultSummary"] = {
+            "count": int(summary["count"] or 0),
+            "successCount": int(summary["success_count"] or 0),
+            "failureCount": int(summary["failure_count"] or 0),
+            "returnedCount": len(rows),
+            "hasMore": int(summary["count"] or 0) > len(rows),
+        }
     return run
 
 
 def overview() -> dict:
     reconcile_stale_runs()
-    datasets = list_datasets(40)
-    runs = list_runs(80)
+    datasets = list_datasets(None)
+    runs = list_runs(None)
     active = [run for run in runs if run.get("status") in {"queued", "running", "cancel_requested"}]
     with _connect() as connection:
         totals = connection.execute(
@@ -1142,13 +1363,14 @@ def overview() -> dict:
             "activeRunCount": len(active),
         },
         "limits": {
-            "maxSamplesPerDataset": MAX_DATASET_SAMPLES,
+            "maxSamplesPerDataset": MAX_DATASET_SAMPLES or None,
             "maxDatasetBytes": MAX_DATASET_BYTES,
+            "maxExtractedDatasetBytes": MAX_EXTRACTED_DATASET_BYTES,
             "maxEvaluationConcurrency": MAX_EVALUATION_CONCURRENCY,
             "maxLoadConcurrency": MAX_LOAD_CONCURRENCY,
             "maxLoadRequests": MAX_LOAD_REQUESTS,
             "maxLoadDurationSeconds": MAX_LOAD_DURATION_SECONDS,
-            "maxStoredDatasets": MAX_STORED_DATASETS,
+            "maxStoredDatasets": MAX_STORED_DATASETS or None,
             "maxStoredBytes": MAX_STORED_BYTES,
         },
     }
