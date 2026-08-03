@@ -20,6 +20,11 @@ PACKAGE_DIR = Path(
 MODEL_PATH = PACKAGE_DIR / "model" / "dinov3_vit7b16_linear_fp16.onnx"
 LABELS_PATH = PACKAGE_DIR / "model" / "labels.json"
 PROVIDER = os.environ.get("DINOV3_PROVIDER", "cpu").strip().lower() or "cpu"
+SPLIT_DIR = Path(
+    os.environ.get("DINOV3_SPLIT_DIR", "/mnt/sda1/ymk/dinov3_split_fp16")
+).expanduser().resolve()
+STAGE1_DEVICE = int(os.environ.get("DINOV3_STAGE1_DEVICE", "1"))
+STAGE2_DEVICE = int(os.environ.get("DINOV3_STAGE2_DEVICE", "0"))
 INTRA_OP_THREADS = max(0, int(os.environ.get("DINOV3_INTRA_OP_THREADS", "16")))
 MAX_UPLOAD_BYTES = max(1, int(os.environ.get("DINOV3_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024))))
 MAX_IMAGE_PIXELS = max(1, int(os.environ.get("DINOV3_MAX_IMAGE_PIXELS", "24000000")))
@@ -53,15 +58,25 @@ class ModelRuntime:
                 package = str(PACKAGE_DIR)
                 if package not in sys.path:
                     sys.path.insert(0, package)
-                from inference_onnx import OnnxDetector
+                if PROVIDER == "split-cuda":
+                    from split_runtime import SplitCudaDetector
 
-                self.detector = OnnxDetector(
-                    MODEL_PATH,
-                    provider=PROVIDER,
-                    batch_size=1,
-                    intra_op_threads=INTRA_OP_THREADS,
-                    labels_path=LABELS_PATH,
-                )
+                    self.detector = SplitCudaDetector(
+                        SPLIT_DIR,
+                        package_dir=PACKAGE_DIR,
+                        stage1_device=STAGE1_DEVICE,
+                        stage2_device=STAGE2_DEVICE,
+                    )
+                else:
+                    from inference_onnx import OnnxDetector
+
+                    self.detector = OnnxDetector(
+                        MODEL_PATH,
+                        provider=PROVIDER,
+                        batch_size=1,
+                        intra_op_threads=INTRA_OP_THREADS,
+                        labels_path=LABELS_PATH,
+                    )
             except Exception as exc:
                 self.state = "error"
                 self.error = f"{type(exc).__name__}: {exc}"
@@ -110,7 +125,12 @@ def _confidence_level(fake_probability: float) -> str:
 
 
 def _health_payload() -> dict[str, Any]:
-    artifact_ready = MODEL_PATH.is_file() and LABELS_PATH.is_file()
+    split_ready = (SPLIT_DIR / "stage1.onnx").is_file() and (
+        SPLIT_DIR / "stage2.onnx"
+    ).is_file()
+    artifact_ready = LABELS_PATH.is_file() and (
+        split_ready if PROVIDER == "split-cuda" else MODEL_PATH.is_file()
+    )
     detector = runtime.detector
     providers = list(getattr(detector, "active_providers", []) or [])
     ready = runtime.state == "ready" and detector is not None
@@ -119,6 +139,8 @@ def _health_payload() -> dict[str, Any]:
     ]
     if PROVIDER == "cpu":
         warnings.append("66 服务器单卡显存为 12 GB，ViT-7B 无法单卡常驻，当前使用 CPUExecutionProvider。")
+    elif PROVIDER == "split-cuda":
+        warnings.append("ViT-7B 已按 20+20 层切分并常驻两张 GPU；当前仅允许单路串行推理。")
     return {
         "status": "ok" if ready else runtime.state,
         "service": "realguard-dinov3-vit7b16",
@@ -134,6 +156,7 @@ def _health_payload() -> dict[str, Any]:
         "model": MODEL_ID,
         "modelVersion": MODEL_VERSION,
         "modelPath": str(MODEL_PATH),
+        "splitModelPath": str(SPLIT_DIR) if PROVIDER == "split-cuda" else "",
         "threshold": 0.5,
         "loadSeconds": runtime.load_seconds,
         "loadedAt": runtime.loaded_at,

@@ -9,11 +9,14 @@ User=ymk
 Group=ymk
 WorkingDirectory=/home/ymk/services/dinov3-onnx-service
 Environment=DINOV3_PACKAGE_DIR=/home/ymk/model_registry/dinov3_vit7b16_linear_onnx_fp16
-Environment=DINOV3_PROVIDER=cpu
+Environment=DINOV3_PROVIDER=split-cuda
+Environment=DINOV3_SPLIT_DIR=/mnt/sda1/ymk/dinov3_split_fp16
+Environment=DINOV3_STAGE1_DEVICE=1
+Environment=DINOV3_STAGE2_DEVICE=0
 Environment=DINOV3_INTRA_OP_THREADS=16
 Environment=DINOV3_EAGER_LOAD=1
 Environment=DINOV3_QUEUE_WAIT_SECONDS=20
-Environment=CUDA_VISIBLE_DEVICES=
+Environment=CUDA_VISIBLE_DEVICES=0,1
 ExecStart=/home/ymk/miniconda3/envs/realguard/bin/gunicorn --workers 1 --threads 2 --worker-class gthread --bind 127.0.0.1:5071 --timeout 600 --graceful-timeout 30 --keep-alive 5 --access-logfile - --error-logfile - service:app
 Restart=always
 RestartSec=8
@@ -21,8 +24,8 @@ TimeoutStopSec=45
 KillSignal=SIGTERM
 Nice=5
 CPUWeight=50
-MemoryHigh=64G
-MemoryMax=80G
+MemoryHigh=24G
+MemoryMax=32G
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full

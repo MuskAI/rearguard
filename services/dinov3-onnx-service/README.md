@@ -11,13 +11,45 @@ RealGuard model contract without copying or modifying the 13 GB model bundle.
 - Public-server tunnel endpoint: `http://127.0.0.1:15002`
 - Admin model id: `dinov3-vit7b16-linear-fp16`
 
-The two Titan Xp cards each have 12 GB VRAM. ONNX Runtime cannot shard this
-graph across both cards, while the FP16 backbone alone is about 13 GB.
-Production therefore runs this candidate with `CPUExecutionProvider`; moving
-it to CUDA requires one GPU with at least 24 GB VRAM or a separately exported
-model-parallel/quantized artifact. ONNX session construction has a large
-temporary host-memory peak, so the service is isolated with a 64 GB soft limit
-and an 80 GB hard limit.
+The two Titan Xp cards each have 12 GB VRAM. The service splits the 40-block
+FP16 graph after block 20 and runs each half in an isolated process on a
+different GPU. Isolation matters: repeatedly switching two CUDA devices from
+one ONNX Runtime process is unstable on this Pascal deployment.
+
+| Stage | Blocks | Default GPU | Added VRAM |
+| --- | --- | --- | --- |
+| `stage1.onnx` | 1-20 | GPU 1 | about 6.56 GB |
+| `stage2.onnx` | 21-40 + head | GPU 0 | about 6.56 GB |
+
+The intermediate feature copied between workers is about 1.57 MB at batch
+size 1. A 12-run smoke benchmark reached a 0.332 second median after warm-up,
+compared with 4.50 seconds for the complete CPU graph. The service remains
+single-flight because both cards also host the production detector and
+watermark models.
+
+Create the split artifacts on the large data volume:
+
+```bash
+python split_model.py \
+  /home/ymk/model_registry/dinov3_vit7b16_linear_onnx_fp16/model/dinov3_vit7b16_linear_fp16.onnx \
+  /mnt/sda1/ymk/dinov3_split_fp16
+```
+
+Validate the isolated-worker path without starting the HTTP service:
+
+```bash
+python split_process_smoke.py --iterations 12 \
+  --image /path/to/a/test-image.jpg
+```
+
+Set `DINOV3_PROVIDER=cpu` and restore the original memory limits in the unit
+file to roll back to the unsplit CPU graph.
+
+Dynamic INT8 quantization was tested on the FP16 export. Although each half
+shrunk from 6.3 GB to 3.2 GB, ONNX Runtime rejected `DynamicQuantizeLinear`
+with FP16 activations before provider assignment. It is not a usable GPU INT8
+artifact. TensorRT INT8 is also not used because current TensorRT releases do
+not support the Titan Xp's SM 6.1 architecture.
 
 The service returns a binary model label and raw fake score, but intentionally
 marks the decision as `review_only` until an independently signed production

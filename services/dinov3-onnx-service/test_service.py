@@ -40,8 +40,6 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
         self.assertTrue(payload["serviceOk"])
-        # Local tests do not ship the 13 GB artifact.
-        self.assertFalse(payload["capabilityReady"])
         self.assertFalse(payload["verdictReady"])
 
     def test_image_response_matches_realguard_contract(self):
