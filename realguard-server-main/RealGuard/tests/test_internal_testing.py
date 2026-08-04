@@ -1,5 +1,7 @@
 from pathlib import Path
+import base64
 import io
+import json
 import sys
 import time
 import zipfile
@@ -111,6 +113,21 @@ def test_dataset_ingestion_accepts_streams_without_total_byte_quota():
     assert limits["maxExtractedDatasetBytes"] is None
     assert limits["maxStoredBytes"] is None
     assert internal_testing._source_upload_limit("large-dataset.zip") == 0
+
+
+def test_dataset_build_reuses_staged_image_inode(tmp_path):
+    staged = tmp_path / "staged.png"
+    staged.write_bytes(_png_bytes())
+    staged_inode = staged.stat().st_ino
+
+    dataset = internal_testing.create_dataset(
+        [("folder/real/staged.png", staged)],
+        source_consumed_callback=lambda _name, source: source.unlink(),
+    )
+    stored = internal_testing.sample_path(dataset["samples"][0]["id"])[0]
+
+    assert not staged.exists()
+    assert stored.stat().st_ino == staged_inode
 
 
 def test_dataset_storage_uses_free_space_guard(monkeypatch):
@@ -1068,6 +1085,108 @@ def test_admin_page_contains_internal_testing_workspace(client):
     assert "分数分布与混淆矩阵" in html
     assert "Logits 分布" in html
     assert "不从概率反推" in html
+
+
+class _RemoteTestingResponse:
+    def __init__(self, payload, status=200):
+        self.content = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.status_code = status
+        self.headers = {"Content-Type": "application/json"}
+
+    def close(self):
+        return None
+
+
+class _RemoteTestingSession:
+    def __init__(self, response):
+        self.response = response
+        self.calls = []
+        self.trust_env = True
+
+    def request(self, method, url, **kwargs):
+        body = kwargs.get("data")
+        if hasattr(body, "read"):
+            body = body.read()
+        self.calls.append({"method": method, "url": url, "body": body, **kwargs})
+        return self.response
+
+    def close(self):
+        return None
+
+
+def test_admin_proxies_internal_evaluation_to_algorithm_server(client, monkeypatch):
+    _login(client, "operator", admin_id=7, username="evaluator")
+    remote = _RemoteTestingSession(_RemoteTestingResponse({
+        "status": "success",
+        "run": {"id": "run_remote", "status": "queued"},
+    }, status=202))
+    monkeypatch.setenv("REALGUARD_INTERNAL_TESTING_REMOTE_URL", "http://127.0.0.1:15072")
+    monkeypatch.setenv("REALGUARD_INTERNAL_TESTING_TOKEN", "shared-testing-token")
+    monkeypatch.setattr(admin.requests, "Session", lambda: remote)
+    monkeypatch.setattr(admin, "_audit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(admin, "_internal_testing_model", lambda model_id: ({
+        "id": model_id,
+        "name": "Remote model",
+        "endpoint": "http://127.0.0.1:15002/image",
+        "healthUrl": "http://127.0.0.1:15002/health",
+    }, ""))
+
+    response = client.post(
+        "/api/admin/testing/runs",
+        json={"datasetId": "ds_remote", "modelId": "dinov3", "concurrency": 2},
+        headers=_csrf(client),
+    )
+
+    assert response.status_code == 202
+    assert response.get_json()["run"]["id"] == "run_remote"
+    call = remote.calls[0]
+    assert call["url"] == "http://127.0.0.1:15072/api/admin/testing/runs"
+    assert call["headers"]["Authorization"] == "Bearer shared-testing-token"
+    assert call["headers"]["X-RealGuard-Actor-Id"] == "7"
+    encoded = call["headers"]["X-RealGuard-Testing-Model"]
+    model = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+    assert model["id"] == "dinov3"
+    assert remote.trust_env is False
+
+
+def test_admin_remote_overview_keeps_public_system_snapshot(client, monkeypatch):
+    _login(client, "reviewer")
+    remote = _RemoteTestingSession(_RemoteTestingResponse({
+        "status": "success",
+        "datasets": [],
+        "runs": [],
+        "imports": [],
+        "summary": {},
+        "limits": {},
+        "storage": {"host": "10.1.20.66", "freeBytes": 1234},
+    }))
+    monkeypatch.setenv("REALGUARD_INTERNAL_TESTING_REMOTE_URL", "http://127.0.0.1:15072")
+    monkeypatch.setenv("REALGUARD_INTERNAL_TESTING_TOKEN", "shared-testing-token")
+    monkeypatch.setattr(admin.requests, "Session", lambda: remote)
+    monkeypatch.setattr(admin, "_testing_system_snapshot", lambda: {"host": {"status": "ok"}})
+
+    response = client.get("/api/admin/testing/overview")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["storage"]["host"] == "10.1.20.66"
+    assert payload["system"]["host"]["status"] == "ok"
+    assert payload["system"]["internalTestingStorage"]["freeBytes"] == 1234
+
+
+def test_admin_remote_testing_configuration_fails_closed(client, monkeypatch):
+    _login(client, "operator")
+    monkeypatch.setenv("REALGUARD_INTERNAL_TESTING_REMOTE_URL", "http://10.1.20.66:5072")
+    monkeypatch.setattr(
+        internal_testing,
+        "overview",
+        lambda **_kwargs: pytest.fail("must not fall back to cloud-local image storage"),
+    )
+
+    response = client.get("/api/admin/testing/overview")
+
+    assert response.status_code == 503
+    assert "回环隧道" in response.get_json()["message"]
 
 
 def test_internal_testing_has_a_cache_busting_direct_entry(client):

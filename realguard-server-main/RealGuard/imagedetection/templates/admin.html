@@ -912,13 +912,14 @@
       try{ return await requestPromise; }
       finally{ if(mutationKey) mutationRequests.delete(mutationKey); }
     }
-    async function uploadApi(url, formData, onProgress){
+    async function uploadApi(url, formData, onProgress, headers={}){
       const mutationKey = `POST:${url}`;
       if(mutationRequests.has(mutationKey)) throw new Error('该操作正在处理中，请稍候');
       const requestPromise = new Promise((resolve,reject)=>{
         const xhr=new XMLHttpRequest();
         xhr.open('POST',url,true);
         xhr.setRequestHeader('X-CSRF-Token',CSRF_TOKEN);
+        Object.entries(headers || {}).forEach(([key,value])=>xhr.setRequestHeader(key,String(value)));
         xhr.upload.onprogress=(event)=>{
           if(typeof onProgress==='function' && event.lengthComputable){
             onProgress({loaded:event.loaded,total:event.total,percent:Math.min(100,Math.round(event.loaded/event.total*100)),processing:false});
@@ -2378,7 +2379,9 @@
       form.set('durationSeconds',$('testingLoadDuration').value);
       form.set('file',file);
       try{
-        const data=await uploadApi('/api/admin/testing/load-tests',form);
+        const data=await uploadApi('/api/admin/testing/load-tests',form,null,{
+          'X-RealGuard-Testing-Model-Id':$('testingLoadModel').value,
+        });
         toast(`压测任务已启动：${data.run.id}`);
         await loadTesting(true);
         await openTestingRun(data.run.id);

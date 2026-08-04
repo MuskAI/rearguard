@@ -17,7 +17,7 @@
 | 主前端在哪里？ | `v2-agent/frontend` |
 | 业务后端在哪里？ | `realguard-server-main/RealGuard` |
 | 模型在哪里运行？ | 66 GPU 服务器，公网服务器负责排队和转发 |
-| 数据存在哪里？ | MySQL、V2 SQLite 和受保护的上传目录 |
+| 数据存在哪里？ | 业务数据在 MySQL/V2 SQLite；内部评测图片只保存在 66 数据盘 |
 | 怎么发布？ | 使用 `scripts/deploy_*.sh`，不要手工覆盖服务器文件 |
 
 ## 系统架构
@@ -30,6 +30,7 @@ flowchart LR
     B --> Q["持久任务队列<br/>2 路 Worker"]
     Q --> D["检测代理"]
     D --> G["66 GPU 模型服务"]
+    B --> T["66 内部评测服务<br/>数据集 / 批测 / 压测"]
     B --> E["FastAPI 证据服务"]
     B --> M[("MySQL")]
     E --> S[("SQLite")]

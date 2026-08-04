@@ -17,6 +17,7 @@ Environment=REALGUARD_ENV=production
 Environment=REALGUARD_ALERT_WORKER_ENABLED=0
 EnvironmentFile=/etc/realguard/session.env
 EnvironmentFile=/etc/realguard/realguard-backend.env
+EnvironmentFile=/etc/realguard/internal-testing-remote.env
 EnvironmentFile=/etc/realguard/detector-db.env
 EnvironmentFile=-/etc/realguard/sms.env
 EnvironmentFile=/etc/realguard/agent.env

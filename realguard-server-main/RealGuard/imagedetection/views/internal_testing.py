@@ -761,9 +761,16 @@ def create_dataset(
     def extracted_items():
         count = 0
         for filename, source in uploads:
+            relative_name = _safe_relative_path(filename)
+            direct_path = (
+                source
+                if isinstance(source, Path)
+                and Path(relative_name).suffix.lower() not in {".pdf", ".docx", ".zip"}
+                else None
+            )
             try:
                 for item in _iter_source(filename, source):
-                    yield item
+                    yield (*item, direct_path)
                     count += 1
                     if _limit_reached(count, MAX_DATASET_SAMPLES):
                         return
@@ -772,13 +779,13 @@ def create_dataset(
                     source_consumed_callback(filename, source)
         if source_url:
             for item in _web_images(source_url):
-                yield item
+                yield (*item, None)
                 count += 1
                 if _limit_reached(count, MAX_DATASET_SAMPLES):
                     return
 
     try:
-        for index, (sample_name, payload, source, relative_path) in enumerate(extracted_items(), 1):
+        for index, (sample_name, payload, source, relative_path, direct_path) in enumerate(extracted_items(), 1):
             digest = hashlib.sha256(payload).hexdigest()
             if digest in seen:
                 continue
@@ -786,8 +793,16 @@ def create_dataset(
             mime, width, height, suffix = _image_payload(payload)
             stored_name = f"{index:04d}-{digest[:16]}{suffix}"
             path = dataset_dir / stored_name
-            _ensure_storage_capacity(len(payload))
-            path.write_bytes(payload)
+            linked = False
+            if direct_path is not None:
+                try:
+                    os.link(direct_path, path)
+                    linked = True
+                except OSError:
+                    linked = False
+            if not linked:
+                _ensure_storage_capacity(len(payload))
+                path.write_bytes(payload)
             os.chmod(path, 0o600)
             safe_sample_name = _safe_name(sample_name, f"sample-{index}")
             safe_relative_path = _safe_relative_path(relative_path, safe_sample_name)

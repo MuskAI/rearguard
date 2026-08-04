@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from urllib.parse import unquote, urlparse
 
 import requests
-from flask import Blueprint, Response, g, jsonify, redirect, render_template, request, send_file, session, url_for
+from flask import Blueprint, Response, g, jsonify, redirect, render_template, request, send_file, session, stream_with_context, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from imagedetection.decision_labels import binary_final_label
@@ -487,6 +487,183 @@ def _admin_csrf_protect():
     if not _csrf_valid():
         return _csrf_error_response()
     return None
+
+
+def _internal_testing_remote_url():
+    value = str(os.environ.get("REALGUARD_INTERNAL_TESTING_REMOTE_URL") or "").strip().rstrip("/")
+    if not value:
+        return ""
+    parsed = urlparse(value)
+    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        raise ValueError("内部评测远程地址必须使用本机回环隧道")
+    return value
+
+
+def _internal_testing_remote_model():
+    path = request.path.rstrip("/")
+    model_id = ""
+    if request.method == "POST" and path == "/api/admin/testing/runs":
+        model_id = str((request.get_json(silent=True) or {}).get("modelId") or "")
+    elif request.method == "POST" and path == "/api/admin/testing/dataset-imports":
+        payload = request.get_json(silent=True) or {}
+        if payload.get("streamEvaluation"):
+            model_id = str(payload.get("modelId") or "")
+    elif request.method == "POST" and path == "/api/admin/testing/load-tests":
+        model_id = str(request.headers.get("X-RealGuard-Testing-Model-Id") or "")
+        if not model_id:
+            raise ValueError("后台页面版本过旧，请刷新页面后重新启动压测")
+    if not model_id:
+        return None
+    model, message = _internal_testing_model(model_id)
+    if message:
+        raise ValueError(message)
+    return model
+
+
+def _internal_testing_remote_audit(user, status_code):
+    if status_code >= 400 or request.method in {"GET", "HEAD", "OPTIONS"}:
+        return
+    path = request.path.rstrip("/")
+    action = "testing.remote.mutate"
+    target = path.rsplit("/", 1)[-1] or "internal-testing"
+    if path == "/api/admin/testing/dataset-imports":
+        action, target = "testing.dataset_import.create", "dataset-import"
+    elif path.endswith("/finalize"):
+        action, target = "testing.dataset_import.finalize", path.split("/")[-2]
+    elif "/dataset-imports/" in path and request.method == "DELETE":
+        action = "testing.dataset_import.delete"
+    elif path == "/api/admin/testing/runs":
+        action, target = "testing.evaluation.start", "evaluation"
+    elif path == "/api/admin/testing/load-tests":
+        action, target = "testing.load.start", "load-test"
+    elif path.endswith("/cancel"):
+        action, target = "testing.run.cancel", path.split("/")[-2]
+    elif "/datasets/" in path and request.method == "DELETE":
+        action = "testing.dataset.delete"
+    elif "/samples/" in path:
+        action = "testing.sample.label"
+    try:
+        _audit(user, action, target, meta={"dataHost": "10.1.20.66"})
+    except Exception:
+        # The remote mutation has already committed. Audit availability must not
+        # turn a successful upload into a browser retry and duplicate the chunk.
+        pass
+
+
+@admin_blueprint.before_request
+def _proxy_remote_internal_testing():
+    if not request.path.startswith("/api/admin/testing/"):
+        return None
+    try:
+        remote_url = _internal_testing_remote_url()
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 503
+    if not remote_url:
+        return None
+    permission = (
+        "testing.load"
+        if request.path.rstrip("/") == "/api/admin/testing/load-tests"
+        else "testing.view" if request.method in {"GET", "HEAD", "OPTIONS"}
+        else "testing.run"
+    )
+    user, error = _admin_required(permission)
+    if error:
+        return error
+    token = str(os.environ.get("REALGUARD_INTERNAL_TESTING_TOKEN") or "").strip()
+    if not token:
+        return jsonify({
+            "status": "error",
+            "message": "内部评测远程存储尚未完成配置",
+        }), 503
+    try:
+        model = _internal_testing_remote_model()
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+
+    actor_id = str(user.get("adminId") or user.get("Userid") or "")
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-RealGuard-Actor-Id": actor_id,
+        "X-RealGuard-Actor-Name": str(user.get("username") or ""),
+    }
+    for name, value in request.headers.items():
+        lowered = name.lower()
+        if lowered.startswith("x-upload-") or lowered in {
+            "content-type", "content-length", "range", "if-modified-since", "if-none-match",
+        }:
+            headers[name] = value
+    if model:
+        encoded = base64.urlsafe_b64encode(
+            json.dumps(model, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        ).decode("ascii").rstrip("=")
+        headers["X-RealGuard-Testing-Model"] = encoded
+
+    body = None
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        if request.is_json:
+            body = request.get_data(cache=True)
+        else:
+            body = request.stream
+    remote = None
+    remote_session = requests.Session()
+    remote_session.trust_env = False
+    try:
+        remote = remote_session.request(
+            request.method,
+            f"{remote_url}{request.path}",
+            params=list(request.args.items(multi=True)),
+            headers=headers,
+            data=body,
+            timeout=(5, 900),
+            allow_redirects=False,
+            stream=True,
+        )
+    except requests.RequestException:
+        remote_session.close()
+        return jsonify({
+            "status": "error",
+            "message": "66 服务器的内部评测服务暂时不可达，上传断点已保留",
+        }), 503
+
+    content_type = str(remote.headers.get("Content-Type") or "")
+    if "application/json" in content_type:
+        content = remote.content
+        status_code = remote.status_code
+        response_headers = {
+            key: value for key, value in remote.headers.items()
+            if key.lower() in {"content-type", "retry-after"}
+        }
+        remote.close()
+        remote_session.close()
+        if request.path.rstrip("/") == "/api/admin/testing/overview" and status_code < 400:
+            try:
+                payload = json.loads(content.decode("utf-8"))
+                payload["system"] = _testing_system_snapshot()
+                payload["system"]["internalTestingStorage"] = payload.get("storage") or {}
+                content = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
+                pass
+        _internal_testing_remote_audit(user, status_code)
+        return Response(content, status=status_code, headers=response_headers)
+
+    passthrough_headers = {
+        key: value for key, value in remote.headers.items()
+        if key.lower() in {
+            "content-type", "content-length", "content-disposition", "etag",
+            "last-modified", "accept-ranges", "content-range",
+        }
+    }
+
+    @stream_with_context
+    def generate():
+        try:
+            yield from remote.iter_content(chunk_size=64 * 1024)
+        finally:
+            remote.close()
+            remote_session.close()
+
+    _internal_testing_remote_audit(user, remote.status_code)
+    return Response(generate(), status=remote.status_code, headers=passthrough_headers)
 
 
 @admin_blueprint.after_request

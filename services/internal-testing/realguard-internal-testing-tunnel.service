@@ -1,0 +1,15 @@
+[Unit]
+Description=RealGuard internal evaluation tunnel to the public application server
+After=network-online.target realguard-internal-testing.service
+Wants=network-online.target
+Requires=realguard-internal-testing.service
+
+[Service]
+Type=simple
+User=ymk
+ExecStart=/usr/bin/ssh -N -T -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=accept-new -i /home/ymk/.ssh/realguard_web_tunnel_ed25519 -R 127.0.0.1:15072:127.0.0.1:5072 -L 127.0.0.1:15001:127.0.0.1:15001 -L 127.0.0.1:18848:127.0.0.1:8848 ubuntu@124.221.92.85
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,23 @@
+[Unit]
+Description=RealGuard internal evaluation service on the algorithm server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ymk
+Group=ymk
+WorkingDirectory=/home/ymk/realguard-internal-testing/app
+EnvironmentFile=/etc/realguard/internal-testing.env
+ExecStart=/home/ymk/realguard-internal-testing/venv/bin/python -m gunicorn --worker-class gthread --workers 1 --threads 16 --timeout 900 --graceful-timeout 60 --keep-alive 5 --bind 127.0.0.1:5072 --access-logfile - --error-logfile - service:app
+Restart=always
+RestartSec=3
+TimeoutStopSec=75
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/mnt/sda1/ymk/realguard-internal-testing
+
+[Install]
+WantedBy=multi-user.target
