@@ -355,11 +355,15 @@
     .testing-logit-list{display:grid;gap:18px}
     .testing-unavailable{padding:14px;border-left:3px solid var(--amber);background:#fffaf1;color:#78521f;font-size:11px;line-height:1.6}
     .testing-result-note{display:flex;gap:16px;flex-wrap:wrap;font-size:10px;color:var(--muted)}
+    .testing-primary-score{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding:18px 0 20px;border-bottom:1px solid var(--line)}
+    .testing-primary-score span{display:block;font-size:11px;color:var(--muted);margin-bottom:5px}
+    .testing-primary-score strong{display:block;font-size:36px;line-height:1;font-variant-numeric:tabular-nums;color:var(--green)}
+    .testing-primary-score small{max-width:360px;text-align:right;color:var(--muted);font-size:10px;line-height:1.6}
     @media(max-width:1280px){.testing-workbench{grid-template-columns:1fr}.testing-status{grid-template-columns:repeat(2,minmax(0,1fr))}.testing-status-item:nth-child(2){border-right:0}.testing-status-item:nth-child(-n+2){border-bottom:1px solid var(--line-soft)}.testing-analysis-grid{grid-template-columns:1fr}}
     @media(max-width:1280px){.dashboard-grid,.model-workbench{grid-template-columns:1fr}.side-stack{position:static}.models{grid-template-columns:1fr}.host-strip{grid-template-columns:repeat(3,minmax(0,1fr))}}
     @media(max-width:1280px){.assurance-grid{grid-template-columns:1fr}}
     @media(max-width:960px){.app{grid-template-columns:76px minmax(0,1fr)}.brand-title,.brand-sub,.nav-text,.nav-label{display:none}.nav-item{justify-content:center}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.secondary-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.secondary-item:nth-child(3){padding-left:0;border-left:0}.account-name{display:none}}
-    @media(max-width:720px){.testing-folder-head{align-items:stretch;flex-direction:column}.testing-folder-head .btn{justify-content:center}.testing-folder-summary-head{align-items:flex-start;flex-direction:column;gap:4px}.testing-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.testing-kpi:nth-child(4n){border-right:1px solid var(--line)}.testing-kpi:nth-child(2n){border-right:0}.testing-kpi:nth-last-child(-n+4){border-bottom:1px solid var(--line)}.testing-kpi:nth-last-child(-n+2){border-bottom:0}.testing-resource-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.testing-resource-item:nth-child(2){border-right:0}.testing-resource-item:nth-child(-n+2){border-bottom:1px solid var(--line)}.testing-report-head{align-items:flex-start;flex-direction:column}.testing-histogram{height:140px;gap:3px}}
+    @media(max-width:720px){.testing-folder-head{align-items:stretch;flex-direction:column}.testing-folder-head .btn{justify-content:center}.testing-folder-summary-head{align-items:flex-start;flex-direction:column;gap:4px}.testing-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.testing-kpi:nth-child(4n){border-right:1px solid var(--line)}.testing-kpi:nth-child(2n){border-right:0}.testing-kpi:nth-last-child(-n+4){border-bottom:1px solid var(--line)}.testing-kpi:nth-last-child(-n+2){border-bottom:0}.testing-resource-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.testing-resource-item:nth-child(2){border-right:0}.testing-resource-item:nth-child(-n+2){border-bottom:1px solid var(--line)}.testing-report-head,.testing-primary-score{align-items:flex-start;flex-direction:column}.testing-primary-score small{text-align:left}.testing-histogram{height:140px;gap:3px}}
     @media(max-width:720px){.app{display:block}.sidebar{height:auto;position:relative;display:flex;gap:8px;padding:8px 10px;overflow-x:auto}.brand{flex:0 0 auto}.nav-group{display:flex;margin-top:0;gap:5px}.nav-label{display:none}.nav-item{width:auto;min-width:max-content;flex:0 0 auto;padding:0 11px}.nav-text{display:inline!important}.topbar{height:56px;padding:0 12px}.crumbs>span{display:none}.top-actions{gap:6px}.sync-status{display:none}.account-popover{position:fixed;right:12px;top:62px}.content{padding:16px 12px 36px}.workspace-heading{align-items:flex-start}.overall-health{max-width:54%;align-items:flex-start}.metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.metric{padding:13px}.metric strong{font-size:22px}.secondary-grid{grid-template-columns:1fr}.secondary-item,.secondary-item:nth-child(3){padding:8px 0;border-left:0;border-top:1px solid var(--line-soft)}.secondary-item:first-child{border-top:0}.model-card.editor .kv,.kv{grid-template-columns:1fr}.panel{padding:14px}.disclosure{padding:0}.panel-head{align-items:flex-start;flex-direction:column}.panel-head .action-row{width:100%}.toolbar{align-items:stretch}.toolbar .input,.toolbar .select,.toolbar .btn{width:100%;flex:1 1 auto;justify-content:center}.route-summary-row{display:grid}.data-table{min-width:640px}.compact-table table{min-width:520px}.host-strip{grid-template-columns:1fr}.host-stat{border-right:0;border-bottom:1px solid var(--line)}.operation-row{grid-template-columns:30px minmax(0,1fr)}.operation-value{grid-column:2;text-align:left}#view-testing .workspace-heading{display:block}#view-testing .workspace-heading>.action-row{width:auto;margin-top:12px}#view-testing .workspace-heading>.action-row .btn{width:auto}.testing-status,.testing-form-grid,.testing-metrics,.testing-stream-mode{grid-template-columns:1fr}.testing-status-item{border-right:0;border-bottom:1px solid var(--line-soft)}.testing-status-item:last-child{border-bottom:0}.testing-form-grid .span-2{grid-column:auto}.toast{left:14px;right:14px;bottom:14px}.dialog-actions{display:grid;grid-template-columns:1fr 1fr}.dialog-actions .btn{justify-content:center;min-height:44px}}
     @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
   </style>
@@ -634,7 +638,7 @@
 
             <section class="panel">
               <div class="panel-head">
-                <div><h2>2. 启动模型评测</h2><p>真值样本会计算混淆矩阵、Accuracy、Precision、Recall 和 F1。</p></div>
+                <div><h2>2. 启动模型评测</h2><p>真值样本会计算准确率、混淆矩阵、精确率、召回率和 F1。</p></div>
               </div>
               <form class="compact-form" onsubmit="startTestingEvaluation(event)">
                 <label>测试数据集<select class="select" id="testingEvalDataset" required></select></label>
@@ -1685,18 +1689,23 @@
       );
       const runs=data.runs || [];
       $('testingRuns').innerHTML=table(
-        ['任务','目标','进度','状态','操作'],
+        ['任务','目标','进度','准确率','状态','操作'],
         runs.slice(0,30).map(run=>{
           const total=Number(run.total_count || 0);
           const completed=Number(run.completed_count || 0);
           const progress=total ? Math.min(100,Math.round(completed/total*100)) : 0;
           const active=['queued','running','cancel_requested'].includes(run.status);
+          const runMetrics=run.metrics || {};
+          const accuracy=run.kind==='evaluation'
+            ? (runMetrics.accuracy==null?'<span class="muted">无法计算</span>':`<strong>${testingPercent(runMetrics.accuracy)}</strong><br><span class="muted">${runMetrics.labeledCount ?? 0} 个有效样本</span>`)
+            : '<span class="muted">不适用</span>';
           return `<tr>
             <td><strong>${run.kind==='load_test'?'压力测试':'模型评测'}</strong><br><span class="mono">${esc(run.id)}</span></td>
             <td>${esc(run.model_name || run.model_id)}</td>
             <td>${completed}/${total}<div class="testing-progress"><span style="transform:scaleX(${progress/100})"></span></div></td>
+            <td>${accuracy}</td>
             <td>${testingRunStatus(run.status)}</td>
-            <td><div class="testing-table-actions"><button class="btn mini secondary" onclick="openTestingRun('${esc(run.id)}')">结果</button>${active&&can('testing.run')?`<button class="btn mini secondary" onclick="cancelTestingRun('${esc(run.id)}')">停止</button>`:''}</div></td>
+            <td><div class="testing-table-actions"><button class="btn mini secondary" onclick="openTestingRun('${esc(run.id)}')">查看报告</button>${active&&can('testing.run')?`<button class="btn mini secondary" onclick="cancelTestingRun('${esc(run.id)}')">停止</button>`:''}</div></td>
           </tr>`;
         }),
         '还没有测试任务'
@@ -2190,7 +2199,7 @@
       const groupMetrics=metrics.groupMetrics || [];
       const dimensionLabels={domain:'数据域',source_class:'源类别',generation_type:'生成类型',generator:'生成器',review_sentiment:'评论类别',review_group:'Review 分组',transform:'图像变换'};
       const metricItems=isEvaluation ? [
-        ['Accuracy',testingPercent(metrics.accuracy),'总体正确率'],
+        ['准确率 Accuracy',testingPercent(metrics.accuracy),'总体正确率'],
         ['ROC-AUC',metrics.auc==null?'--':Number(metrics.auc).toFixed(3),'分数排序能力'],
         ['F1',testingPercent(metrics.f1),'Precision 与 Recall 的调和平均'],
         ['Balanced Acc.',testingPercent(metrics.balancedAccuracy),'平衡真实与生成类别'],
@@ -2233,6 +2242,7 @@
           <div class="testing-progress"><span style="transform:scaleX(${progress/100})"></span></div>
           <div class="testing-progress-meta"><span>成功 ${resultSummary.successCount ?? metrics.successCount ?? 0}</span><span>失败 ${resultSummary.failureCount ?? metrics.failureCount ?? 0}</span><span>${['queued','running','cancel_requested'].includes(run.status)?'结果持续刷新中':'任务已停止更新'}</span></div>
         </div>
+        ${isEvaluation?`<div class="testing-primary-score"><div><span>本次评测准确率</span><strong>${metrics.accuracy==null?'无法计算':testingPercent(metrics.accuracy)}</strong></div><small>${metrics.accuracy==null?'数据集中缺少可用真值标签，无法计算准确率。':`基于 ${metrics.labeledCount ?? 0} 个有真值且产生有效预测的样本；共提交 ${metrics.sampleCount ?? total} 个样本。`}</small></div>`:''}
         <section class="testing-report-section">
           <div class="testing-report-head"><div><h3>${isEvaluation?'评测结论':'压测结论'}</h3><p>${isEvaluation?'默认以 fake 为正类，阈值 0.5。':'吞吐与延迟基于本次真实请求。'}</p></div><span class="status ${Number(metrics.failureCount || 0)?'warn':'ok'}">${Number(metrics.failureCount || 0)?`${metrics.failureCount} 个失败`:'全部完成'}</span></div>
           <div class="testing-kpi-grid">${metricItems.map(([label,value,hint])=>`<div class="testing-kpi"><small>${esc(label)}</small><strong>${esc(value)}</strong><span>${esc(hint)}</span></div>`).join('')}</div>

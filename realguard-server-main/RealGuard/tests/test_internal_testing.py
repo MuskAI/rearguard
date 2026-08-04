@@ -787,6 +787,9 @@ def test_admin_page_contains_internal_testing_workspace(client):
     assert "/api/admin/testing/dataset-imports" in html
     assert "uploadTestingChunkedFile" in html
     assert "测试时间与资源消耗" in html
+    assert "本次评测准确率" in html
+    assert "查看报告" in html
+    assert "准确率 Accuracy" in html
     assert "分数分布与混淆矩阵" in html
     assert "Logits 分布" in html
     assert "不从概率反推" in html
