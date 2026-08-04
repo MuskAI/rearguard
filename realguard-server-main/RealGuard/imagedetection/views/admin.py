@@ -17,7 +17,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from http.client import HTTPResponse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import requests
 from flask import Blueprint, Response, g, jsonify, redirect, render_template, request, send_file, session, url_for
@@ -2928,22 +2928,30 @@ def admin_testing_upload_import_chunk(import_id):
     _, error = _admin_required("testing.run")
     if error:
         return error
-    uploaded = request.files.get("chunk")
-    if not uploaded:
+    is_raw_chunk = request.mimetype == "application/octet-stream"
+    uploaded = None if is_raw_chunk else request.files.get("chunk")
+    chunk = request.stream if is_raw_chunk else (uploaded.stream if uploaded else None)
+    if chunk is None:
         return jsonify({"status": "error", "message": "缺少文件分块"}), 400
+    values = request.headers if is_raw_chunk else request.form
+    prefix = "X-Upload-" if is_raw_chunk else ""
+    upload_id = values.get(f"{prefix}Id") or ""
+    relative_path = values.get(f"{prefix}Relative-Path") or ""
+    if is_raw_chunk:
+        relative_path = unquote(relative_path)
     try:
         import_session = internal_testing.add_import_chunk(
             import_id,
-            upload_id=request.form.get("uploadId") or "",
-            relative_path=request.form.get("relativePath") or uploaded.filename or "archive.zip",
-            chunk_index=int(request.form.get("chunkIndex") or 0),
-            total_chunks=int(request.form.get("totalChunks") or 0),
+            upload_id=upload_id,
+            relative_path=relative_path or (uploaded.filename if uploaded else "archive.zip"),
+            chunk_index=int(values.get(f"{prefix}Chunk-Index" if is_raw_chunk else "chunkIndex") or 0),
+            total_chunks=int(values.get(f"{prefix}Total-Chunks" if is_raw_chunk else "totalChunks") or 0),
             expected_bytes=(
-                int(request.form.get("expectedBytes"))
-                if request.form.get("expectedBytes") not in (None, "")
+                int(values.get(f"{prefix}Expected-Bytes" if is_raw_chunk else "expectedBytes"))
+                if values.get(f"{prefix}Expected-Bytes" if is_raw_chunk else "expectedBytes") not in (None, "")
                 else None
             ),
-            chunk=uploaded.stream,
+            chunk=chunk,
         )
     except (TypeError, ValueError) as exc:
         return jsonify({"status": "error", "message": str(exc)}), 400

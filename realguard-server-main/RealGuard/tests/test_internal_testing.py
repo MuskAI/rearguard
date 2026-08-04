@@ -760,6 +760,38 @@ def test_admin_resumable_dataset_import_api(client):
     assert status.get_json()["importSession"]["datasetId"] == completed["datasetId"]
 
 
+def test_admin_accepts_raw_binary_import_chunks(client):
+    _login(client, "operator")
+    image = _png_bytes()
+    created = client.post(
+        "/api/admin/testing/dataset-imports",
+        json={"name": "raw chunk import", "expectedFiles": 1, "expectedBytes": len(image)},
+        headers=_csrf(client),
+    )
+    import_id = created.get_json()["importSession"]["id"]
+    uploaded = client.post(
+        f"/api/admin/testing/dataset-imports/{import_id}/chunks",
+        data=image,
+        content_type="application/octet-stream",
+        headers={
+            **_csrf(client),
+            "X-Upload-Id": "raw_chunk_upload_001",
+            "X-Upload-Relative-Path": "nested%2Freal%2Fphoto.png",
+            "X-Upload-Chunk-Index": "0",
+            "X-Upload-Total-Chunks": "1",
+            "X-Upload-Expected-Bytes": str(len(image)),
+        },
+    )
+
+    assert uploaded.status_code == 200
+    assert uploaded.get_json()["importSession"]["validatedFiles"] == 1
+    resumed = internal_testing.get_import_resume_state(import_id, [{
+        "relativePath": "nested/real/photo.png",
+        "byteSize": len(image),
+    }])
+    assert resumed["completedFiles"][0]["relativePath"] == "nested/real/photo.png"
+
+
 def test_admin_can_start_streaming_folder_evaluation(client, monkeypatch):
     _login(client, "operator")
     monkeypatch.setattr(admin, "_internal_testing_model", lambda model_id: ({

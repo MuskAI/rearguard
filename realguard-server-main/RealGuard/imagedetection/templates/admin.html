@@ -942,6 +942,38 @@
       try{ return await requestPromise; }
       finally{ mutationRequests.delete(mutationKey); }
     }
+    async function uploadBlobApi(url, blob, metadata, onProgress){
+      const mutationKey=`POST:${url}`;
+      if(mutationRequests.has(mutationKey)) throw new Error('该操作正在处理中，请稍候');
+      const requestPromise=new Promise((resolve,reject)=>{
+        const xhr=new XMLHttpRequest();
+        xhr.open('POST',url,true);
+        xhr.setRequestHeader('Content-Type','application/octet-stream');
+        xhr.setRequestHeader('X-CSRF-Token',CSRF_TOKEN);
+        Object.entries(metadata || {}).forEach(([key,value])=>xhr.setRequestHeader(key,String(value)));
+        xhr.upload.onprogress=(event)=>{
+          if(typeof onProgress==='function' && event.lengthComputable){
+            onProgress({loaded:event.loaded,total:event.total,percent:Math.min(100,Math.round(event.loaded/event.total*100)),processing:false});
+          }
+        };
+        xhr.upload.onload=()=>{ if(typeof onProgress==='function') onProgress({loaded:blob.size,total:blob.size,percent:100,processing:true}); };
+        xhr.onerror=()=>reject(apiRequestError('网络连接失败，当前分块未完成'));
+        xhr.ontimeout=()=>reject(apiRequestError('上传超时，请检查网络后重试'));
+        xhr.onload=()=>{
+          const data=parseApiPayload(xhr.status,xhr.statusText,xhr.responseText);
+          if(xhr.status===401){ location.href='/admin/login'; reject(apiRequestError('后台会话已过期，请重新登录',401)); return; }
+          if(xhr.status<200 || xhr.status>=300 || data.status==='error'){
+            reject(apiRequestError(data.message || `HTTP ${xhr.status}`,xhr.status,xhr.getResponseHeader('Retry-After')));
+            return;
+          }
+          resolve(data);
+        };
+        xhr.send(blob);
+      });
+      mutationRequests.set(mutationKey,requestPromise);
+      try{ return await requestPromise; }
+      finally{ mutationRequests.delete(mutationKey); }
+    }
     function statusPill(health){
       if(!health) return '<span class="status warn">unchecked</span>';
       if(health.ok) return '<span class="status ok">online</span>';
@@ -1923,14 +1955,15 @@
       for(let index=firstChunk;index<totalChunks;index++){
         ensureTestingUploadContinues();
         const start=index*chunkSize, end=Math.min(file.size,start+chunkSize);
-        const form=new FormData();
-        form.set('uploadId',uploadId);
-        form.set('relativePath',relativePath);
-        form.set('chunkIndex',String(index));
-        form.set('totalChunks',String(totalChunks));
-        form.set('expectedBytes',String(file.size));
-        form.set('chunk',file.slice(start,end),file.name);
-        const data=await retryTestingUpload(()=>uploadApi(`/api/admin/testing/dataset-imports/${encodeURIComponent(importId)}/chunks`,form,progress=>{
+        const chunk=file.slice(start,end);
+        const metadata={
+          'X-Upload-Id':uploadId,
+          'X-Upload-Relative-Path':encodeURIComponent(relativePath),
+          'X-Upload-Chunk-Index':index,
+          'X-Upload-Total-Chunks':totalChunks,
+          'X-Upload-Expected-Bytes':file.size,
+        };
+        const data=await retryTestingUpload(()=>uploadBlobApi(`/api/admin/testing/dataset-imports/${encodeURIComponent(importId)}/chunks`,chunk,metadata,progress=>{
           onBytes(start+(progress.loaded || 0));
         }));
         latest=data.importSession;
@@ -2210,50 +2243,21 @@
         button.textContent='正在核对服务器断点…';
         await reconcileTestingUpload(importId,selected);
         let sentBytes=Math.max(0,Number(session.uploadedBytes || 0));
-        const direct=[];
-        const flushDirect=async()=>{
-          if(!direct.length) return;
-          ensureTestingUploadContinues();
-          const batch=direct.splice(0,direct.length);
-          const batchBytes=batch.reduce((sum,item)=>sum+item.file.size,0);
-          const base=sentBytes;
-          const data=await retryTestingUpload(()=>{
-            const form=new FormData();
-            batch.forEach(item=>form.append('files',item.file,item.relativePath));
-            return uploadApi(`/api/admin/testing/dataset-imports/${encodeURIComponent(importId)}/files`,form,progress=>{
-            const approximate=base+batchBytes*((progress.percent || 0)/100);
-            renderTestingImport(session,totalBytes?approximate/totalBytes*100:0);
-            button.textContent=`正在上传 ${totalBytes?Math.min(99,Math.round(approximate/totalBytes*100)):0}%`;
-            });
-          });
-          session=data.importSession;
-          sentBytes+=batchBytes;
-          batch.forEach(item=>state.testingImportedPaths.add(item.relativePath));
-          renderTestingImport(session,totalBytes?sentBytes/totalBytes*100:0);
-        };
-        let directBytes=0;
         for(const file of selected){
           ensureTestingUploadContinues();
           const relativePath=testingRelativePath(file);
           if(state.testingImportedPaths.has(relativePath)||state.testingRejectedPaths.has(relativePath)) continue;
-          if(file.size>8*1024*1024){
-            await flushDirect(); directBytes=0;
-            const checkpoint=state.testingPendingChunks.get(relativePath);
-            const savedBytes=Math.min(file.size,Number(checkpoint?.byteSize || 0));
-            const base=Math.max(0,sentBytes-savedBytes);
-            session=await uploadTestingChunkedFile(importId,file,relativePath,current=>{
-              const approximate=base+current;
-              renderTestingImport(session,totalBytes?approximate/totalBytes*100:0);
-              button.textContent=`正在上传 ${totalBytes?Math.min(99,Math.round(approximate/totalBytes*100)):0}%`;
-            }) || session;
-            sentBytes=base+file.size;
-            state.testingImportedPaths.add(relativePath);
-          }else{
-            if(direct.length>=30 || directBytes+file.size>16*1024*1024){ await flushDirect(); directBytes=0; }
-            direct.push({file,relativePath}); directBytes+=file.size;
-          }
+          const checkpoint=state.testingPendingChunks.get(relativePath);
+          const savedBytes=Math.min(file.size,Number(checkpoint?.byteSize || 0));
+          const base=Math.max(0,sentBytes-savedBytes);
+          session=await uploadTestingChunkedFile(importId,file,relativePath,current=>{
+            const approximate=base+current;
+            renderTestingImport(session,totalBytes?approximate/totalBytes*100:0);
+            button.textContent=`正在上传 ${totalBytes?Math.min(99,Math.round(approximate/totalBytes*100)):0}%`;
+          }) || session;
+          sentBytes=base+file.size;
+          state.testingImportedPaths.add(relativePath);
         }
-        await flushDirect();
         ensureTestingUploadContinues();
         button.textContent='正在提交后台建库…';
         const finalized=await api(`/api/admin/testing/dataset-imports/${encodeURIComponent(importId)}/finalize`,{method:'POST',body:'{}'});

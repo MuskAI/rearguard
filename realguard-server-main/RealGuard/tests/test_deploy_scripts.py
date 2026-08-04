@@ -90,7 +90,8 @@ def test_internal_dataset_import_uses_bounded_resumable_requests():
     assert "client_max_body_size 32m;" in location
     assert "proxy_request_buffering off;" in location
     assert "proxy_read_timeout 600s;" in location
-    assert "realguard-upload-proxy-security.conf" in location
+    assert "realguard-api-proxy-security.conf" in location
+    assert "realguard-upload-proxy-security.conf" not in location
     assert "realguard-api-proxy-security.conf" in resume_location
     assert "client_max_body_size 2m;" in resume_location
 
