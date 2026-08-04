@@ -173,7 +173,7 @@ class SplitCudaDetector:
             raise RuntimeError(f"unexpected split worker status: {status}")
         return np.asarray(payload)
 
-    def predict_pil(self, image: Image.Image) -> dict[str, float]:
+    def predict_pil(self, image: Image.Image) -> dict[str, Any]:
         import sys
 
         package = str(self.package_dir)
@@ -192,13 +192,14 @@ class SplitCudaDetector:
             stage2.send(("run", (hidden, array)))
             logits = self._receive(stage2)
 
-        values = np.asarray(logits, dtype=np.float64)
-        values -= np.max(values, axis=1, keepdims=True)
+        raw_values = np.asarray(logits, dtype=np.float64)
+        values = raw_values - np.max(raw_values, axis=1, keepdims=True)
         probabilities = np.exp(values)
         probabilities /= np.sum(probabilities, axis=1, keepdims=True)
         return {
             "real_probability": float(probabilities[0, 0]),
             "fake_probability": float(probabilities[0, 1]),
+            "logits": [float(value) for value in raw_values[0].tolist()],
         }
 
     def close(self) -> None:

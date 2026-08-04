@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import os
+import subprocess
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -66,6 +67,8 @@ _PRECHECK_FIELDS = (
     "positiveEvidenceAvailable",
     "completeVisibleScan",
 )
+_GPU_CACHE_LOCK = threading.Lock()
+_GPU_CACHE: dict[str, Any] = {"sampledAtMonotonic": 0.0, "payload": None}
 
 
 class ModelRuntime:
@@ -159,6 +162,59 @@ def _confidence_level(fake_probability: float) -> str:
     return "低"
 
 
+def _gpu_snapshot() -> dict[str, Any]:
+    now = time.monotonic()
+    with _GPU_CACHE_LOCK:
+        if _GPU_CACHE["payload"] is not None and now - _GPU_CACHE["sampledAtMonotonic"] < 0.2:
+            return dict(_GPU_CACHE["payload"])
+        fields = (
+            "index,name,utilization.gpu,memory.used,memory.total,"
+            "temperature.gpu,power.draw"
+        )
+        try:
+            result = subprocess.run(
+                [
+                    "nvidia-smi", f"--query-gpu={fields}",
+                    "--format=csv,noheader,nounits",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            devices = []
+            for line in result.stdout.splitlines():
+                parts = [part.strip() for part in line.split(",")]
+                if len(parts) != 7:
+                    continue
+
+                def number(value: str) -> float | None:
+                    try:
+                        return float(value)
+                    except ValueError:
+                        return None
+
+                devices.append({
+                    "index": int(parts[0]),
+                    "name": parts[1],
+                    "utilizationPercent": number(parts[2]),
+                    "memoryUsedMb": number(parts[3]),
+                    "memoryTotalMb": number(parts[4]),
+                    "temperatureC": number(parts[5]),
+                    "powerWatts": number(parts[6]),
+                })
+            payload = {
+                "available": bool(devices),
+                "devices": devices,
+                "sampledAt": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        except (OSError, subprocess.SubprocessError):
+            payload = {"available": False, "devices": [], "sampledAt": ""}
+        _GPU_CACHE["sampledAtMonotonic"] = now
+        _GPU_CACHE["payload"] = payload
+        return dict(payload)
+
+
 def _health_payload() -> dict[str, Any]:
     split_ready = (SPLIT_DIR / "stage1.onnx").is_file() and (
         SPLIT_DIR / "stage2.onnx"
@@ -200,6 +256,7 @@ def _health_payload() -> dict[str, Any]:
         "loadedAt": runtime.loaded_at,
         "error": runtime.error,
         "queueDepth": 0,
+        "gpu": _gpu_snapshot(),
         "warnings": warnings,
     }
 
@@ -375,6 +432,12 @@ def predict_image():
             }
         },
     }
+    raw_logits = result.get("logits")
+    if isinstance(raw_logits, (list, tuple)) and raw_logits:
+        data["modelOutput"] = {
+            "logits": [float(value) for value in raw_logits],
+            "classOrder": ["real", "fake"],
+        }
     return jsonify({"code": 200, "msg": "success", "data": data})
 
 

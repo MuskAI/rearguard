@@ -14,6 +14,7 @@ class FakeDetector:
         return {
             "fake_probability": 0.87,
             "real_probability": 0.13,
+            "logits": [-0.75, 1.15],
         }
 
 
@@ -54,6 +55,8 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(payload["data"]["final_label"], "AI生成图像")
         self.assertEqual(payload["data"]["fake_percentage"], 87.0)
         self.assertEqual(payload["data"]["decisionStatus"], "review_only")
+        self.assertEqual(payload["data"]["modelOutput"]["logits"], [-0.75, 1.15])
+        self.assertEqual(payload["data"]["modelOutput"]["classOrder"], ["real", "fake"])
         self.assertEqual(
             payload["data"]["remote_evidence"]["visibleWatermarkPrecheck"]["status"],
             "unavailable",

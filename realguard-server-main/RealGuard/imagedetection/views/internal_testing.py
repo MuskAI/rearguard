@@ -9,6 +9,7 @@ import math
 import mimetypes
 import os
 import re
+import resource
 import shutil
 import socket
 import sqlite3
@@ -1581,6 +1582,7 @@ def add_import_chunk(
 
 
 def _create_stream_evaluation(import_id: str, dataset_id: str, payload: dict) -> dict:
+    started_monotonic = time.monotonic()
     model = payload.get("model") or {}
     concurrency = max(
         1,
@@ -1671,6 +1673,8 @@ def _create_stream_evaluation(import_id: str, dataset_id: str, payload: dict) ->
             completed.append(result_from_cache(sample, cached_row))
         else:
             missing.append(sample)
+    resource_monitor = _ResourceMonitor(model)
+    resource_monitor.start()
     if missing:
         with ThreadPoolExecutor(max_workers=concurrency) as pool:
             futures = {pool.submit(evaluate, sample): sample for sample in missing}
@@ -1715,11 +1719,21 @@ def _create_stream_evaluation(import_id: str, dataset_id: str, payload: dict) ->
             ],
         )
         connection.commit()
+    metrics = _evaluation_metrics(completed)
+    metrics["timing"] = _timing_metrics(
+        time.monotonic() - started_monotonic,
+        completed,
+        concurrency=concurrency,
+        allow_latency_estimate=not missing,
+    )
+    metrics["resourceUsage"] = resource_monitor.finish()
+    if not missing:
+        metrics["resourceUsage"]["note"] = "样本在上传阶段已完成检测；此处资源值仅覆盖评测结果汇总。"
     _set_run(
         run_id,
         status="completed",
         completed_count=len(completed),
-        metrics_json=json.dumps(_evaluation_metrics(completed), ensure_ascii=False),
+        metrics_json=json.dumps(metrics, ensure_ascii=False),
         finished_at=_now(),
     )
     return _run_row(run_id) or {}
@@ -1998,6 +2012,288 @@ def _percentile(values: list[int], percentile: float) -> int | None:
     return int(ordered[index])
 
 
+def _finite_number(value) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _numeric_summary(values: list[float]) -> dict:
+    clean = [float(value) for value in values if _finite_number(value) is not None]
+    if not clean:
+        return {"count": 0, "min": None, "max": None, "mean": None, "stdDev": None,
+                "p05": None, "p25": None, "p50": None, "p75": None, "p95": None}
+    ordered = sorted(clean)
+
+    def percentile(fraction: float) -> float:
+        if len(ordered) == 1:
+            return ordered[0]
+        position = (len(ordered) - 1) * fraction
+        lower = math.floor(position)
+        upper = math.ceil(position)
+        if lower == upper:
+            return ordered[lower]
+        return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
+
+    return {
+        "count": len(clean),
+        "min": round(ordered[0], 6),
+        "max": round(ordered[-1], 6),
+        "mean": round(statistics.fmean(clean), 6),
+        "stdDev": round(statistics.pstdev(clean), 6) if len(clean) > 1 else 0.0,
+        "p05": round(percentile(0.05), 6),
+        "p25": round(percentile(0.25), 6),
+        "p50": round(percentile(0.50), 6),
+        "p75": round(percentile(0.75), 6),
+        "p95": round(percentile(0.95), 6),
+    }
+
+
+def _histogram(values: list[float], *, bins: int = 10,
+               lower: float | None = None, upper: float | None = None) -> dict:
+    clean = [float(value) for value in values if _finite_number(value) is not None]
+    if not clean:
+        return {"count": 0, "lower": None, "upper": None, "bins": []}
+    minimum = min(clean) if lower is None else float(lower)
+    maximum = max(clean) if upper is None else float(upper)
+    if maximum <= minimum:
+        padding = max(abs(minimum) * 0.05, 0.5)
+        minimum -= padding
+        maximum += padding
+    width = (maximum - minimum) / max(1, bins)
+    counts = [0] * max(1, bins)
+    for value in clean:
+        index = int((value - minimum) / width)
+        index = max(0, min(len(counts) - 1, index))
+        counts[index] += 1
+    return {
+        "count": len(clean),
+        "lower": round(minimum, 6),
+        "upper": round(maximum, 6),
+        "bins": [
+            {
+                "lower": round(minimum + index * width, 6),
+                "upper": round(minimum + (index + 1) * width, 6),
+                "count": count,
+            }
+            for index, count in enumerate(counts)
+        ],
+    }
+
+
+def _extract_logits(payload) -> tuple[list[float] | None, list[str]]:
+    """Return model logits only when the response explicitly names them as logits."""
+    candidates = {"logits", "rawlogits", "raw_logits", "classlogits", "class_logits"}
+    labels: list[str] = []
+
+    def visit(value, depth: int = 0):
+        nonlocal labels
+        if depth > 7:
+            return None
+        if isinstance(value, dict):
+            for key in ("classOrder", "class_order", "labels", "classes"):
+                raw_labels = value.get(key)
+                if isinstance(raw_labels, list) and all(isinstance(item, str) for item in raw_labels):
+                    labels = [str(item)[:80] for item in raw_labels[:32]]
+            for key, item in value.items():
+                normalized = str(key).replace("-", "_").lower()
+                if normalized in candidates:
+                    raw = item[0] if isinstance(item, list) and len(item) == 1 and isinstance(item[0], list) else item
+                    if isinstance(raw, (list, tuple)) and 1 <= len(raw) <= 32:
+                        numbers = [_finite_number(entry) for entry in raw]
+                        if all(number is not None for number in numbers):
+                            return [float(number) for number in numbers]
+                    scalar = _finite_number(raw)
+                    if scalar is not None:
+                        return [scalar]
+            for item in value.values():
+                found = visit(item, depth + 1)
+                if found is not None:
+                    return found
+        elif isinstance(value, list):
+            for item in value[:32]:
+                found = visit(item, depth + 1)
+                if found is not None:
+                    return found
+        return None
+
+    return visit(payload), labels
+
+
+def _binary_auc(items: list[dict]) -> float | None:
+    scored = [
+        (float(item["score"]), 1 if item.get("groundTruth") == "fake" else 0)
+        for item in items
+        if item.get("groundTruth") in {"real", "fake"}
+        and _finite_number(item.get("score")) is not None
+    ]
+    positives = sum(label for _, label in scored)
+    negatives = len(scored) - positives
+    if not positives or not negatives:
+        return None
+    ordered = sorted(scored, key=lambda pair: pair[0])
+    rank_sum = 0.0
+    index = 0
+    while index < len(ordered):
+        end = index + 1
+        while end < len(ordered) and ordered[end][0] == ordered[index][0]:
+            end += 1
+        average_rank = ((index + 1) + end) / 2.0
+        rank_sum += average_rank * sum(label for _, label in ordered[index:end])
+        index = end
+    return round((rank_sum - positives * (positives + 1) / 2) / (positives * negatives), 6)
+
+
+def _process_memory_mb() -> tuple[float | None, float | None]:
+    current = peak = None
+    try:
+        status = Path("/proc/self/status").read_text(encoding="utf-8")
+        for line in status.splitlines():
+            if line.startswith("VmRSS:"):
+                current = float(line.split()[1]) / 1024.0
+            elif line.startswith("VmHWM:"):
+                peak = float(line.split()[1]) / 1024.0
+    except (OSError, ValueError, IndexError):
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        divisor = 1024.0 if os.uname().sysname != "Darwin" else 1024.0 * 1024.0
+        peak = float(usage.ru_maxrss) / divisor
+    return current, peak
+
+
+def _host_memory_percent() -> float | None:
+    try:
+        values = {}
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            key, raw = line.split(":", 1)
+            values[key] = float(raw.strip().split()[0])
+        total = values.get("MemTotal", 0)
+        available = values.get("MemAvailable", 0)
+        return round((total - available) / total * 100.0, 2) if total else None
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+class _ResourceMonitor:
+    """Low-overhead run telemetry; process values cover the shared web worker."""
+
+    def __init__(self, model: dict) -> None:
+        self.model = dict(model or {})
+        self.started = time.monotonic()
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        self.cpu_started = float(usage.ru_utime + usage.ru_stime)
+        self.stop_event = threading.Event()
+        self.samples: list[dict] = []
+        self.model_samples: list[dict] = []
+        self.thread = threading.Thread(target=self._run, name="testing-resource-monitor", daemon=True)
+
+    def start(self) -> None:
+        self.thread.start()
+
+    def _sample_model(self) -> dict | None:
+        health_url = str(self.model.get("healthUrl") or "").strip()
+        if not health_url:
+            return None
+        try:
+            session = requests.Session()
+            session.trust_env = False
+            response = session.get(health_url, timeout=1.5, allow_redirects=False)
+            payload = response.json() if response.ok else {}
+            if not isinstance(payload, dict):
+                payload = {}
+            return {
+                "provider": str(payload.get("activeProvider") or ""),
+                "queueDepth": _finite_number(payload.get("queueDepth")),
+                "gpu": payload.get("gpu") if isinstance(payload.get("gpu"), dict) else None,
+            }
+        except (requests.RequestException, ValueError):
+            return None
+        finally:
+            try:
+                session.close()
+            except UnboundLocalError:
+                pass
+
+    def _capture(self) -> None:
+        rss, peak = _process_memory_mb()
+        try:
+            load1 = float(os.getloadavg()[0])
+        except (AttributeError, OSError):
+            load1 = None
+        self.samples.append({
+            "rssMb": rss,
+            "peakRssMb": peak,
+            "hostMemoryPercent": _host_memory_percent(),
+            "load1": load1,
+        })
+        model_sample = self._sample_model()
+        if model_sample:
+            self.model_samples.append(model_sample)
+
+    def _run(self) -> None:
+        while not self.stop_event.is_set():
+            self._capture()
+            self.stop_event.wait(0.25)
+
+    def finish(self) -> dict:
+        self._capture()
+        self.stop_event.set()
+        self.thread.join(timeout=2.0)
+        elapsed = max(time.monotonic() - self.started, 0.001)
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        cpu_seconds = max(0.0, float(usage.ru_utime + usage.ru_stime) - self.cpu_started)
+
+        def values(key: str) -> list[float]:
+            return [float(item[key]) for item in self.samples if _finite_number(item.get(key)) is not None]
+
+        gpu_devices: dict[str, list[dict]] = {}
+        for sample in self.model_samples:
+            gpu = sample.get("gpu") or {}
+            devices = gpu.get("devices") if isinstance(gpu.get("devices"), list) else []
+            for device in devices:
+                if isinstance(device, dict):
+                    gpu_devices.setdefault(str(device.get("index", "?")), []).append(device)
+        gpu_summary = []
+        for index, device_samples in sorted(gpu_devices.items()):
+            util = [_finite_number(item.get("utilizationPercent")) for item in device_samples]
+            used = [_finite_number(item.get("memoryUsedMb")) for item in device_samples]
+            total = next((_finite_number(item.get("memoryTotalMb")) for item in device_samples if _finite_number(item.get("memoryTotalMb")) is not None), None)
+            util = [item for item in util if item is not None]
+            used = [item for item in used if item is not None]
+            gpu_summary.append({
+                "index": index,
+                "utilizationMeanPercent": round(statistics.fmean(util), 2) if util else None,
+                "utilizationPeakPercent": round(max(util), 2) if util else None,
+                "memoryPeakMb": round(max(used), 1) if used else None,
+                "memoryTotalMb": total,
+            })
+        providers = [item.get("provider") for item in self.model_samples if item.get("provider")]
+        queue_depths = [item.get("queueDepth") for item in self.model_samples if item.get("queueDepth") is not None]
+        return {
+            "available": bool(self.samples),
+            "sampleCount": len(self.samples),
+            "samplingIntervalSeconds": 0.25,
+            "webProcess": {
+                "scope": "shared_worker_process",
+                "cpuSeconds": round(cpu_seconds, 3),
+                "averageCpuPercent": round(cpu_seconds / elapsed * 100.0, 2),
+                "rssPeakMb": round(max(values("peakRssMb") or values("rssMb")), 1) if values("peakRssMb") or values("rssMb") else None,
+            },
+            "host": {
+                "memoryPeakPercent": round(max(values("hostMemoryPercent")), 2) if values("hostMemoryPercent") else None,
+                "load1Peak": round(max(values("load1")), 2) if values("load1") else None,
+            },
+            "modelService": {
+                "sampleCount": len(self.model_samples),
+                "provider": providers[-1] if providers else "",
+                "queueDepthPeak": max(queue_depths) if queue_depths else None,
+                "gpus": gpu_summary,
+                "telemetryAvailable": bool(gpu_summary),
+            },
+        }
+
+
 def _prediction(payload: dict) -> tuple[str, float | None]:
     data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
     label = str(
@@ -2164,7 +2460,7 @@ def _is_cancelled(run_id: str) -> bool:
     return bool(row and row.get("status") == "cancel_requested")
 
 
-def _base_evaluation_metrics(results: list[dict]) -> dict:
+def _base_evaluation_metrics(results: list[dict], *, include_distributions: bool = True) -> dict:
     latencies = [int(item["latencyMs"]) for item in results if item.get("ok")]
     labeled = [
         item for item in results
@@ -2178,12 +2474,13 @@ def _base_evaluation_metrics(results: list[dict]) -> dict:
     accuracy = (tp + tn) / len(labeled) if labeled else None
     precision = tp / (tp + fp) if tp + fp else None
     recall = tp / (tp + fn) if tp + fn else None
+    specificity = tn / (tn + fp) if tn + fp else None
     f1 = (
         2 * precision * recall / (precision + recall)
         if precision is not None and recall is not None and precision + recall
         else None
     )
-    return {
+    metrics = {
         "sampleCount": len(results),
         "successCount": sum(bool(item.get("ok")) for item in results),
         "failureCount": sum(not bool(item.get("ok")) for item in results),
@@ -2192,7 +2489,15 @@ def _base_evaluation_metrics(results: list[dict]) -> dict:
         "accuracy": accuracy,
         "precision": precision,
         "recall": recall,
+        "specificity": specificity,
+        "falsePositiveRate": fp / (fp + tn) if fp + tn else None,
+        "falseNegativeRate": fn / (fn + tp) if fn + tp else None,
+        "balancedAccuracy": (
+            (recall + specificity) / 2
+            if recall is not None and specificity is not None else None
+        ),
         "f1": f1,
+        "auc": _binary_auc(results),
         "latency": {
             "meanMs": round(statistics.fmean(latencies), 1) if latencies else None,
             "p50Ms": _percentile(latencies, 0.50),
@@ -2201,10 +2506,78 @@ def _base_evaluation_metrics(results: list[dict]) -> dict:
             "maxMs": max(latencies) if latencies else None,
         },
     }
+    if not include_distributions:
+        return metrics
+
+    scored = [
+        item for item in results
+        if bool(item.get("ok")) and _finite_number(item.get("score")) is not None
+    ]
+    scores = [float(item["score"]) for item in scored]
+    score_distribution = {
+        "available": bool(scores),
+        "sampleCount": len(scores),
+        "threshold": 0.5,
+        "summary": _numeric_summary(scores),
+        "histogram": _histogram(scores, bins=10, lower=0.0, upper=1.0),
+        "byGroundTruth": {},
+    }
+    for label in ("real", "fake"):
+        label_scores = [
+            float(item["score"]) for item in scored if item.get("groundTruth") == label
+        ]
+        score_distribution["byGroundTruth"][label] = {
+            "summary": _numeric_summary(label_scores),
+            "histogram": _histogram(label_scores, bins=10, lower=0.0, upper=1.0),
+        }
+    labeled_scores = [
+        item for item in scored if item.get("groundTruth") in {"real", "fake"}
+    ]
+    metrics["brierScore"] = (
+        round(statistics.fmean(
+            (float(item["score"]) - (1.0 if item["groundTruth"] == "fake" else 0.0)) ** 2
+            for item in labeled_scores
+        ), 6)
+        if labeled_scores else None
+    )
+    metrics["scoreDistribution"] = score_distribution
+
+    vectors: list[list[float]] = []
+    class_order: list[str] = []
+    for item in results:
+        vector, labels = _extract_logits(item.get("payload") or {})
+        if vector:
+            vectors.append(vector)
+            if labels and len(labels) == len(vector):
+                class_order = labels
+    dimensions = []
+    vector_size = max((len(vector) for vector in vectors), default=0)
+    for index in range(vector_size):
+        values = [vector[index] for vector in vectors if len(vector) > index]
+        dimensions.append({
+            "index": index,
+            "label": class_order[index] if index < len(class_order) else f"class_{index}",
+            "summary": _numeric_summary(values),
+            "histogram": _histogram(values, bins=12),
+        })
+    metrics["logitsDistribution"] = {
+        "available": bool(dimensions),
+        "sampleCount": len(vectors),
+        "vectorSize": vector_size,
+        "classOrder": class_order,
+        "dimensions": dimensions,
+        "message": "" if dimensions else "当前模型接口未返回原始 logits；概率分数不会被伪装成 logits。",
+    }
+    metrics["errorBreakdown"] = dict(Counter(
+        str(item.get("error") or "未知错误")[:120]
+        for item in results if not item.get("ok")
+    ))
+    return metrics
 
 
 def _evaluation_metrics(results: list[dict]) -> dict:
     metrics = _base_evaluation_metrics(results)
+    metrics["diagnosticsVersion"] = 2
     dimensions: dict[str, dict[str, list[dict]]] = {}
     for item in results:
         for dimension, value in (item.get("subclasses") or {}).items():
@@ -2216,7 +2589,7 @@ def _evaluation_metrics(results: list[dict]) -> dict:
         if len(values) > 60:
             continue
         for value, items in sorted(values.items(), key=lambda pair: (-len(pair[1]), pair[0])):
-            item_metrics = _base_evaluation_metrics(items)
+            item_metrics = _base_evaluation_metrics(items, include_distributions=False)
             grouped.append({
                 "dimension": dimension,
                 "value": value,
@@ -2233,8 +2606,42 @@ def _evaluation_metrics(results: list[dict]) -> dict:
     return metrics
 
 
+def _timing_metrics(
+    elapsed_seconds: float,
+    results: list[dict],
+    *,
+    concurrency: int = 1,
+    allow_latency_estimate: bool = False,
+) -> dict:
+    recorded_elapsed = max(float(elapsed_seconds or 0), 0.0)
+    successful = sum(bool(item.get("ok")) for item in results)
+    latencies = [
+        float(item["latencyMs"])
+        for item in results if _finite_number(item.get("latencyMs")) is not None
+    ]
+    latency_total = sum(latencies) / 1000.0
+    elapsed = recorded_elapsed
+    estimated = False
+    if allow_latency_estimate and latencies and recorded_elapsed * 1000.0 < max(latencies):
+        elapsed = latency_total / max(1, int(concurrency or 1))
+        estimated = True
+    return {
+        "wallTimeSeconds": round(elapsed, 3),
+        "recordedWallTimeSeconds": round(recorded_elapsed, 3),
+        "estimated": estimated,
+        "basis": "summed_latency_divided_by_concurrency" if estimated else "run_timestamps",
+        "throughputSamplesPerSecond": round(len(results) / elapsed, 4) if elapsed else None,
+        "successfulThroughputPerSecond": round(successful / elapsed, 4) if elapsed else None,
+        "modelLatencyTotalSeconds": round(latency_total, 3),
+        "concurrencyGain": round(latency_total / elapsed, 3) if elapsed else None,
+    }
+
+
 def _execute_evaluation(run_id: str, model: dict, concurrency: int) -> None:
+    started_monotonic = time.monotonic()
     _set_run(run_id, status="running", started_at=_now())
+    resource_monitor = _ResourceMonitor(model)
+    resource_monitor.start()
     with _connect() as connection:
         run = connection.execute("SELECT dataset_id FROM runs WHERE id = ?", (run_id,)).fetchone()
         samples = connection.execute(
@@ -2314,13 +2721,21 @@ def _execute_evaluation(run_id: str, model: dict, concurrency: int) -> None:
                     _set_run(run_id, completed_count=len(completed))
                 fill_pending()
         status = "cancelled" if _is_cancelled(run_id) else "completed"
+        metrics = _evaluation_metrics(completed)
+        metrics["timing"] = _timing_metrics(
+            time.monotonic() - started_monotonic,
+            completed,
+            concurrency=concurrency,
+        )
+        metrics["resourceUsage"] = resource_monitor.finish()
         _set_run(
             run_id,
             status=status,
-            metrics_json=json.dumps(_evaluation_metrics(completed), ensure_ascii=False),
+            metrics_json=json.dumps(metrics, ensure_ascii=False),
             finished_at=_now(),
         )
     except Exception as exc:
+        resource_monitor.finish()
         _set_run(run_id, status="failed", error=str(exc)[:1000], finished_at=_now())
 
 
@@ -2384,6 +2799,8 @@ def _execute_load_test(
 ) -> None:
     started_monotonic = time.monotonic()
     _set_run(run_id, status="running", started_at=_now())
+    resource_monitor = _ResourceMonitor(model)
+    resource_monitor.start()
     results: list[dict] = []
 
     def invoke() -> dict:
@@ -2433,6 +2850,7 @@ def _execute_load_test(
                 str(code): sum(item.get("httpStatus") == code for item in results)
                 for code in sorted({item.get("httpStatus") for item in results}, key=str)
             },
+            "resourceUsage": resource_monitor.finish(),
         }
         _set_run(
             run_id,
@@ -2441,6 +2859,7 @@ def _execute_load_test(
             finished_at=_now(),
         )
     except Exception as exc:
+        resource_monitor.finish()
         _set_run(run_id, status="failed", error=str(exc)[:1000], finished_at=_now())
 
 
@@ -2552,6 +2971,85 @@ def reconcile_stale_runs(max_idle_seconds: int = 600) -> int:
         return int(cursor.rowcount or 0)
 
 
+def _elapsed_from_run(run: dict) -> float:
+    try:
+        started = datetime.fromisoformat(str(run.get("started_at") or run.get("created_at")))
+        finished = datetime.fromisoformat(str(run.get("finished_at") or run.get("updated_at")))
+        return max(0.0, (finished - started).total_seconds())
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _backfill_evaluation_diagnostics(run: dict) -> dict:
+    metrics = run.get("metrics") if isinstance(run.get("metrics"), dict) else {}
+    if run.get("kind") != "evaluation" or run.get("status") not in {"completed", "cancelled"}:
+        return run
+    if (
+        int(metrics.get("diagnosticsVersion") or 0) >= 2
+        and "scoreDistribution" in metrics
+        and "timing" in metrics
+        and "logitsDistribution" in metrics
+    ):
+        return run
+    results = []
+    with _connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT r.status,r.predicted_label,r.score,r.latency_ms,r.http_status,r.error,
+                   r.response_json,s.ground_truth,s.subclasses_json,s.group_id
+            FROM results r
+            LEFT JOIN samples s ON s.id = r.sample_id
+            WHERE r.run_id = ? ORDER BY r.id
+            """,
+            (run["id"],),
+        )
+        for row in rows:
+            try:
+                payload = json.loads(row["response_json"] or "{}")
+            except json.JSONDecodeError:
+                payload = {}
+            logits, labels = _extract_logits(payload)
+            diagnostic_payload = (
+                {"modelOutput": {"logits": logits, "classOrder": labels}}
+                if logits else {}
+            )
+            try:
+                subclasses = json.loads(row["subclasses_json"] or "{}")
+            except json.JSONDecodeError:
+                subclasses = {}
+            results.append({
+                "ok": row["status"] == "success",
+                "groundTruth": row["ground_truth"],
+                "predictedLabel": row["predicted_label"],
+                "score": row["score"],
+                "latencyMs": row["latency_ms"],
+                "httpStatus": row["http_status"],
+                "error": row["error"] or "",
+                "payload": diagnostic_payload,
+                "subclasses": subclasses,
+                "groupId": row["group_id"] or "",
+            })
+    recomputed = _evaluation_metrics(results)
+    configuration = run.get("configuration") if isinstance(run.get("configuration"), dict) else {}
+    recomputed["timing"] = _timing_metrics(
+        _elapsed_from_run(run),
+        results,
+        concurrency=int(configuration.get("concurrency") or 1),
+        allow_latency_estimate=bool(configuration.get("streamedDuringUpload")),
+    )
+    recomputed["resourceUsage"] = metrics.get("resourceUsage") or {
+        "available": False,
+        "sampleCount": 0,
+        "message": "该历史任务运行时尚未启用资源采样。",
+        "webProcess": {},
+        "host": {},
+        "modelService": {"sampleCount": 0, "gpus": [], "telemetryAvailable": False},
+    }
+    run["metrics"] = {**metrics, **recomputed}
+    _set_run(run["id"], metrics_json=json.dumps(run["metrics"], ensure_ascii=False))
+    return run
+
+
 def get_run(
     run_id: str,
     *,
@@ -2561,6 +3059,7 @@ def get_run(
     run = _run_row(run_id)
     if not run:
         return None
+    run = _backfill_evaluation_diagnostics(run)
     if include_results:
         with _connect() as connection:
             summary = connection.execute(
@@ -2577,7 +3076,7 @@ def get_run(
             rows = connection.execute(
                 f"""
                 SELECT r.id,r.sample_id,r.status,r.predicted_label,r.score,r.latency_ms,
-                       r.http_status,r.error,r.created_at,s.name AS sample_name,
+                       r.http_status,r.error,r.response_json,r.created_at,s.name AS sample_name,
                        s.ground_truth,s.relative_path,s.label_source,s.class_path,
                        s.subclasses_json,s.group_id
                 FROM results r
@@ -2586,7 +3085,16 @@ def get_run(
                 """,
                 params,
             ).fetchall()
-        run["results"] = [_row_dict(row) or {} for row in rows]
+        run["results"] = []
+        for row in rows:
+            item = _row_dict(row) or {}
+            response = item.pop("response", {})
+            logits, labels = _extract_logits(response)
+            item["modelDiagnostics"] = {
+                "logits": logits,
+                "classOrder": labels,
+            }
+            run["results"].append(item)
         run["resultSummary"] = {
             "count": int(summary["count"] or 0),
             "successCount": int(summary["success_count"] or 0),

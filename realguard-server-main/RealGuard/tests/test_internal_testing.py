@@ -408,6 +408,57 @@ def test_evaluation_metrics_include_subclass_breakdown():
     assert grouped[("transform", "transfer")]["accuracy"] == 0
 
 
+def test_evaluation_metrics_include_score_and_logit_distributions():
+    metrics = internal_testing._evaluation_metrics([
+        {
+            "ok": True, "groundTruth": "real", "predictedLabel": "real",
+            "score": 0.08, "latencyMs": 90,
+            "payload": {"data": {"modelOutput": {"logits": [2.4, -1.2], "classOrder": ["real", "fake"]}}},
+        },
+        {
+            "ok": True, "groundTruth": "fake", "predictedLabel": "fake",
+            "score": 0.91, "latencyMs": 110,
+            "payload": {"data": {"modelOutput": {"logits": [-1.1, 2.7], "classOrder": ["real", "fake"]}}},
+        },
+    ])
+
+    assert metrics["auc"] == 1
+    assert metrics["balancedAccuracy"] == 1
+    assert metrics["scoreDistribution"]["sampleCount"] == 2
+    assert sum(item["count"] for item in metrics["scoreDistribution"]["histogram"]["bins"]) == 2
+    assert metrics["logitsDistribution"]["available"] is True
+    assert metrics["logitsDistribution"]["classOrder"] == ["real", "fake"]
+    assert metrics["logitsDistribution"]["dimensions"][1]["summary"]["max"] == 2.7
+
+
+def test_evaluation_metrics_do_not_fabricate_logits_from_probabilities():
+    metrics = internal_testing._evaluation_metrics([
+        {
+            "ok": True, "groundTruth": "fake", "predictedLabel": "fake",
+            "score": 0.82, "latencyMs": 100,
+            "payload": {"data": {"probability": 0.82, "rawModelScore": 0.82}},
+        },
+    ])
+
+    assert metrics["scoreDistribution"]["available"] is True
+    assert metrics["logitsDistribution"]["available"] is False
+    assert "未返回原始 logits" in metrics["logitsDistribution"]["message"]
+
+
+def test_streamed_timing_uses_explicit_latency_estimate_when_run_timestamps_are_too_short():
+    timing = internal_testing._timing_metrics(
+        0.05,
+        [{"ok": True, "latencyMs": 1000}, {"ok": True, "latencyMs": 1200}],
+        concurrency=2,
+        allow_latency_estimate=True,
+    )
+
+    assert timing["estimated"] is True
+    assert timing["basis"] == "summed_latency_divided_by_concurrency"
+    assert timing["recordedWallTimeSeconds"] == 0.05
+    assert timing["wallTimeSeconds"] == 1.1
+
+
 def test_evaluation_run_persists_reproducible_metrics(monkeypatch):
     dataset = internal_testing.create_dataset(
         [
@@ -462,6 +513,18 @@ def test_evaluation_run_persists_reproducible_metrics(monkeypatch):
         "returnedCount": 2,
         "hasMore": False,
     }
+    assert completed["metrics"]["timing"]["wallTimeSeconds"] >= 0
+    assert "resourceUsage" in completed["metrics"]
+
+    with internal_testing._connect() as connection:
+        connection.execute(
+            "UPDATE runs SET metrics_json=? WHERE id=?",
+            ('{"accuracy": 1.0}', run["id"]),
+        )
+        connection.commit()
+    backfilled = internal_testing.get_run(run["id"])
+    assert backfilled["metrics"]["scoreDistribution"]["sampleCount"] == 2
+    assert backfilled["metrics"]["resourceUsage"]["available"] is False
 
 
 def test_model_non_json_response_is_a_diagnostic_failure(monkeypatch):
@@ -723,6 +786,10 @@ def test_admin_page_contains_internal_testing_workspace(client):
     assert "不限制数据集总大小" in html
     assert "/api/admin/testing/dataset-imports" in html
     assert "uploadTestingChunkedFile" in html
+    assert "测试时间与资源消耗" in html
+    assert "分数分布与混淆矩阵" in html
+    assert "Logits 分布" in html
+    assert "不从概率反推" in html
 
 
 def test_internal_testing_has_a_cache_busting_direct_entry(client):

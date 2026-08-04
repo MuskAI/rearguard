@@ -319,11 +319,47 @@
     .testing-sample-body select{height:32px;font-size:11px}
     .testing-detail-fold{margin:12px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:10px 0}
     .testing-detail-fold summary{cursor:pointer;font-weight:700;color:var(--ink);padding:4px 0 10px}
-    @media(max-width:1280px){.testing-workbench{grid-template-columns:1fr}.testing-status{grid-template-columns:repeat(2,minmax(0,1fr))}.testing-status-item:nth-child(2){border-right:0}.testing-status-item:nth-child(-n+2){border-bottom:1px solid var(--line-soft)}}
+    .testing-report-section{padding:18px 0;border-top:1px solid var(--line);display:grid;gap:14px}
+    .testing-report-section:first-of-type{border-top:0}
+    .testing-report-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px}
+    .testing-report-head h3{margin:0;font-size:14px;color:var(--ink)}
+    .testing-report-head p{margin:3px 0 0;color:var(--muted);font-size:11px}
+    .testing-kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid var(--line);background:#fff}
+    .testing-kpi{min-height:82px;padding:14px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);display:grid;align-content:space-between;gap:8px}
+    .testing-kpi:nth-child(4n){border-right:0}.testing-kpi:nth-last-child(-n+4){border-bottom:0}
+    .testing-kpi small{font-size:10px;color:var(--muted)}
+    .testing-kpi strong{font-size:21px;font-variant-numeric:tabular-nums;line-height:1}
+    .testing-kpi span{font-size:10px;color:var(--muted)}
+    .testing-analysis-grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(280px,.65fr);gap:20px}
+    .testing-chart-block{min-width:0}
+    .testing-chart-title{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:10px}
+    .testing-chart-title strong{font-size:12px}.testing-chart-title span{font-size:10px;color:var(--muted)}
+    .testing-histogram{height:170px;display:grid;grid-template-columns:repeat(var(--bins),minmax(3px,1fr));align-items:end;gap:5px;padding:12px 8px 24px;border-left:1px solid var(--line);border-bottom:1px solid var(--line);position:relative;background:linear-gradient(to top,rgba(11,122,116,.035) 1px,transparent 1px);background-size:100% 25%}
+    .testing-histogram-bar{height:max(3px,var(--height));background:var(--green);position:relative;transition:opacity .15s,filter .15s;min-width:0}
+    .testing-histogram-bar:hover{filter:brightness(.88)}
+    .testing-histogram-bar::after{content:attr(data-count);position:absolute;left:50%;bottom:100%;transform:translate(-50%,-4px);font-size:9px;color:var(--muted);opacity:0;pointer-events:none}
+    .testing-histogram-bar:hover::after{opacity:1}
+    .testing-histogram-axis{display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-top:5px;font-variant-numeric:tabular-nums}
+    .testing-distribution-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+    .testing-distribution-summary div{padding:10px 8px;border-right:1px solid var(--line)}
+    .testing-distribution-summary div:last-child{border-right:0}
+    .testing-distribution-summary small,.testing-resource-item small{display:block;font-size:9px;color:var(--muted)}
+    .testing-distribution-summary strong,.testing-resource-item strong{display:block;margin-top:4px;font-size:13px;font-variant-numeric:tabular-nums}
+    .testing-confusion{display:grid;grid-template-columns:52px repeat(2,minmax(72px,1fr));grid-template-rows:24px repeat(2,70px);border:1px solid var(--line)}
+    .testing-confusion>*{display:grid;place-items:center;border-right:1px solid var(--line);border-bottom:1px solid var(--line);font-size:10px;text-align:center}
+    .testing-confusion>*:nth-child(3n){border-right:0}.testing-confusion>*:nth-last-child(-n+3){border-bottom:0}
+    .testing-confusion .value{font-size:20px;font-weight:800;font-variant-numeric:tabular-nums;background:#f7faf9}
+    .testing-confusion .correct{color:#087a62;background:#eff8f4}.testing-confusion .wrong{color:#b54d3a;background:#fff5f1}
+    .testing-resource-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+    .testing-resource-item{padding:12px;border-right:1px solid var(--line)}.testing-resource-item:last-child{border-right:0}
+    .testing-logit-list{display:grid;gap:18px}
+    .testing-unavailable{padding:14px;border-left:3px solid var(--amber);background:#fffaf1;color:#78521f;font-size:11px;line-height:1.6}
+    .testing-result-note{display:flex;gap:16px;flex-wrap:wrap;font-size:10px;color:var(--muted)}
+    @media(max-width:1280px){.testing-workbench{grid-template-columns:1fr}.testing-status{grid-template-columns:repeat(2,minmax(0,1fr))}.testing-status-item:nth-child(2){border-right:0}.testing-status-item:nth-child(-n+2){border-bottom:1px solid var(--line-soft)}.testing-analysis-grid{grid-template-columns:1fr}}
     @media(max-width:1280px){.dashboard-grid,.model-workbench{grid-template-columns:1fr}.side-stack{position:static}.models{grid-template-columns:1fr}.host-strip{grid-template-columns:repeat(3,minmax(0,1fr))}}
     @media(max-width:1280px){.assurance-grid{grid-template-columns:1fr}}
     @media(max-width:960px){.app{grid-template-columns:76px minmax(0,1fr)}.brand-title,.brand-sub,.nav-text,.nav-label{display:none}.nav-item{justify-content:center}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.secondary-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.secondary-item:nth-child(3){padding-left:0;border-left:0}.account-name{display:none}}
-    @media(max-width:720px){.testing-folder-head{align-items:stretch;flex-direction:column}.testing-folder-head .btn{justify-content:center}.testing-folder-summary-head{align-items:flex-start;flex-direction:column;gap:4px}}
+    @media(max-width:720px){.testing-folder-head{align-items:stretch;flex-direction:column}.testing-folder-head .btn{justify-content:center}.testing-folder-summary-head{align-items:flex-start;flex-direction:column;gap:4px}.testing-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.testing-kpi:nth-child(4n){border-right:1px solid var(--line)}.testing-kpi:nth-child(2n){border-right:0}.testing-kpi:nth-last-child(-n+4){border-bottom:1px solid var(--line)}.testing-kpi:nth-last-child(-n+2){border-bottom:0}.testing-resource-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.testing-resource-item:nth-child(2){border-right:0}.testing-resource-item:nth-child(-n+2){border-bottom:1px solid var(--line)}.testing-report-head{align-items:flex-start;flex-direction:column}.testing-histogram{height:140px;gap:3px}}
     @media(max-width:720px){.app{display:block}.sidebar{height:auto;position:relative;display:flex;gap:8px;padding:8px 10px;overflow-x:auto}.brand{flex:0 0 auto}.nav-group{display:flex;margin-top:0;gap:5px}.nav-label{display:none}.nav-item{width:auto;min-width:max-content;flex:0 0 auto;padding:0 11px}.nav-text{display:inline!important}.topbar{height:56px;padding:0 12px}.crumbs>span{display:none}.top-actions{gap:6px}.sync-status{display:none}.account-popover{position:fixed;right:12px;top:62px}.content{padding:16px 12px 36px}.workspace-heading{align-items:flex-start}.overall-health{max-width:54%;align-items:flex-start}.metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.metric{padding:13px}.metric strong{font-size:22px}.secondary-grid{grid-template-columns:1fr}.secondary-item,.secondary-item:nth-child(3){padding:8px 0;border-left:0;border-top:1px solid var(--line-soft)}.secondary-item:first-child{border-top:0}.model-card.editor .kv,.kv{grid-template-columns:1fr}.panel{padding:14px}.disclosure{padding:0}.panel-head{align-items:flex-start;flex-direction:column}.panel-head .action-row{width:100%}.toolbar{align-items:stretch}.toolbar .input,.toolbar .select,.toolbar .btn{width:100%;flex:1 1 auto;justify-content:center}.route-summary-row{display:grid}.data-table{min-width:640px}.compact-table table{min-width:520px}.host-strip{grid-template-columns:1fr}.host-stat{border-right:0;border-bottom:1px solid var(--line)}.operation-row{grid-template-columns:30px minmax(0,1fr)}.operation-value{grid-column:2;text-align:left}#view-testing .workspace-heading{display:block}#view-testing .workspace-heading>.action-row{width:auto;margin-top:12px}#view-testing .workspace-heading>.action-row .btn{width:auto}.testing-status,.testing-form-grid,.testing-metrics,.testing-stream-mode{grid-template-columns:1fr}.testing-status-item{border-right:0;border-bottom:1px solid var(--line-soft)}.testing-status-item:last-child{border-bottom:0}.testing-form-grid .span-2{grid-column:auto}.toast{left:14px;right:14px;bottom:14px}.dialog-actions{display:grid;grid-template-columns:1fr 1fr}.dialog-actions .btn{justify-content:center;min-height:44px}}
     @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
   </style>
@@ -1561,6 +1597,39 @@
       if(bytes < 1024*1024) return `${(bytes/1024).toFixed(1)} KB`;
       return `${(bytes/1024/1024).toFixed(1)} MB`;
     }
+    function testingDuration(seconds){
+      const value=Number(seconds);
+      if(!Number.isFinite(value)) return '--';
+      if(value < 1) return `${Math.round(value*1000)} ms`;
+      if(value < 60) return `${value.toFixed(value < 10?2:1)} 秒`;
+      const minutes=Math.floor(value/60), remainder=Math.round(value%60);
+      return `${minutes} 分 ${remainder} 秒`;
+    }
+    function testingDate(value){
+      if(!value) return '--';
+      const date=new Date(value);
+      return Number.isNaN(date.getTime())?String(value):date.toLocaleString('zh-CN',{hour12:false});
+    }
+    function testingHistogram(histogram,{percentAxis=false}={}){
+      const bins=histogram?.bins || [];
+      if(!bins.length) return '<div class="empty">暂无可绘制数据</div>';
+      const maximum=Math.max(1,...bins.map(item=>Number(item.count || 0)));
+      const axis=value=>percentAxis?`${(Number(value)*100).toFixed(0)}%`:Number(value).toFixed(2);
+      const bars=bins.map(item=>{
+        const count=Number(item.count || 0);
+        const title=`${axis(item.lower)} – ${axis(item.upper)}：${count} 个样本`;
+        return `<span class="testing-histogram-bar" data-count="${count}" title="${esc(title)}" style="--height:${Math.max(2,count/maximum*100).toFixed(1)}%"></span>`;
+      }).join('');
+      return `<div class="testing-histogram" style="--bins:${bins.length}">${bars}</div><div class="testing-histogram-axis"><span>${axis(histogram.lower)}</span><span>${axis(histogram.upper)}</span></div>`;
+    }
+    function testingSummaryStrip(summary,{percent=false}={}){
+      const format=value=>value==null?'--':percent?`${(Number(value)*100).toFixed(1)}%`:Number(value).toFixed(4);
+      return `<div class="testing-distribution-summary">
+        <div><small>均值</small><strong>${format(summary?.mean)}</strong></div>
+        <div><small>中位数</small><strong>${format(summary?.p50)}</strong></div>
+        <div><small>标准差</small><strong>${format(summary?.stdDev)}</strong></div>
+      </div>`;
+    }
     function testingRunStatus(status){
       const meta={
         queued:['排队中','warn'],running:['运行中','warn'],cancel_requested:['停止中','warn'],
@@ -2106,6 +2175,13 @@
       state.testingDetail={type:'run',data:run};
       const metrics=run.metrics || {};
       const latency=metrics.latency || {};
+      const timing=metrics.timing || {};
+      const resources=metrics.resourceUsage || {};
+      const webResource=resources.webProcess || {};
+      const hostResource=resources.host || {};
+      const modelResource=resources.modelService || {};
+      const scoreDistribution=metrics.scoreDistribution || {};
+      const logitsDistribution=metrics.logitsDistribution || {};
       const isEvaluation=run.kind==='evaluation';
       const total=Number(run.total_count || 0);
       const completed=Number(run.completed_count || 0);
@@ -2114,18 +2190,37 @@
       const groupMetrics=metrics.groupMetrics || [];
       const dimensionLabels={domain:'数据域',source_class:'源类别',generation_type:'生成类型',generator:'生成器',review_sentiment:'评论类别',review_group:'Review 分组',transform:'图像变换'};
       const metricItems=isEvaluation ? [
-        ['Accuracy',testingPercent(metrics.accuracy)],['Precision',testingPercent(metrics.precision)],
-        ['Recall',testingPercent(metrics.recall)],['F1',testingPercent(metrics.f1)],
-        ['成功样本',metrics.successCount ?? resultSummary.successCount ?? 0],['失败样本',metrics.failureCount ?? resultSummary.failureCount ?? 0],
-        ['P50',latency.p50Ms == null?'--':`${latency.p50Ms} ms`],['P95',latency.p95Ms == null?'--':`${latency.p95Ms} ms`],
+        ['Accuracy',testingPercent(metrics.accuracy),'总体正确率'],
+        ['ROC-AUC',metrics.auc==null?'--':Number(metrics.auc).toFixed(3),'分数排序能力'],
+        ['F1',testingPercent(metrics.f1),'Precision 与 Recall 的调和平均'],
+        ['Balanced Acc.',testingPercent(metrics.balancedAccuracy),'平衡真实与生成类别'],
+        ['误报率 FPR',testingPercent(metrics.falsePositiveRate),'真图被判假的比例'],
+        ['漏报率 FNR',testingPercent(metrics.falseNegativeRate),'假图被判真的比例'],
+        ['Brier',metrics.brierScore==null?'--':Number(metrics.brierScore).toFixed(4),'概率校准误差，越低越好'],
+        ['有效样本',`${metrics.labeledCount ?? 0} / ${metrics.sampleCount ?? total}`,'有真值且产生有效预测'],
       ] : [
-        ['吞吐',metrics.throughputRps == null?'--':`${metrics.throughputRps} req/s`],
-        ['错误率',testingPercent(metrics.errorRate)],['成功请求',metrics.successCount ?? '--'],
-        ['失败请求',metrics.failureCount ?? '--'],['P50',latency.p50Ms == null?'--':`${latency.p50Ms} ms`],
-        ['P95',latency.p95Ms == null?'--':`${latency.p95Ms} ms`],['P99',latency.p99Ms == null?'--':`${latency.p99Ms} ms`],
-        ['最大延迟',latency.maxMs == null?'--':`${latency.maxMs} ms`],
+        ['吞吐',metrics.throughputRps == null?'--':`${metrics.throughputRps} req/s`,'每秒完成请求'],
+        ['错误率',testingPercent(metrics.errorRate),'失败请求占比'],['成功请求',metrics.successCount ?? '--','HTTP 与业务结论均成功'],
+        ['失败请求',metrics.failureCount ?? '--','请求或模型处理失败'],['P50',latency.p50Ms == null?'--':`${latency.p50Ms} ms`,'延迟中位数'],
+        ['P95',latency.p95Ms == null?'--':`${latency.p95Ms} ms`,'95% 请求低于该值'],['P99',latency.p99Ms == null?'--':`${latency.p99Ms} ms`,'99% 请求低于该值'],
+        ['最大延迟',latency.maxMs == null?'--':`${latency.maxMs} ms`,'最慢请求'],
       ];
       const confusion=metrics.confusionMatrix || {};
+      const gpuItems=(modelResource.gpus || []).map(gpu=>`<div class="testing-resource-item"><small>GPU ${esc(gpu.index)} 峰值</small><strong>${gpu.utilizationPeakPercent==null?'--':`${gpu.utilizationPeakPercent}%`} · ${gpu.memoryPeakMb==null?'--':`${gpu.memoryPeakMb} MB`}</strong></div>`).join('');
+      const resourceItems=`
+        <div class="testing-resource-item"><small>Web 进程 CPU</small><strong>${webResource.averageCpuPercent==null?'--':`${webResource.averageCpuPercent}%`}</strong></div>
+        <div class="testing-resource-item"><small>Web 进程内存峰值</small><strong>${webResource.rssPeakMb==null?'--':`${webResource.rssPeakMb} MB`}</strong></div>
+        <div class="testing-resource-item"><small>宿主机内存峰值</small><strong>${hostResource.memoryPeakPercent==null?'--':`${hostResource.memoryPeakPercent}%`}</strong></div>
+        <div class="testing-resource-item"><small>模型运行设备</small><strong>${esc(modelResource.provider || '未采集')}</strong></div>`;
+      const logitCharts=(logitsDistribution.dimensions || []).map(item=>`<div class="testing-chart-block">
+        <div class="testing-chart-title"><strong>${esc(item.label || `class_${item.index}`)} logits</strong><span>${item.summary?.count ?? 0} 个样本</span></div>
+        ${testingHistogram(item.histogram)}${testingSummaryStrip(item.summary)}
+      </div>`).join('');
+      const resultRows=(run.results || []).map(item=>{
+        const logits=item.modelDiagnostics?.logits;
+        const logitText=Array.isArray(logits)?logits.map(value=>Number(value).toFixed(4)).join(', '):'--';
+        return `<tr><td title="${esc(item.relative_path || item.sample_name || item.sample_id)}">${esc(item.relative_path || item.sample_name || item.sample_id)}</td><td>${esc(item.ground_truth)}</td><td>${esc(item.predicted_label)}</td><td>${item.score == null?'--':Number(item.score).toFixed(4)}</td><td class="mono">${esc(logitText)}</td><td>${item.latency_ms == null?'--':`${item.latency_ms} ms`}</td><td>${item.status==='success'?'<span class="status ok">成功</span>':`<span class="status">${esc(item.error || '失败')}</span>`}</td></tr>`;
+      });
       $('testingDetailPanel').hidden=false;
       $('testingDetail').innerHTML=`
         <div class="panel-head">
@@ -2138,13 +2233,43 @@
           <div class="testing-progress"><span style="transform:scaleX(${progress/100})"></span></div>
           <div class="testing-progress-meta"><span>成功 ${resultSummary.successCount ?? metrics.successCount ?? 0}</span><span>失败 ${resultSummary.failureCount ?? metrics.failureCount ?? 0}</span><span>${['queued','running','cancel_requested'].includes(run.status)?'结果持续刷新中':'任务已停止更新'}</span></div>
         </div>
-        <div class="testing-metrics">${metricItems.map(([label,value])=>`<div class="testing-metric"><small>${esc(label)}</small><strong>${esc(value)}</strong></div>`).join('')}</div>
-        ${isEvaluation&&metrics.labeledCount?`<div class="route-summary">
-          <div class="route-summary-row"><span>混淆矩阵</span><strong>TP ${confusion.tp ?? 0} · TN ${confusion.tn ?? 0} · FP ${confusion.fp ?? 0} · FN ${confusion.fn ?? 0}</strong></div>
-          <div class="route-summary-row"><span>科学口径</span><strong>${metrics.labeledCount} 个有真值且产生有效预测的样本</strong></div>
-        </div>`:isEvaluation?'<div class="warning-band">当前数据集没有足够真值标签，已统计延迟与成功率，但不计算准确率指标。</div>':''}
+        <section class="testing-report-section">
+          <div class="testing-report-head"><div><h3>${isEvaluation?'评测结论':'压测结论'}</h3><p>${isEvaluation?'默认以 fake 为正类，阈值 0.5。':'吞吐与延迟基于本次真实请求。'}</p></div><span class="status ${Number(metrics.failureCount || 0)?'warn':'ok'}">${Number(metrics.failureCount || 0)?`${metrics.failureCount} 个失败`:'全部完成'}</span></div>
+          <div class="testing-kpi-grid">${metricItems.map(([label,value,hint])=>`<div class="testing-kpi"><small>${esc(label)}</small><strong>${esc(value)}</strong><span>${esc(hint)}</span></div>`).join('')}</div>
+          ${isEvaluation&&!metrics.labeledCount?'<div class="warning-band">当前数据集没有足够真值标签，已统计延迟、分数与成功率，但不计算准确率指标。</div>':''}
+        </section>
+        <section class="testing-report-section">
+          <div class="testing-report-head"><div><h3>测试时间与资源消耗</h3><p>资源值约每 250 ms 采样；Web 进程指标包含同一 worker 内的并行请求。</p></div><span class="mono">${testingDate(run.started_at)} → ${testingDate(run.finished_at)}</span></div>
+          <div class="testing-resource-grid">
+            <div class="testing-resource-item"><small>${timing.estimated?'估算总耗时':'总耗时'}</small><strong>${testingDuration(timing.wallTimeSeconds ?? metrics.elapsedSeconds)}</strong></div>
+            <div class="testing-resource-item"><small>处理吞吐</small><strong>${timing.throughputSamplesPerSecond==null?(metrics.throughputRps==null?'--':`${metrics.throughputRps} req/s`):`${Number(timing.throughputSamplesPerSecond).toFixed(2)} 张/秒`}</strong></div>
+            <div class="testing-resource-item"><small>平均延迟</small><strong>${latency.meanMs==null?'--':`${latency.meanMs} ms`}</strong></div>
+            <div class="testing-resource-item"><small>P95 延迟</small><strong>${latency.p95Ms==null?'--':`${latency.p95Ms} ms`}</strong></div>
+          </div>
+          <div class="testing-resource-grid">${resourceItems}</div>
+          ${gpuItems?`<div class="testing-resource-grid">${gpuItems}</div>`:''}
+          ${resources.available===false?`<div class="testing-unavailable">${esc(resources.message || '该任务没有可用的资源采样数据。')}</div>`:''}
+        </section>
+        ${isEvaluation?`<section class="testing-report-section">
+          <div class="testing-report-head"><div><h3>分数分布与混淆矩阵</h3><p>分数是模型输出的 AI 概率；分布可用于观察阈值、类别重叠和校准问题。</p></div><span>${scoreDistribution.sampleCount ?? 0} 个有效分数</span></div>
+          <div class="testing-analysis-grid">
+            <div class="testing-chart-block">
+              <div class="testing-chart-title"><strong>AI 分数分布</strong><span>阈值 ${testingPercent(scoreDistribution.threshold ?? .5)}</span></div>
+              ${scoreDistribution.available?`${testingHistogram(scoreDistribution.histogram,{percentAxis:true})}${testingSummaryStrip(scoreDistribution.summary,{percent:true})}`:'<div class="testing-unavailable">模型没有返回可统计的概率分数。</div>'}
+              <div class="testing-result-note"><span>真图均值 ${testingPercent(scoreDistribution.byGroundTruth?.real?.summary?.mean)}</span><span>假图均值 ${testingPercent(scoreDistribution.byGroundTruth?.fake?.summary?.mean)}</span><span>范围 ${testingPercent(scoreDistribution.summary?.min)} – ${testingPercent(scoreDistribution.summary?.max)}</span></div>
+            </div>
+            <div class="testing-chart-block">
+              <div class="testing-chart-title"><strong>混淆矩阵</strong><span>行是真值，列是预测</span></div>
+              <div class="testing-confusion"><span></span><span>预测真实</span><span>预测生成</span><span>实际真实</span><span class="value correct">${confusion.tn ?? 0}<small>TN</small></span><span class="value wrong">${confusion.fp ?? 0}<small>FP</small></span><span>实际生成</span><span class="value wrong">${confusion.fn ?? 0}<small>FN</small></span><span class="value correct">${confusion.tp ?? 0}<small>TP</small></span></div>
+            </div>
+          </div>
+        </section>
+        <section class="testing-report-section">
+          <div class="testing-report-head"><div><h3>Logits 分布</h3><p>仅统计模型接口明确返回的原始分类 logits，不从概率反推。</p></div><span>${logitsDistribution.sampleCount ?? 0} 个样本</span></div>
+          ${logitsDistribution.available?`<div class="testing-logit-list">${logitCharts}</div>`:`<div class="testing-unavailable">${esc(logitsDistribution.message || '当前模型接口未返回原始 logits。')}</div>`}
+        </section>`:''}
         ${isEvaluation&&groupMetrics.length?`<details class="testing-detail-fold"><summary>查看子类评测 (${groupMetrics.length})</summary>${table(['维度','子类','样本','Accuracy','F1'],groupMetrics.map(item=>`<tr><td>${esc(dimensionLabels[item.dimension] || item.dimension)}</td><td>${esc(item.value)}</td><td>${item.labeledCount}/${item.sampleCount}</td><td>${testingPercent(item.accuracy)}</td><td>${testingPercent(item.f1)}</td></tr>`),'暂无子类指标')}</details>`:''}
-        ${isEvaluation?table(['样本','真值','预测','分数','耗时','状态'],(run.results||[]).map(item=>`<tr><td>${esc(item.relative_path || item.sample_name || item.sample_id)}</td><td>${esc(item.ground_truth)}</td><td>${esc(item.predicted_label)}</td><td>${item.score == null?'--':testingPercent(item.score)}</td><td>${item.latency_ms == null?'--':`${item.latency_ms} ms`}</td><td>${item.status==='success'?'<span class="status ok">成功</span>':`<span class="status">${esc(item.error || '失败')}</span>`}</td></tr>`),'任务尚未产生样本结果'):''}
+        ${isEvaluation?`<details class="testing-detail-fold"><summary>查看逐样本结果 (${resultSummary.count ?? resultRows.length})</summary>${table(['样本','真值','预测','AI 分数','Logits','耗时','状态'],resultRows,'任务尚未产生样本结果')}</details>`:''}
         ${resultSummary.hasMore?`<p class="testing-help">当前展示前 ${resultSummary.returnedCount} 条；完整结果可通过 CSV 导出。</p>`:''}`;
       $('testingDetailPanel').scrollIntoView({behavior:'smooth',block:'start'});
       if(['queued','running','cancel_requested'].includes(run.status)) setTimeout(()=>{ if(state.testingDetail?.data?.id===id) openTestingRun(id); },1200);
