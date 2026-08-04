@@ -88,7 +88,7 @@ def test_internal_dataset_import_uses_bounded_resumable_requests():
     location = body.split("location ~ ^/api/admin/testing/dataset-imports(?:", 1)[1].split("}", 1)[0]
     resume_location = body.split("location ~ ^/api/admin/testing/dataset-imports/[^/]+/resume$", 1)[1].split("}", 1)[0]
     assert "client_max_body_size 32m;" in location
-    assert "proxy_request_buffering on;" in location
+    assert "proxy_request_buffering off;" in location
     assert "proxy_read_timeout 600s;" in location
     assert "realguard-api-proxy-security.conf" in location
     assert "realguard-upload-proxy-security.conf" not in location
