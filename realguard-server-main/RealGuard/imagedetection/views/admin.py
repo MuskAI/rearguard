@@ -2934,11 +2934,32 @@ def admin_testing_upload_import_chunk(import_id):
             relative_path=request.form.get("relativePath") or uploaded.filename or "archive.zip",
             chunk_index=int(request.form.get("chunkIndex") or 0),
             total_chunks=int(request.form.get("totalChunks") or 0),
+            expected_bytes=(
+                int(request.form.get("expectedBytes"))
+                if request.form.get("expectedBytes") not in (None, "")
+                else None
+            ),
             chunk=uploaded.stream,
         )
     except (TypeError, ValueError) as exc:
         return jsonify({"status": "error", "message": str(exc)}), 400
     return jsonify({"status": "success", "importSession": import_session})
+
+
+@admin_blueprint.route("/api/admin/testing/dataset-imports/<import_id>/resume", methods=["POST"])
+def admin_testing_resume_import(import_id):
+    _, error = _admin_required("testing.run")
+    if error:
+        return error
+    payload = request.get_json(silent=True) or {}
+    files = payload.get("files") or []
+    if not isinstance(files, list):
+        return jsonify({"status": "error", "message": "文件清单格式无效"}), 400
+    try:
+        resume_state = internal_testing.get_import_resume_state(import_id, files)
+    except (TypeError, ValueError) as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    return jsonify({"status": "success", "resumeState": resume_state})
 
 
 @admin_blueprint.route("/api/admin/testing/dataset-imports/<import_id>/finalize", methods=["POST"])

@@ -310,6 +310,9 @@
     .testing-progress-head span{color:var(--muted);font-size:12px}
     .testing-progress-card .testing-progress{height:9px;margin:0}
     .testing-progress-meta{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:11px;margin-top:8px}
+    .testing-resume-note{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px;padding:10px 12px;border:1px solid #b9d9cd;background:#f2faf7;color:#285d4c;border-radius:var(--radius);font-size:11px;line-height:1.55}
+    .testing-resume-note span{min-width:0}
+    .testing-upload-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:11px}
     .testing-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:12px 0}
     .testing-metric{border:1px solid var(--line-soft);background:#f8faf9;padding:11px;border-radius:var(--radius)}
     .testing-metric small{display:block;color:var(--muted);font-size:10px}
@@ -634,7 +637,12 @@
                   <div class="testing-progress-lane" id="testingDetectionLane" hidden><span>模型检测</span><div class="testing-progress"><span id="testingDetectionBar" style="transform:scaleX(0)"></span></div><strong id="testingDetectionPercent">0%</strong></div>
                   <div class="testing-progress-meta" id="testingImportMeta"><span>尚未开始</span></div>
                   <div class="testing-help" id="testingImportIssues" hidden></div>
-                  <button class="btn mini secondary" id="testingCancelImport" type="button" onclick="cancelTestingImport()" hidden>取消本次上传</button>
+                  <div class="testing-resume-note" id="testingResumeNote" hidden><span>服务器已保存上传断点。重新选择同一数据集文件夹后，将自动跳过已完成文件并续传剩余分块。</span></div>
+                  <div class="testing-upload-actions">
+                    <button class="btn mini secondary" id="testingPauseImport" type="button" onclick="pauseTestingImport()" hidden><i class="fa fa-pause"></i>暂停上传</button>
+                    <button class="btn mini" id="testingResumeImport" type="button" onclick="resumeTestingImport()" hidden><i class="fa fa-play"></i>继续上传</button>
+                    <button class="btn mini secondary" id="testingCancelImport" type="button" onclick="cancelTestingImport()" hidden><i class="fa fa-trash"></i>删除上传任务</button>
+                  </div>
                 </div>
               </form>
             </section>
@@ -812,8 +820,9 @@
       return Array.isArray(required) ? required.some(can) : can(required);
     };
     const mutationRequests = new Map();
-    let state = {metrics:null, models:[], routing:{}, routingHistory:[], detections:[], users:[], admins:[], keys:[], services:[], host:null, serviceSummary:null, performance:null, assurance:null, swarm:null, alerts:null, alertDeliveries:[], audit:[], testing:null, testingDetail:null, testingImportId:'', testingImportedPaths:new Set(), testingFolderFiles:[], testingExtraFiles:[], testingFolderScanning:false, testingFolderName:'', pages:{}, selectedUser:null, selectedDetection:null};
+    let state = {metrics:null, models:[], routing:{}, routingHistory:[], detections:[], users:[], admins:[], keys:[], services:[], host:null, serviceSummary:null, performance:null, assurance:null, swarm:null, alerts:null, alertDeliveries:[], audit:[], testing:null, testingDetail:null, testingImportId:'', testingImportedPaths:new Set(), testingPendingChunks:new Map(), testingUploadActive:false, testingUploadPaused:false, testingResumeAfterSelection:false, testingFolderFiles:[], testingExtraFiles:[], testingFolderScanning:false, testingFolderName:'', pages:{}, selectedUser:null, selectedDetection:null};
     const testingRelativePaths = new WeakMap();
+    const TESTING_IMPORT_STORAGE_KEY='realguard.testing.import.v1';
     let testingRefreshTimer = null;
     const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
     const can = (permission) => PERMISSIONS.has(permission);
@@ -1722,6 +1731,19 @@
       clearTimeout(testingRefreshTimer);
       try{
         state.testing=await api('/api/admin/testing/overview');
+        const imports=Array.isArray(state.testing?.imports)
+          ? state.testing.imports
+          : (state.testing.imports=[]);
+        if(!imports.some(item=>item.status==='uploading')){
+          const saved=readPersistedTestingImport();
+          if(saved?.importId){
+            try{
+              const recovered=await api(`/api/admin/testing/dataset-imports/${encodeURIComponent(saved.importId)}`);
+              if(recovered.importSession?.status==='uploading') imports.unshift(recovered.importSession);
+              else clearPersistedTestingImport(saved.importId);
+            }catch(_error){ clearPersistedTestingImport(saved.importId); }
+          }
+        }
         renderTesting();
       }catch(err){
         if(showError) toast(err?.message || '内部测试平台加载失败');
@@ -1730,11 +1752,38 @@
         || (state.testing?.imports || []).some(item=>['uploading','queued','processing'].includes(item.status));
       if(active && location.hash==='#testing') testingRefreshTimer=setTimeout(()=>loadTesting(false),3000);
     }
+    function persistTestingImport(session){
+      if(!session?.id || session.status!=='uploading') return;
+      try{
+        localStorage.setItem(TESTING_IMPORT_STORAGE_KEY,JSON.stringify({
+          importId:session.id,
+          name:session.name || '',
+          expectedFiles:Number(session.expectedFiles || 0),
+          expectedBytes:Number(session.expectedBytes || 0),
+          updatedAt:session.updatedAt || new Date().toISOString(),
+        }));
+      }catch(_error){ /* Upload recovery still works from the server session. */ }
+    }
+    function readPersistedTestingImport(){
+      try{ return JSON.parse(localStorage.getItem(TESTING_IMPORT_STORAGE_KEY) || 'null'); }
+      catch(_error){ return null; }
+    }
+    function clearPersistedTestingImport(importId=''){
+      try{
+        const saved=JSON.parse(localStorage.getItem(TESTING_IMPORT_STORAGE_KEY) || '{}');
+        if(!importId || !saved.importId || saved.importId===importId) localStorage.removeItem(TESTING_IMPORT_STORAGE_KEY);
+      }catch(_error){ localStorage.removeItem(TESTING_IMPORT_STORAGE_KEY); }
+    }
     function renderTestingImport(session, uploadPercent=null){
       const card=$('testingImportProgress');
       if(!card || !session) return;
       const status=session.status || 'uploading';
-      if(status==='uploading') state.testingImportId=session.id || state.testingImportId;
+      if(status==='uploading'){
+        state.testingImportId=session.id || state.testingImportId;
+        (session.files || []).forEach(file=>state.testingImportedPaths.add(file.relativePath));
+        (session.pendingChunks || []).forEach(item=>state.testingPendingChunks.set(item.relativePath,item));
+        persistTestingImport(session);
+      }
       let percent=Number(uploadPercent);
       const detection=session.detection || {};
       let stage=session.streamEvaluation?'正在上传，同时进行模型检测':'正在分批上传并校验';
@@ -1748,6 +1797,7 @@
         else{
           const total=Number(session.expectedBytes || 0), done=Number(session.uploadedBytes || 0);
           percent=total?Math.min(99,Math.round(done/total*100)):0;
+          if(!state.testingUploadActive && (done>0 || (session.pendingChunks || []).length)) stage='上传已暂停，可从断点继续';
         }
       }
       card.hidden=false;
@@ -1755,6 +1805,7 @@
       $('testingImportStage').textContent=stage;
       $('testingImportBar').style.transform=`scaleX(${Math.max(0,Math.min(100,percent))/100})`;
       const expected=Number(session.expectedFiles || 0), validated=Number(session.validatedFiles || 0), rejected=Number(session.rejectedFiles || 0);
+      const expectedBytes=Number(session.expectedBytes || 0), uploadedBytes=Number(session.uploadedBytes || 0);
       const processed=Number(session.processedSamples || 0), totalSamples=Number(session.totalSamples || 0);
       const detectionTotal=Number(detection.total || 0), detectionCompleted=Number(detection.completed || 0);
       const detectionPercent=detectionTotal?Math.min(100,Math.round(detectionCompleted/detectionTotal*100)):0;
@@ -1766,6 +1817,8 @@
       }
       $('testingImportMeta').innerHTML=[
         `<span>已校验 ${validated}${expected?` / ${expected}`:''} 个文件</span>`,
+        expectedBytes?`<span>已上传 ${testingBytes(uploadedBytes)} / ${testingBytes(expectedBytes)}</span>`:'',
+        (session.pendingChunks || []).length?`<span>${session.pendingChunks.length} 个文件保存了分块断点</span>`:'',
         `<span>不合格 ${rejected}</span>`,
         session.streamEvaluation?`<span>已检测 ${detectionCompleted} / ${detectionTotal} · 失败 ${Number(detection.failed || 0)}</span>`:'',
         totalSamples?`<span>已建库 ${processed} / ${totalSamples} 张</span>`:'',
@@ -1786,32 +1839,86 @@
       issues.hidden=!inspection.length;
       const cancel=$('testingCancelImport');
       cancel.hidden=!['uploading','failed'].includes(status);
+      const paused=status==='uploading'&&!state.testingUploadActive;
+      $('testingResumeNote').hidden=!paused;
+      $('testingResumeImport').hidden=!paused;
+      $('testingPauseImport').hidden=!(status==='uploading'&&state.testingUploadActive);
     }
     async function retryTestingUpload(action, attempts=3){
       let lastError;
       for(let attempt=1;attempt<=attempts;attempt++){
-        try{ return await action(); }
-        catch(err){ lastError=err; if(attempt<attempts) await new Promise(resolve=>setTimeout(resolve,attempt*700)); }
+        try{ ensureTestingUploadContinues(); return await action(); }
+        catch(err){
+          if(err?.uploadPaused) throw err;
+          lastError=err;
+          if(attempt<attempts) await new Promise(resolve=>setTimeout(resolve,attempt*700));
+        }
       }
       throw lastError;
+    }
+    function testingUploadPausedError(){
+      const error=new Error('上传已暂停，断点已保存在服务器');
+      error.uploadPaused=true;
+      return error;
+    }
+    function ensureTestingUploadContinues(){
+      if(state.testingUploadPaused) throw testingUploadPausedError();
+    }
+    async function stableTestingUploadId(file,relativePath){
+      const value=`${relativePath}\u0000${Number(file.size || 0)}\u0000${Number(file.lastModified || 0)}`;
+      if(globalThis.crypto?.subtle && globalThis.TextEncoder){
+        const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value));
+        return `file_${Array.from(new Uint8Array(digest)).slice(0,16).map(byte=>byte.toString(16).padStart(2,'0')).join('')}`;
+      }
+      let hash=2166136261;
+      for(let index=0;index<value.length;index++){ hash^=value.charCodeAt(index); hash=Math.imul(hash,16777619); }
+      return `file_${(hash>>>0).toString(16).padStart(8,'0')}_${Number(file.size || 0).toString(36)}`;
+    }
+    async function reconcileTestingUpload(importId,files){
+      state.testingImportedPaths=new Set();
+      state.testingPendingChunks=new Map();
+      for(let offset=0;offset<files.length;offset+=500){
+        ensureTestingUploadContinues();
+        const batch=files.slice(offset,offset+500);
+        const data=await api(`/api/admin/testing/dataset-imports/${encodeURIComponent(importId)}/resume`,{
+          method:'POST',
+          body:JSON.stringify({files:batch.map(file=>({relativePath:testingRelativePath(file),byteSize:Number(file.size || 0)}))}),
+        });
+        const resume=data.resumeState || {};
+        if((resume.conflicts || []).length){
+          const conflict=resume.conflicts[0];
+          throw new Error(`文件“${conflict.relativePath}”与服务器断点大小不一致，请重新选择原数据集文件夹`);
+        }
+        (resume.completedFiles || []).forEach(item=>state.testingImportedPaths.add(item.relativePath));
+        (resume.pendingChunks || []).forEach(item=>state.testingPendingChunks.set(item.relativePath,item));
+      }
     }
     async function uploadTestingChunkedFile(importId,file,relativePath,onBytes){
       const chunkSize=8*1024*1024;
       const totalChunks=Math.max(1,Math.ceil(file.size/chunkSize));
-      const uploadId=(globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`).replace(/[^0-9a-zA-Z_-]/g,'');
+      const saved=state.testingPendingChunks.get(relativePath);
+      if(saved && Number(saved.totalChunks)!==totalChunks) throw new Error(`文件“${relativePath}”与服务器断点不一致，请确认选择了原文件`);
+      const uploadId=saved?.uploadId || await stableTestingUploadId(file,relativePath);
+      const firstChunk=Math.max(0,Number(saved?.nextChunk || 0));
       let latest=null;
-      for(let index=0;index<totalChunks;index++){
+      onBytes(Math.min(file.size,Number(saved?.byteSize || firstChunk*chunkSize)));
+      for(let index=firstChunk;index<totalChunks;index++){
+        ensureTestingUploadContinues();
         const start=index*chunkSize, end=Math.min(file.size,start+chunkSize);
         const form=new FormData();
         form.set('uploadId',uploadId);
         form.set('relativePath',relativePath);
         form.set('chunkIndex',String(index));
         form.set('totalChunks',String(totalChunks));
+        form.set('expectedBytes',String(file.size));
         form.set('chunk',file.slice(start,end),file.name);
         const data=await retryTestingUpload(()=>uploadApi(`/api/admin/testing/dataset-imports/${encodeURIComponent(importId)}/chunks`,form,progress=>{
           onBytes(start+(progress.loaded || 0));
         }));
         latest=data.importSession;
+        const checkpoint=(latest?.pendingChunks || []).find(item=>item.relativePath===relativePath);
+        if(checkpoint) state.testingPendingChunks.set(relativePath,checkpoint);
+        else state.testingPendingChunks.delete(relativePath);
         onBytes(end);
       }
       return latest;
@@ -1832,10 +1939,26 @@
       try{
         await api(`/api/admin/testing/dataset-imports/${encodeURIComponent(importId)}`,{method:'DELETE'});
         state.testingImportId=''; state.testingImportedPaths=new Set();
+        state.testingPendingChunks=new Map(); state.testingUploadPaused=false; state.testingUploadActive=false;
+        clearPersistedTestingImport(importId);
         $('testingImportProgress').hidden=true;
-        toast('本次数据集上传已取消，暂存文件已清理');
+        toast('上传任务和服务器暂存文件已删除');
         await loadTesting(false);
       }catch(err){ toast(err?.message || '取消上传失败'); }
+    }
+    function pauseTestingImport(){
+      if(!state.testingUploadActive) return;
+      state.testingUploadPaused=true;
+      $('testingPauseImport').disabled=true;
+      toast('将在当前分块上传完成后暂停，已完成内容不会丢失');
+    }
+    async function resumeTestingImport(){
+      state.testingResumeAfterSelection=true;
+      const files=await selectTestingFolder();
+      if(files?.length){
+        state.testingResumeAfterSelection=false;
+        $('testingDatasetForm').requestSubmit();
+      }
     }
     function testingRelativePath(file){
       return testingRelativePaths.get(file) || file.webkitRelativePath || file.name;
@@ -1867,6 +1990,10 @@
         state.testingFolderName=(String(firstPath || '').split('/')[0] || '').trim();
       }
       summarizeTestingFolder();
+      if(files.length && state.testingResumeAfterSelection){
+        state.testingResumeAfterSelection=false;
+        setTimeout(()=>$('testingDatasetForm')?.requestSubmit(),0);
+      }
       setTimeout(()=>{
         const settled=Array.from(input?.files || []);
         if(settled.length){ state.testingFolderFiles=settled; summarizeTestingFolder(); }
@@ -1925,7 +2052,7 @@
     async function selectTestingFolder(){
       if(typeof window.showDirectoryPicker!=='function'){
         $('testingDirectory').click();
-        return;
+        return null;
       }
       try{
         const handle=await window.showDirectoryPicker({mode:'read'});
@@ -1934,9 +2061,11 @@
         const files=[];
         await collectTestingDirectoryHandle(handle,state.testingFolderName,files);
         state.testingFolderFiles=files; state.testingFolderScanning=false; summarizeTestingFolder();
+        return files;
       }catch(error){
         state.testingFolderScanning=false; summarizeTestingFolder();
         if(error?.name!=='AbortError') toast('文件夹读取失败，请改用拖拽文件夹方式');
+        return null;
       }
     }
     function readTestingEntryFile(entry,relativePath){
@@ -2015,6 +2144,7 @@
       const totalBytes=selected.reduce((sum,file)=>sum+Number(file.size || 0),0);
       const streamEvaluation=$('testingStreamEvaluation').checked;
       if(streamEvaluation && !$('testingStreamModel').value){ toast('请选择边上传边测试使用的模型'); return; }
+      state.testingUploadActive=true; state.testingUploadPaused=false;
       button.disabled=true; button.textContent='正在创建上传会话…';
       let importId=state.testingImportId || '';
       try{
@@ -2040,11 +2170,20 @@
           state.testingImportId=importId;
           state.testingImportedPaths=new Set();
         }
+        if(Number(session.expectedFiles || 0) && Number(session.expectedFiles)!==selected.length){
+          throw new Error(`所选文件夹包含 ${selected.length} 个文件，但断点任务需要 ${session.expectedFiles} 个，请选择原数据集文件夹`);
+        }
+        if(Number(session.expectedBytes || 0) && Number(session.expectedBytes)!==totalBytes){
+          throw new Error(`所选文件夹总大小与断点任务不一致，请选择原数据集文件夹`);
+        }
         renderTestingImport(session,0);
-        let sentBytes=selected.reduce((sum,file)=>sum+(state.testingImportedPaths.has(testingRelativePath(file))?file.size:0),0);
+        button.textContent='正在核对服务器断点…';
+        await reconcileTestingUpload(importId,selected);
+        let sentBytes=Math.max(0,Number(session.uploadedBytes || 0));
         const direct=[];
         const flushDirect=async()=>{
           if(!direct.length) return;
+          ensureTestingUploadContinues();
           const batch=direct.splice(0,direct.length);
           const batchBytes=batch.reduce((sum,item)=>sum+item.file.size,0);
           const form=new FormData();
@@ -2062,17 +2201,20 @@
         };
         let directBytes=0;
         for(const file of selected){
+          ensureTestingUploadContinues();
           const relativePath=testingRelativePath(file);
           if(state.testingImportedPaths.has(relativePath)) continue;
           if(file.size>8*1024*1024){
             await flushDirect(); directBytes=0;
-            const base=sentBytes;
+            const checkpoint=state.testingPendingChunks.get(relativePath);
+            const savedBytes=Math.min(file.size,Number(checkpoint?.byteSize || 0));
+            const base=Math.max(0,sentBytes-savedBytes);
             session=await uploadTestingChunkedFile(importId,file,relativePath,current=>{
               const approximate=base+current;
               renderTestingImport(session,totalBytes?approximate/totalBytes*100:0);
               button.textContent=`正在上传 ${totalBytes?Math.min(99,Math.round(approximate/totalBytes*100)):0}%`;
             }) || session;
-            sentBytes+=file.size;
+            sentBytes=base+file.size;
             state.testingImportedPaths.add(relativePath);
           }else{
             if(direct.length>=30 || directBytes+file.size>16*1024*1024){ await flushDirect(); directBytes=0; }
@@ -2080,6 +2222,7 @@
           }
         }
         await flushDirect();
+        ensureTestingUploadContinues();
         button.textContent='正在提交后台建库…';
         const finalized=await api(`/api/admin/testing/dataset-imports/${encodeURIComponent(importId)}/finalize`,{method:'POST',body:'{}'});
         renderTestingImport(finalized.importSession);
@@ -2090,13 +2233,23 @@
         summarizeTestingFolder();
         toggleTestingStreamMode();
         state.testingImportId=''; state.testingImportedPaths=new Set();
+        state.testingPendingChunks=new Map();
+        clearPersistedTestingImport(importId);
         $('testingCancelImport').hidden=true;
         await loadTesting(true);
         if(completed.datasetId) await openTestingDataset(completed.datasetId);
       }catch(err){
-        toast(`${err?.message || '数据集创建失败'}${importId?`（会话 ${importId} 已保留）`:''}`);
+        toast(err?.uploadPaused?'上传已暂停，可稍后从当前断点继续':`${err?.message || '数据集创建失败'}${importId?`（会话 ${importId} 已保留）`:''}`);
       }finally{
-        button.disabled=false; button.innerHTML='<i class="fa fa-database"></i>创建数据集';
+        state.testingUploadActive=false;
+        $('testingPauseImport').disabled=false;
+        button.disabled=false; button.innerHTML=state.testingImportId?'<i class="fa fa-play"></i>继续上传':'<i class="fa fa-database"></i>创建数据集';
+        if(state.testingImportId){
+          try{
+            const current=await api(`/api/admin/testing/dataset-imports/${encodeURIComponent(state.testingImportId)}`);
+            renderTestingImport(current.importSession);
+          }catch(_error){ /* The next overview refresh will reconcile the card. */ }
+        }
       }
     }
     async function openTestingDataset(id){

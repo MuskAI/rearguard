@@ -902,6 +902,7 @@ def _import_db(import_id: str) -> sqlite3.Connection:
             part_path TEXT,
             next_chunk INTEGER NOT NULL,
             total_chunks INTEGER NOT NULL,
+            expected_bytes INTEGER,
             byte_size INTEGER NOT NULL DEFAULT 0,
             status TEXT NOT NULL DEFAULT 'pending',
             file_id TEXT,
@@ -932,6 +933,13 @@ def _import_db(import_id: str) -> sqlite3.Connection:
             ON detections(status, id);
         """
     )
+    chunk_columns = {
+        str(row["name"])
+        for row in connection.execute("PRAGMA table_info(chunks)").fetchall()
+    }
+    if "expected_bytes" not in chunk_columns:
+        connection.execute("ALTER TABLE chunks ADD COLUMN expected_bytes INTEGER")
+        connection.commit()
     return connection
 
 
@@ -994,7 +1002,7 @@ def _public_import(payload: dict | None) -> dict | None:
         ).fetchall()
         file_count = int(connection.execute("SELECT COUNT(*) FROM files").fetchone()[0])
         chunk_rows = connection.execute(
-            "SELECT upload_id,relative_path,next_chunk,total_chunks,byte_size FROM chunks WHERE status = 'pending' ORDER BY updated_at"
+            "SELECT upload_id,relative_path,next_chunk,total_chunks,expected_bytes,byte_size FROM chunks WHERE status = 'pending' ORDER BY updated_at"
         ).fetchall()
         rejection_rows = connection.execute(
             "SELECT relative_path,message,created_at FROM rejections ORDER BY id DESC LIMIT 200"
@@ -1023,6 +1031,7 @@ def _public_import(payload: dict | None) -> dict | None:
             "relativePath": row["relative_path"],
             "nextChunk": row["next_chunk"],
             "totalChunks": row["total_chunks"],
+            "expectedBytes": row["expected_bytes"],
             "byteSize": row["byte_size"],
         }
         for row in chunk_rows
@@ -1118,6 +1127,67 @@ def create_import_session(
 def get_import_session(import_id: str) -> dict | None:
     with _IMPORT_LOCK:
         return _public_import(_load_import(import_id))
+
+
+def get_import_resume_state(import_id: str, files: list[dict]) -> dict:
+    """Match a reselected local folder against files already accepted by the server."""
+    if len(files) > 1000:
+        raise ValueError("单次最多校验 1000 个文件，请分批提交")
+    requested: dict[str, tuple[str, int]] = {}
+    for item in files:
+        safe_path = _safe_relative_path(str(item.get("relativePath") or ""))
+        byte_size = max(0, int(item.get("byteSize") or 0))
+        requested[safe_path.casefold()] = (safe_path, byte_size)
+    with _IMPORT_LOCK:
+        payload = _load_import(import_id)
+        if not payload:
+            raise ValueError("数据集上传会话不存在")
+        if payload.get("status") != "uploading":
+            raise ValueError("当前上传会话不能继续上传")
+        if not requested:
+            return {"completedFiles": [], "conflicts": [], "pendingChunks": []}
+        placeholders = ",".join("?" for _ in requested)
+        paths = [item[0] for item in requested.values()]
+        with _import_db(import_id) as connection:
+            file_rows = connection.execute(
+                f"SELECT relative_path,byte_size FROM files WHERE relative_path IN ({placeholders})",
+                paths,
+            ).fetchall()
+            chunk_rows = connection.execute(
+                f"""
+                SELECT upload_id,relative_path,next_chunk,total_chunks,expected_bytes,byte_size
+                FROM chunks
+                WHERE status='pending' AND relative_path IN ({placeholders})
+                """,
+                paths,
+            ).fetchall()
+    completed = []
+    conflicts = []
+    for row in file_rows:
+        expected = requested.get(str(row["relative_path"]).casefold())
+        if not expected:
+            continue
+        server_bytes = int(row["byte_size"] or 0)
+        item = {"relativePath": expected[0], "byteSize": server_bytes}
+        if server_bytes == expected[1]:
+            completed.append(item)
+        else:
+            conflicts.append({**item, "localBytes": expected[1]})
+    return {
+        "completedFiles": completed,
+        "conflicts": conflicts,
+        "pendingChunks": [
+            {
+                "uploadId": row["upload_id"],
+                "relativePath": row["relative_path"],
+                "nextChunk": int(row["next_chunk"] or 0),
+                "totalChunks": int(row["total_chunks"] or 0),
+                "expectedBytes": row["expected_bytes"],
+                "byteSize": int(row["byte_size"] or 0),
+            }
+            for row in chunk_rows
+        ],
+    }
 
 
 def list_import_sessions(limit: int = 20) -> list[dict]:
@@ -1455,6 +1525,7 @@ def add_import_chunk(
     relative_path: str,
     chunk_index: int,
     total_chunks: int,
+    expected_bytes: int | None,
     chunk,
 ) -> dict:
     if not re.fullmatch(r"[0-9a-zA-Z_-]{8,80}", str(upload_id or "")):
@@ -1463,6 +1534,9 @@ def add_import_chunk(
     total_chunks = int(total_chunks)
     if chunk_index < 0 or total_chunks < 1 or chunk_index >= total_chunks:
         raise ValueError("分块序号无效")
+    expected_bytes = int(expected_bytes) if expected_bytes is not None else None
+    if expected_bytes is not None and expected_bytes < 0:
+        raise ValueError("文件大小无效")
     data = _read_source(chunk, MAX_IMPORT_CHUNK_BYTES)
     should_submit = False
     with _IMPORT_LOCK:
@@ -1485,10 +1559,10 @@ def add_import_chunk(
                 connection.execute(
                     """
                     INSERT OR REPLACE INTO chunks
-                        (upload_id,relative_path,part_path,next_chunk,total_chunks,byte_size,status,file_id,updated_at)
-                    VALUES (?,?,?,?,?,?,?,?,?)
+                        (upload_id,relative_path,part_path,next_chunk,total_chunks,expected_bytes,byte_size,status,file_id,updated_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)
                     """,
-                    (upload_id, safe_path, None, total_chunks, total_chunks, 0, "completed", existing["id"], _now()),
+                    (upload_id, safe_path, None, total_chunks, total_chunks, expected_bytes, 0, "completed", existing["id"], _now()),
                 )
                 connection.commit()
                 return _public_import(payload) or {}
@@ -1499,10 +1573,10 @@ def add_import_chunk(
                 connection.execute(
                     """
                     INSERT INTO chunks
-                        (upload_id,relative_path,part_path,next_chunk,total_chunks,byte_size,status,updated_at)
-                    VALUES (?,?,?,?,?,?,?,?)
+                        (upload_id,relative_path,part_path,next_chunk,total_chunks,expected_bytes,byte_size,status,updated_at)
+                    VALUES (?,?,?,?,?,?,?,?,?)
                     """,
-                    (upload_id, safe_path, str(part_path), 0, total_chunks, 0, "pending", _now()),
+                    (upload_id, safe_path, str(part_path), 0, total_chunks, expected_bytes, 0, "pending", _now()),
                 )
                 connection.commit()
                 state = connection.execute(
@@ -1510,6 +1584,14 @@ def add_import_chunk(
                 ).fetchone()
             if state["relative_path"] != safe_path or int(state["total_chunks"] or 0) != total_chunks:
                 raise ValueError("分块文件信息与上传会话不一致")
+            stored_expected = state["expected_bytes"]
+            if stored_expected is not None and expected_bytes is not None and int(stored_expected) != expected_bytes:
+                raise ValueError("本地文件大小与已保存断点不一致，请确认选择了原文件夹")
+            if stored_expected is None and expected_bytes is not None:
+                connection.execute(
+                    "UPDATE chunks SET expected_bytes=?,updated_at=? WHERE upload_id=?",
+                    (expected_bytes, _now(), upload_id),
+                )
             expected = int(state["next_chunk"] or 0)
             if chunk_index < expected:
                 return _public_import(payload) or {}
@@ -1529,7 +1611,11 @@ def add_import_chunk(
             )
             if next_chunk == total_chunks:
                 suffix = Path(safe_path).suffix.lower()
-                rejection = "" if suffix == ".zip" or byte_size <= MAX_UPLOAD_BYTES else "单个图片或文档超过 24 MB"
+                rejection = ""
+                if expected_bytes is not None and byte_size != expected_bytes:
+                    rejection = "分块合并后的文件大小不一致，请重新上传该文件"
+                elif suffix != ".zip" and byte_size > MAX_UPLOAD_BYTES:
+                    rejection = "单个图片或文档超过 24 MB"
                 final_path = part_path.with_name(f"{uuid.uuid4().hex}{suffix[:12]}")
                 if not rejection:
                     os.replace(part_path, final_path)
