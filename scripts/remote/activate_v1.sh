@@ -148,6 +148,7 @@ sudo bash -lc '
     /etc/realguard/session.env \
     /etc/realguard/realguard-backend.env \
     /etc/realguard/detector-db.env \
+    /etc/realguard/internal-testing-remote.env \
     /etc/realguard/backup.env; do
     [ ! -f "$env_file" ] || . "$env_file"
   done

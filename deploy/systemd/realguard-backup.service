@@ -10,6 +10,7 @@ Group=root
 UMask=0077
 EnvironmentFile=/etc/realguard/realguard-backend.env
 EnvironmentFile=/etc/realguard/detector-db.env
+EnvironmentFile=-/etc/realguard/internal-testing-remote.env
 EnvironmentFile=/etc/realguard/backup.env
 ExecStart=/usr/local/sbin/realguard-backup
 TimeoutStartSec=3h

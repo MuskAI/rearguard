@@ -23,6 +23,13 @@ EVIDENCE_MANIFEST_DIR="${REALGUARD_EVIDENCE_SNAPSHOT_ROOT:-/opt/realguard-data/e
 LEGACY_GOVERNANCE_EVIDENCE_DIR="${REALGUARD_LEGACY_EVIDENCE_ROOT:-/opt/realguard-data/legacy-governance-evidence}"
 INTERNAL_TEST_DIR="${REALGUARD_INTERNAL_TEST_ROOT:-/opt/realguard-data/internal-testing}"
 INTERNAL_TEST_DB="${REALGUARD_INTERNAL_TEST_DB:-$INTERNAL_TEST_DIR/internal-testing.sqlite3}"
+if [[ -n "${REALGUARD_BACKUP_INCLUDE_INTERNAL_TESTING:-}" ]]; then
+  INCLUDE_INTERNAL_TESTING="$REALGUARD_BACKUP_INCLUDE_INTERNAL_TESTING"
+elif [[ -n "${REALGUARD_INTERNAL_TESTING_REMOTE_URL:-}" ]]; then
+  INCLUDE_INTERNAL_TESTING=0
+else
+  INCLUDE_INTERNAL_TESTING=1
+fi
 
 require_uint() {
   local name="$1" value="$2" minimum="$3" maximum="${4:-9223372036854775807}"
@@ -43,6 +50,7 @@ require_uint REALGUARD_BACKUP_MIN_FREE_PERCENT "$MIN_FREE_PERCENT" 0 99
 require_uint REALGUARD_BACKUP_MIN_STAGING_BYTES "$MIN_STAGING_BYTES" 0
 require_uint REALGUARD_BACKUP_REQUIRE_OFFSITE "$REQUIRE_OFFSITE" 0 1
 require_uint REALGUARD_BACKUP_REQUIRE_ALL_SOURCES "$REQUIRE_ALL_SOURCES" 0 1
+require_uint REALGUARD_BACKUP_INCLUDE_INTERNAL_TESTING "$INCLUDE_INTERNAL_TESTING" 0 1
 install -d -m 700 "$BACKUP_ROOT"
 BACKUP_ROOT="$(cd "$BACKUP_ROOT" && pwd -P)"
 
@@ -246,7 +254,19 @@ enforce_capacity() {
 estimate_staging_bytes() {
   local estimate="$MIN_STAGING_BYTES" source size latest
   local source_total=0
-  for source in "$ADMIN_STATE_FILE" "$V2_DB" "$TRAFFIC_DB" "$PRIVACY_ERASURE_LEDGER" "$UPLOADS_DIR" "$EVIDENCE_MANIFEST_DIR" "$LEGACY_GOVERNANCE_EVIDENCE_DIR" "$INTERNAL_TEST_DIR"; do
+  local sources=(
+    "$ADMIN_STATE_FILE"
+    "$V2_DB"
+    "$TRAFFIC_DB"
+    "$PRIVACY_ERASURE_LEDGER"
+    "$UPLOADS_DIR"
+    "$EVIDENCE_MANIFEST_DIR"
+    "$LEGACY_GOVERNANCE_EVIDENCE_DIR"
+  )
+  if [[ "$INCLUDE_INTERNAL_TESTING" == "1" ]]; then
+    sources+=("$INTERNAL_TEST_DIR")
+  fi
+  for source in "${sources[@]}"; do
     if [[ -e "$source" ]]; then
       size="$(directory_bytes "$source")"
       source_total=$((source_total + size))
@@ -393,7 +413,9 @@ dump_mysql \
 backup_sqlite "$V2_DB" "$staging/jianzhen-v2.sqlite3"
 backup_sqlite "$TRAFFIC_DB" "$staging/traffic-cumulative.sqlite3"
 backup_sqlite "$PRIVACY_ERASURE_LEDGER" "$staging/privacy-erasure-tombstones.sqlite3"
-backup_sqlite "$INTERNAL_TEST_DB" "$staging/internal-testing.sqlite3"
+if [[ "$INCLUDE_INTERNAL_TESTING" == "1" ]]; then
+  backup_sqlite "$INTERNAL_TEST_DB" "$staging/internal-testing.sqlite3"
+fi
 
 admin_state_backed_up=false
 if [[ -f "$ADMIN_STATE_FILE" && ! -L "$ADMIN_STATE_FILE" ]]; then
@@ -410,7 +432,7 @@ fi
 if [[ -d "$LEGACY_GOVERNANCE_EVIDENCE_DIR" ]]; then
   tar -C "$LEGACY_GOVERNANCE_EVIDENCE_DIR" -czf "$staging/legacy-governance-evidence.tgz" .
 fi
-if [[ -d "$INTERNAL_TEST_DIR" ]]; then
+if [[ "$INCLUDE_INTERNAL_TESTING" == "1" && -d "$INTERNAL_TEST_DIR" ]]; then
   tar \
     --exclude="$(basename "$INTERNAL_TEST_DB")" \
     --exclude="$(basename "$INTERNAL_TEST_DB")-shm" \
@@ -431,6 +453,7 @@ evidence_manifest_directory=$EVIDENCE_MANIFEST_DIR
 legacy_governance_evidence_directory=$LEGACY_GOVERNANCE_EVIDENCE_DIR
 internal_testing_directory=$INTERNAL_TEST_DIR
 internal_testing_database=$INTERNAL_TEST_DB
+internal_testing_included=$INCLUDE_INTERNAL_TESTING
 EOF
 (
   cd "$staging"

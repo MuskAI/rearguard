@@ -160,6 +160,58 @@ def test_backup_script_creates_consistent_local_snapshot(tmp_path):
         assert hashlib.sha256(target.read_bytes()).hexdigest() == digest
 
 
+def test_backup_script_excludes_remote_internal_testing_data(tmp_path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
+    _write_executable(fake_bin / "sort", "#!/bin/sh\ncat\n")
+    _write_executable(fake_bin / "mysqldump", "#!/bin/sh\nprintf '%s\\n' '-- test dump'\n")
+
+    privacy_ledger = tmp_path / "privacy-erasure.sqlite3"
+    with sqlite3.connect(privacy_ledger) as connection:
+        connection.execute("CREATE TABLE evidence (value TEXT NOT NULL)")
+    internal_testing = tmp_path / "internal-testing"
+    internal_testing.mkdir()
+    (internal_testing / "large-image.png").write_bytes(b"image-data")
+    backup_root = tmp_path / "backups"
+    backup_status = tmp_path / "backup-status.json"
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "REALGUARD_BACKUP_ROOT": str(backup_root),
+        "REALGUARD_BACKUP_MIN_FREE_BYTES": "0",
+        "REALGUARD_BACKUP_MIN_FREE_PERCENT": "0",
+        "REALGUARD_BACKUP_MIN_STAGING_BYTES": "1",
+        "REALGUARD_BACKUP_STATUS_FILE": str(backup_status),
+        "REALGUARD_DB_USER": "backup-user",
+        "REALGUARD_DB_NAME": "system",
+        "REALGUARD_DETECTION_DB_USER": "backup-user",
+        "REALGUARD_DETECTION_DB_NAME": "image_detection",
+        "REALGUARD_PRIVACY_ERASURE_LEDGER_PATH": str(privacy_ledger),
+        "REALGUARD_UPLOADS_DIR": str(tmp_path / "uploads"),
+        "REALGUARD_EVIDENCE_SNAPSHOT_ROOT": str(tmp_path / "evidence-manifests"),
+        "REALGUARD_LEGACY_EVIDENCE_ROOT": str(tmp_path / "legacy-evidence"),
+        "REALGUARD_INTERNAL_TEST_ROOT": str(internal_testing),
+        "REALGUARD_INTERNAL_TESTING_REMOTE_URL": "http://127.0.0.1:15072",
+        "PYTHON_BIN": sys.executable,
+    }
+
+    completed = subprocess.run(
+        ["bash", str(BACKUP_SCRIPT)],
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    snapshot = (backup_root / "latest").resolve()
+    assert not (snapshot / "internal-testing.sqlite3").exists()
+    assert not (snapshot / "internal-testing-files.tgz").exists()
+    manifest = (snapshot / "MANIFEST").read_text(encoding="utf-8")
+    assert "internal_testing_included=0" in manifest
+
+
 def test_backup_script_records_failed_run_without_erasing_last_success(tmp_path):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
