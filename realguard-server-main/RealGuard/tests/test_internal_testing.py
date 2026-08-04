@@ -788,6 +788,8 @@ def test_admin_page_contains_internal_testing_workspace(client):
     assert "uploadTestingChunkedFile" in html
     assert "测试时间与资源消耗" in html
     assert "本次评测准确率" in html
+    assert "最新准确率" in html
+    assert "testing-status-action" in html
     assert "查看报告" in html
     assert "准确率 Accuracy" in html
     assert "分数分布与混淆矩阵" in html

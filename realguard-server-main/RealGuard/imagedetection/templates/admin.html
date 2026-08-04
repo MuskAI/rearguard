@@ -272,6 +272,9 @@
     .testing-status-item small{display:block;color:var(--muted);font-size:11px;margin-bottom:5px}
     .testing-status-item strong{display:block;font-size:17px;overflow-wrap:anywhere}
     .testing-status-item span{display:block;color:var(--muted);font-size:11px;margin-top:4px}
+    .testing-status-action{appearance:none;width:100%;border-top:0;border-bottom:0;border-left:0;background:#f3faf7;text-align:left;font:inherit;color:inherit;cursor:pointer;transition:background .15s}
+    .testing-status-action:hover,.testing-status-action:focus-visible{background:#e5f5ef;outline:2px solid var(--green);outline-offset:-2px}
+    .testing-status-action strong{color:var(--green);font-size:22px}
     .testing-workbench{display:grid;grid-template-columns:minmax(0,1.08fr) minmax(360px,.92fr);gap:16px}
     .testing-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
     .testing-form-grid .span-2{grid-column:1/-1}
@@ -1650,12 +1653,15 @@
       const services=system.services || {};
       const hostCpu=host.cpu?.loadPercent;
       const hostMemory=host.memory?.usedPercent;
-      $('testingStatus').innerHTML=[
+      const latestEvaluation=(data.runs || []).find(run=>run.kind==='evaluation'&&run.status==='completed'&&run.metrics?.accuracy!=null);
+      const latestMetrics=latestEvaluation?.metrics || {};
+      const statusItems=[
         ['Web 服务器',host.status === 'critical' ? '异常' : host.status === 'warning' ? '需关注' : '运行正常',`CPU ${hostCpu ?? '--'}% · 内存 ${hostMemory ?? '--'}%`],
         ['算法服务器',algorithm.serviceReady ? '服务在线' : '服务异常',`${algorithm.modelName || '主鉴伪模型'} · ${algorithm.latencyMs ?? '--'} ms`],
         ['模型服务',`${services.online ?? 0}/${services.total ?? 0} 在线`,`降级 ${services.degraded ?? 0} · 离线 ${services.offline ?? 0}`],
-        ['测试任务',`${summary.activeRunCount ?? 0} 个运行中`,`${summary.sampleCount ?? 0} 样本 · ${summary.labeledCount ?? 0} 已标注`],
-      ].map(([label,value,hint])=>`<div class="testing-status-item"><small>${esc(label)}</small><strong>${esc(value)}</strong><span>${esc(hint)}</span></div>`).join('');
+      ];
+      const latestAccuracy=latestEvaluation?`<button type="button" class="testing-status-item testing-status-action" onclick="openTestingRun('${esc(latestEvaluation.id)}')"><small>最新准确率</small><strong>${testingPercent(latestMetrics.accuracy)}</strong><span>${latestMetrics.labeledCount ?? 0} 个有效样本 · 点击查看报告</span></button>`:`<div class="testing-status-item"><small>最新准确率</small><strong>暂无</strong><span>完成一次带真值的评测后显示</span></div>`;
+      $('testingStatus').innerHTML=statusItems.map(([label,value,hint])=>`<div class="testing-status-item"><small>${esc(label)}</small><strong>${esc(value)}</strong><span>${esc(hint)}</span></div>`).join('')+latestAccuracy;
 
       const models=(system.models || []).filter(model=>model.enabled !== false);
       const modelOptions=models.map(model=>`<option value="${esc(model.id)}">${esc(model.name || model.id)}${model.health?.ok ? '' : ' · 未就绪'}</option>`).join('');
