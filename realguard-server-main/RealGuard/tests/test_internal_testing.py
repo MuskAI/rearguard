@@ -792,6 +792,40 @@ def test_admin_accepts_raw_binary_import_chunks(client):
     assert resumed["completedFiles"][0]["relativePath"] == "nested/real/photo.png"
 
 
+def test_admin_rejects_empty_raw_chunk_without_persisting_failed_state(client):
+    _login(client, "operator")
+    created = client.post(
+        "/api/admin/testing/dataset-imports",
+        json={"name": "empty raw chunk", "expectedFiles": 1, "expectedBytes": 1024},
+        headers=_csrf(client),
+    )
+    import_id = created.get_json()["importSession"]["id"]
+    uploaded = client.post(
+        f"/api/admin/testing/dataset-imports/{import_id}/chunks",
+        data=b"",
+        content_type="application/octet-stream",
+        headers={
+            **_csrf(client),
+            "X-Upload-Id": "empty_raw_chunk_001",
+            "X-Upload-Relative-Path": "nested%2Freal%2Fphoto.png",
+            "X-Upload-Chunk-Index": "0",
+            "X-Upload-Total-Chunks": "1",
+            "X-Upload-Expected-Bytes": "1024",
+        },
+    )
+    current = internal_testing.get_import_session(import_id)
+    resumed = internal_testing.get_import_resume_state(import_id, [{
+        "relativePath": "nested/real/photo.png",
+        "byteSize": 1024,
+    }])
+
+    assert uploaded.status_code == 400
+    assert uploaded.get_json()["message"] == "当前分块内容为空，请重新选择原数据集文件夹后继续"
+    assert current["rejectedFiles"] == 0
+    assert resumed["pendingChunks"] == []
+    assert resumed["rejectedFiles"] == []
+
+
 def test_admin_can_start_streaming_folder_evaluation(client, monkeypatch):
     _login(client, "operator")
     monkeypatch.setattr(admin, "_internal_testing_model", lambda model_id: ({

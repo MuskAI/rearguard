@@ -1592,6 +1592,8 @@ def add_import_chunk(
     if expected_bytes is not None and expected_bytes < 0:
         raise ValueError("文件大小无效")
     data = _read_source(chunk, MAX_IMPORT_CHUNK_BYTES)
+    if not data:
+        raise ValueError("当前分块内容为空，请重新选择原数据集文件夹后继续")
     should_submit = False
     with _IMPORT_LOCK:
         payload = _load_import(import_id)
