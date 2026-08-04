@@ -406,10 +406,32 @@ def test_rejected_file_is_deduplicated_and_returned_for_resume():
     current = internal_testing.get_import_session(session["id"])
 
     assert current["rejectedFiles"] == 1
-    assert resumed["rejectedFiles"] == [{
+    assert resumed["completedFiles"] == [{
         "relativePath": "metadata/sample.json",
-        "message": "不是可读取的图片",
+        "byteSize": 2,
+        "ignored": True,
+        "reason": "unsupported_type",
     }]
+    assert resumed["ignoredFiles"] == resumed["completedFiles"]
+    assert resumed["rejectedFiles"] == []
+
+
+def test_resume_skips_non_detection_files_before_they_are_uploaded():
+    session = internal_testing.create_import_session(expected_files=2)
+
+    resumed = internal_testing.get_import_resume_state(session["id"], [
+        {"relativePath": "metadata/sample.json", "byteSize": 2048},
+        {"relativePath": "images/photo.png", "byteSize": 4096},
+    ])
+
+    assert resumed["completedFiles"] == [{
+        "relativePath": "metadata/sample.json",
+        "byteSize": 2048,
+        "ignored": True,
+        "reason": "unsupported_type",
+    }]
+    assert resumed["ignoredFiles"] == resumed["completedFiles"]
+    assert resumed["rejectedFiles"] == []
 
 
 def test_processing_import_resumes_after_worker_restart():

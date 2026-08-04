@@ -55,6 +55,10 @@ MIN_FREE_STORAGE_BYTES = max(
     int(os.environ.get("REALGUARD_INTERNAL_TEST_MIN_FREE_BYTES", str(2 * 1024 * 1024 * 1024))),
 )
 ALLOWED_IMAGE_FORMATS = {"JPEG", "PNG", "WEBP", "BMP", "GIF", "TIFF", "HEIF", "HEIC"}
+IMPORTABLE_FILE_SUFFIXES = {
+    ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff",
+    ".heic", ".heif", ".pdf", ".docx", ".zip",
+}
 ALLOWED_LABELS = {"real", "fake", "unlabeled"}
 REAL_PATH_LABELS = {
     "real", "reals", "authentic", "genuine", "natural", "camera", "captured",
@@ -1164,26 +1168,45 @@ def get_import_resume_state(import_id: str, files: list[dict]) -> dict:
             raise ValueError("当前上传会话不能继续上传")
         if not requested:
             return {"completedFiles": [], "conflicts": [], "pendingChunks": []}
-        placeholders = ",".join("?" for _ in requested)
-        paths = [item[0] for item in requested.values()]
-        with _import_db(import_id) as connection:
-            file_rows = connection.execute(
-                f"SELECT relative_path,byte_size FROM files WHERE relative_path IN ({placeholders})",
-                paths,
-            ).fetchall()
-            chunk_rows = connection.execute(
-                f"""
-                SELECT upload_id,relative_path,next_chunk,total_chunks,expected_bytes,byte_size
-                FROM chunks
-                WHERE status='pending' AND relative_path IN ({placeholders})
-                """,
-                paths,
-            ).fetchall()
-            rejection_rows = connection.execute(
-                f"SELECT relative_path,message FROM rejections WHERE relative_path IN ({placeholders})",
-                paths,
-            ).fetchall()
-    completed = []
+        ignored = [
+            {
+                "relativePath": relative_path,
+                "byteSize": byte_size,
+                "ignored": True,
+                "reason": "unsupported_type",
+            }
+            for relative_path, byte_size in requested.values()
+            if Path(relative_path).suffix.lower() not in IMPORTABLE_FILE_SUFFIXES
+        ]
+        importable = {
+            key: value
+            for key, value in requested.items()
+            if Path(value[0]).suffix.lower() in IMPORTABLE_FILE_SUFFIXES
+        }
+        file_rows = []
+        chunk_rows = []
+        rejection_rows = []
+        if importable:
+            placeholders = ",".join("?" for _ in importable)
+            paths = [item[0] for item in importable.values()]
+            with _import_db(import_id) as connection:
+                file_rows = connection.execute(
+                    f"SELECT relative_path,byte_size FROM files WHERE relative_path IN ({placeholders})",
+                    paths,
+                ).fetchall()
+                chunk_rows = connection.execute(
+                    f"""
+                    SELECT upload_id,relative_path,next_chunk,total_chunks,expected_bytes,byte_size
+                    FROM chunks
+                    WHERE status='pending' AND relative_path IN ({placeholders})
+                    """,
+                    paths,
+                ).fetchall()
+                rejection_rows = connection.execute(
+                    f"SELECT relative_path,message FROM rejections WHERE relative_path IN ({placeholders})",
+                    paths,
+                ).fetchall()
+    completed = list(ignored)
     conflicts = []
     for row in file_rows:
         expected = requested.get(str(row["relative_path"]).casefold())
@@ -1197,6 +1220,7 @@ def get_import_resume_state(import_id: str, files: list[dict]) -> dict:
             conflicts.append({**item, "localBytes": expected[1]})
     return {
         "completedFiles": completed,
+        "ignoredFiles": ignored,
         "conflicts": conflicts,
         "rejectedFiles": [
             {"relativePath": row["relative_path"], "message": row["message"]}
