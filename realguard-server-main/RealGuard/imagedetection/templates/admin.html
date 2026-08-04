@@ -889,6 +889,13 @@
       if(clean && clean.length<240) message+=`：${clean}`;
       return {status:'error',message};
     }
+    function apiRequestError(message,status=0,retryAfter=''){
+      const error=new Error(message || (status?`HTTP ${status}`:'请求失败'));
+      error.status=Number(status || 0);
+      const seconds=Number.parseFloat(String(retryAfter || ''));
+      error.retryAfterMs=Number.isFinite(seconds)&&seconds>0?Math.ceil(seconds*1000):0;
+      return error;
+    }
     async function api(url, options={}){
       const method = String(options.method || 'GET').toUpperCase();
       const mutationKey = ['GET','HEAD','OPTIONS'].includes(method) ? '' : `${method}:${url}`;
@@ -897,8 +904,8 @@
         const headers = {'Content-Type':'application/json', 'X-CSRF-Token': CSRF_TOKEN, ...(options.headers || {})};
         const res = await fetch(url, {...options, headers});
         const data = parseApiPayload(res.status,res.statusText,await res.text());
-        if(res.status === 401){ location.href='/admin/login'; throw new Error('后台会话已过期，请重新登录'); }
-        if(!res.ok || data.status === 'error') throw new Error(data.message || `HTTP ${res.status}`);
+        if(res.status === 401){ location.href='/admin/login'; throw apiRequestError('后台会话已过期，请重新登录',401); }
+        if(!res.ok || data.status === 'error') throw apiRequestError(data.message || `HTTP ${res.status}`,res.status,res.headers.get('Retry-After'));
         return data;
       })();
       if(mutationKey) mutationRequests.set(mutationKey, requestPromise);
@@ -918,12 +925,15 @@
           }
         };
         xhr.upload.onload=()=>{ if(typeof onProgress==='function') onProgress({percent:100,processing:true}); };
-        xhr.onerror=()=>reject(new Error('网络连接失败，上传未完成'));
-        xhr.ontimeout=()=>reject(new Error('上传超时，请检查网络后重试'));
+        xhr.onerror=()=>reject(apiRequestError('网络连接失败，上传未完成'));
+        xhr.ontimeout=()=>reject(apiRequestError('上传超时，请检查网络后重试'));
         xhr.onload=()=>{
           const data=parseApiPayload(xhr.status,xhr.statusText,xhr.responseText);
-          if(xhr.status===401){ location.href='/admin/login'; reject(new Error('后台会话已过期，请重新登录')); return; }
-          if(xhr.status<200 || xhr.status>=300 || data.status==='error'){ reject(new Error(data.message || `HTTP ${xhr.status}`)); return; }
+          if(xhr.status===401){ location.href='/admin/login'; reject(apiRequestError('后台会话已过期，请重新登录',401)); return; }
+          if(xhr.status<200 || xhr.status>=300 || data.status==='error'){
+            reject(apiRequestError(data.message || `HTTP ${xhr.status}`,xhr.status,xhr.getResponseHeader('Retry-After')));
+            return;
+          }
           resolve(data);
         };
         xhr.send(formData);
@@ -1846,12 +1856,18 @@
     }
     async function retryTestingUpload(action, attempts=3){
       let lastError;
-      for(let attempt=1;attempt<=attempts;attempt++){
+      let attempt=0;
+      while(attempt<attempts){
+        attempt+=1;
         try{ ensureTestingUploadContinues(); return await action(); }
         catch(err){
           if(err?.uploadPaused) throw err;
           lastError=err;
-          if(attempt<attempts) await new Promise(resolve=>setTimeout(resolve,attempt*700));
+          if(err?.status===429 && attempts<12) attempts=12;
+          if(attempt<attempts){
+            const delay=err?.status===429?Math.max(2100,Number(err.retryAfterMs || 0)):attempt*700;
+            await new Promise(resolve=>setTimeout(resolve,delay));
+          }
         }
       }
       throw lastError;

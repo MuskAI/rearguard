@@ -85,10 +85,14 @@ def test_internal_dataset_import_uses_bounded_resumable_requests():
         ROOT / "realguard-server-main" / "deploy" / "nginx-realguard-frontend.conf"
     ).read_text(encoding="utf-8")
 
-    location = body.split("location ~ ^/api/admin/testing/dataset-imports", 1)[1].split("}", 1)[0]
+    location = body.split("location ~ ^/api/admin/testing/dataset-imports(?:", 1)[1].split("}", 1)[0]
+    resume_location = body.split("location ~ ^/api/admin/testing/dataset-imports/[^/]+/resume$", 1)[1].split("}", 1)[0]
     assert "client_max_body_size 32m;" in location
     assert "proxy_request_buffering off;" in location
     assert "proxy_read_timeout 600s;" in location
+    assert "realguard-upload-proxy-security.conf" in location
+    assert "realguard-api-proxy-security.conf" in resume_location
+    assert "client_max_body_size 2m;" in resume_location
 
 
 def test_big_screen_page_disables_access_log_and_never_uses_query_token_auth():
