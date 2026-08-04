@@ -940,6 +940,22 @@ def _import_db(import_id: str) -> sqlite3.Connection:
     if "expected_bytes" not in chunk_columns:
         connection.execute("ALTER TABLE chunks ADD COLUMN expected_bytes INTEGER")
         connection.commit()
+    rejection_index = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_import_rejections_path'"
+    ).fetchone()
+    if not rejection_index:
+        connection.execute(
+            """
+            DELETE FROM rejections
+            WHERE id NOT IN (
+                SELECT MIN(id) FROM rejections GROUP BY relative_path COLLATE NOCASE
+            )
+            """
+        )
+        connection.execute(
+            "CREATE UNIQUE INDEX idx_import_rejections_path ON rejections(relative_path COLLATE NOCASE)"
+        )
+        connection.commit()
     return connection
 
 
@@ -1007,6 +1023,7 @@ def _public_import(payload: dict | None) -> dict | None:
         rejection_rows = connection.execute(
             "SELECT relative_path,message,created_at FROM rejections ORDER BY id DESC LIMIT 200"
         ).fetchall()
+        rejection_count = int(connection.execute("SELECT COUNT(*) FROM rejections").fetchone()[0])
         detection_rows = connection.execute(
             """
             SELECT relative_path,status,predicted_label,score,latency_ms,error,updated_at
@@ -1044,6 +1061,7 @@ def _public_import(payload: dict | None) -> dict | None:
         }
         for row in reversed(rejection_rows)
     ]
+    public["rejectedFiles"] = rejection_count
     public["detection"] = {
         "total": sum(detection_counts.values()),
         "queued": detection_counts.get("queued", 0),
@@ -1161,6 +1179,10 @@ def get_import_resume_state(import_id: str, files: list[dict]) -> dict:
                 """,
                 paths,
             ).fetchall()
+            rejection_rows = connection.execute(
+                f"SELECT relative_path,message FROM rejections WHERE relative_path IN ({placeholders})",
+                paths,
+            ).fetchall()
     completed = []
     conflicts = []
     for row in file_rows:
@@ -1176,6 +1198,10 @@ def get_import_resume_state(import_id: str, files: list[dict]) -> dict:
     return {
         "completedFiles": completed,
         "conflicts": conflicts,
+        "rejectedFiles": [
+            {"relativePath": row["relative_path"], "message": row["message"]}
+            for row in rejection_rows
+        ],
         "pendingChunks": [
             {
                 "uploadId": row["upload_id"],
@@ -1258,11 +1284,12 @@ def _insert_rejection(
     relative_path: str,
     message: str,
 ) -> None:
-    payload["rejectedFiles"] = int(payload.get("rejectedFiles") or 0) + 1
-    connection.execute(
-        "INSERT INTO rejections (relative_path,message,created_at) VALUES (?,?,?)",
+    cursor = connection.execute(
+        "INSERT OR IGNORE INTO rejections (relative_path,message,created_at) VALUES (?,?,?)",
         (relative_path[:1000], str(message)[:300], _now()),
     )
+    if cursor.rowcount:
+        payload["rejectedFiles"] = int(payload.get("rejectedFiles") or 0) + 1
 
 
 def _queue_import_detection(
@@ -1465,6 +1492,9 @@ def add_import_files(import_id: str, uploads: list[tuple[str, object]]) -> dict:
             raise ValueError("当前上传会话不能继续接收文件")
         accepted = []
         with _import_db(import_id) as connection:
+            payload["rejectedFiles"] = int(
+                connection.execute("SELECT COUNT(*) FROM rejections").fetchone()[0]
+            )
             for filename, source in uploads:
                 relative_path = _safe_relative_path(filename)
                 existing_row = connection.execute(
@@ -1927,6 +1957,9 @@ def finalize_import(import_id: str) -> dict:
             pending_count = int(connection.execute(
                 "SELECT COUNT(*) FROM chunks WHERE status = 'pending'"
             ).fetchone()[0])
+            payload["rejectedFiles"] = int(
+                connection.execute("SELECT COUNT(*) FROM rejections").fetchone()[0]
+            )
             file_rows = connection.execute(
                 "SELECT inspection_json FROM files"
             ).fetchall()

@@ -393,6 +393,25 @@ def test_duplicate_batch_retry_does_not_create_rejection():
     assert retry["accepted"][0]["alreadyUploaded"] is True
 
 
+def test_rejected_file_is_deduplicated_and_returned_for_resume():
+    session = internal_testing.create_import_session(expected_files=1)
+    for _ in range(3):
+        internal_testing.add_import_files(
+            session["id"], [("metadata/sample.json", io.BytesIO(b"{}"))]
+        )
+
+    resumed = internal_testing.get_import_resume_state(session["id"], [
+        {"relativePath": "metadata/sample.json", "byteSize": 2}
+    ])
+    current = internal_testing.get_import_session(session["id"])
+
+    assert current["rejectedFiles"] == 1
+    assert resumed["rejectedFiles"] == [{
+        "relativePath": "metadata/sample.json",
+        "message": "不是可读取的图片",
+    }]
+
+
 def test_processing_import_resumes_after_worker_restart():
     session = internal_testing.create_import_session(expected_files=1)
     internal_testing.add_import_files(

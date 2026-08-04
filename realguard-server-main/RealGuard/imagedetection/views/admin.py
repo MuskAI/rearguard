@@ -2911,7 +2911,11 @@ def admin_testing_upload_import_files(import_id):
         if uploaded and uploaded.filename
     ]
     if not uploads:
-        return jsonify({"status": "error", "message": "本批次没有文件"}), 400
+        return jsonify({
+            "status": "error",
+            "code": "empty_upload_batch",
+            "message": "浏览器未提交本批次文件，系统将重建请求后重试",
+        }), 422
     try:
         import_session = internal_testing.add_import_files(import_id, uploads)
     except ValueError as exc:

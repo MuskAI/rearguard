@@ -820,7 +820,7 @@
       return Array.isArray(required) ? required.some(can) : can(required);
     };
     const mutationRequests = new Map();
-    let state = {metrics:null, models:[], routing:{}, routingHistory:[], detections:[], users:[], admins:[], keys:[], services:[], host:null, serviceSummary:null, performance:null, assurance:null, swarm:null, alerts:null, alertDeliveries:[], audit:[], testing:null, testingDetail:null, testingImportId:'', testingImportedPaths:new Set(), testingPendingChunks:new Map(), testingUploadActive:false, testingUploadPaused:false, testingResumeAfterSelection:false, testingFolderFiles:[], testingExtraFiles:[], testingFolderScanning:false, testingFolderName:'', pages:{}, selectedUser:null, selectedDetection:null};
+    let state = {metrics:null, models:[], routing:{}, routingHistory:[], detections:[], users:[], admins:[], keys:[], services:[], host:null, serviceSummary:null, performance:null, assurance:null, swarm:null, alerts:null, alertDeliveries:[], audit:[], testing:null, testingDetail:null, testingImportId:'', testingImportedPaths:new Set(), testingRejectedPaths:new Set(), testingPendingChunks:new Map(), testingUploadActive:false, testingUploadPaused:false, testingResumeAfterSelection:false, testingFolderFiles:[], testingExtraFiles:[], testingFolderScanning:false, testingFolderName:'', pages:{}, selectedUser:null, selectedDetection:null};
     const testingRelativePaths = new WeakMap();
     const TESTING_IMPORT_STORAGE_KEY='realguard.testing.import.v1';
     let testingRefreshTimer = null;
@@ -1892,6 +1892,7 @@
     }
     async function reconcileTestingUpload(importId,files){
       state.testingImportedPaths=new Set();
+      state.testingRejectedPaths=new Set();
       state.testingPendingChunks=new Map();
       for(let offset=0;offset<files.length;offset+=500){
         ensureTestingUploadContinues();
@@ -1906,6 +1907,7 @@
           throw new Error(`文件“${conflict.relativePath}”与服务器断点大小不一致，请重新选择原数据集文件夹`);
         }
         (resume.completedFiles || []).forEach(item=>state.testingImportedPaths.add(item.relativePath));
+        (resume.rejectedFiles || []).forEach(item=>state.testingRejectedPaths.add(item.relativePath));
         (resume.pendingChunks || []).forEach(item=>state.testingPendingChunks.set(item.relativePath,item));
       }
     }
@@ -1955,7 +1957,7 @@
       try{
         await api(`/api/admin/testing/dataset-imports/${encodeURIComponent(importId)}`,{method:'DELETE'});
         state.testingImportId=''; state.testingImportedPaths=new Set();
-        state.testingPendingChunks=new Map(); state.testingUploadPaused=false; state.testingUploadActive=false;
+        state.testingRejectedPaths=new Set(); state.testingPendingChunks=new Map(); state.testingUploadPaused=false; state.testingUploadActive=false;
         clearPersistedTestingImport(importId);
         $('testingImportProgress').hidden=true;
         toast('上传任务和服务器暂存文件已删除');
@@ -2026,6 +2028,11 @@
         return String(file.type || '').startsWith('image/') || imageExtensions.has(extension);
       }).length;
     }
+    function testingUploadableFile(file){
+      const extension=String(file.name || '').split('.').pop().toLowerCase();
+      return String(file.type || '').startsWith('image/')
+        || new Set(['jpg','jpeg','png','webp','bmp','gif','tif','tiff','heic','heif','pdf','docx','zip']).has(extension);
+    }
     function summarizeTestingFolder(){
       const files=(state.testingFolderFiles || []).length
         ? state.testingFolderFiles
@@ -2041,6 +2048,7 @@
       const root=state.testingFolderName || testingRelativePath(files[0]).split('/')[0] || '已选文件夹';
       const bytes=files.reduce((sum,file)=>sum+Number(file.size || 0),0);
       const imageCount=testingImageCount(files);
+      const uploadableCount=files.filter(testingUploadableFile).length;
       const paths=files.map(testingRelativePath);
       const maxDepth=Math.max(...paths.map(path=>Math.max(0,path.split('/').length-1)),0);
       const classFolders=new Set(paths.map(path=>{
@@ -2048,7 +2056,7 @@
         return parts.length>2 ? parts[1] : '';
       }).filter(Boolean));
       summary.classList.remove('empty');
-      summary.innerHTML=`<div class="testing-folder-summary-head"><strong><i class="fa fa-check-circle"></i> ${esc(root)}</strong><span>已读取</span></div><div class="testing-folder-facts"><span>${files.length} 个文件</span><span>${imageCount} 张可检测图片</span><span>${testingBytes(bytes)}</span><span>${maxDepth} 层目录</span>${classFolders.size?`<span>${classFolders.size} 个一级分类</span>`:''}</div>`;
+      summary.innerHTML=`<div class="testing-folder-summary-head"><strong><i class="fa fa-check-circle"></i> ${esc(root)}</strong><span>已读取</span></div><div class="testing-folder-facts"><span>${files.length} 个文件</span><span>${imageCount} 张可检测图片</span>${files.length>uploadableCount?`<span>忽略 ${files.length-uploadableCount} 个非检测文件</span>`:''}<span>${testingBytes(bytes)}</span><span>${maxDepth} 层目录</span>${classFolders.size?`<span>${classFolders.size} 个一级分类</span>`:''}</div>`;
       if(!$('testingDatasetName').value.trim()) $('testingDatasetName').value=root;
     }
     async function collectTestingDirectoryHandle(handle,prefix,files){
@@ -2150,14 +2158,17 @@
       event.preventDefault();
       const button=$('testingCreateDataset');
       if(state.testingFolderScanning){ toast('文件夹仍在读取中，请等待文件数量显示完成'); return; }
-      const selected=await waitForTestingFiles();
+      const chosenFiles=await waitForTestingFiles();
       const sourceUrl=$('testingSourceUrl').value.trim();
-      if(!selected.length && !sourceUrl){
+      if(!chosenFiles.length && !sourceUrl){
         const hadSelection=Boolean(state.testingFolderName || $('testingDirectory')?.value || $('testingFiles')?.value);
         toast(hadSelection?'浏览器没有读取到文件夹内容，请重新选择并确认显示了文件数量':'请选择数据集文件夹或填写网页地址');
         return;
       }
+      const selected=chosenFiles.filter(testingUploadableFile);
+      if(chosenFiles.length && !selected.length && !sourceUrl){ toast('所选文件夹中没有可检测的图片、ZIP、PDF 或 DOCX'); return; }
       const totalBytes=selected.reduce((sum,file)=>sum+Number(file.size || 0),0);
+      const chosenBytes=chosenFiles.reduce((sum,file)=>sum+Number(file.size || 0),0);
       const streamEvaluation=$('testingStreamEvaluation').checked;
       if(streamEvaluation && !$('testingStreamModel').value){ toast('请选择边上传边测试使用的模型'); return; }
       state.testingUploadActive=true; state.testingUploadPaused=false;
@@ -2168,7 +2179,7 @@
         if(importId){
           const existing=await api(`/api/admin/testing/dataset-imports/${encodeURIComponent(importId)}`);
           if(existing.importSession?.status==='uploading') session=existing.importSession;
-          else{ importId=''; state.testingImportId=''; state.testingImportedPaths=new Set(); }
+          else{ importId=''; state.testingImportId=''; state.testingImportedPaths=new Set(); state.testingRejectedPaths=new Set(); }
         }
         if(!session){
           const created=await api('/api/admin/testing/dataset-imports',{method:'POST',body:JSON.stringify({
@@ -2185,11 +2196,14 @@
           importId=session.id;
           state.testingImportId=importId;
           state.testingImportedPaths=new Set();
+          state.testingRejectedPaths=new Set();
         }
-        if(Number(session.expectedFiles || 0) && Number(session.expectedFiles)!==selected.length){
-          throw new Error(`所选文件夹包含 ${selected.length} 个文件，但断点任务需要 ${session.expectedFiles} 个，请选择原数据集文件夹`);
+        const expectedFiles=Number(session.expectedFiles || 0);
+        const expectedBytes=Number(session.expectedBytes || 0);
+        if(expectedFiles && ![selected.length,chosenFiles.length].includes(expectedFiles)){
+          throw new Error(`所选文件夹包含 ${chosenFiles.length} 个文件，但断点任务需要 ${session.expectedFiles} 个，请选择原数据集文件夹`);
         }
-        if(Number(session.expectedBytes || 0) && Number(session.expectedBytes)!==totalBytes){
+        if(expectedBytes && ![totalBytes,chosenBytes].includes(expectedBytes)){
           throw new Error(`所选文件夹总大小与断点任务不一致，请选择原数据集文件夹`);
         }
         renderTestingImport(session,0);
@@ -2202,14 +2216,16 @@
           ensureTestingUploadContinues();
           const batch=direct.splice(0,direct.length);
           const batchBytes=batch.reduce((sum,item)=>sum+item.file.size,0);
-          const form=new FormData();
-          batch.forEach(item=>form.append('files',item.file,item.relativePath));
           const base=sentBytes;
-          const data=await retryTestingUpload(()=>uploadApi(`/api/admin/testing/dataset-imports/${encodeURIComponent(importId)}/files`,form,progress=>{
+          const data=await retryTestingUpload(()=>{
+            const form=new FormData();
+            batch.forEach(item=>form.append('files',item.file,item.relativePath));
+            return uploadApi(`/api/admin/testing/dataset-imports/${encodeURIComponent(importId)}/files`,form,progress=>{
             const approximate=base+batchBytes*((progress.percent || 0)/100);
             renderTestingImport(session,totalBytes?approximate/totalBytes*100:0);
             button.textContent=`正在上传 ${totalBytes?Math.min(99,Math.round(approximate/totalBytes*100)):0}%`;
-          }));
+            });
+          });
           session=data.importSession;
           sentBytes+=batchBytes;
           batch.forEach(item=>state.testingImportedPaths.add(item.relativePath));
@@ -2219,7 +2235,7 @@
         for(const file of selected){
           ensureTestingUploadContinues();
           const relativePath=testingRelativePath(file);
-          if(state.testingImportedPaths.has(relativePath)) continue;
+          if(state.testingImportedPaths.has(relativePath)||state.testingRejectedPaths.has(relativePath)) continue;
           if(file.size>8*1024*1024){
             await flushDirect(); directBytes=0;
             const checkpoint=state.testingPendingChunks.get(relativePath);
@@ -2249,7 +2265,7 @@
         summarizeTestingFolder();
         toggleTestingStreamMode();
         state.testingImportId=''; state.testingImportedPaths=new Set();
-        state.testingPendingChunks=new Map();
+        state.testingRejectedPaths=new Set(); state.testingPendingChunks=new Map();
         clearPersistedTestingImport(importId);
         $('testingCancelImport').hidden=true;
         await loadTesting(true);
