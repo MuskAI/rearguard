@@ -1190,18 +1190,36 @@ def get_import_resume_state(import_id: str, files: list[dict]) -> dict:
             for relative_path, byte_size in requested.values()
             if Path(relative_path).suffix.lower() not in IMPORTABLE_FILE_SUFFIXES
         ]
-        importable = {
+        import_candidates = {
             key: value
             for key, value in requested.items()
             if Path(value[0]).suffix.lower() in IMPORTABLE_FILE_SUFFIXES
         }
+        empty_files = {
+            key: value for key, value in import_candidates.items() if value[1] == 0
+        }
+        importable = {
+            key: value for key, value in import_candidates.items() if value[1] > 0
+        }
         file_rows = []
         chunk_rows = []
         rejection_rows = []
-        if importable:
-            placeholders = ",".join("?" for _ in importable)
-            paths = [item[0] for item in importable.values()]
-            with _import_db(import_id) as connection:
+        with _import_db(import_id) as connection:
+            for relative_path, _ in empty_files.values():
+                _insert_rejection(
+                    connection,
+                    payload,
+                    relative_path,
+                    "文件大小为 0 字节，已跳过",
+                )
+            for relative_path, _ in importable.values():
+                connection.execute(
+                    "DELETE FROM rejections WHERE relative_path = ? AND message = ?",
+                    (relative_path, "文件大小为 0 字节，已跳过"),
+                )
+            if importable:
+                placeholders = ",".join("?" for _ in importable)
+                paths = [item[0] for item in importable.values()]
                 file_rows = connection.execute(
                     f"SELECT relative_path,byte_size FROM files WHERE relative_path IN ({placeholders})",
                     paths,
@@ -1214,10 +1232,18 @@ def get_import_resume_state(import_id: str, files: list[dict]) -> dict:
                     """,
                     paths,
                 ).fetchall()
+            if import_candidates:
+                rejection_placeholders = ",".join("?" for _ in import_candidates)
+                rejection_paths = [item[0] for item in import_candidates.values()]
                 rejection_rows = connection.execute(
-                    f"SELECT relative_path,message FROM rejections WHERE relative_path IN ({placeholders})",
-                    paths,
+                    f"SELECT relative_path,message FROM rejections WHERE relative_path IN ({rejection_placeholders})",
+                    rejection_paths,
                 ).fetchall()
+            payload["rejectedFiles"] = int(
+                connection.execute("SELECT COUNT(*) FROM rejections").fetchone()[0]
+            )
+            connection.commit()
+            _save_import(payload)
     completed = list(ignored)
     conflicts = []
     for row in file_rows:
@@ -1605,6 +1631,27 @@ def add_import_chunk(
     expected_bytes = int(expected_bytes) if expected_bytes is not None else None
     if expected_bytes is not None and expected_bytes < 0:
         raise ValueError("文件大小无效")
+    if expected_bytes == 0:
+        with _IMPORT_LOCK:
+            payload = _load_import(import_id)
+            if not payload:
+                raise ValueError("数据集上传会话不存在")
+            if payload.get("status") != "uploading":
+                raise ValueError("当前上传会话不能继续接收分块")
+            safe_path = _safe_relative_path(relative_path)
+            with _import_db(import_id) as connection:
+                _insert_rejection(
+                    connection,
+                    payload,
+                    safe_path,
+                    "文件大小为 0 字节，已跳过",
+                )
+                payload["rejectedFiles"] = int(
+                    connection.execute("SELECT COUNT(*) FROM rejections").fetchone()[0]
+                )
+                connection.commit()
+            _save_import(payload)
+            return _public_import(payload) or {}
     data = _read_source(chunk, MAX_IMPORT_CHUNK_BYTES)
     if not data:
         raise ValueError("当前分块内容为空，请重新选择原数据集文件夹后继续")

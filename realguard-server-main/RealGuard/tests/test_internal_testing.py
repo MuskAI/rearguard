@@ -378,6 +378,43 @@ def test_import_resume_state_matches_completed_and_partial_files():
     assert resumed["pendingChunks"][0]["expectedBytes"] == len(archive_data)
 
 
+def test_import_resume_skips_zero_byte_image_and_records_rejection():
+    session = internal_testing.create_import_session(expected_files=2)
+    empty_path = "dataset/real/empty.jpg"
+
+    first = internal_testing.get_import_resume_state(session["id"], [
+        {"relativePath": empty_path, "byteSize": 0},
+        {"relativePath": "dataset/real/photo.jpg", "byteSize": 1024},
+    ])
+    second = internal_testing.get_import_resume_state(session["id"], [
+        {"relativePath": empty_path, "byteSize": 0},
+    ])
+    current = internal_testing.get_import_session(session["id"])
+
+    assert first["rejectedFiles"] == [{
+        "relativePath": empty_path,
+        "message": "文件大小为 0 字节，已跳过",
+    }]
+    assert second["rejectedFiles"] == first["rejectedFiles"]
+    assert current["rejectedFiles"] == 1
+
+
+def test_zero_byte_file_can_be_retried_after_local_file_is_repaired():
+    session = internal_testing.create_import_session(expected_files=1)
+    relative_path = "dataset/real/repaired.jpg"
+    internal_testing.get_import_resume_state(session["id"], [
+        {"relativePath": relative_path, "byteSize": 0},
+    ])
+
+    resumed = internal_testing.get_import_resume_state(session["id"], [
+        {"relativePath": relative_path, "byteSize": 2048},
+    ])
+    current = internal_testing.get_import_session(session["id"])
+
+    assert resumed["rejectedFiles"] == []
+    assert current["rejectedFiles"] == 0
+
+
 def test_duplicate_batch_retry_does_not_create_rejection():
     session = internal_testing.create_import_session(expected_files=1)
     payload = _png_bytes()
@@ -877,6 +914,35 @@ def test_admin_rejects_empty_raw_chunk_without_persisting_failed_state(client):
     assert current["rejectedFiles"] == 0
     assert resumed["pendingChunks"] == []
     assert resumed["rejectedFiles"] == []
+
+
+def test_admin_skips_declared_zero_byte_file_without_stopping_import(client):
+    _login(client, "operator")
+    created = client.post(
+        "/api/admin/testing/dataset-imports",
+        json={"name": "zero byte import", "expectedFiles": 1, "expectedBytes": 0},
+        headers=_csrf(client),
+    )
+    import_id = created.get_json()["importSession"]["id"]
+    uploaded = client.post(
+        f"/api/admin/testing/dataset-imports/{import_id}/chunks",
+        data=b"",
+        content_type="application/octet-stream",
+        headers={
+            **_csrf(client),
+            "X-Upload-Id": "zero_byte_upload_001",
+            "X-Upload-Relative-Path": "dataset%2Freal%2Fempty.jpg",
+            "X-Upload-Chunk-Index": "0",
+            "X-Upload-Total-Chunks": "1",
+            "X-Upload-Expected-Bytes": "0",
+        },
+    )
+    current = internal_testing.get_import_session(import_id)
+
+    assert uploaded.status_code == 200
+    assert uploaded.get_json()["importSession"]["status"] == "uploading"
+    assert current["rejectedFiles"] == 1
+    assert current["rejections"][0]["relativePath"] == "dataset/real/empty.jpg"
 
 
 def test_admin_can_start_streaming_folder_evaluation(client, monkeypatch):
