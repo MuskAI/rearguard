@@ -41,7 +41,7 @@ def client(monkeypatch):
     return app.test_client()
 
 
-def _login(client, role="operator"):
+def _login(client, role="operator", admin_id=1, username="root"):
     with client.session_transaction() as session:
         session["user_info"] = {
             "Userid": 1,
@@ -50,9 +50,9 @@ def _login(client, role="operator"):
             "openid": "openid-1",
         }
         session[admin.ADMIN_SESSION_KEY] = {
-            "Userid": "admin:1",
-            "adminId": 1,
-            "username": "root",
+            "Userid": f"admin:{admin_id}",
+            "adminId": admin_id,
+            "username": username,
             "phone": "13800000000",
             "role": role,
             "authType": "admin_account",
@@ -451,6 +451,23 @@ def test_processing_import_resumes_after_worker_restart():
     assert completed["status"] == "completed"
 
 
+def test_import_sessions_can_be_filtered_by_admin_owner():
+    first = internal_testing.create_import_session(
+        name="first admin",
+        actor={"adminId": 1, "username": "first"},
+    )
+    second = internal_testing.create_import_session(
+        name="second admin",
+        actor={"adminId": 2, "username": "second"},
+    )
+
+    owned = internal_testing.list_import_sessions(actor={"adminId": 1})
+
+    assert [item["id"] for item in owned] == [first["id"]]
+    assert internal_testing.get_import_session(first["id"], actor={"adminId": 1})
+    assert internal_testing.get_import_session(second["id"], actor={"adminId": 1}) is None
+
+
 def test_evaluation_metrics_use_only_labeled_valid_predictions():
     metrics = internal_testing._evaluation_metrics([
         {"ok": True, "groundTruth": "fake", "predictedLabel": "fake", "latencyMs": 100},
@@ -760,6 +777,42 @@ def test_admin_resumable_dataset_import_api(client):
     assert status.get_json()["importSession"]["datasetId"] == completed["datasetId"]
 
 
+def test_admin_cannot_resume_another_admins_import(client):
+    _login(client, "operator", admin_id=1, username="first")
+    created = client.post(
+        "/api/admin/testing/dataset-imports",
+        json={"name": "private import", "expectedFiles": 1},
+        headers=_csrf(client),
+    )
+    import_id = created.get_json()["importSession"]["id"]
+
+    _login(client, "operator", admin_id=2, username="second")
+    overview = client.get("/api/admin/testing/overview")
+    status = client.get(f"/api/admin/testing/dataset-imports/{import_id}")
+    resume = client.post(
+        f"/api/admin/testing/dataset-imports/{import_id}/resume",
+        json={"files": []},
+        headers=_csrf(client),
+    )
+    upload = client.post(
+        f"/api/admin/testing/dataset-imports/{import_id}/chunks",
+        data=_png_bytes(),
+        content_type="application/octet-stream",
+        headers={
+            **_csrf(client),
+            "X-Upload-Id": "cross_admin_upload",
+            "X-Upload-Relative-Path": "sample.png",
+            "X-Upload-Chunk-Index": "0",
+            "X-Upload-Total-Chunks": "1",
+        },
+    )
+
+    assert overview.status_code == 200
+    assert overview.get_json()["imports"] == []
+    assert status.status_code == resume.status_code == upload.status_code == 404
+    assert internal_testing.get_import_session(import_id)["validatedFiles"] == 0
+
+
 def test_admin_accepts_raw_binary_import_chunks(client):
     _login(client, "operator")
     image = _png_bytes()
@@ -875,7 +928,7 @@ def test_admin_dataset_upload_preserves_relative_filename(client):
 
 def test_reviewer_can_view_but_cannot_mutate_testing_data(client, monkeypatch):
     _login(client, "reviewer")
-    monkeypatch.setattr(internal_testing, "overview", lambda: {
+    monkeypatch.setattr(internal_testing, "overview", lambda actor=None: {
         "datasets": [], "runs": [], "summary": {}, "limits": {},
     })
     monkeypatch.setattr(admin, "_testing_system_snapshot", lambda: {})
@@ -934,6 +987,8 @@ def test_admin_page_contains_internal_testing_workspace(client):
     assert "不限制数据集总大小" in html
     assert "/api/admin/testing/dataset-imports" in html
     assert "uploadTestingChunkedFile" in html
+    assert "file.slice(start,end).arrayBuffer()" in html
+    assert "chunk.byteLength!==end-start" in html
     assert "reconcileTestingUpload" in html
     assert "stableTestingUploadId" in html
     assert "服务器已保存上传断点" in html

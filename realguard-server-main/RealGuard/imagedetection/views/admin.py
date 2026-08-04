@@ -2776,12 +2776,22 @@ def _testing_system_snapshot():
 
 @admin_blueprint.route("/api/admin/testing/overview")
 def admin_testing_overview():
-    _, error = _admin_required("testing.view")
+    user, error = _admin_required("testing.view")
     if error:
         return error
-    payload = internal_testing.overview()
+    payload = internal_testing.overview(actor=user)
     payload["system"] = _testing_system_snapshot()
     return jsonify({"status": "success", **payload})
+
+
+def _owned_testing_import(import_id, actor):
+    import_session = internal_testing.get_import_session(import_id, actor=actor)
+    if import_session:
+        return import_session, None
+    return None, (
+        jsonify({"status": "error", "message": "数据集上传会话不存在"}),
+        404,
+    )
 
 
 @admin_blueprint.route("/api/admin/testing/datasets", methods=["POST"])
@@ -2874,12 +2884,12 @@ def admin_testing_create_import():
 
 @admin_blueprint.route("/api/admin/testing/dataset-imports/<import_id>")
 def admin_testing_import(import_id):
-    _, error = _admin_required("testing.view")
+    user, error = _admin_required("testing.view")
     if error:
         return error
-    import_session = internal_testing.get_import_session(import_id)
-    if not import_session:
-        return jsonify({"status": "error", "message": "数据集上传会话不存在"}), 404
+    import_session, ownership_error = _owned_testing_import(import_id, user)
+    if ownership_error:
+        return ownership_error
     return jsonify({"status": "success", "importSession": import_session})
 
 
@@ -2888,6 +2898,9 @@ def admin_testing_delete_import(import_id):
     user, error = _admin_required("testing.run")
     if error:
         return error
+    _, ownership_error = _owned_testing_import(import_id, user)
+    if ownership_error:
+        return ownership_error
     try:
         deleted = internal_testing.delete_import_session(import_id)
     except ValueError as exc:
@@ -2900,9 +2913,12 @@ def admin_testing_delete_import(import_id):
 
 @admin_blueprint.route("/api/admin/testing/dataset-imports/<import_id>/files", methods=["POST"])
 def admin_testing_upload_import_files(import_id):
-    _, error = _admin_required("testing.run")
+    user, error = _admin_required("testing.run")
     if error:
         return error
+    _, ownership_error = _owned_testing_import(import_id, user)
+    if ownership_error:
+        return ownership_error
     if int(request.content_length or 0) > internal_testing.available_storage_bytes():
         return jsonify({"status": "error", "message": "服务器磁盘剩余空间不足"}), 507
     uploads = [
@@ -2925,9 +2941,12 @@ def admin_testing_upload_import_files(import_id):
 
 @admin_blueprint.route("/api/admin/testing/dataset-imports/<import_id>/chunks", methods=["POST"])
 def admin_testing_upload_import_chunk(import_id):
-    _, error = _admin_required("testing.run")
+    user, error = _admin_required("testing.run")
     if error:
         return error
+    _, ownership_error = _owned_testing_import(import_id, user)
+    if ownership_error:
+        return ownership_error
     is_raw_chunk = request.mimetype == "application/octet-stream"
     uploaded = None if is_raw_chunk else request.files.get("chunk")
     chunk = request.stream if is_raw_chunk else (uploaded.stream if uploaded else None)
@@ -2960,9 +2979,12 @@ def admin_testing_upload_import_chunk(import_id):
 
 @admin_blueprint.route("/api/admin/testing/dataset-imports/<import_id>/resume", methods=["POST"])
 def admin_testing_resume_import(import_id):
-    _, error = _admin_required("testing.run")
+    user, error = _admin_required("testing.run")
     if error:
         return error
+    _, ownership_error = _owned_testing_import(import_id, user)
+    if ownership_error:
+        return ownership_error
     payload = request.get_json(silent=True) or {}
     files = payload.get("files") or []
     if not isinstance(files, list):
@@ -2979,6 +3001,9 @@ def admin_testing_finalize_import(import_id):
     user, error = _admin_required("testing.run")
     if error:
         return error
+    _, ownership_error = _owned_testing_import(import_id, user)
+    if ownership_error:
+        return ownership_error
     try:
         import_session = internal_testing.finalize_import(import_id)
     except ValueError as exc:

@@ -249,6 +249,15 @@ def _actor_fields(actor: dict | None) -> tuple[str, str]:
     )
 
 
+def _import_belongs_to_actor(payload: dict | None, actor: dict | None) -> bool:
+    if actor is None:
+        return True
+    owner_id = str(((payload or {}).get("actor") or {}).get("adminId") or "")
+    actor_id, _ = _actor_fields(actor)
+    # Imports created before ownership was recorded remain recoverable.
+    return not owner_id or bool(actor_id and owner_id == actor_id)
+
+
 def _safe_name(value: str, fallback: str = "sample") -> str:
     name = Path(str(value or "")).name.strip().replace("\x00", "")
     return (name or fallback)[:180]
@@ -1146,9 +1155,12 @@ def create_import_session(
     return _public_import(payload) or {}
 
 
-def get_import_session(import_id: str) -> dict | None:
+def get_import_session(import_id: str, actor: dict | None = None) -> dict | None:
     with _IMPORT_LOCK:
-        return _public_import(_load_import(import_id))
+        payload = _load_import(import_id)
+        if not _import_belongs_to_actor(payload, actor):
+            return None
+        return _public_import(payload)
 
 
 def get_import_resume_state(import_id: str, files: list[dict]) -> dict:
@@ -1240,7 +1252,7 @@ def get_import_resume_state(import_id: str, files: list[dict]) -> dict:
     }
 
 
-def list_import_sessions(limit: int = 20) -> list[dict]:
+def list_import_sessions(limit: int = 20, actor: dict | None = None) -> list[dict]:
     if not IMPORT_ROOT.exists():
         return []
     sessions = []
@@ -1264,6 +1276,8 @@ def list_import_sessions(limit: int = 20) -> list[dict]:
                 raw["status"] = "queued"
                 _save_import(raw)
                 _submit_import(directory.name)
+            if not _import_belongs_to_actor(raw, actor):
+                continue
             payload = _public_import(raw)
             if payload:
                 sessions.append(payload)
@@ -3250,12 +3264,12 @@ def get_run(
     return run
 
 
-def overview() -> dict:
+def overview(actor: dict | None = None) -> dict:
     reconcile_stale_runs()
     datasets = list_datasets(None)
     runs = list_runs(None)
     active = [run for run in runs if run.get("status") in {"queued", "running", "cancel_requested"}]
-    imports = list_import_sessions(20)
+    imports = list_import_sessions(20, actor=actor)
     active_imports = [
         item for item in imports if item.get("status") in {"uploading", "queued", "processing"}
     ]

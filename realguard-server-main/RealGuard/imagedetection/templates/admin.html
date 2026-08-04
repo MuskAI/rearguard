@@ -942,9 +942,10 @@
       try{ return await requestPromise; }
       finally{ mutationRequests.delete(mutationKey); }
     }
-    async function uploadBlobApi(url, blob, metadata, onProgress){
+    async function uploadBlobApi(url, body, metadata, onProgress){
       const mutationKey=`POST:${url}`;
       if(mutationRequests.has(mutationKey)) throw new Error('该操作正在处理中，请稍候');
+      const bodySize=Number(body?.size ?? body?.byteLength ?? 0);
       const requestPromise=new Promise((resolve,reject)=>{
         const xhr=new XMLHttpRequest();
         xhr.open('POST',url,true);
@@ -956,7 +957,7 @@
             onProgress({loaded:event.loaded,total:event.total,percent:Math.min(100,Math.round(event.loaded/event.total*100)),processing:false});
           }
         };
-        xhr.upload.onload=()=>{ if(typeof onProgress==='function') onProgress({loaded:blob.size,total:blob.size,percent:100,processing:true}); };
+        xhr.upload.onload=()=>{ if(typeof onProgress==='function') onProgress({loaded:bodySize,total:bodySize,percent:100,processing:true}); };
         xhr.onerror=()=>reject(apiRequestError('网络连接失败，当前分块未完成'));
         xhr.ontimeout=()=>reject(apiRequestError('上传超时，请检查网络后重试'));
         xhr.onload=()=>{
@@ -968,7 +969,7 @@
           }
           resolve(data);
         };
-        xhr.send(blob);
+        xhr.send(body);
       });
       mutationRequests.set(mutationKey,requestPromise);
       try{ return await requestPromise; }
@@ -1955,7 +1956,15 @@
       for(let index=firstChunk;index<totalChunks;index++){
         ensureTestingUploadContinues();
         const start=index*chunkSize, end=Math.min(file.size,start+chunkSize);
-        const chunk=file.slice(start,end);
+        let chunk;
+        try{
+          chunk=await file.slice(start,end).arrayBuffer();
+        }catch(_error){
+          throw new Error(`无法读取文件“${relativePath}”，请确认外置磁盘仍已连接，并重新选择数据集文件夹授权访问`);
+        }
+        if(chunk.byteLength!==end-start){
+          throw new Error(`文件“${relativePath}”读取不完整（应为 ${end-start} 字节，实际 ${chunk.byteLength} 字节），请重新选择数据集文件夹`);
+        }
         const metadata={
           'X-Upload-Id':uploadId,
           'X-Upload-Relative-Path':encodeURIComponent(relativePath),
@@ -1963,9 +1972,15 @@
           'X-Upload-Total-Chunks':totalChunks,
           'X-Upload-Expected-Bytes':file.size,
         };
-        const data=await retryTestingUpload(()=>uploadBlobApi(`/api/admin/testing/dataset-imports/${encodeURIComponent(importId)}/chunks`,chunk,metadata,progress=>{
-          onBytes(start+(progress.loaded || 0));
-        }));
+        let data;
+        try{
+          data=await retryTestingUpload(()=>uploadBlobApi(`/api/admin/testing/dataset-imports/${encodeURIComponent(importId)}/chunks`,chunk,metadata,progress=>{
+            onBytes(start+(progress.loaded || 0));
+          }));
+        }catch(error){
+          error.message=`文件“${relativePath}”上传失败：${error.message || '网络连接中断'}`;
+          throw error;
+        }
         latest=data.importSession;
         const checkpoint=(latest?.pendingChunks || []).find(item=>item.relativePath===relativePath);
         if(checkpoint) state.testingPendingChunks.set(relativePath,checkpoint);
