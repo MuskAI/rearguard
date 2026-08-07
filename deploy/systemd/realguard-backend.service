@@ -15,6 +15,7 @@ Environment=REALGUARD_PORT=5000
 Environment=REALGUARD_SESSION_COOKIE_SECURE=1
 Environment=REALGUARD_ENV=production
 Environment=REALGUARD_ALERT_WORKER_ENABLED=0
+Environment=REALGUARD_INTERNAL_TESTING_REMOTE_REQUIRED=1
 EnvironmentFile=/etc/realguard/session.env
 EnvironmentFile=/etc/realguard/realguard-backend.env
 EnvironmentFile=/etc/realguard/internal-testing-remote.env

@@ -1189,6 +1189,22 @@ def test_admin_remote_testing_configuration_fails_closed(client, monkeypatch):
     assert "回环隧道" in response.get_json()["message"]
 
 
+def test_admin_remote_testing_required_never_falls_back_to_cloud_storage(client, monkeypatch):
+    _login(client, "operator")
+    monkeypatch.delenv("REALGUARD_INTERNAL_TESTING_REMOTE_URL", raising=False)
+    monkeypatch.setenv("REALGUARD_INTERNAL_TESTING_REMOTE_REQUIRED", "1")
+    monkeypatch.setattr(
+        internal_testing,
+        "overview",
+        lambda **_kwargs: pytest.fail("must not use cloud-local internal testing storage"),
+    )
+
+    response = client.get("/api/admin/testing/overview")
+
+    assert response.status_code == 503
+    assert "仅允许使用 66 服务器存储" in response.get_json()["message"]
+
+
 def test_internal_testing_has_a_cache_busting_direct_entry(client):
     _login(client, "operator")
     response = client.get("/admin/testing")

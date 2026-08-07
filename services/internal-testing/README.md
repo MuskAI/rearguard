@@ -24,4 +24,9 @@ The public backend uses the same token and:
 
 ```text
 REALGUARD_INTERNAL_TESTING_REMOTE_URL=http://127.0.0.1:15072
+REALGUARD_INTERNAL_TESTING_REMOTE_REQUIRED=1
 ```
+
+`REALGUARD_INTERNAL_TESTING_REMOTE_REQUIRED=1` is a fail-closed production
+guard: if the tunnel or its URL is missing, the public server rejects internal
+evaluation writes instead of creating a cloud-local dataset.

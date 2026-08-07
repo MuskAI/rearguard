@@ -1704,11 +1704,19 @@
       const host=system.host || {};
       const algorithm=system.algorithmServer || {};
       const services=system.services || {};
+      const testingStorage=data.storage || system.internalTestingStorage || {};
       const hostCpu=host.cpu?.loadPercent;
       const hostMemory=host.memory?.usedPercent;
       const latestEvaluation=(data.runs || []).find(run=>run.kind==='evaluation'&&run.status==='completed'&&run.metrics?.accuracy!=null);
       const latestMetrics=latestEvaluation?.metrics || {};
       const statusItems=[
+        [
+          '评测数据盘',
+          testingStorage.host==='10.1.20.66' ? '仅存 66 服务器' : '配置待检查',
+          testingStorage.freeBytes==null
+            ? '容量暂不可用'
+            : `可用 ${testingBytes(testingStorage.freeBytes)} · 总计 ${testingBytes(testingStorage.totalBytes)}`,
+        ],
         ['Web 服务器',host.status === 'critical' ? '异常' : host.status === 'warning' ? '需关注' : '运行正常',`CPU ${hostCpu ?? '--'}% · 内存 ${hostMemory ?? '--'}%`],
         ['算法服务器',algorithm.serviceReady ? '服务在线' : '服务异常',`${algorithm.modelName || '主鉴伪模型'} · ${algorithm.latencyMs ?? '--'} ms`],
         ['模型服务',`${services.online ?? 0}/${services.total ?? 0} 在线`,`降级 ${services.degraded ?? 0} · 离线 ${services.offline ?? 0}`],

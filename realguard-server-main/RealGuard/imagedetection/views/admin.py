@@ -499,6 +499,13 @@ def _internal_testing_remote_url():
     return value
 
 
+def _internal_testing_remote_required():
+    value = str(
+        os.environ.get("REALGUARD_INTERNAL_TESTING_REMOTE_REQUIRED") or ""
+    ).strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 def _internal_testing_remote_model():
     path = request.path.rstrip("/")
     model_id = ""
@@ -559,6 +566,11 @@ def _proxy_remote_internal_testing():
     except ValueError as exc:
         return jsonify({"status": "error", "message": str(exc)}), 503
     if not remote_url:
+        if _internal_testing_remote_required():
+            return jsonify({
+                "status": "error",
+                "message": "内部评测仅允许使用 66 服务器存储，远程存储隧道尚未配置",
+            }), 503
         return None
     permission = (
         "testing.load"
