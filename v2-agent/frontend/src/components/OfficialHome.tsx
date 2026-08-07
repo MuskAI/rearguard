@@ -190,7 +190,7 @@ export default function OfficialHome({
           {authReady && (user ? (
             <AccountMenu user={user} onWorkspace={onEnterWorkspace} onDeveloper={() => onDeveloper("overview")} onLogout={onLogout} />
           ) : (
-            <button type="button" className="home-login-button" onClick={onLogin}><LogIn size={17} /><span>登录</span></button>
+            <button type="button" className="home-login-button" onClick={onLogin} aria-label="登录账号" title="登录账号"><LogIn size={17} /><span>登录</span></button>
           ))}
           <button type="button" className="home-workspace-button" onClick={onEnterWorkspace}><span className="home-label-wide">开始鉴伪</span><span className="home-label-compact">鉴伪</span><ArrowRight size={17} /></button>
         </div>
