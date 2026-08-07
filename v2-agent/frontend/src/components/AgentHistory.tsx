@@ -8,6 +8,7 @@ import {
   Menu,
   PanelLeftClose,
   Plus,
+  RefreshCw,
   Search,
   Trash2,
   UserRound,
@@ -31,6 +32,7 @@ interface Props {
   onQueryChange: (value: string) => void;
   onSelect: (entry: AgentHistoryEntry) => void;
   onDelete: (entry: AgentHistoryEntry) => void;
+  onRetry: () => void;
   deletingKey?: string;
   onNew: () => void;
   onCollapse: () => void;
@@ -95,7 +97,15 @@ function HistoryContent(props: Props & { closeButtonRef?: RefObject<HTMLButtonEl
             {!props.loading && !props.message && filtered.length === 0 && (
               <div className="history-empty">{props.query ? "没有匹配的任务" : "完成鉴伪后，任务会出现在这里"}</div>
             )}
-            {props.message && <div className="history-empty history-error">{props.message}</div>}
+            {props.message && (
+              <div className="history-empty history-error">
+                <span>{props.message}</span>
+                <button type="button" className="history-retry-button" onClick={props.onRetry} disabled={props.loading}>
+                  <RefreshCw className={props.loading ? "spin" : ""} size={14} />
+                  重新加载
+                </button>
+              </div>
+            )}
             {filtered.map((entry) => (
               <div className="history-entry-row" key={entry.key}>
                 <button

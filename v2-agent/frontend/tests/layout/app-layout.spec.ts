@@ -15,7 +15,7 @@ const user = {
   phone: "138****0000",
 };
 
-async function installBaseMocks(page: Page, authenticated = false) {
+async function installBaseMocks(page: Page, authenticated = false, historyFailure = false) {
   await page.route(/\/v2-api\/csrf(?:\?|$)/, (route) => route.fulfill({
     json: { csrfToken: "a".repeat(40) },
   }));
@@ -44,18 +44,22 @@ async function installBaseMocks(page: Page, authenticated = false) {
 
   if (!authenticated) return;
   await page.route("**/v2-api/history**", (route) => route.fulfill({
+    status: historyFailure ? 503 : 200,
     json: { items: [], total: 0, filterCounts: {} },
   }));
   await page.route("**/api/history/image-detections**", (route) => route.fulfill({
+    status: historyFailure ? 503 : 200,
     json: { status: "success", records: [], total: 0 },
   }));
   await page.route("**/api/history/video-detections**", (route) => route.fulfill({
+    status: historyFailure ? 503 : 200,
     json: { status: "success", records: [], total: 0 },
   }));
 }
 
-async function installDeveloperMocks(page: Page) {
+async function installDeveloperMocks(page: Page, failures: Partial<Record<"account" | "keys" | "ledger", boolean>> = {}) {
   await page.route("**/api/developer/account?**", (route) => route.fulfill({
+    status: failures.account ? 503 : 200,
     json: {
       status: "success",
       account: {
@@ -104,6 +108,7 @@ async function installDeveloperMocks(page: Page) {
     },
   }));
   await page.route("**/api/developer/keys", (route) => route.fulfill({
+    status: failures.keys ? 503 : 200,
     json: {
       status: "success",
       keys: [{
@@ -119,6 +124,7 @@ async function installDeveloperMocks(page: Page) {
     },
   }));
   await page.route("**/api/developer/ledger?**", (route) => route.fulfill({
+    status: failures.ledger ? 503 : 200,
     json: { status: "success", entries: [] },
   }));
 }
@@ -309,17 +315,50 @@ test("开发者平台移动布局与 API Key 弹窗满足键盘交互", async ({
 
   await expect(page.getByRole("heading", { name: "把慧鉴AI接入你的业务流程" })).toBeVisible();
   await expect(page.getByRole("button", { name: "API Keys" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "返回慧鉴AI官网" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "官网", exact: true })).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
 
+  await page.getByRole("button", { name: "API Keys" }).click();
+  await expect(page).toHaveURL(/developerTab=keys/);
+  await page.goBack();
+  await expect(page.getByRole("heading", { name: "把慧鉴AI接入你的业务流程" })).toBeVisible();
   await page.getByRole("button", { name: "API Keys" }).click();
   const createButton = page.getByRole("button", { name: "创建 API Key" });
   await createButton.click();
   const dialog = page.getByRole("dialog", { name: "创建 API Key" });
   await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel("有效期")).toHaveValue("90");
+  await expect(dialog.getByRole("option", { name: "永不过期" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "关闭" })).toBeFocused();
   await page.keyboard.press("Shift+Tab");
   await expect(page.getByRole("button", { name: "创建 Key" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
   await expect(createButton).toBeFocused();
+});
+
+test("开发者凭据读取失败不会伪装成空列表", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await installBaseMocks(page, true);
+  await installDeveloperMocks(page, { keys: true });
+  await page.goto("/?developer=1&developerTab=keys");
+
+  await expect(page.getByText("API Key 列表读取失败，为避免重复创建，当前已暂停凭据操作")).toBeVisible();
+  await expect(page.getByRole("button", { name: "创建 API Key" })).toBeDisabled();
+  await expect(page.getByText("尚未创建 API Key")).toHaveCount(0);
+});
+
+test("历史记录读取失败时提供可执行的重试入口", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await installBaseMocks(page, true, true);
+  await page.goto("/?workspace=1");
+
+  await expect(page.getByText("个人历史暂时无法读取，请稍后刷新")).toBeVisible();
+  const retry = page.getByRole("button", { name: "重新加载" });
+  await expect(retry).toBeVisible();
+  const retriedRequest = page.waitForRequest(/\/v2-api\/history/);
+  await retry.click();
+  await retriedRequest;
+  await expect(page.getByText("个人历史暂时无法读取，请稍后刷新")).toBeVisible();
 });

@@ -1016,12 +1016,19 @@
       return notes.join(' ');
     }
     function routeTitle(route){ return titles[route] || route; }
-    function switchRoute(route){
-      if(!routeAllowed(route)){ toast('当前角色无权访问该模块'); route='dashboard'; }
+    function switchRoute(route, options={}){
+      let historyMode=options.historyMode || 'push';
+      if(!routeAllowed(route)){
+        toast('当前角色无权访问该模块');
+        route='dashboard';
+        if(historyMode==='none') historyMode='replace';
+      }
       document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === `view-${route}`));
       document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.route === route));
       $('crumb').textContent = routeTitle(route);
-      history.replaceState(null, '', `#${route}`);
+      const nextHash=`#${route}`;
+      if(historyMode==='replace') history.replaceState({route},'',nextHash);
+      else if(historyMode==='push' && location.hash!==nextHash) history.pushState({route},'',nextHash);
       if(route === 'assurance' && can('topology.view')) loadAssurance();
       if(route === 'swarm' && can('topology.view')) loadExpertReview();
       if(route === 'system' && can('topology.view')) loadSystem();
@@ -2556,9 +2563,13 @@
       await Promise.allSettled(tasks);
     }
     document.querySelectorAll('[data-route]').forEach(el => el.addEventListener('click', e => { e.preventDefault(); switchRoute(el.dataset.route); }));
+    window.addEventListener('popstate',()=>{
+      const requested=(location.hash || '#dashboard').slice(1);
+      switchRoute(requested,{historyMode:'none'});
+    });
     const initial = (location.hash || `#${SERVER_INITIAL_ROUTE}`).slice(1);
     const initialRoute = (titles[initial] && routeAllowed(initial)) ? initial : 'dashboard';
-    switchRoute(initialRoute); loadOverview();
+    switchRoute(initialRoute,{historyMode:'replace'}); loadOverview();
   </script>
 {% endif %}
 </body>

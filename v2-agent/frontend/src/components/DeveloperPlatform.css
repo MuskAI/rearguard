@@ -353,6 +353,7 @@
 .developer-table-wrap td small { max-width: 260px; margin-top: 2px; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; font-size: 9px; }
 .developer-table-wrap td code { color: #315967; font-size: 10px; }
 .developer-empty-cell { height: 110px !important; color: var(--muted) !important; text-align: center !important; }
+.developer-load-error { color: #9f3e30 !important; background: #fff8f5 !important; }
 .developer-status, .developer-key-state { display: inline-flex; align-items: center; min-height: 22px; padding: 0 7px; border-radius: 4px; font-size: 9px; font-weight: 750; }
 .developer-status.success, .developer-key-state.active { color: var(--green); background: var(--green-soft); }
 .developer-status.running, .developer-status.queued { color: var(--blue); background: var(--blue-soft); }
@@ -512,8 +513,6 @@
 }
 
 .developer-login-gate { position: relative; padding: 20px; }
-.developer-back-link { position: absolute; top: 20px; left: 24px; min-height: 38px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; color: var(--muted-strong); background: transparent; border-radius: 6px; font-size: 11px; }
-.developer-back-link:hover { color: var(--primary-strong); background: var(--primary-soft); }
 .developer-gate-panel { width: min(430px, 100%); display: flex; flex-direction: column; align-items: center; padding: 40px 32px; text-align: center; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow-sm); }
 .developer-gate-icon { width: 52px; height: 52px; display: grid; place-items: center; margin-bottom: 18px; color: var(--primary-strong); background: var(--primary-soft); border-radius: 8px; }
 .developer-gate-panel h1 { margin: 20px 0 6px; color: var(--ink-strong); font-size: 22px; }

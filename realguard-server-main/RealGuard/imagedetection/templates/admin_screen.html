@@ -158,6 +158,13 @@
     .inspector-actions{display:flex;gap:8px;padding-top:2px}
     .action-link{min-height:38px;padding:0 12px;border:1px solid var(--line);border-radius:6px;display:inline-flex;align-items:center;justify-content:center;gap:7px;color:var(--ink);background:var(--panel-2);font-weight:700;font-size:13px}
     .action-link:hover{border-color:#607168}
+    .session-expired{position:fixed;z-index:90;inset:0;display:grid;place-items:center;padding:20px;background:rgba(7,11,9,.82);backdrop-filter:blur(8px)}
+    .session-expired[hidden]{display:none}
+    .session-expired-card{width:min(430px,100%);padding:28px;border:1px solid #536159;border-radius:var(--radius);background:#151b18;box-shadow:var(--shadow);text-align:center}
+    .session-expired-card>i{width:48px;height:48px;display:grid;place-items:center;margin:0 auto 16px;border-radius:var(--radius);color:var(--amber);background:rgba(239,189,95,.1);font-size:21px}
+    .session-expired-card h2{margin:0 0 8px;font-size:22px}
+    .session-expired-card p{margin:0;color:var(--muted);font-size:13px;line-height:1.7}
+    .session-expired-card .action-link{margin-top:20px;color:#071008;background:var(--green);border-color:var(--green)}
     .empty{padding:20px;color:var(--muted);text-align:center;font-size:12px}
     .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
     @keyframes spin{to{transform:rotate(360deg)}}
@@ -260,7 +267,7 @@
     <section class="runtime" id="runtime" aria-label="服务器运行状态"></section>
     <div class="foot"><button class="active-filter" id="activeFilter" type="button" disabled><strong>全部检测</strong></button><span>管理员：{{ admin_user.username or admin_user.phone or "admin" }} · 数据不含用户身份信息</span></div>
   </main>
-  <aside class="inspector" id="inspector" aria-hidden="true" aria-labelledby="inspectorTitle">
+  <aside class="inspector" id="inspector" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="inspectorTitle" tabindex="-1" inert>
     <div class="inspector-head">
       <div><span class="inspector-kicker" id="inspectorKicker">数据详情</span><h2 id="inspectorTitle">查看详情</h2></div>
       <button class="icon-btn" id="closeInspector" type="button" aria-label="关闭详情" title="关闭详情"><i class="fa fa-times" aria-hidden="true"></i></button>
@@ -268,6 +275,15 @@
     <div class="inspector-body" id="inspectorBody"></div>
     <div class="inspector-actions" id="inspectorActions"></div>
   </aside>
+  <div class="session-expired" id="sessionExpired" role="alertdialog" aria-modal="true" aria-labelledby="sessionExpiredTitle" hidden>
+    <section class="session-expired-card">
+      <i class="fa fa-lock" aria-hidden="true"></i>
+      <h2 id="sessionExpiredTitle">管理会话已失效</h2>
+      <p>实时轮询已经停止，页面中的旧数据不再作为当前状态展示。</p>
+      <p id="sessionExpiredLastData">尚未成功读取数据</p>
+      <a class="action-link" id="sessionExpiredLogin" href="/admin/login"><i class="fa fa-sign-in" aria-hidden="true"></i>重新登录</a>
+    </section>
+  </div>
   <script src="/static/js/echarts-6.1.0.min.js"></script>
   <script>
     const SCREEN_TOKEN = {{ screen_token|default("", true)|tojson }};
@@ -276,6 +292,7 @@
     let state = null;
     let lastSuccessAt = 0;
     let loading = false;
+    let authenticationExpired = false;
     let resizeFrame = 0;
     let inspectorReturnFocus = null;
     const previousMetricValues = new Map();
@@ -324,8 +341,12 @@
       const timeout = setTimeout(() => controller.abort(), 12000);
       try{
         const res = await fetch('/api/admin/big-screen', {headers, signal:controller.signal, cache:'no-store', credentials:'same-origin'});
-        const data = await res.json();
-        if(!res.ok || data.status === 'error') throw new Error(data.message || '大屏数据加载失败');
+        const data = await res.json().catch(()=>({}));
+        if(!res.ok || data.status === 'error'){
+          const error = new Error(data.message || '大屏数据加载失败');
+          error.status = res.status;
+          throw error;
+        }
         return data;
       }catch(err){
         if(err.name === 'AbortError') throw new Error('数据请求超时');
@@ -447,13 +468,40 @@
       $('inspectorActions').innerHTML = action ? `<a class="action-link" href="${esc(action.href)}"><i class="fa fa-arrow-right" aria-hidden="true"></i>${esc(action.label)}</a>` : '';
       $('inspector').classList.add('open');
       $('inspector').setAttribute('aria-hidden','false');
+      $('inspector').removeAttribute('inert');
+      document.querySelector('.screen').inert=true;
       requestAnimationFrame(()=>$('closeInspector').focus());
     }
     function closeInspector(){
       $('inspector').classList.remove('open');
       $('inspector').setAttribute('aria-hidden','true');
+      $('inspector').setAttribute('inert','');
+      if(!authenticationExpired) document.querySelector('.screen').inert=false;
       const target=inspectorReturnFocus;inspectorReturnFocus=null;
       if(target && document.contains(target)) target.focus();
+    }
+    function trapInspectorFocus(event){
+      if(!$('inspector').classList.contains('open')) return;
+      if(event.key==='Escape'){event.preventDefault();closeInspector();return;}
+      if(event.key!=='Tab') return;
+      const focusable=[...$('inspector').querySelectorAll('a[href],button:not(:disabled),[tabindex]:not([tabindex="-1"])')].filter(item=>!item.hasAttribute('hidden'));
+      if(!focusable.length){event.preventDefault();$('inspector').focus();return;}
+      const first=focusable[0],last=focusable[focusable.length-1];
+      if(event.shiftKey && document.activeElement===first){event.preventDefault();last.focus();}
+      else if(!event.shiftKey && document.activeElement===last){event.preventDefault();first.focus();}
+    }
+    function expireAuthentication(){
+      if(authenticationExpired) return;
+      authenticationExpired=true;
+      ui.autoRefresh=false;ui.nextRefreshAt=0;clearTimeout(ui.refreshTimer);ui.refreshTimer=null;
+      closeInspector();
+      document.querySelector('.screen').inert=true;
+      setConnection('error','会话已失效');
+      $('generated').textContent='实时数据已停止更新';
+      $('refreshNow').disabled=true;$('autoRefresh').disabled=true;
+      $('sessionExpiredLastData').textContent=lastSuccessAt?`最后成功更新：${new Date(lastSuccessAt).toLocaleString('zh-CN',{hour12:false})}`:'本次会话尚未成功读取数据';
+      $('sessionExpired').hidden=false;
+      requestAnimationFrame(()=>$('sessionExpiredLogin').focus());
     }
     function drawCanvas(id, draw){
       const canvas = $(id);
@@ -835,10 +883,12 @@
         renderAnomalies(state.anomalies);
         renderCharts();
       }catch(err){
+        if(err.status===401 || err.status===403){expireAuthentication();return;}
         setConnection('error', state ? '刷新失败' : '连接失败');
         $('generated').textContent = state ? `保留上次数据 · ${err.message}` : err.message;
       }finally{
-        loading=false;$('refreshNow').disabled=false;$('refreshNow').removeAttribute('aria-busy');scheduleRefresh();
+        loading=false;$('refreshNow').removeAttribute('aria-busy');
+        if(!authenticationExpired){$('refreshNow').disabled=false;scheduleRefresh();}
       }
     }
     function syncTrendControls(){
@@ -921,7 +971,7 @@
     $('refreshNow').addEventListener('click',load);
     $('fullscreenToggle').addEventListener('click',toggleFullscreen);
     document.addEventListener('fullscreenchange',updateFullscreenButton);
-    document.addEventListener('keydown',event=>{if(event.key==='Escape' && $('inspector').classList.contains('open')) closeInspector();});
+    document.addEventListener('keydown',trapInspectorFocus);
     ['trend','routes','distribution'].forEach(setupCanvas);
     window.addEventListener('resize',()=>{cancelAnimationFrame(resizeFrame);resizeFrame=requestAnimationFrame(()=>{renderCharts();ui.trafficChart?.resize();});});
     syncTrendControls();syncDistributionControls();syncPrimaryView();updateFullscreenButton();load();

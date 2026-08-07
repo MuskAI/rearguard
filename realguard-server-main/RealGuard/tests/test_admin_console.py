@@ -253,7 +253,11 @@ def test_admin_screen_renders_interactive_operations_controls(client, monkeypatc
     assert "algorithm?.inferenceStatus" in html
     assert "algorithm?.verdictStatus" in html
     assert "/static/js/echarts-6.1.0.min.js" in html
-    assert 'id="inspector"' in html
+    assert 'id="inspector" role="dialog" aria-modal="true"' in html
+    assert 'id="sessionExpired" role="alertdialog" aria-modal="true"' in html
+    assert "err.status===401 || err.status===403" in html
+    assert "document.querySelector('.screen').inert=true" in html
+    assert "document.addEventListener('keydown',trapInspectorFocus)" in html
     assert "['trend','routes','distribution'].forEach(setupCanvas)" in html
 
 
@@ -269,6 +273,19 @@ def test_admin_page_exposes_exact_developer_call_quota_control(client, monkeypat
     assert "设置 API 次数" in html
     assert "/api/admin/developer/accounts/" in html
     assert "remainingCalls" in html
+
+
+def test_admin_navigation_preserves_browser_history(client, monkeypatch):
+    monkeypatch.setenv("REALGUARD_ADMIN_USER_IDS", "1")
+    monkeypatch.setattr(admin, "_admin_account_count", lambda: 0)
+    _login_session(client)
+
+    html = client.get("/admin").get_data(as_text=True)
+
+    assert "history.pushState({route},'',nextHash)" in html
+    assert "window.addEventListener('popstate'" in html
+    assert "switchRoute(requested,{historyMode:'none'})" in html
+    assert "switchRoute(initialRoute,{historyMode:'replace'})" in html
 
 
 def test_admin_account_login_sets_admin_session(client, monkeypatch):

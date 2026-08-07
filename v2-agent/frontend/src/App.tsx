@@ -373,7 +373,7 @@ export default function App() {
 
   useEffect(() => {
     if (!analyticsEnabled) return;
-    const page = view === "home" ? "home" : view === "developer" ? "history" : "image";
+    const page = view === "home" ? "home" : view === "developer" ? "developer" : "workspace";
     if (lastTrackedPageRef.current === page) return;
     lastTrackedPageRef.current = page;
     trackPageview(page);
@@ -446,6 +446,7 @@ export default function App() {
     const url = new URL(window.location.href);
     url.searchParams.delete("workspace");
     url.searchParams.delete("developer");
+    url.searchParams.delete("developerTab");
     if (nextView === "workspace") {
       url.searchParams.set("workspace", "1");
       url.hash = "";
@@ -1087,6 +1088,7 @@ export default function App() {
         onQueryChange={setHistoryQuery}
         onSelect={(entry) => void selectHistory(entry)}
         onDelete={(entry) => void removeHistoryEntry(entry)}
+        onRetry={() => user && void loadHistoryForUser(user)}
         deletingKey={deletingHistoryKey}
         onNew={resetTask}
         onCollapse={() => setHistorySidebarVisible(false)}

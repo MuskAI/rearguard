@@ -16,7 +16,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from xml.sax.saxutils import escape
 
-from imagedetection.decision_labels import binary_final_label
+from imagedetection.decision_labels import AI_GENERATED_LABEL, binary_final_label
 
 FONT_NAME = "HuijianCJK"
 _FONT_LOCK = Lock()
@@ -188,7 +188,7 @@ def _build_report(
         title=f"慧鉴AI {title} {report_id}",
         author="慧鉴AI",
     )
-    is_fake = any(token in final_label for token in ("AI", "伪造", "风险", "篡改", "翻拍", "深伪"))
+    is_fake = final_label == AI_GENERATED_LABEL
     needs_review = "复核" in final_label or confidence == "低"
     verdict_color = AMBER if needs_review else RED if is_fake else TEAL
     story: list[Any] = [

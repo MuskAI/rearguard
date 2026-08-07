@@ -2,7 +2,6 @@ import { KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, u
 import {
   Activity,
   AlertTriangle,
-  ArrowLeft,
   BookOpen,
   Check,
   ChevronRight,
@@ -52,6 +51,7 @@ import "./DeveloperPlatform.css";
 type DeveloperTab = "overview" | "keys" | "tester" | "docs" | "usage";
 type CodeLanguage = "curl" | "python" | "typescript" | "java" | "go";
 type CreateKeyPayload = Parameters<typeof createDeveloperKey>[0];
+type DeveloperResourceErrors = { account: string; keys: string; ledger: string };
 
 interface PendingCreateKeyOperation {
   fingerprint: string;
@@ -136,7 +136,6 @@ function keyStatusLabel(key: DeveloperApiKey) {
 }
 
 function expiryFromChoice(choice: string) {
-  if (choice === "never") return null;
   const days = Number(choice);
   return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
 }
@@ -319,6 +318,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
   const [ledger, setLedger] = useState<DeveloperLedgerEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [resourceErrors, setResourceErrors] = useState<DeveloperResourceErrors>({ account: "", keys: "", ledger: "" });
   const [createOpen, setCreateOpen] = useState(false);
   const [keyBusy, setKeyBusy] = useState<number | "create" | null>(null);
   const [revealedKey, setRevealedKey] = useState<{ value: string; title: string } | null>(null);
@@ -340,6 +340,19 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
   const accountIdentity = user?.account_uuid || (user ? String(user.Userid) : "");
   const accountIdentityRef = useRef(accountIdentity);
   accountIdentityRef.current = accountIdentity;
+
+  const selectDeveloperTab = useCallback((nextTab: DeveloperTab) => {
+    setTab(nextTab);
+    const url = new URL(window.location.href);
+    const currentTab = initialDeveloperTab();
+    url.searchParams.delete("workspace");
+    url.searchParams.set("developer", "1");
+    url.searchParams.set("developerTab", nextTab);
+    url.hash = "";
+    if (currentTab !== nextTab || window.location.search !== url.search) {
+      window.history.pushState({ view: "developer", developerTab: nextTab }, "", url);
+    }
+  }, []);
 
   const restoreModalOpener = useCallback(() => {
     const opener = modalOpenerRef.current;
@@ -368,9 +381,14 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
       fetchDeveloperLedger(80),
     ]);
     if (generation !== loadGeneration.current) return;
-    setAccount(accountResult.status === "fulfilled" ? accountResult.value : null);
-    setKeys(keyResult.status === "fulfilled" ? keyResult.value.keys || [] : []);
-    setLedger(ledgerResult.status === "fulfilled" ? ledgerResult.value.entries || [] : []);
+    if (accountResult.status === "fulfilled") setAccount(accountResult.value);
+    if (keyResult.status === "fulfilled") setKeys(keyResult.value.keys || []);
+    if (ledgerResult.status === "fulfilled") setLedger(ledgerResult.value.entries || []);
+    setResourceErrors({
+      account: accountResult.status === "rejected" ? "账户额度与调用统计读取失败" : "",
+      keys: keyResult.status === "rejected" ? "API Key 列表读取失败" : "",
+      ledger: ledgerResult.status === "rejected" ? "计费账本读取失败" : "",
+    });
     const rejected = [accountResult, keyResult, ledgerResult].find((item) => item.status === "rejected");
     setError(rejected?.status === "rejected" ? (rejected.reason instanceof Error ? rejected.reason.message : "开发者数据读取失败") : "");
     setLoading(false);
@@ -382,6 +400,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
     setKeys([]);
     setLedger([]);
     setError("");
+    setResourceErrors({ account: "", keys: "", ledger: "" });
     setCreateOpen(false);
     setRevealedKey(null);
     setTesterKeySeed("");
@@ -395,6 +414,12 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    const syncTabFromUrl = () => setTab(initialDeveloperTab());
+    window.addEventListener("popstate", syncTabFromUrl);
+    return () => window.removeEventListener("popstate", syncTabFromUrl);
+  }, []);
 
   useEffect(() => {
     if (!copied) return;
@@ -561,10 +586,9 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
   if (!user) {
     return (
       <div className="developer-gate developer-login-gate">
-        <button type="button" className="developer-back-link" onClick={onHome}><ArrowLeft size={17} /> 返回官网</button>
         <div className="developer-gate-panel">
           <span className="developer-gate-icon"><LockKeyhole size={28} /></span>
-          <HuijianBrand />
+          <HuijianBrand onClick={onHome} />
           <h1>开发者平台需要登录</h1>
           <p>API Key、赠送额度、调用记录和账单都绑定到你的慧鉴AI账号。</p>
           <button type="button" className="developer-primary-action" onClick={onLogin}><LogIn size={17} /> 登录开发者平台</button>
@@ -584,7 +608,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
             return (
-              <button key={item.key} type="button" className={tab === item.key ? "is-active" : ""} onClick={() => setTab(item.key)} aria-current={tab === item.key ? "page" : undefined} aria-label={item.label} title={item.label}>
+              <button key={item.key} type="button" className={tab === item.key ? "is-active" : ""} onClick={() => selectDeveloperTab(item.key)} aria-current={tab === item.key ? "page" : undefined} aria-label={item.label} title={item.label}>
                 <Icon size={17} /><span>{item.label}</span><ChevronRight size={14} />
               </button>
             );
@@ -610,7 +634,6 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
           <div className="developer-topbar-actions">
             {error && <span className="developer-inline-error">{error}</span>}
             <button type="button" className="developer-icon-button" onClick={() => void load()} disabled={loading} title="刷新数据" aria-label="刷新数据"><RefreshCw className={loading ? "spin" : ""} size={17} /></button>
-            <button type="button" className="developer-secondary-action" onClick={onHome}><ArrowLeft size={16} /> 官网</button>
             <button type="button" className="developer-primary-action compact" onClick={onWorkspace} aria-label="打开鉴伪工作台" title="打开鉴伪工作台"><ShieldCheck size={16} /><span>鉴伪工作台</span></button>
           </div>
         </header>
@@ -618,8 +641,8 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
         <div className="developer-scroll" aria-busy={loading}>
           {loading && account === null && keys.length === 0 && ledger.length === 0 ? <DeveloperLoadingState /> : <>
           {error && <div className="developer-page-error" role="alert">{error}</div>}
-          {tab === "overview" && <Overview account={account} endpoint={endpoint} copied={copied} onCopy={copyText} onOpenKeys={() => setTab("keys")} onOpenDocs={() => setTab("docs")} />}
-          {tab === "keys" && <KeysPanel keys={keys} busy={keyBusy} loading={loading} onCreate={openCreateDialog} onRotate={rotateKey} onRevoke={revokeKey} />}
+          {tab === "overview" && <Overview account={account} accountError={resourceErrors.account} keysReady={!resourceErrors.keys} endpoint={endpoint} copied={copied} onCopy={copyText} onOpenKeys={() => selectDeveloperTab("keys")} onOpenDocs={() => selectDeveloperTab("docs")} />}
+          {tab === "keys" && <KeysPanel keys={keys} loadError={resourceErrors.keys} busy={keyBusy} loading={loading} onCreate={openCreateDialog} onRotate={rotateKey} onRevoke={revokeKey} />}
           {tab === "tester" && <ApiTesterPanel key={accountIdentity} endpoint={endpoint} apiKeySeed={testerKeySeed} />}
           {tab === "docs" && (
             <DocsPanel
@@ -633,7 +656,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
               onCopy={copyText}
             />
           )}
-          {tab === "usage" && <UsagePanel account={account} ledger={ledger} days={days} onDaysChange={setDays} />}
+          {tab === "usage" && <UsagePanel account={account} ledger={ledger} accountError={resourceErrors.account} ledgerError={resourceErrors.ledger} days={days} onDaysChange={setDays} />}
           </>}
         </div>
       </main>
@@ -649,7 +672,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
               <label className="developer-check-row"><input type="checkbox" checked={newKeyScopes.swarm} onChange={(event) => setNewKeyScopes((value) => ({ ...value, swarm: event.target.checked }))} /><span><strong>Swarm 多源复核</strong><small>多条独立证据交叉核验</small></span></label>
               <label className="developer-check-row"><input type="checkbox" checked={newKeyScopes.reports} onChange={(event) => setNewKeyScopes((value) => ({ ...value, reports: event.target.checked }))} /><span><strong>报告下载</strong><small>读取该 Key 创建任务的 PDF 报告</small></span></label>
             </fieldset>
-            <label><span>有效期</span><select value={newKeyExpiry} onChange={(event) => setNewKeyExpiry(event.target.value)}><option value="30">30 天</option><option value="90">90 天</option><option value="365">1 年</option><option value="never">永不过期</option></select></label>
+            <label><span>有效期</span><select value={newKeyExpiry} onChange={(event) => setNewKeyExpiry(event.target.value)}><option value="30">30 天</option><option value="90">90 天</option><option value="365">1 年</option></select></label>
             <label><span>IP 白名单 <small>可选，每行一个 IP 或 CIDR</small></span><textarea value={newKeyIps} onChange={(event) => setNewKeyIps(event.target.value)} rows={3} placeholder="203.0.113.10&#10;10.0.0.0/24" /></label>
             {error && <p className="developer-modal-error" role="alert">{error}</p>}
             <footer><button type="button" className="developer-secondary-action" onClick={closeCreateDialog}>取消</button><button type="button" className="developer-primary-action" onClick={() => void createKey()} disabled={keyBusy === "create" || !newKeyName.trim() || (!newKeyScopes.fast && !newKeyScopes.swarm)}>{keyBusy === "create" ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />} 创建 Key</button></footer>
@@ -976,8 +999,10 @@ function DeveloperLoadingState() {
   );
 }
 
-function Overview({ account, endpoint, copied, onCopy, onOpenKeys, onOpenDocs }: {
+function Overview({ account, accountError, keysReady, endpoint, copied, onCopy, onOpenKeys, onOpenDocs }: {
   account: DeveloperAccountResponse | null;
+  accountError: string;
+  keysReady: boolean;
   endpoint: string;
   copied: string;
   onCopy: (value: string, token: string) => void;
@@ -993,7 +1018,7 @@ function Overview({ account, endpoint, copied, onCopy, onOpenKeys, onOpenDocs }:
   ];
   return (
     <div className="developer-page developer-overview">
-      <section className="developer-section-heading"><div><p>开发者平台 <span><i /> 账号级权限与用量</span></p><h2>把慧鉴AI接入你的业务流程</h2><small>一期开放图像鉴伪；快速检测与 Swarm 复核共用异步接口。</small></div><button type="button" className="developer-primary-action" onClick={onOpenKeys}><KeyRound size={16} /> 创建 API Key</button></section>
+      <section className="developer-section-heading"><div><p>开发者平台 <span><i /> 账号级权限与用量</span></p><h2>把慧鉴AI接入你的业务流程</h2><small>一期开放图像鉴伪；快速检测与 Swarm 复核共用异步接口。</small></div><button type="button" className="developer-primary-action" onClick={onOpenKeys} disabled={!keysReady} title={keysReady ? undefined : "API Key 状态尚未读取成功"}><KeyRound size={16} /> 创建 API Key</button></section>
       <section className="developer-metric-strip" aria-label="开发者账户指标">
         {metrics.map((item) => { const Icon = item.icon; return <article key={item.label}><span><Icon size={18} /></span><div><small>{item.label}</small><strong>{item.value}</strong><p>{item.note}</p></div></article>; })}
       </section>
@@ -1019,30 +1044,30 @@ function Overview({ account, endpoint, copied, onCopy, onOpenKeys, onOpenDocs }:
           <p>所有 API Key 共享账号额度；失败、超时和参数错误不扣减。</p>
         </section>
       </div>
-      <RecentTasks tasks={account?.recentTasks || []} />
+      <RecentTasks tasks={account?.recentTasks || []} error={accountError} />
     </div>
   );
 }
 
-function RecentTasks({ tasks }: { tasks: DeveloperAccountResponse["recentTasks"] }) {
+function RecentTasks({ tasks, error }: { tasks: DeveloperAccountResponse["recentTasks"]; error?: string }) {
   return (
     <section className="developer-table-section">
       <header><div><h3>最近任务</h3><p>只显示当前账号通过开发者 API 创建的任务。</p></div></header>
       <div className="developer-table-wrap"><table><thead><tr><th>文件</th><th>模式</th><th>状态</th><th>结算</th><th>创建时间</th></tr></thead><tbody>
-        {tasks.length ? tasks.map((task) => <tr key={task.id}><td><strong>{task.filename}</strong><small>{task.id}</small></td><td>{task.mode === "swarm" ? "Swarm" : "快速"}</td><td><span className={`developer-status ${task.status}`}>{statusLabel(task.status)}</span></td><td>{task.billing?.status === "settled" ? (task.billing.source === "free" ? "赠送额度" : formatMoney(task.billing.amountFen)) : task.billing?.status === "reserved" ? "已预占" : "未结算"}</td><td>{compactDate(task.createdAt)}</td></tr>) : <tr><td colSpan={5} className="developer-empty-cell">还没有 API 任务</td></tr>}
+        {error ? <tr><td colSpan={5} className="developer-empty-cell developer-load-error">{error}，请使用页面右上角刷新</td></tr> : tasks.length ? tasks.map((task) => <tr key={task.id}><td><strong>{task.filename}</strong><small>{task.id}</small></td><td>{task.mode === "swarm" ? "Swarm" : "快速"}</td><td><span className={`developer-status ${task.status}`}>{statusLabel(task.status)}</span></td><td>{task.billing?.status === "settled" ? (task.billing.source === "free" ? "赠送额度" : formatMoney(task.billing.amountFen)) : task.billing?.status === "reserved" ? "已预占" : "未结算"}</td><td>{compactDate(task.createdAt)}</td></tr>) : <tr><td colSpan={5} className="developer-empty-cell">还没有 API 任务</td></tr>}
       </tbody></table></div>
     </section>
   );
 }
 
-function KeysPanel({ keys, busy, loading, onCreate, onRotate, onRevoke }: { keys: DeveloperApiKey[]; busy: number | "create" | null; loading: boolean; onCreate: (opener: HTMLElement) => void; onRotate: (key: DeveloperApiKey, opener: HTMLElement) => void; onRevoke: (key: DeveloperApiKey) => void }) {
+function KeysPanel({ keys, loadError, busy, loading, onCreate, onRotate, onRevoke }: { keys: DeveloperApiKey[]; loadError: string; busy: number | "create" | null; loading: boolean; onCreate: (opener: HTMLElement) => void; onRotate: (key: DeveloperApiKey, opener: HTMLElement) => void; onRevoke: (key: DeveloperApiKey) => void }) {
   const activeCount = keys.filter((key) => key.status === "active").length;
   return (
     <div className="developer-page">
-      <section className="developer-section-heading"><div><p>凭据管理</p><h2>API Keys</h2><small>按环境拆分密钥，降低泄露后的影响范围。完整 Key 仅在创建或轮换时展示一次。</small></div><button type="button" className="developer-primary-action" onClick={(event) => onCreate(event.currentTarget)} disabled={loading || activeCount >= 5 || busy !== null}><Plus size={16} /> 创建 API Key</button></section>
-      <section className="developer-security-rail"><ShieldCheck size={19} /><div><strong>服务端只保存 Key 哈希</strong><span>建议设置有效期与 IP 白名单，并定期轮换生产密钥。</span></div><small>{activeCount} / 5 个 active</small></section>
+      <section className="developer-section-heading"><div><p>凭据管理</p><h2>API Keys</h2><small>按环境拆分密钥，降低泄露后的影响范围。完整 Key 仅在创建或轮换时展示一次。</small></div><button type="button" className="developer-primary-action" onClick={(event) => onCreate(event.currentTarget)} disabled={loading || Boolean(loadError) || activeCount >= 5 || busy !== null}><Plus size={16} /> 创建 API Key</button></section>
+      <section className="developer-security-rail"><ShieldCheck size={19} /><div><strong>服务端只保存 Key 哈希</strong><span>建议设置有效期与 IP 白名单，并定期轮换生产密钥。</span></div><small>{loadError ? "状态未知" : `${activeCount} / 5 个 active`}</small></section>
       <section className="developer-table-section developer-key-table"><header><div><h3>密钥列表</h3><p>撤销后立即失效，不影响账号额度和历史账单。</p></div></header><div className="developer-table-wrap"><table><thead><tr><th>名称</th><th>Key</th><th>权限</th><th>限制</th><th>最后使用</th><th aria-label="操作" /></tr></thead><tbody>
-        {keys.length ? keys.map((key) => <tr key={`${key.id}-${key.status}`}><td><strong>{key.name}</strong><span className={`developer-key-state ${key.status}`}>{keyStatusLabel(key)}</span></td><td><code>{key.preview}</code></td><td><div className="developer-scope-list">{key.scopes.map((scope) => <span key={scope}>{scope === "image:fast" ? "快速" : scope === "image:swarm" ? "Swarm" : scope === "reports" ? "报告" : scope}</span>)}</div></td><td><small>{key.expiresAt ? `到期 ${compactDate(key.expiresAt)}` : "永不过期"}</small><small>{key.ipAllowlist?.length ? `${key.ipAllowlist.length} 条 IP 规则` : "不限 IP"}</small></td><td>{compactDate(key.lastUsedAt)}</td><td><div className="developer-row-actions">{key.status === "active" && <><button type="button" title="轮换 Key" aria-label={`轮换 ${key.name}`} disabled={busy !== null} onClick={(event) => onRotate(key, event.currentTarget)}>{busy === key.id ? <LoaderCircle className="spin" size={16} /> : <RotateCw size={16} />}</button><button type="button" className="danger" title="撤销 Key" aria-label={`撤销 ${key.name}`} disabled={busy !== null} onClick={() => onRevoke(key)}><Trash2 size={16} /></button></>}</div></td></tr>) : <tr><td colSpan={6} className="developer-empty-cell">尚未创建 API Key</td></tr>}
+        {loadError ? <tr><td colSpan={6} className="developer-empty-cell developer-load-error">{loadError}，为避免重复创建，当前已暂停凭据操作</td></tr> : keys.length ? keys.map((key) => <tr key={`${key.id}-${key.status}`}><td><strong>{key.name}</strong><span className={`developer-key-state ${key.status}`}>{keyStatusLabel(key)}</span></td><td><code>{key.preview}</code></td><td><div className="developer-scope-list">{key.scopes.map((scope) => <span key={scope}>{scope === "image:fast" ? "快速" : scope === "image:swarm" ? "Swarm" : scope === "reports" ? "报告" : scope}</span>)}</div></td><td><small>{key.expiresAt ? `到期 ${compactDate(key.expiresAt)}` : "未设置到期时间"}</small><small>{key.ipAllowlist?.length ? `${key.ipAllowlist.length} 条 IP 规则` : "不限 IP"}</small></td><td>{compactDate(key.lastUsedAt)}</td><td><div className="developer-row-actions">{key.status === "active" && <><button type="button" title="轮换 Key" aria-label={`轮换 ${key.name}`} disabled={busy !== null} onClick={(event) => onRotate(key, event.currentTarget)}>{busy === key.id ? <LoaderCircle className="spin" size={16} /> : <RotateCw size={16} />}</button><button type="button" className="danger" title="撤销 Key" aria-label={`撤销 ${key.name}`} disabled={busy !== null} onClick={() => onRevoke(key)}><Trash2 size={16} /></button></>}</div></td></tr>) : <tr><td colSpan={6} className="developer-empty-cell">尚未创建 API Key</td></tr>}
       </tbody></table></div></section>
     </div>
   );
@@ -1068,15 +1093,15 @@ function DocsPanel({ endpoint, mode, language, code, copied, onModeChange, onLan
   );
 }
 
-function UsagePanel({ account, ledger, days, onDaysChange }: { account: DeveloperAccountResponse | null; ledger: DeveloperLedgerEntry[]; days: 7 | 14 | 30 | 90; onDaysChange: (days: 7 | 14 | 30 | 90) => void }) {
+function UsagePanel({ account, ledger, accountError, ledgerError, days, onDaysChange }: { account: DeveloperAccountResponse | null; ledger: DeveloperLedgerEntry[]; accountError: string; ledgerError: string; days: 7 | 14 | 30 | 90; onDaysChange: (days: 7 | 14 | 30 | 90) => void }) {
   const chart = account?.usage.byDay || [];
   const maxCalls = Math.max(1, ...chart.map((item) => Number(item.requests || 0)));
   return (
     <div className="developer-page">
       <section className="developer-section-heading"><div><p>账号级统计</p><h2>用量与账单</h2><small>检测次数、Token 用量和计费结算按账号汇总，不随 API Key 轮换变化。</small></div><select className="developer-days-select" value={days} onChange={(event) => onDaysChange(Number(event.target.value) as 7 | 14 | 30 | 90)}><option value={7}>近 7 天</option><option value={14}>近 14 天</option><option value={30}>近 30 天</option><option value={90}>近 90 天</option></select></section>
-      <section className="developer-metric-strip usage-metrics"><article><span><Activity size={18} /></span><div><small>成功调用</small><strong>{formatNumber((account?.modeSummary.fast.calls || 0) + (account?.modeSummary.swarm.calls || 0))}</strong><p>仅统计已结算任务</p></div></article><article><span><Gauge size={18} /></span><div><small>快速检测</small><strong>{formatNumber(account?.modeSummary.fast.calls)}</strong><p>{formatMoney(account?.modeSummary.fast.spendFen)} 支出</p></div></article><article><span><ShieldCheck size={18} /></span><div><small>Swarm 多源复核</small><strong>{formatNumber(account?.modeSummary.swarm.calls)}</strong><p>{formatMoney(account?.modeSummary.swarm.spendFen)} 支出</p></div></article><article><span><Code2 size={18} /></span><div><small>Token 用量</small><strong>{formatNumber(account?.usage.summary.totalTokens)}</strong><p>输入与输出合计</p></div></article></section>
+      <section className="developer-metric-strip usage-metrics"><article><span><Activity size={18} /></span><div><small>成功调用</small><strong>{formatNumber(accountError || !account ? undefined : account.modeSummary.fast.calls + account.modeSummary.swarm.calls)}</strong><p>仅统计已结算任务</p></div></article><article><span><Gauge size={18} /></span><div><small>快速检测</small><strong>{formatNumber(account?.modeSummary.fast.calls)}</strong><p>{formatMoney(account?.modeSummary.fast.spendFen)} 支出</p></div></article><article><span><ShieldCheck size={18} /></span><div><small>Swarm 多源复核</small><strong>{formatNumber(account?.modeSummary.swarm.calls)}</strong><p>{formatMoney(account?.modeSummary.swarm.spendFen)} 支出</p></div></article><article><span><Code2 size={18} /></span><div><small>Token 用量</small><strong>{formatNumber(account?.usage.summary.totalTokens)}</strong><p>输入与输出合计</p></div></article></section>
       <section className="developer-usage-chart"><header><div><h3>调用趋势</h3><p>每天成功记录到开发者用量系统的请求。</p></div></header><div className="developer-bars" aria-label="每日 API 调用趋势">{chart.map((item) => <div key={item.date} title={`${item.date}: ${item.requests} 次`}><span style={{ height: `${Math.max(item.requests ? 8 : 2, (Number(item.requests || 0) / maxCalls) * 100)}%` }} /><small>{chart.length <= 14 || item.date.endsWith("01") || item === chart[chart.length - 1] ? item.date.slice(5).replace("-", "/") : ""}</small></div>)}</div></section>
-      <section className="developer-table-section"><header><div><h3>计费账本</h3><p>赠送额度消费、付费扣款与管理员调整均保留审计记录。</p></div></header><div className="developer-table-wrap"><table><thead><tr><th>时间</th><th>类型</th><th>模式 / 任务</th><th>额度变化</th><th>余额变化</th><th>说明</th></tr></thead><tbody>{ledger.length ? ledger.map((entry) => <tr key={entry.id}><td>{compactDate(entry.createdAt)}</td><td>{entry.type === "detection_free" ? "赠送额度" : entry.type === "detection_charge" ? "检测扣款" : "后台调整"}</td><td><strong>{entry.mode === "swarm" ? "Swarm" : entry.mode === "fast" ? "快速" : "-"}</strong><small>{entry.taskId || "-"}</small></td><td className={entry.freeCallsDelta < 0 ? "negative" : "positive"}>{entry.freeCallsDelta ? `${entry.freeCallsDelta > 0 ? "+" : ""}${entry.freeCallsDelta} 次` : "-"}</td><td className={entry.balanceDeltaFen < 0 ? "negative" : entry.balanceDeltaFen > 0 ? "positive" : ""}>{entry.balanceDeltaFen ? `${entry.balanceDeltaFen > 0 ? "+" : "-"}${formatMoney(Math.abs(entry.balanceDeltaFen))}` : "-"}</td><td>{entry.note}</td></tr>) : <tr><td colSpan={6} className="developer-empty-cell">账本暂无记录</td></tr>}</tbody></table></div></section>
+      <section className="developer-table-section"><header><div><h3>计费账本</h3><p>赠送额度消费、付费扣款与管理员调整均保留审计记录。</p></div></header><div className="developer-table-wrap"><table><thead><tr><th>时间</th><th>类型</th><th>模式 / 任务</th><th>额度变化</th><th>余额变化</th><th>说明</th></tr></thead><tbody>{ledgerError ? <tr><td colSpan={6} className="developer-empty-cell developer-load-error">{ledgerError}，当前不展示空账本</td></tr> : ledger.length ? ledger.map((entry) => <tr key={entry.id}><td>{compactDate(entry.createdAt)}</td><td>{entry.type === "detection_free" ? "赠送额度" : entry.type === "detection_charge" ? "检测扣款" : "后台调整"}</td><td><strong>{entry.mode === "swarm" ? "Swarm" : entry.mode === "fast" ? "快速" : "-"}</strong><small>{entry.taskId || "-"}</small></td><td className={entry.freeCallsDelta < 0 ? "negative" : "positive"}>{entry.freeCallsDelta ? `${entry.freeCallsDelta > 0 ? "+" : ""}${entry.freeCallsDelta} 次` : "-"}</td><td className={entry.balanceDeltaFen < 0 ? "negative" : entry.balanceDeltaFen > 0 ? "positive" : ""}>{entry.balanceDeltaFen ? `${entry.balanceDeltaFen > 0 ? "+" : "-"}${formatMoney(Math.abs(entry.balanceDeltaFen))}` : "-"}</td><td>{entry.note}</td></tr>) : <tr><td colSpan={6} className="developer-empty-cell">账本暂无记录</td></tr>}</tbody></table></div></section>
     </div>
   );
 }

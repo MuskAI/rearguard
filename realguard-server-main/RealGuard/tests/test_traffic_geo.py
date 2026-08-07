@@ -197,6 +197,42 @@ def test_confirmed_pageview_rejects_automation_and_invalid_payload(tmp_path, mon
     assert not traffic_geo.record_confirmed_pageview(agent="Mozilla/5.0", **{**common, "page": "admin"})
 
 
+def test_confirmed_pageview_tracks_workspace_and_developer_as_distinct_surfaces(tmp_path, monkeypatch):
+    monkeypatch.setenv("REALGUARD_TRAFFIC_CUMULATIVE_DB", str(tmp_path / "traffic.sqlite3"))
+    common = {
+        "ip": "8.8.8.8",
+        "agent": "Mozilla/5.0 Chrome/126.0",
+        "visitor_id": "visitor-00000001",
+        "resolver": lambda _ip: {"country": "中国", "province": "浙江省", "isoCode": "CN"},
+    }
+
+    assert traffic_geo.record_confirmed_pageview(
+        event_id="event-workspace-001", page="workspace", occurred_at=NOW, **common,
+    )
+    assert traffic_geo.record_confirmed_pageview(
+        event_id="event-developer-001", page="developer", occurred_at=NOW, **common,
+    )
+
+    payload = traffic_geo.confirmed_traffic_summary(now=NOW)
+    assert payload["site"] == {"pageViews": 2, "uniqueVisitors": 1}
+    assert payload["homepage"] == {"pageViews": 0, "uniqueVisitors": 0}
+    assert payload["provinces"][0]["visitorDetails"][0]["pages"] == 2
+
+
+def test_historical_referer_recognizes_current_spa_surfaces():
+    allowed = {"www.rrreal.cn"}
+
+    assert traffic_geo._historical_page_from_referer(
+        "https://www.rrreal.cn/?workspace=1", allowed,
+    ) == "workspace"
+    assert traffic_geo._historical_page_from_referer(
+        "https://www.rrreal.cn/?developer=1&developerTab=docs", allowed,
+    ) == "developer"
+    assert traffic_geo._historical_page_from_referer(
+        "https://www.rrreal.cn/?page=image", allowed,
+    ) == "image"
+
+
 def test_historical_import_recovers_only_same_site_browser_sessions(tmp_path, monkeypatch):
     monkeypatch.setenv("REALGUARD_TRAFFIC_CUMULATIVE_DB", str(tmp_path / "traffic.sqlite3"))
     browser = "Mozilla/5.0 Chrome/126.0"

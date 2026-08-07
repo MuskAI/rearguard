@@ -29,6 +29,7 @@ DEFAULT_WINDOW_HOURS = 24
 DEFAULT_ONLINE_WINDOW_MINUTES = 5
 DEFAULT_VISITOR_DETAIL_LIMIT = 20
 HOMEPAGE_PATHS = {"/", "/index.html"}
+CONFIRMED_PAGE_TYPES = {"home", "workspace", "developer", "image", "video", "history"}
 
 LOG_PATTERN = re.compile(
     r'^(?P<ip>\S+)\s+\S+\s+\S+\s+\[(?P<time>[^]]+)]\s+'
@@ -294,7 +295,7 @@ def record_confirmed_pageview(
         not _is_public_ipv4(ip)
         or not re.fullmatch(r"[A-Za-z0-9_-]{16,96}", visitor_id)
         or not re.fullmatch(r"[A-Za-z0-9_-]{16,96}", event_id)
-        or page not in {"home", "image", "video", "history"}
+        or page not in CONFIRMED_PAGE_TYPES
         or not agent
         or BOT_PATTERN.search(agent)
     ):
@@ -383,8 +384,13 @@ def _historical_page_from_referer(referer: str, allowed_hosts: set[str]) -> str 
         return None
     if parsed.path.startswith("/admin"):
         return None
-    page = parse_qs(parsed.query).get("page", [""])[0].lower()
-    return page if page in {"image", "video", "history"} else "home"
+    query = parse_qs(parsed.query)
+    if query.get("developer", [""])[0] == "1":
+        return "developer"
+    if query.get("workspace", [""])[0] == "1":
+        return "workspace"
+    page = query.get("page", [""])[0].lower()
+    return page if page in CONFIRMED_PAGE_TYPES - {"home"} else "home"
 
 
 def import_historical_browser_sessions(
