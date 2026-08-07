@@ -30,3 +30,15 @@ REALGUARD_INTERNAL_TESTING_REMOTE_REQUIRED=1
 `REALGUARD_INTERNAL_TESTING_REMOTE_REQUIRED=1` is a fail-closed production
 guard: if the tunnel or its URL is missing, the public server rejects internal
 evaluation writes instead of creating a cloud-local dataset.
+
+The public backend service also mounts
+`/opt/realguard-data/internal-testing` as inaccessible. This is a second,
+operating-system-level guard: even an application regression cannot write
+internal evaluation images to the cloud host. Nginx request buffering remains
+disabled for the dataset and chunk upload routes, so request bodies are streamed
+through the web process to server 66.
+
+The admin page reports the writable capacity of the server 66 data volume.
+There is no application-level dataset size or image-count limit, but imports
+still require enough physical space on that volume while preserving the
+configured free-space reserve.

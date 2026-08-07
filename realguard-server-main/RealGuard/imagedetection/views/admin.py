@@ -503,7 +503,10 @@ def _internal_testing_remote_required():
     value = str(
         os.environ.get("REALGUARD_INTERNAL_TESTING_REMOTE_REQUIRED") or ""
     ).strip().lower()
-    return value in {"1", "true", "yes", "on"}
+    environment = str(os.environ.get("REALGUARD_ENV") or "").strip().lower()
+    return value in {"1", "true", "yes", "on"} or environment in {
+        "prod", "production",
+    }
 
 
 def _internal_testing_remote_model():

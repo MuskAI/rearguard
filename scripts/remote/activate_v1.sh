@@ -251,6 +251,12 @@ sudo ln -s /opt/realguard-data/uploads "$release_root/RealGuard/imagedetection/s
 sudo install -d -m 755 -o ubuntu -g ubuntu /opt/realguard-data/uploads/aliyun-probes
 sudo install -d -m 750 -o root -g ubuntu /opt/realguard-data/legacy-governance-evidence
 sudo chown -R ubuntu:ubuntu /opt/realguard-data/uploads
+if [[ -d /opt/realguard-data/internal-testing ]] \
+  && [[ -n "$(sudo find /opt/realguard-data/internal-testing -mindepth 1 -print -quit)" ]]; then
+  echo "Refusing deployment: cloud-local internal testing data must be migrated to server 66 first" >&2
+  exit 1
+fi
+sudo install -d -m 000 -o root -g root /opt/realguard-data/internal-testing
 
 sudo install -d -m 700 /etc/realguard
 sudo install -d -m 700 -o root -g root /opt/realguard-audit-checkpoint

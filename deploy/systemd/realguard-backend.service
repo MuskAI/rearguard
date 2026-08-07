@@ -38,6 +38,7 @@ PrivateTmp=true
 ProtectHome=true
 ProtectSystem=full
 ReadWritePaths=/opt/realguard-data/uploads /opt/realguard-data /tmp
+InaccessiblePaths=/opt/realguard-data/internal-testing
 UMask=0077
 
 [Install]

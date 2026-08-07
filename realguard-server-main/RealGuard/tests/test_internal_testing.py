@@ -1068,6 +1068,9 @@ def test_admin_page_contains_internal_testing_workspace(client):
     assert "非 JSON 响应" not in html
     assert "单次数据集总上传量 128 MB" not in html
     assert "不限制数据集总大小" in html
+    assert "云服务器不保存副本" in html
+    assert "testingAvailableBytes" in html
+    assert "超过 66 数据盘当前可写容量" in html
     assert "/api/admin/testing/dataset-imports" in html
     assert "uploadTestingChunkedFile" in html
     assert "file.slice(start,end).arrayBuffer()" in html
@@ -1197,6 +1200,23 @@ def test_admin_remote_testing_required_never_falls_back_to_cloud_storage(client,
         internal_testing,
         "overview",
         lambda **_kwargs: pytest.fail("must not use cloud-local internal testing storage"),
+    )
+
+    response = client.get("/api/admin/testing/overview")
+
+    assert response.status_code == 503
+    assert "仅允许使用 66 服务器存储" in response.get_json()["message"]
+
+
+def test_admin_production_never_falls_back_to_cloud_storage(client, monkeypatch):
+    _login(client, "operator")
+    monkeypatch.delenv("REALGUARD_INTERNAL_TESTING_REMOTE_URL", raising=False)
+    monkeypatch.delenv("REALGUARD_INTERNAL_TESTING_REMOTE_REQUIRED", raising=False)
+    monkeypatch.setenv("REALGUARD_ENV", "production")
+    monkeypatch.setattr(
+        internal_testing,
+        "overview",
+        lambda **_kwargs: pytest.fail("production must not use cloud-local testing storage"),
     )
 
     response = client.get("/api/admin/testing/overview")
