@@ -208,7 +208,7 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
               ? "登录后，任务与报告只对你本人可见。"
               : panel === "register"
                 ? "注册后即可保存个人鉴伪记录。"
-                : "手机号验证成功，设置密码后即可进入慧鉴 AI。"}
+                : "手机号验证成功，设置密码后即可进入慧鉴AI。"}
           </p>
         </div>
 

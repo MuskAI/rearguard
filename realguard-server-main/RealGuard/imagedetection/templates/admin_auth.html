@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>慧鉴 AI 管理员认证</title>
+  <title>慧鉴AI 管理员认证</title>
   <link rel="icon" href="data:,">
   <link href="/static/css/font-awesome.min.css" rel="stylesheet">
   <style>
@@ -14,7 +14,7 @@
     .shell{min-height:100vh;display:grid;grid-template-columns:minmax(320px,.9fr) minmax(360px,520px);align-items:stretch}
     .hero{padding:clamp(32px,6vw,72px);display:flex;flex-direction:column;justify-content:space-between}
     .brand{display:flex;align-items:center;gap:12px;font-weight:900}
-    .mark{width:42px;height:42px;border-radius:6px;background:#eaf4f3;color:var(--blue);border:1px solid #bed9d7;box-shadow:4px 4px 0 #d5e4e1;display:grid;place-items:center;font-family:"Songti SC",serif;font-size:24px}
+    .mark{width:42px;height:42px;border-radius:6px;background:#f4f6f4 url("/brand/generated/huijian-icon-atlas-v2.webp") no-repeat 0 0/300% 300%;border:1px solid #bed9d7;box-shadow:4px 4px 0 #d5e4e1;display:block;flex:0 0 auto}
     h1{font-size:clamp(34px,4vw,48px);line-height:1.12;margin:64px 0 14px;max-width:680px}
     .lead{max-width:640px;color:#475467;font-size:17px;line-height:1.7}
     .rules{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:42px}
@@ -47,7 +47,7 @@
 <body>
   <main class="shell">
     <section class="hero">
-      <div class="brand"><span class="mark">慧</span><span>慧鉴 AI 管理台</span></div>
+      <div class="brand"><span class="mark" aria-hidden="true"></span><span>慧鉴AI 管理台</span></div>
       <div>
         <h1>后台管理入口独立认证</h1>
         <p class="lead">管理员账号与普通业务账号分离；创建账号必须由已有管理员或后台白名单账号授权，登录失败会临时锁定，降低后台暴露风险。</p>
@@ -61,7 +61,7 @@
     </section>
     <section class="panel-wrap">
       <div class="panel">
-        <div class="panel-brand"><span class="mark">慧</span><span>慧鉴 AI 管理台</span></div>
+        <div class="panel-brand"><span class="mark" aria-hidden="true"></span><span>慧鉴AI 管理台</span></div>
         {% if can_register %}<div class="tabs">
           <a class="tab {% if mode != 'register' %}active{% endif %}" href="/admin/login">登录</a>
           <a class="tab {% if mode == 'register' %}active{% endif %}" href="/admin/register">注册</a>

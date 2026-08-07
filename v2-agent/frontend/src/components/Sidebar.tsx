@@ -119,7 +119,7 @@ export default function Sidebar({
       <div className="p-4 flex items-center gap-2.5">
         <Logo size={36} idSuffix="side" />
         <div className="flex-1 min-w-0">
-          <div className="text-lg font-semibold text-rice leading-tight">慧鉴 AI</div>
+          <div className="text-lg font-semibold text-rice leading-tight">慧鉴AI</div>
           <div className="text-[10px] text-brand-cyan">证据分析工作台</div>
         </div>
         {onClose && (

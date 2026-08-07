@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>慧鉴 AI 管理控制台</title>
+  <title>慧鉴AI 管理控制台</title>
   <link rel="icon" href="data:,">
   <link href="/static/css/font-awesome.min.css" rel="stylesheet">
   <style>
@@ -38,7 +38,7 @@
     .app{min-height:100vh;display:grid;grid-template-columns:216px minmax(0,1fr)}
     .sidebar{background:linear-gradient(180deg,var(--sidebar-deep),var(--sidebar));color:#c9d4e2;min-height:100vh;position:sticky;top:0;padding:16px 12px}
     .brand{display:flex;align-items:center;gap:12px;height:56px;padding:0 10px;color:#fff}
-    .brand-mark{width:36px;height:36px;border-radius:var(--radius);background:var(--cyan);display:grid;place-items:center;font-weight:900}
+    .brand-mark{width:36px;height:36px;border-radius:var(--radius);background:#f4f6f4 url("/brand/generated/huijian-icon-atlas-v2.webp") no-repeat 0 0/300% 300%;border:1px solid #79918a;display:block;flex:0 0 auto}
     .brand-title{font-weight:800;font-size:17px}
     .brand-sub{font-family:"IBM Plex Mono",monospace;font-size:10px;color:#8fa3ba;text-transform:uppercase}
     .nav-group{margin-top:18px}
@@ -382,7 +382,7 @@
     <section class="notice">
       <div class="eyebrow">Access control</div>
       <h1>后台权限未开启</h1>
-      <p>当前账号没有慧鉴 AI 管理控制台权限。请在服务环境中配置 <code>REALGUARD_ADMIN_PHONES</code> 或 <code>REALGUARD_ADMIN_USER_IDS</code>。</p>
+      <p>当前账号没有慧鉴AI管理控制台权限。请在服务环境中配置 <code>REALGUARD_ADMIN_PHONES</code> 或 <code>REALGUARD_ADMIN_USER_IDS</code>。</p>
       {% if not admin_configured %}<p>当前检测到尚未配置管理员白名单。</p>{% endif %}
       <p><a class="btn secondary" href="/login">返回登录</a></p>
     </section>
@@ -391,8 +391,8 @@
   <div class="app">
     <aside class="sidebar">
       <a class="brand" href="#dashboard" data-route="dashboard">
-        <span class="brand-mark">慧</span>
-        <span><span class="brand-title">慧鉴 AI</span><span class="brand-sub">管理控制台</span></span>
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span><span class="brand-title">慧鉴AI</span><span class="brand-sub">管理控制台</span></span>
       </a>
       <nav class="nav-group">
         <div class="nav-label">监控</div>
@@ -427,7 +427,7 @@
 
     <main class="main">
       <header class="topbar">
-        <div class="crumbs"><span>慧鉴 AI</span><span>/</span><strong id="crumb">控制台</strong></div>
+        <div class="crumbs"><span>慧鉴AI</span><span>/</span><strong id="crumb">控制台</strong></div>
         <div class="top-actions">
           <span class="sync-status" id="syncStatus" aria-live="polite">尚未同步</span>
           <button class="icon-btn" type="button" onclick="loadAll()" aria-label="刷新全部数据" title="刷新全部数据"><i class="fa fa-refresh"></i></button>

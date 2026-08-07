@@ -265,6 +265,11 @@ for (const viewport of viewports.slice(0, 2)) {
     expect(workspace).not.toBeNull();
     expect(upload).not.toBeNull();
     expect(Math.abs((upload!.x + upload!.width / 2) - (workspace!.x + workspace!.width / 2))).toBeLessThanOrEqual(2);
+    expect(Math.abs((upload!.x + upload!.width / 2) - viewport.width / 2), "匿名上传入口未相对整个视口居中").toBeLessThanOrEqual(2);
+    await expect(page.locator(".sidebar-desktop")).toHaveCount(0);
+    await expect(page.locator(".mobile-history-button")).toHaveCount(0);
+    const homeButton = page.getByRole("button", { name: "返回慧鉴AI官网首页" });
+    await expect(homeButton).toBeVisible();
 
     await page.getByRole("button", { name: "选择图片检测模型" }).click();
     const modelMenu = page.getByRole("listbox", { name: "图片检测模型" });
@@ -274,8 +279,27 @@ for (const viewport of viewports.slice(0, 2)) {
     expect(menuBox!.x).toBeGreaterThanOrEqual(0);
     expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(viewport.width + 1);
     await expectNoHorizontalOverflow(page);
+    await page.keyboard.press("Escape");
+    await homeButton.click();
+    await expect(page.locator(".home-v3")).toBeVisible();
   });
 }
+
+test("登录用户可以隐藏并恢复最近任务侧栏", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await installBaseMocks(page, true);
+  await page.goto("/?workspace=1");
+
+  const sidebar = page.locator(".sidebar-desktop");
+  await expect(sidebar).toBeVisible();
+  await page.getByRole("button", { name: "隐藏最近任务" }).click();
+  await expect(sidebar).toBeHidden();
+  const restore = page.getByRole("button", { name: "显示最近任务" });
+  await expect(restore).toBeVisible();
+  await restore.click();
+  await expect(sidebar).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
 
 test("开发者平台移动布局与 API Key 弹窗满足键盘交互", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });

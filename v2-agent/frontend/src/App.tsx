@@ -1037,6 +1037,12 @@ export default function App() {
   }
 
   const screenTitle = pendingFile?.name || "新建鉴伪任务";
+  const historyAvailable = Boolean(user);
+  const historyLayoutClass = !historyAvailable
+    ? "history-unavailable"
+    : desktopHistoryVisible
+      ? ""
+      : "history-collapsed";
 
   return (
     <>
@@ -1069,8 +1075,8 @@ export default function App() {
           onLogout={logout}
         />
       ) : (
-      <div className={`agent-app ${desktopHistoryVisible ? "" : "history-collapsed"}`}>
-      <AgentHistory
+      <div className={`agent-app ${historyLayoutClass}`}>
+      {historyAvailable && <AgentHistory
         entries={history}
         activeKey={activeKey}
         query={historyQuery}
@@ -1088,13 +1094,13 @@ export default function App() {
         onLogin={() => setAuthOpen(true)}
         onLogout={logout}
         onCloseMobile={() => setMobileHistoryOpen(false)}
-      />
+      />}
 
       <main className="agent-main">
         <header className="agent-topbar">
           <div className="topbar-title">
-            <MobileHistoryButton onClick={() => setMobileHistoryOpen(true)} />
-            {!desktopHistoryVisible && (
+            {historyAvailable && <MobileHistoryButton onClick={() => setMobileHistoryOpen(true)} />}
+            {historyAvailable && !desktopHistoryVisible && (
               <button type="button" className="icon-button desktop-history-open" onClick={() => setHistorySidebarVisible(true)} aria-label="显示最近任务" title="显示最近任务">
                 <PanelLeftOpen size={19} />
               </button>

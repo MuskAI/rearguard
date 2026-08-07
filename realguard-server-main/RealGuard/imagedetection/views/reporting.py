@@ -249,7 +249,7 @@ def image_report_content(
         if isinstance(entry, dict)
     ) or "<li>未形成可用的拍摄流程元数据线索</li>"
     return _html_page(
-        f"慧鉴 AI 图像鉴伪报告 {item.get('itemid')}",
+        f"慧鉴AI 图像鉴伪报告 {item.get('itemid')}",
         accent,
         f"""
         <section class="hero">
@@ -340,7 +340,7 @@ def video_report_content(item: dict, result: dict) -> str:
     video_url = escape(_safe_text(result.get("video_url"), ""))
     preview = f'<video class="preview" src="{video_url}" controls></video>' if video_url else '<div class="preview" style="min-height:260px;"></div>'
     return _html_page(
-        f"慧鉴 AI 视频鉴伪报告 {item.get('itemid')}",
+        f"慧鉴AI 视频鉴伪报告 {item.get('itemid')}",
         accent,
         f"""
         <section class="hero">

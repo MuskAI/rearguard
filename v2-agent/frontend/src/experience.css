@@ -1237,6 +1237,10 @@
   grid-template-columns: 0 minmax(0, 1fr);
 }
 
+.agent-app.history-unavailable {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .sidebar-desktop {
   min-width: 0;
   overflow: hidden;
@@ -1249,6 +1253,7 @@
 .agent-app.history-collapsed > .sidebar-desktop {
   display: block;
   pointer-events: none;
+  visibility: hidden;
   opacity: 0;
   border-color: transparent;
   transform: translateX(-28px);

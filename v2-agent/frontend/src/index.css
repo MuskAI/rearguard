@@ -707,7 +707,8 @@ video {
   flex: 0 0 auto;
 }
 
-.history-collapsed .agent-topbar .brand-home-button {
+.history-collapsed .agent-topbar .brand-home-button,
+.history-unavailable .agent-topbar .brand-home-button {
   display: inline-flex;
 }
 

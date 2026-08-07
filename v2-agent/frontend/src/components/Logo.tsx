@@ -15,9 +15,9 @@ export default function Logo({ size = 40, idSuffix = "0", className }: Props) {
       xmlns="http://www.w3.org/2000/svg"
       className={className}
       role="img"
-      aria-label="慧鉴 AI"
+      aria-label="慧鉴AI"
     >
-      <title>{`慧鉴 AI ${idSuffix}`}</title>
+      <title>{`慧鉴AI ${idSuffix}`}</title>
       <rect x="5" y="5" width="54" height="54" rx="15" fill="#f7f7f2" stroke="#16324a" strokeWidth="3" />
       <path d="M18 25v-7h7m14 0h7v7m0 14v7h-7m-14 0h-7v-7" stroke="#1f5f7a" strokeWidth="3" strokeLinecap="round" />
       <circle cx="32" cy="32" r="11.5" fill="#ddf2ec" stroke="#16324a" strokeWidth="3" />

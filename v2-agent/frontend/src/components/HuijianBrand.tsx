@@ -12,7 +12,7 @@ export default function HuijianBrand({ compact = false, onClick }: Props) {
         <BrandArtIcon name="fast" />
       </span>
       <span className="brand-copy">
-        <strong>慧鉴 <em>AI</em></strong>
+        <strong>慧鉴<em>AI</em></strong>
         {!compact && <small>数字内容鉴伪智能体</small>}
       </span>
     </>

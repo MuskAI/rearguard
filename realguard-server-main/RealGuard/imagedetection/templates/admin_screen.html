@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>慧鉴 AI 运营大屏</title>
+  <title>慧鉴AI 运营大屏</title>
   <link rel="icon" href="data:,">
   <link href="/static/css/font-awesome.min.css" rel="stylesheet">
   <style>
@@ -18,7 +18,7 @@
     .screen{height:100dvh;min-height:0;overflow:hidden;padding:14px;display:grid;grid-template-rows:auto auto minmax(0,1fr) auto auto;gap:10px}
     .top{display:flex;align-items:center;justify-content:space-between;gap:18px;border-bottom:1px solid var(--line);padding-bottom:12px}
     .brand{display:flex;align-items:center;gap:14px;min-width:0}
-    .mark{width:44px;height:44px;border-radius:var(--radius);background:var(--green);color:#071008;display:grid;place-items:center;font-weight:900;flex:0 0 auto}
+    .mark{width:44px;height:44px;border-radius:var(--radius);background:#f4f6f4 url("/brand/generated/huijian-icon-atlas-v2.webp") no-repeat 0 0/300% 300%;border:1px solid #526158;display:block;flex:0 0 auto}
     h1{font-size:28px;margin:0 0 4px;line-height:1.2}
     .sub{color:var(--muted);font-size:13px}
     .top-right{display:flex;align-items:center;gap:14px}
@@ -172,9 +172,9 @@
   <main class="screen">
     <header class="top">
       <div class="brand">
-        <div class="mark">慧</div>
+        <div class="mark" aria-hidden="true"></div>
         <div>
-          <h1>慧鉴 AI 运营态势大屏</h1>
+          <h1>慧鉴AI 运营态势大屏</h1>
           <div class="sub">检测增长、模型路由、反馈分布和服务保障集中展示</div>
         </div>
       </div>

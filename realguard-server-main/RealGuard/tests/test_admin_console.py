@@ -209,10 +209,11 @@ def test_admin_page_renders_workspace_for_allowed_user(client, monkeypatch):
 
     assert response.status_code == 200
     html = response.get_data(as_text=True)
-    assert "慧鉴 AI 管理控制台" in html
+    assert "慧鉴AI 管理控制台" in html
     assert "模型管理" in html
     assert "线上主模型快速切换" in html
     assert "运营大屏" in html
+    assert "/brand/generated/huijian-icon-atlas-v2.webp" in html
 
 
 def test_ordinary_user_cannot_render_admin_console(client, monkeypatch):
@@ -235,7 +236,8 @@ def test_admin_screen_renders_interactive_operations_controls(client, monkeypatc
 
     assert response.status_code == 200
     html = response.get_data(as_text=True)
-    assert "慧鉴 AI 运营态势大屏" in html
+    assert "慧鉴AI 运营态势大屏" in html
+    assert "/brand/generated/huijian-icon-atlas-v2.webp" in html
     assert 'id="autoRefresh"' in html
     assert 'data-range="6"' in html
     assert 'data-distribution-mode="feedback"' in html
@@ -314,7 +316,8 @@ def test_admin_login_hides_account_inventory_and_sets_security_headers(client, m
     assert response.headers["X-Frame-Options"] == "DENY"
     assert response.headers["X-Content-Type-Options"] == "nosniff"
     assert '<div class="panel-brand">' in html
-    assert '<span class="mark">慧</span>' in html
+    assert '<span class="mark" aria-hidden="true"></span>' in html
+    assert "/brand/generated/huijian-icon-atlas-v2.webp" in html
     assert 'href="/">返回官网</a>' in html
     assert ".panel-wrap{order:-1;min-height:100dvh" in html
 
