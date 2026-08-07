@@ -209,6 +209,15 @@ def test_frontend_version_activation_accepts_root_with_fallback_content():
     assert "grep -q '<div id=\"root\"></div>'" not in manager
 
 
+def test_v2_deployment_status_tracks_frontend_version_manager():
+    status_script = (
+        ROOT / "scripts" / "check_deploy_status.sh"
+    ).read_text(encoding="utf-8")
+    v2_block = status_script.split('check_target "V2"', 1)[1].split("fi", 1)[0]
+
+    assert '"scripts/remote/manage_v2_frontend.sh"' in v2_block
+
+
 def test_v1_activation_probes_backend_without_default_nginx_host():
     activate = (ROOT / "scripts" / "remote" / "activate_v1.sh").read_text(
         encoding="utf-8"

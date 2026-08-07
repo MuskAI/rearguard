@@ -222,6 +222,7 @@ if [[ "$TARGET" == "all" || "$TARGET" == "v2" ]]; then
     "deploy/systemd/jianzhen-v2-backend.service" \
     "scripts/deploy_v2.sh" \
     "scripts/remote/activate_v2.sh" \
+    "scripts/remote/manage_v2_frontend.sh" \
     "scripts/deploy_common.sh"
 fi
 
