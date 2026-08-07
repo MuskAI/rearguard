@@ -238,6 +238,8 @@ def test_v1_activation_probes_backend_without_default_nginx_host():
             f"http://127.0.0.1:5000{path}", ""
         )
     assert "get('available')" not in activate
+    assert "grep -q '慧鉴AI 管理员认证'" in activate
+    assert "grep -q '慧鉴 AI 管理员认证'" not in activate
 
 
 def test_public_report_share_credentials_are_not_written_to_access_log():
