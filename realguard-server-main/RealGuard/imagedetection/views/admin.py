@@ -1945,21 +1945,23 @@ def _traffic_metrics_payload(traffic):
     cumulative = traffic.get("cumulative") if isinstance(traffic.get("cumulative"), dict) else {}
     cumulative_homepage = cumulative.get("homepage") if isinstance(cumulative.get("homepage"), dict) else {}
     cumulative_site = cumulative.get("site") if isinstance(cumulative.get("site"), dict) else {}
+    ready = bool(traffic.get("ready"))
+    cumulative_ready = bool(cumulative.get("ready"))
     payload = {
-        "ready": bool(traffic.get("ready")),
+        "ready": ready,
         "windowHours": int(traffic.get("windowHours") or 24),
-        "homepagePageViews": int(homepage.get("pageViews") or 0),
-        "homepageUniqueVisitors": int(homepage.get("uniqueVisitors") or 0),
-        "sitePageViews": int(site.get("pageViews", traffic.get("requests")) or 0),
-        "siteUniqueVisitors": int(site.get("uniqueVisitors", traffic.get("uniqueVisitors")) or 0),
-        "onlineVisitors": int(traffic.get("onlineVisitors") or 0),
+        "homepagePageViews": int(homepage.get("pageViews") or 0) if ready else None,
+        "homepageUniqueVisitors": int(homepage.get("uniqueVisitors") or 0) if ready else None,
+        "sitePageViews": int(site.get("pageViews", traffic.get("requests")) or 0) if ready else None,
+        "siteUniqueVisitors": int(site.get("uniqueVisitors", traffic.get("uniqueVisitors")) or 0) if ready else None,
+        "onlineVisitors": int(traffic.get("onlineVisitors") or 0) if ready else None,
         "onlineWindowMinutes": int(traffic.get("onlineWindowMinutes") or 5),
-        "cumulativeReady": bool(cumulative.get("ready")),
-        "cumulativeSince": str(cumulative.get("since") or "--"),
-        "cumulativeHomepagePageViews": int(cumulative_homepage.get("pageViews") or 0),
-        "cumulativeHomepageUniqueVisitors": int(cumulative_homepage.get("uniqueVisitors") or 0),
-        "cumulativeSitePageViews": int(cumulative_site.get("pageViews", cumulative.get("requests")) or 0),
-        "cumulativeSiteUniqueVisitors": int(cumulative_site.get("uniqueVisitors", cumulative.get("uniqueVisitors")) or 0),
+        "cumulativeReady": cumulative_ready,
+        "cumulativeSince": str(cumulative.get("since") or "--") if cumulative_ready else None,
+        "cumulativeHomepagePageViews": int(cumulative_homepage.get("pageViews") or 0) if cumulative_ready else None,
+        "cumulativeHomepageUniqueVisitors": int(cumulative_homepage.get("uniqueVisitors") or 0) if cumulative_ready else None,
+        "cumulativeSitePageViews": int(cumulative_site.get("pageViews", cumulative.get("requests")) or 0) if cumulative_ready else None,
+        "cumulativeSiteUniqueVisitors": int(cumulative_site.get("uniqueVisitors", cumulative.get("uniqueVisitors")) or 0) if cumulative_ready else None,
     }
     source = traffic.get("source")
     tracking_status = traffic.get("trackingStatus")
@@ -2442,6 +2444,11 @@ def _screen_algorithm_server_payload(models, routing):
     if primary is None:
         return {
             "status": "unknown",
+            "overallStatus": "unknown",
+            "transportStatus": "unavailable",
+            "inferenceStatus": "unavailable",
+            "verdictStatus": "unavailable",
+            "reasons": ["未配置主模型"],
             "serviceReady": False,
             "modelReady": False,
             "modelId": "",
@@ -2471,11 +2478,30 @@ def _screen_algorithm_server_payload(models, routing):
     else:
         status = "degraded"
 
+    transport_status = "online" if service_ready else "offline"
+    inference_status = "ready" if model_ready and accelerator_ready else ("degraded" if service_ready else "unavailable")
+    verdict_status = "ready" if verdict_ready else ("review_only" if service_ready else "unavailable")
+    reasons = list(telemetry.get("decisionGateReasons") or [])
+    if not service_ready:
+        reasons.append(health.get("message") or "模型服务不可达")
+    elif not model_ready:
+        reasons.append("主模型尚未达到可推理状态")
+    if not accelerator_ready:
+        reasons.append("GPU 推理状态未就绪")
+    if not verdict_ready:
+        reasons.append("自动结论门禁尚未通过")
+    reasons = list(dict.fromkeys(str(reason) for reason in reasons if reason))
+
     latency = telemetry.get("remoteLatencyMs")
     if latency is None:
         latency = health.get("latencyMs")
     return {
         "status": status,
+        "overallStatus": status,
+        "transportStatus": transport_status,
+        "inferenceStatus": inference_status,
+        "verdictStatus": verdict_status,
+        "reasons": reasons,
         "serviceReady": service_ready,
         "modelReady": model_ready,
         "verdictReady": verdict_ready,
@@ -2499,15 +2525,20 @@ def _screen_assurance_payload(assurance):
     }
 
 
-def _big_screen_anomalies(metrics, models, assurance, host):
+def _big_screen_anomalies(metrics, models, assurance, host, algorithm_server=None):
     anomalies = []
-    if not assurance.get("online"):
+    algorithm_server = algorithm_server or {}
+    algorithm_status = algorithm_server.get("overallStatus") or algorithm_server.get("status")
+    if algorithm_status != "healthy":
         anomalies.append({
-            "level": "critical",
+            "level": "critical" if algorithm_status in ("offline", "unknown", None) else "warning",
             "title": "主检测链路未就绪",
-            "message": "主模型或依赖服务未达到可用状态，请登录管理后台查看阻断详情。",
+            "message": "；".join(algorithm_server.get("reasons") or []) or "主模型或依赖服务未达到可用状态，请登录管理后台查看阻断详情。",
         })
+    primary_id = str(algorithm_server.get("modelId") or "")
     for model in models:
+        if primary_id and str(model.get("id") or "") == primary_id:
+            continue
         health = model.get("health") or {}
         if not health.get("ok"):
             level = "warning" if health.get("serviceOk") else "critical"
@@ -2574,7 +2605,7 @@ def _big_screen_payload():
         "traffic": traffic,
         "recent": _recent_detection_items(12),
         "assurance": assurance,
-        "anomalies": _big_screen_anomalies(metrics, models, assurance_detail, host),
+        "anomalies": _big_screen_anomalies(metrics, models, assurance_detail, host, algorithm_server),
         "privacy": {"piiIncluded": False, "internalEndpointsIncluded": False, "rawIpsIncluded": False},
     }
 
@@ -2878,7 +2909,31 @@ def admin_update_model(model_id):
     if error:
         return error
     payload = request.get_json(silent=True) or {}
+    confirmed_primary_runtime_change = payload.pop("confirmPrimaryRuntimeChange", False) is True
     before = model_registry.get_model(model_id)
+    if not before:
+        return jsonify({"status": "error", "message": "模型不存在"}), 404
+    routing = model_registry.get_routing()
+    if str(routing.get("imagePrimary") or "") == str(model_id):
+        if "enabled" in payload:
+            enabled = payload.get("enabled") if isinstance(payload.get("enabled"), bool) else str(payload.get("enabled") or "").strip().lower() in ("1", "true", "yes", "on")
+            if not enabled:
+                return jsonify({
+                    "status": "error",
+                    "code": "primary_model_disable_forbidden",
+                    "message": "当前主模型不能直接停用，请先将主路由切换到其他可用模型。",
+                }), 409
+        changed_runtime_fields = [
+            field for field in ("endpoint", "healthUrl")
+            if field in payload and str(payload.get(field) or "").strip() != str(before.get(field) or "").strip()
+        ]
+        if changed_runtime_fields and not confirmed_primary_runtime_change:
+            return jsonify({
+                "status": "error",
+                "code": "primary_model_confirmation_required",
+                "message": "修改当前主模型的服务地址需要明确确认。",
+                "changedFields": changed_runtime_fields,
+            }), 409
     _, model, message = model_registry.update_model(model_id, payload)
     if not model:
         status = 404 if message == "模型不存在" else 400

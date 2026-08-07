@@ -189,7 +189,26 @@ function integrationExamples(origin: string, mode: "fast" | "swarm"): Record<Cod
       '  -F "image=@./sample.jpg")',
       "",
       'STATUS_URL="$ORIGIN$(echo "$TASK" | jq -r .links.self)"',
-      'curl -sS "$STATUS_URL" -H "Authorization: Bearer $API_KEY" | jq',
+      'BODY_FILE="$(mktemp)"; HEADER_FILE="$(mktemp)"',
+      'trap \'rm -f "$BODY_FILE" "$HEADER_FILE"\' EXIT',
+      'DEADLINE=$((SECONDS + 300))',
+      'COMPLETED=0',
+      'while (( SECONDS < DEADLINE )); do',
+      '  HTTP_CODE=$(curl -sS -o "$BODY_FILE" -D "$HEADER_FILE" -w "%{http_code}" "$STATUS_URL" -H "Authorization: Bearer $API_KEY")',
+      '  if [ "$HTTP_CODE" = "429" ]; then',
+      '    RETRY_AFTER=$(awk \'BEGIN{IGNORECASE=1} /^Retry-After:/ {gsub("\\r","",$2); print $2}\' "$HEADER_FILE")',
+      '    sleep "${RETRY_AFTER:-2}"; continue',
+      '  fi',
+      '  if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then cat "$BODY_FILE" >&2; exit 1; fi',
+      '  STATUS=$(jq -r .status "$BODY_FILE")',
+      '  case "$STATUS" in',
+      '    success) jq . "$BODY_FILE"; COMPLETED=1; break ;;',
+      '    failed|rejected) jq . "$BODY_FILE" >&2; exit 1 ;;',
+      '    queued|running) sleep 2 ;;',
+      '    *) cat "$BODY_FILE" >&2; exit 1 ;;',
+      '  esac',
+      'done',
+      'if [ "$COMPLETED" -ne 1 ]; then echo "检测任务等待超时" >&2; exit 1; fi',
     ].join("\n"),
     python: [
       "import os, time, uuid, requests",
@@ -309,9 +328,12 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
   const [testerKeySeed, setTesterKeySeed] = useState("");
   const [newKeyName, setNewKeyName] = useState("生产环境");
   const [newKeyExpiry, setNewKeyExpiry] = useState("90");
-  const [newKeyScopes, setNewKeyScopes] = useState({ fast: true, swarm: false, reports: false });
+  const [newKeyScopes, setNewKeyScopes] = useState({ fast: true, swarm: false, reports: true });
   const [newKeyIps, setNewKeyIps] = useState("");
   const loadGeneration = useRef(0);
+  const createDialogRef = useRef<HTMLElement>(null);
+  const secretDialogRef = useRef<HTMLElement>(null);
+  const modalOpenerRef = useRef<HTMLElement | null>(null);
   const createOperationRef = useRef<PendingCreateKeyOperation | null>(null);
   const rotateOperationKeysRef = useRef(new Map<number, string>());
   const keyMutationInFlightRef = useRef(false);
@@ -362,6 +384,43 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
     const timer = window.setTimeout(() => setCopied(""), 1800);
     return () => window.clearTimeout(timer);
   }, [copied]);
+
+  useEffect(() => {
+    const dialog = revealedKey ? secretDialogRef.current : createOpen ? createDialogRef.current : null;
+    if (!dialog) return;
+    const opener = modalOpenerRef.current;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const focusTimer = window.requestAnimationFrame(() => {
+      dialog.querySelector<HTMLElement>("[autofocus], button, input, select, textarea, a[href]")?.focus();
+    });
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !revealedKey) {
+        event.preventDefault();
+        setCreateOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])'));
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!first || !last) return;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusTimer);
+      document.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      opener?.focus();
+    };
+  }, [createOpen, revealedKey]);
 
   const origin = window.location.origin;
   const endpoint = `${origin}/api/openapi/v1/image-detections`;
@@ -449,6 +508,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
   async function rotateKey(key: DeveloperApiKey) {
     if (keyMutationInFlightRef.current) return;
     if (!window.confirm(`轮换 ${key.name}？旧 Key 会立即撤销。`)) return;
+    modalOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const idempotencyKey = rotateOperationKeysRef.current.get(key.id) || globalThis.crypto.randomUUID();
     rotateOperationKeysRef.current.set(key.id, idempotencyKey);
     keyMutationInFlightRef.current = true;
@@ -471,6 +531,12 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
       keyMutationInFlightRef.current = false;
       if (operationIdentity === accountIdentityRef.current) setKeyBusy(null);
     }
+  }
+
+  function openCreateDialog() {
+    modalOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setError("");
+    setCreateOpen(true);
   }
 
   if (!authReady) {
@@ -534,10 +600,11 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
           </div>
         </header>
 
-        <div className="developer-scroll">
+        <div className="developer-scroll" aria-busy={loading}>
+          {loading && account === null && keys.length === 0 && ledger.length === 0 ? <DeveloperLoadingState /> : <>
           {error && <div className="developer-page-error" role="alert">{error}</div>}
           {tab === "overview" && <Overview account={account} endpoint={endpoint} copied={copied} onCopy={copyText} onOpenKeys={() => setTab("keys")} onOpenDocs={() => setTab("docs")} />}
-          {tab === "keys" && <KeysPanel keys={keys} busy={keyBusy} onCreate={() => { setError(""); setCreateOpen(true); }} onRotate={rotateKey} onRevoke={revokeKey} />}
+          {tab === "keys" && <KeysPanel keys={keys} busy={keyBusy} loading={loading} onCreate={openCreateDialog} onRotate={rotateKey} onRevoke={revokeKey} />}
           {tab === "tester" && <ApiTesterPanel key={accountIdentity} endpoint={endpoint} apiKeySeed={testerKeySeed} />}
           {tab === "docs" && (
             <DocsPanel
@@ -552,12 +619,13 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
             />
           )}
           {tab === "usage" && <UsagePanel account={account} ledger={ledger} days={days} onDaysChange={setDays} />}
+          </>}
         </div>
       </main>
 
       {createOpen && (
         <div className="developer-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setCreateOpen(false); }}>
-          <section className="developer-modal" role="dialog" aria-modal="true" aria-labelledby="create-key-title">
+          <section ref={createDialogRef} className="developer-modal" role="dialog" aria-modal="true" aria-labelledby="create-key-title">
             <header><div><h2 id="create-key-title">创建 API Key</h2><p>明文只展示一次，创建后请立即保存。</p></div><button type="button" onClick={() => setCreateOpen(false)} aria-label="关闭"><X size={19} /></button></header>
             <label><span>名称</span><input autoFocus value={newKeyName} onChange={(event) => setNewKeyName(event.target.value)} maxLength={120} placeholder="例如：生产环境" /></label>
             <fieldset>
@@ -576,7 +644,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
 
       {revealedKey && (
         <div className="developer-modal-backdrop">
-          <section className="developer-modal developer-secret-modal" role="dialog" aria-modal="true" aria-labelledby="secret-title">
+          <section ref={secretDialogRef} className="developer-modal developer-secret-modal" role="dialog" aria-modal="true" aria-labelledby="secret-title">
             <header><div><h2 id="secret-title">{revealedKey.title}</h2><p>关闭后将无法再次查看完整 Key。</p></div></header>
             <div className="developer-secret-value"><code>{revealedKey.value}</code><button type="button" onClick={() => void copyText(revealedKey.value, "secret")}>{copied === "secret" ? <Check size={17} /> : <Copy size={17} />}{copied === "secret" ? "已复制" : "复制"}</button></div>
             <footer><button autoFocus type="button" className="developer-primary-action" onClick={() => setRevealedKey(null)}>我已保存</button></footer>
@@ -884,6 +952,15 @@ async function copyTextForTester(task: TesterTask) {
   }
 }
 
+function DeveloperLoadingState() {
+  return (
+    <section className="developer-loading-state" role="status" aria-live="polite">
+      <span><LoaderCircle className="spin" size={22} /></span>
+      <div><strong>正在读取开发者账户</strong><p>同步额度、API Key 与调用记录</p></div>
+    </section>
+  );
+}
+
 function Overview({ account, endpoint, copied, onCopy, onOpenKeys, onOpenDocs }: {
   account: DeveloperAccountResponse | null;
   endpoint: string;
@@ -901,7 +978,7 @@ function Overview({ account, endpoint, copied, onCopy, onOpenKeys, onOpenDocs }:
   ];
   return (
     <div className="developer-page developer-overview">
-      <section className="developer-section-heading"><div><p>开发者平台 <span><i /> 账号级权限与用量</span></p><h2>把慧鉴AI接入你的业务流程</h2><small>一期开放图像鉴伪，快速检测与 Swarm 多源复核使用同一套异步任务接口。</small></div><button type="button" className="developer-primary-action" onClick={onOpenKeys}><KeyRound size={16} /> 创建 API Key</button></section>
+      <section className="developer-section-heading"><div><p>开发者平台 <span><i /> 账号级权限与用量</span></p><h2>把慧鉴AI接入你的业务流程</h2><small>一期开放图像鉴伪；快速检测与 Swarm 复核共用异步接口。</small></div><button type="button" className="developer-primary-action" onClick={onOpenKeys}><KeyRound size={16} /> 创建 API Key</button></section>
       <section className="developer-metric-strip" aria-label="开发者账户指标">
         {metrics.map((item) => { const Icon = item.icon; return <article key={item.label}><span><Icon size={18} /></span><div><small>{item.label}</small><strong>{item.value}</strong><p>{item.note}</p></div></article>; })}
       </section>
@@ -943,11 +1020,11 @@ function RecentTasks({ tasks }: { tasks: DeveloperAccountResponse["recentTasks"]
   );
 }
 
-function KeysPanel({ keys, busy, onCreate, onRotate, onRevoke }: { keys: DeveloperApiKey[]; busy: number | "create" | null; onCreate: () => void; onRotate: (key: DeveloperApiKey) => void; onRevoke: (key: DeveloperApiKey) => void }) {
+function KeysPanel({ keys, busy, loading, onCreate, onRotate, onRevoke }: { keys: DeveloperApiKey[]; busy: number | "create" | null; loading: boolean; onCreate: () => void; onRotate: (key: DeveloperApiKey) => void; onRevoke: (key: DeveloperApiKey) => void }) {
   const activeCount = keys.filter((key) => key.status === "active").length;
   return (
     <div className="developer-page">
-      <section className="developer-section-heading"><div><p>凭据管理</p><h2>API Keys</h2><small>按环境拆分密钥，降低泄露后的影响范围。完整 Key 仅在创建或轮换时展示一次。</small></div><button type="button" className="developer-primary-action" onClick={onCreate} disabled={activeCount >= 5 || busy !== null}><Plus size={16} /> 创建 API Key</button></section>
+      <section className="developer-section-heading"><div><p>凭据管理</p><h2>API Keys</h2><small>按环境拆分密钥，降低泄露后的影响范围。完整 Key 仅在创建或轮换时展示一次。</small></div><button type="button" className="developer-primary-action" onClick={onCreate} disabled={loading || activeCount >= 5 || busy !== null}><Plus size={16} /> 创建 API Key</button></section>
       <section className="developer-security-rail"><ShieldCheck size={19} /><div><strong>服务端只保存 Key 哈希</strong><span>建议设置有效期与 IP 白名单，并定期轮换生产密钥。</span></div><small>{activeCount} / 5 个 active</small></section>
       <section className="developer-table-section developer-key-table"><header><div><h3>密钥列表</h3><p>撤销后立即失效，不影响账号额度和历史账单。</p></div></header><div className="developer-table-wrap"><table><thead><tr><th>名称</th><th>Key</th><th>权限</th><th>限制</th><th>最后使用</th><th aria-label="操作" /></tr></thead><tbody>
         {keys.length ? keys.map((key) => <tr key={`${key.id}-${key.status}`}><td><strong>{key.name}</strong><span className={`developer-key-state ${key.status}`}>{keyStatusLabel(key)}</span></td><td><code>{key.preview}</code></td><td><div className="developer-scope-list">{key.scopes.map((scope) => <span key={scope}>{scope === "image:fast" ? "快速" : scope === "image:swarm" ? "Swarm" : scope === "reports" ? "报告" : scope}</span>)}</div></td><td><small>{key.expiresAt ? `到期 ${compactDate(key.expiresAt)}` : "永不过期"}</small><small>{key.ipAllowlist?.length ? `${key.ipAllowlist.length} 条 IP 规则` : "不限 IP"}</small></td><td>{compactDate(key.lastUsedAt)}</td><td><div className="developer-row-actions">{key.status === "active" && <><button type="button" title="轮换 Key" aria-label={`轮换 ${key.name}`} disabled={busy !== null} onClick={() => onRotate(key)}>{busy === key.id ? <LoaderCircle className="spin" size={16} /> : <RotateCw size={16} />}</button><button type="button" className="danger" title="撤销 Key" aria-label={`撤销 ${key.name}`} disabled={busy !== null} onClick={() => onRevoke(key)}><Trash2 size={16} /></button></>}</div></td></tr>) : <tr><td colSpan={6} className="developer-empty-cell">尚未创建 API Key</td></tr>}

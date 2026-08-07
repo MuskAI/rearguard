@@ -71,6 +71,7 @@
     .segment:last-child{border-right:0}
     .segment:hover{color:var(--ink);background:rgba(255,255,255,.04)}
     .segment.active,.segment[aria-pressed="true"]{color:#071008;background:var(--green);font-weight:800}
+    .segment:disabled{color:#647068;background:#171d19;cursor:not-allowed;opacity:.72}
     .series-toggle{min-height:30px;padding:0 9px;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--muted);display:inline-flex;align-items:center;gap:6px;font-size:11px}
     .series-toggle[aria-pressed="true"]{color:var(--ink);background:rgba(255,255,255,.04)}
     .series-toggle[aria-pressed="false"]{opacity:.48}
@@ -218,7 +219,7 @@
         </div>
         <div class="canvas-wrap" id="trendView" hidden><canvas id="trend" tabindex="0" role="img" aria-label="图像与视频检测趋势，使用左右方向键选择时间点"></canvas><div class="chart-tooltip" id="trendTooltip" role="status"></div><p class="sr-only" id="trendSummary"></p></div>
         <div class="traffic-view" id="trafficView">
-          <div class="traffic-map-stage"><div class="traffic-map" id="trafficMap" tabindex="0" role="img" aria-label="访客省级分布地图，可切换最近 24 小时与累计统计，并用方向键选择地区"></div></div>
+          <div class="traffic-map-stage"><div class="traffic-map" id="trafficMap" tabindex="0" role="img" aria-label="访客省级分布地图，可切换最近 24 小时与累计统计，并用方向键选择地区"></div><p class="sr-only" id="trafficSelectionStatus" aria-live="polite"></p></div>
           <aside class="traffic-rank">
             <div class="traffic-summary" id="trafficSummary"></div>
             <div class="province-list" id="provinceList"></div>
@@ -276,6 +277,7 @@
     let lastSuccessAt = 0;
     let loading = false;
     let resizeFrame = 0;
+    let inspectorReturnFocus = null;
     const previousMetricValues = new Map();
     const colors = {green:'#70d58a',cyan:'#42cfc1',amber:'#efbd5f',red:'#f47575',muted:'#a8b4aa',line:'#344038',track:'#27302b',ink:'#f2f6f1'};
     const ui = {
@@ -385,7 +387,8 @@
       if(!found && !allowEmpty)return;
       const item=found || {name,visitors:0,requests:0,share:0,cities:[],visitorDetails:[]};
       const previous=ui.trafficSelected;ui.trafficSelected=name;
-      document.querySelectorAll('[data-province-index]').forEach(button=>button.classList.toggle('active',ui.trafficItems[Number(button.dataset.provinceIndex)]?.name===name));
+      document.querySelectorAll('[data-province-index]').forEach(button=>{const active=ui.trafficItems[Number(button.dataset.provinceIndex)]?.name===name;button.classList.toggle('active',active);button.setAttribute('aria-current',active?'true':'false');});
+      $('trafficSelectionStatus').textContent=`已选择${name}，独立访客 ${formatNumber(item.visitors)} 人，页面访问 ${formatNumber(item.requests)} 次`;
       if(ui.trafficChart){
         if(previous) ui.trafficChart.dispatchAction({type:'unselect',seriesIndex:0,name:provinceNames[previous] || previous});
         ui.trafficChart.dispatchAction({type:'select',seriesIndex:0,name:provinceNames[name] || name});
@@ -395,13 +398,18 @@
     }
     function renderTraffic(){
       const root=state?.traffic || {};
+      const cumulativeButton=document.querySelector('[data-traffic-range="cumulative"]');
+      const cumulativeReady=root.cumulative?.ready===true;
+      if(cumulativeButton){cumulativeButton.disabled=!cumulativeReady;cumulativeButton.title=cumulativeReady?'查看累计访问':'累计访问统计尚未就绪';}
+      if(ui.trafficRange==='cumulative' && !cumulativeReady) ui.trafficRange='recent';
+      document.querySelectorAll('[data-traffic-range]').forEach(option=>{const active=option.dataset.trafficRange===ui.trafficRange;option.classList.toggle('active',active);option.setAttribute('aria-pressed',String(active));});
       const traffic=ui.trafficRange==='cumulative'?(root.cumulative || {}):root;
       ui.trafficItems=(traffic.provinces || []).slice();
       const summary=ui.trafficRange==='cumulative'
         ?[['累计主页访客',traffic.homepage?.uniqueVisitors],['累计主页访问',traffic.homepage?.pageViews],['累计网站访客',traffic.site?.uniqueVisitors ?? traffic.uniqueVisitors],['累计网站访问',traffic.site?.pageViews ?? traffic.requests],['累计起始',traffic.since&&traffic.since!=='--'?traffic.since.slice(5):'--'],['定位覆盖',`${traffic.coveragePercent ?? 0}%`]]
         :[['主页访客',traffic.homepage?.uniqueVisitors],['主页访问',traffic.homepage?.pageViews],['网站访客',traffic.site?.uniqueVisitors ?? traffic.uniqueVisitors],['网站访问',traffic.site?.pageViews ?? traffic.requests],['当前在线',traffic.onlineVisitors],['定位覆盖',`${traffic.coveragePercent ?? 0}%`]];
       $('trafficSummary').innerHTML=summary.map(([label,value])=>`<div><span>${esc(label)}</span><strong>${esc(formatNumber(value))}</strong></div>`).join('');
-      $('provinceList').innerHTML=ui.trafficItems.length?ui.trafficItems.slice(0,10).map((item,index)=>`<button class="province-row ${ui.trafficSelected===item.name?'active':''}" type="button" data-province-index="${index}" aria-label="查看${esc(item.name)}访问详情"><span>${index+1}. ${esc(item.name)}</span><strong>${esc(formatNumber(item.visitors))} 人</strong></button>`).join(''):'<div class="empty">暂无可展示的省级访问数据</div>';
+      $('provinceList').innerHTML=ui.trafficItems.length?ui.trafficItems.map((item,index)=>`<button class="province-row ${ui.trafficSelected===item.name?'active':''}" type="button" data-province-index="${index}" aria-current="${ui.trafficSelected===item.name?'true':'false'}" aria-label="查看${esc(item.name)}访问详情"><span>${index+1}. ${esc(item.name)}</span><strong>${esc(formatNumber(item.visitors))} 人</strong></button>`).join(''):'<div class="empty">暂无可展示的省级访问数据</div>';
       if(!ui.trafficMapReady){ensureTrafficMap();return;}
       const max=Math.max(1,...ui.trafficItems.map(item=>Number(item.visitors)||0));
       const byName=new Map(ui.trafficItems.map(item=>[item.name,item]));
@@ -431,6 +439,7 @@
       document.querySelectorAll('[data-primary-view]').forEach(button=>{const active=button.dataset.primaryView===ui.primaryView;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));});
     }
     function openInspector({kicker='数据详情',title='查看详情',rows=[],contentHtml='',action=null}){
+      inspectorReturnFocus=document.activeElement instanceof HTMLElement?document.activeElement:null;
       $('inspectorKicker').textContent = kicker;
       $('inspectorTitle').textContent = title;
       const rowsHtml=rows.map(([label,value]) => `<div class="detail-row"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join('');
@@ -438,10 +447,13 @@
       $('inspectorActions').innerHTML = action ? `<a class="action-link" href="${esc(action.href)}"><i class="fa fa-arrow-right" aria-hidden="true"></i>${esc(action.label)}</a>` : '';
       $('inspector').classList.add('open');
       $('inspector').setAttribute('aria-hidden','false');
+      requestAnimationFrame(()=>$('closeInspector').focus());
     }
     function closeInspector(){
       $('inspector').classList.remove('open');
       $('inspector').setAttribute('aria-hidden','true');
+      const target=inspectorReturnFocus;inspectorReturnFocus=null;
+      if(target && document.contains(target)) target.focus();
     }
     function drawCanvas(id, draw){
       const canvas = $(id);
@@ -539,11 +551,13 @@
       const traffic=metrics?.traffic || {};
       const windowHours=traffic.windowHours || 24;
       const onlineMinutes=traffic.onlineWindowMinutes || 5;
+      const trafficReady=traffic.ready===true;
+      const trafficMessage=traffic?.source?.message || '访问统计暂不可用';
       const rows = [
         {key:'today',label:'今日检测',value:metrics?.detections?.today,sub:`图像 ${metrics?.detections?.todayImages ?? 0} / 视频 ${metrics?.detections?.todayVideos ?? 0}`,rows:[['今日图像',`${metrics?.detections?.todayImages ?? 0} 次`],['今日视频',`${metrics?.detections?.todayVideos ?? 0} 次`],['昨日检测',`${metrics?.detections?.yesterday ?? 0} 次`]],action:{href:'/admin#detections',label:'查看检测记录'}},
-        {key:'homepage',label:'主页访客',value:traffic.homepageUniqueVisitors,sub:`${windowHours}h · ${formatNumber(traffic.homepagePageViews)} 次访问`,rows:[['主页独立访客',`${formatNumber(traffic.homepageUniqueVisitors)} 人`],['主页访问次数',`${formatNumber(traffic.homepagePageViews)} 次`],['统计窗口',`最近 ${windowHours} 小时`]]},
-        {key:'siteViews',label:'网站访问量',value:traffic.sitePageViews,sub:`${windowHours}h · ${formatNumber(traffic.siteUniqueVisitors)} 位访客`,rows:[['网站页面访问',`${formatNumber(traffic.sitePageViews)} 次`],['网站独立访客',`${formatNumber(traffic.siteUniqueVisitors)} 人`],['统计窗口',`最近 ${windowHours} 小时`]]},
-        {key:'online',label:'当前在线',value:traffic.onlineVisitors,sub:`最近 ${onlineMinutes} 分钟活跃`,rows:[['在线访客',`${formatNumber(traffic.onlineVisitors)} 人`],['在线口径',`最近 ${onlineMinutes} 分钟有页面访问`],['隐私说明','仅做匿名去重统计']]},
+        {key:'homepage',label:'主页访客',value:trafficReady?traffic.homepageUniqueVisitors:null,sub:trafficReady?`${windowHours}h · ${formatNumber(traffic.homepagePageViews)} 次访问`:trafficMessage,rows:trafficReady?[['主页独立访客',`${formatNumber(traffic.homepageUniqueVisitors)} 人`],['主页访问次数',`${formatNumber(traffic.homepagePageViews)} 次`],['统计窗口',`最近 ${windowHours} 小时`]]:[['统计状态','数据不可用'],['原因',trafficMessage]]},
+        {key:'siteViews',label:'网站访问量',value:trafficReady?traffic.sitePageViews:null,sub:trafficReady?`${windowHours}h · ${formatNumber(traffic.siteUniqueVisitors)} 位访客`:trafficMessage,rows:trafficReady?[['网站页面访问',`${formatNumber(traffic.sitePageViews)} 次`],['网站独立访客',`${formatNumber(traffic.siteUniqueVisitors)} 人`],['统计窗口',`最近 ${windowHours} 小时`]]:[['统计状态','数据不可用'],['原因',trafficMessage]]},
+        {key:'online',label:'当前在线',value:trafficReady?traffic.onlineVisitors:null,sub:trafficReady?`最近 ${onlineMinutes} 分钟活跃`:trafficMessage,rows:trafficReady?[['在线访客',`${formatNumber(traffic.onlineVisitors)} 人`],['在线口径',`最近 ${onlineMinutes} 分钟有页面访问`],['隐私说明','仅做匿名去重统计']]:[['统计状态','数据不可用'],['原因',trafficMessage]]},
         {key:'users',label:'用户总数',value:metrics?.users?.total,sub:`今日新增 ${metrics?.users?.todayNew ?? 0}`,rows:[['用户总数',formatNumber(metrics?.users?.total)],['今日新增',formatNumber(metrics?.users?.todayNew)]],action:{href:'/admin#users',label:'查看用户'}},
         {key:'keys',label:'活跃 API 密钥',value:metrics?.users?.apiKeys,sub:'开发者接入',rows:[['活跃密钥',formatNumber(metrics?.users?.apiKeys)],['统计口径','当前可用开发者凭证']],action:{href:'/admin#keys',label:'查看访问凭证'}},
       ];
@@ -586,8 +600,9 @@
       const disk = host?.disk || {};
       const total = Number(services?.total) || 0;
       const online = Number(services?.online) || 0;
-      const algorithmStatus = algorithm?.status === 'healthy' ? '自动判定就绪' : algorithm?.status === 'degraded' && algorithm?.serviceReady && algorithm?.modelReady ? '人工复核' : algorithm?.status === 'degraded' ? '降级' : algorithm?.status === 'offline' ? '离线' : '未知';
-      const algorithmPercent = algorithm?.status === 'healthy' ? 100 : algorithm?.status === 'degraded' ? 50 : 0;
+      const overallStatus=algorithm?.overallStatus || algorithm?.status;
+      const algorithmStatus = overallStatus === 'healthy' ? '自动判定就绪' : overallStatus === 'degraded' && algorithm?.verdictStatus === 'review_only' ? '仅人工复核' : overallStatus === 'degraded' ? '降级' : overallStatus === 'offline' ? '离线' : '未知';
+      const algorithmPercent = overallStatus === 'healthy' ? 100 : overallStatus === 'degraded' ? 50 : 0;
       const provider = algorithm?.provider === 'CUDAExecutionProvider' ? 'CUDA' : (algorithm?.provider || '推理设备未知');
       const gpu = algorithm?.cudaDeviceId != null ? `GPU ${algorithm.cudaDeviceId}` : 'GPU 未识别';
       const remoteLatency = algorithm?.latencyMs != null ? `${algorithm.latencyMs} ms` : '--';
@@ -596,23 +611,29 @@
         {label:'Web 服务器 · 内存',value:`${memory.usedPercent ?? '--'}%`,detail:`${formatBytes(memory.usedBytes)} / ${formatBytes(memory.totalBytes)}`,percent:memory.usedPercent,rows:[['节点','公网 Web 服务器'],['使用率',`${memory.usedPercent ?? '--'}%`],['已使用',formatBytes(memory.usedBytes)],['总容量',formatBytes(memory.totalBytes)]]},
         {label:'Web 服务器 · 系统盘',value:`${disk.usedPercent ?? '--'}%`,detail:`${formatBytes(disk.usedBytes)} / ${formatBytes(disk.totalBytes)}`,percent:disk.usedPercent,rows:[['节点','公网 Web 服务器'],['使用率',`${disk.usedPercent ?? '--'}%`],['已使用',formatBytes(disk.usedBytes)],['总容量',formatBytes(disk.totalBytes)]]},
         {label:'Web 服务器 · 运行时长',value:formatDuration(host?.uptimeSeconds),detail:`Web 进程 ${formatDuration(host?.processUptimeSeconds)}`,rows:[['节点','公网 Web 服务器'],['系统运行',formatDuration(host?.uptimeSeconds)],['Web 进程',formatDuration(host?.processUptimeSeconds)]]},
-        {label:'算法服务器 · 主鉴伪',value:algorithmStatus,detail:algorithm?.modelName || '未配置主模型',percent:algorithmPercent,inverse:true,rows:[['节点','后端算法服务器'],['运行状态',algorithmStatus],['主模型',algorithm?.modelName || '-'],['结论模式',algorithm?.decisionMode || 'review_only'],['校准门禁',algorithm?.verdictReady ? '已通过' : '未通过'],['门禁原因',(algorithm?.decisionGateReasons || []).join('；') || '-'],['模型服务',`${online}/${total || '--'} 在线`],['降级 / 离线',`${services?.degraded ?? 0} / ${services?.offline ?? 0}`]]},
+        {label:'算法服务器 · 主鉴伪',value:algorithmStatus,detail:algorithm?.modelName || '未配置主模型',percent:algorithmPercent,inverse:true,rows:[['节点','后端算法服务器'],['总体状态',algorithmStatus],['传输链路',algorithm?.transportStatus || '-'],['推理状态',algorithm?.inferenceStatus || '-'],['结论状态',algorithm?.verdictStatus || '-'],['主模型',algorithm?.modelName || '-'],['状态原因',(algorithm?.reasons || []).join('；') || '-'],['模型服务',`${online}/${total || '--'} 在线`],['降级 / 离线',`${services?.degraded ?? 0} / ${services?.offline ?? 0}`]]},
         {label:'算法服务器 · GPU 推理',value:`${provider} · ${gpu}`,detail:`探测 ${remoteLatency}`,percent:algorithmPercent,inverse:true,rows:[['节点','后端算法服务器'],['推理设备',provider],['GPU',gpu],['远端探测',remoteLatency],['队列深度',algorithm?.queueDepth ?? '--']]},
       ];
       $('runtime').innerHTML = ui.runtimeItems.map(runtimeItem).join('');
     }
-    function healthState(model){
+    function healthState(model,routing,algorithm){
+      if(routing?.imagePrimary===model.id && algorithm?.modelId===model.id){
+        const status=algorithm?.overallStatus || algorithm?.status;
+        if(status==='healthy') return ['ok','自动判定就绪'];
+        if(status==='degraded') return ['warn',algorithm?.verdictStatus==='review_only'?'仅人工复核':'降级'];
+        return ['','离线'];
+      }
       const h = model.health || {};
       if(h.ok) return ['ok','在线'];
       if(h.serviceOk) return ['warn','降级'];
       return ['','故障'];
     }
-    function renderModels(models,routing){
+    function renderModels(models,routing,algorithm=state?.algorithmServer || {}){
       ui.modelItems=models || [];
-      const online=ui.modelItems.filter(model=>model.health?.ok).length;
+      const online=ui.modelItems.filter(model=>healthState(model,routing,algorithm)[0]==='ok').length;
       $('modelStatusBadge').textContent=`${online}/${ui.modelItems.length || 0} 在线`;
       $('models').innerHTML = ui.modelItems.map((m,index) => {
-        const [cls,text] = healthState(m);
+        const [cls,text] = healthState(m,routing,algorithm);
         const role = routing?.imagePrimary === m.id ? '主路由' : (routing?.imageFallback === m.id ? '兜底' : '');
         const active=ui.filter?.kind==='model' && ui.filter.value===m.id;
         return `<button class="model ${active?'active':''}" type="button" data-model-index="${index}"><span><strong>${esc(m.name || m.id)}</strong><span>${esc(m.id)} ${role ? '· '+role : ''}</span></span><span class="state ${cls}">${text}</span></button>`;
@@ -753,11 +774,11 @@
     }
     function applyFilter(filter){
       ui.filter=filter;
-      if(state){renderRecent();renderModels(state.models,state.routing);drawRoutes();drawDistribution();}
+      if(state){renderRecent();renderModels(state.models,state.routing,state.algorithmServer);drawRoutes();drawDistribution();}
     }
     function clearFilter(){
       ui.filter=null;ui.locked.routes=null;ui.locked.distribution=null;
-      if(state){renderRecent();renderModels(state.models,state.routing);drawRoutes();drawDistribution();}
+      if(state){renderRecent();renderModels(state.models,state.routing,state.algorithmServer);drawRoutes();drawDistribution();}
     }
     function setupCanvas(id){
       const canvas=$(id);
@@ -809,7 +830,7 @@
         $('generated').textContent = `数据时间 ${state.generatedAt || '--'}`;
         renderMetrics(state.metrics);
         renderRuntime(state.host, state.services, state.algorithmServer);
-        renderModels(state.models, state.routing);
+        renderModels(state.models, state.routing, state.algorithmServer);
         renderRecent();
         renderAnomalies(state.anomalies);
         renderCharts();
@@ -882,6 +903,7 @@
     });
     document.querySelectorAll('[data-primary-view]').forEach(button=>button.addEventListener('click',()=>{ui.primaryView=button.dataset.primaryView;syncPrimaryView();renderCharts();}));
     document.querySelectorAll('[data-traffic-range]').forEach(button=>button.addEventListener('click',()=>{
+      if(button.disabled) return;
       ui.trafficRange=button.dataset.trafficRange==='cumulative'?'cumulative':'recent';
       ui.trafficSelected=null;
       closeInspector();

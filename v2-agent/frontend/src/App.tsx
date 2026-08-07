@@ -238,6 +238,7 @@ export default function App() {
   const [history, setHistory] = useState<AgentHistoryEntry[]>([]);
   const [historyQuery, setHistoryQuery] = useState("");
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyDetailLoading, setHistoryDetailLoading] = useState(false);
   const [historyMessage, setHistoryMessage] = useState("");
   const [deletingHistoryKey, setDeletingHistoryKey] = useState<string>();
   const [mobileHistoryOpen, setMobileHistoryOpen] = useState(false);
@@ -406,6 +407,7 @@ export default function App() {
     previewUrlRef.current = null;
     retryFileRef.current = null;
     setPendingFile(null);
+    setHistoryDetailLoading(false);
     setProgress(null);
     setOutcome(null);
     setErrorMessage("");
@@ -891,11 +893,13 @@ export default function App() {
     setErrorMessage("");
     setProgress(null);
     setFallbackOffer(null);
+    setHistoryDetailLoading(false);
     if (cachedOutcome) {
       setOutcome(cachedOutcome);
       return;
     }
     setOutcome(null);
+    setHistoryDetailLoading(true);
     try {
       let nextOutcome: AgentOutcome;
       if (entry.origin === "image") {
@@ -917,6 +921,8 @@ export default function App() {
     } catch (error) {
       if (detailTokenRef.current !== requestToken || userIdRef.current !== expectedUserId) return;
       setErrorMessage(error instanceof Error ? error.message : "历史任务暂时无法读取");
+    } finally {
+      if (detailTokenRef.current === requestToken && userIdRef.current === expectedUserId) setHistoryDetailLoading(false);
     }
   }
 
@@ -1094,7 +1100,7 @@ export default function App() {
               </button>
             )}
             <HuijianBrand compact onClick={() => navigateToView("home")} />
-            <AnalysisModeSwitch mode={imageAnalysisMode} disabled={busy} onChange={setImageAnalysisMode} />
+            <AnalysisModeSwitch mode={imageAnalysisMode} disabled={busy || historyDetailLoading} onChange={setImageAnalysisMode} />
             <div>
               <h1 tabIndex={-1}><span className="desktop-task-title">{screenTitle}</span><span className="mobile-task-title">{pendingFile?.name || "慧鉴AI"}</span></h1>
               <p>{pendingFile ? "慧鉴AI 正在为这份内容整理可信证据" : "一个入口完成检测、取证、凭证核验与报告归档"}</p>
@@ -1134,6 +1140,20 @@ export default function App() {
             />
           )}
 
+          {!guestLimitReached && !pendingFile && !outcome && errorMessage && (
+            <div className="agent-error-message workspace-error-state" role="alert">
+              <span><Bot size={18} /></span>
+              <div>
+                <strong>工作台需要重新连接</strong>
+                <p>{errorMessage}</p>
+                <div className="workspace-error-actions">
+                  {!user && <button type="button" className="primary-button" onClick={() => setAuthOpen(true)}><LogIn size={15} /> 重新登录</button>}
+                  <button type="button" className="secondary-button" onClick={requestFileSelection}><Paperclip size={15} /> 选择新的内容</button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {pendingFile && (
             <div className="conversation-flow">
               <div className="user-file-message">
@@ -1141,6 +1161,9 @@ export default function App() {
                 {pendingFile.previewUrl ? <img src={pendingFile.previewUrl} alt="待检测文件预览" /> : <span className="file-message-icon"><Paperclip size={20} /></span>}
               </div>
               {(progress || busy) && !outcome && <AgentProgressPanel progress={progress} onStopWaiting={stopWaitingForTask} />}
+              {historyDetailLoading && !outcome && (
+                <AgentProgressPanel progress={{ title: "正在打开历史记录", detail: "读取已归档结论与证据，不会重新检测", percent: 72, stage: "report" }} />
+              )}
               {fallbackOffer && !busy && (
                 <div className="fallback-choice" role="alert" aria-live="polite">
                   <span><ShieldCheck size={19} /></span>
@@ -1192,7 +1215,7 @@ export default function App() {
           )}
         </div>
 
-        {(pendingFile || outcome || errorMessage) && (
+        {(pendingFile || outcome) && (
           <div className="composer-dock">
             <button type="button" className="composer-compact" disabled={busy} onClick={() => fileInputRef.current?.click()}>
               <span className="composer-attach"><Paperclip size={18} /></span>
@@ -1277,7 +1300,7 @@ function WelcomeWorkspace({
           <button type="button" className="upload-stage-core" disabled={busy} onClick={onOpenFile}>
             <div className="upload-stage-icon"><BrandArtIcon name="workflow" /></div>
             <h3>{dragging ? "松开即可开始鉴伪" : "上传或拖放待鉴别内容"}</h3>
-            <p>图片、视频或文档会自动进入对应的证据链路</p>
+            <p>图片、视频和文档将自动进入对应证据链路</p>
             <span className="primary-button upload-button"><Paperclip size={17} /> 选择文件</span>
           </button>
           <div className="capability-strip compact-capability-strip" aria-label="支持的内容类型">
@@ -1301,7 +1324,7 @@ function WelcomeWorkspace({
   );
 }
 
-function AgentProgressPanel({ progress, onStopWaiting }: { progress: AgentProgress | null; onStopWaiting: () => void }) {
+function AgentProgressPanel({ progress, onStopWaiting }: { progress: AgentProgress | null; onStopWaiting?: () => void }) {
   const current = progress || { title: "正在准备鉴伪任务", detail: "请稍候", percent: 8, stage: "validate" as const };
   const stages = [
     { key: "receive", label: "安全接收", note: "格式与权限", icon: "document" as const },
@@ -1332,8 +1355,8 @@ function AgentProgressPanel({ progress, onStopWaiting }: { progress: AgentProgre
           </div>
         )}
         {current.fallback && <div className="fallback-note"><ShieldCheck size={14} /> 已切换至可用的可信检测链路，不会返回模拟结论。</div>}
-        <button type="button" className="cancel-analysis-button" onClick={onStopWaiting}>停止等待</button>
-        <small className="stop-waiting-note">仅停止当前页面查询；服务器任务可能继续运行。</small>
+        {onStopWaiting && <button type="button" className="cancel-analysis-button" onClick={onStopWaiting}>停止等待</button>}
+        {onStopWaiting && <small className="stop-waiting-note">仅停止当前页面查询；服务器任务可能继续运行。</small>}
       </div>
     </div>
   );

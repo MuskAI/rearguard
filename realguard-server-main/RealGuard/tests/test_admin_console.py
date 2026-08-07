@@ -171,14 +171,33 @@ def test_dashboard_metrics_count_today_detections(monkeypatch):
         "onlineVisitors": 4,
         "onlineWindowMinutes": 5,
         "cumulativeReady": False,
-        "cumulativeSince": "--",
-        "cumulativeHomepagePageViews": 0,
-        "cumulativeHomepageUniqueVisitors": 0,
-        "cumulativeSitePageViews": 0,
-        "cumulativeSiteUniqueVisitors": 0,
+        "cumulativeSince": None,
+        "cumulativeHomepagePageViews": None,
+        "cumulativeHomepageUniqueVisitors": None,
+        "cumulativeSitePageViews": None,
+        "cumulativeSiteUniqueVisitors": None,
     }
     assert metrics["todayWindow"]["start"] == "2026-06-09 00:00:00"
     assert any(call[1] == ("2026-06-09 00:00:00", "2026-06-10 00:00:00") and call[2] for call in calls)
+
+
+def test_traffic_metrics_keep_unavailable_distinct_from_zero():
+    payload = admin._traffic_metrics_payload({
+        "ready": False,
+        "windowHours": 24,
+        "homepage": {"pageViews": 0, "uniqueVisitors": 0},
+        "site": {"pageViews": 0, "uniqueVisitors": 0},
+        "onlineVisitors": 0,
+        "source": {"message": "统计存储连接失败"},
+        "cumulative": {"ready": False},
+    })
+
+    assert payload["ready"] is False
+    assert payload["homepagePageViews"] is None
+    assert payload["sitePageViews"] is None
+    assert payload["onlineVisitors"] is None
+    assert payload["cumulativeSitePageViews"] is None
+    assert payload["source"]["message"] == "统计存储连接失败"
 
 
 def test_admin_page_renders_workspace_for_allowed_user(client, monkeypatch):
@@ -483,6 +502,11 @@ def test_screen_algorithm_server_payload_uses_primary_model_gpu_telemetry():
 
     assert payload == {
         "status": "healthy",
+        "overallStatus": "healthy",
+        "transportStatus": "online",
+        "inferenceStatus": "ready",
+        "verdictStatus": "ready",
+        "reasons": [],
         "serviceReady": True,
         "modelReady": True,
         "verdictReady": True,
@@ -947,6 +971,58 @@ def test_admin_rejects_deleting_routed_model(client, monkeypatch, tmp_path):
 
     assert response.status_code == 400
     assert "路由策略" in response.get_json()["message"]
+
+
+def test_admin_protects_primary_model_runtime_changes(client, monkeypatch, tmp_path):
+    monkeypatch.setenv("REALGUARD_ADMIN_PHONES", "13800000000")
+    monkeypatch.setattr(admin.model_registry, "REGISTRY_PATH", tmp_path / "registry.json")
+    monkeypatch.setattr(admin.admin_state, "STATE_PATH", tmp_path / "admin_state.json")
+    _login_session(client, admin_role="admin")
+    headers = _csrf_headers(client)
+    created = client.post(
+        "/api/admin/models",
+        json={
+            "id": "v3-primary-test",
+            "name": "Primary Test",
+            "endpoint": "http://127.0.0.1:19000/image",
+            "healthUrl": "http://127.0.0.1:19000/health",
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201
+    routing = admin.model_registry.update_routing({
+        "imagePrimary": "v3-primary-test",
+        "imageFallback": "",
+        "fallbackEnabled": False,
+    })
+    assert routing["imagePrimary"] == "v3-primary-test"
+
+    disabled = client.post(
+        "/api/admin/models/v3-primary-test",
+        json={"enabled": False},
+        headers=headers,
+    )
+    assert disabled.status_code == 409
+    assert disabled.get_json()["code"] == "primary_model_disable_forbidden"
+
+    unconfirmed = client.post(
+        "/api/admin/models/v3-primary-test",
+        json={"endpoint": "http://127.0.0.1:19000/image-v2"},
+        headers=headers,
+    )
+    assert unconfirmed.status_code == 409
+    assert unconfirmed.get_json()["code"] == "primary_model_confirmation_required"
+
+    confirmed = client.post(
+        "/api/admin/models/v3-primary-test",
+        json={
+            "endpoint": "http://127.0.0.1:19000/image-v2",
+            "confirmPrimaryRuntimeChange": True,
+        },
+        headers=headers,
+    )
+    assert confirmed.status_code == 200
+    assert confirmed.get_json()["model"]["endpoint"] == "http://127.0.0.1:19000/image-v2"
 
 
 def test_admin_assurance_reports_v1_blockers(client, monkeypatch):

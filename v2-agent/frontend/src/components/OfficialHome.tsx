@@ -94,6 +94,8 @@ export default function OfficialHome({
   const siteRef = useRef<HTMLDivElement>(null);
   const developerRootRef = useRef<HTMLDivElement>(null);
   const developerTriggerRef = useRef<HTMLButtonElement>(null);
+  const mobileNavRef = useRef<HTMLElement>(null);
+  const mobileNavTriggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const root = siteRef.current;
@@ -132,6 +134,27 @@ export default function OfficialHome({
     };
   }, [developerOpen]);
 
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    const closeOutside = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!mobileNavRef.current?.contains(target) && !mobileNavTriggerRef.current?.contains(target)) {
+        setMobileNavOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setMobileNavOpen(false);
+      mobileNavTriggerRef.current?.focus();
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [mobileNavOpen]);
+
   function openDeveloper(entry: DeveloperEntry) {
     setDeveloperOpen(false);
     setMobileNavOpen(false);
@@ -139,7 +162,7 @@ export default function OfficialHome({
   }
 
   function moveHero(event: ReactPointerEvent<HTMLElement>) {
-    if (event.pointerType !== "mouse") return;
+    if (event.pointerType !== "mouse" || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const rect = event.currentTarget.getBoundingClientRect();
     const x = (event.clientX - rect.left) / rect.width - 0.5;
     const y = (event.clientY - rect.top) / rect.height - 0.5;
@@ -184,7 +207,7 @@ export default function OfficialHome({
         </nav>
 
         <div className="home-header-actions">
-          <button type="button" className="home-mobile-menu-button" onClick={() => setMobileNavOpen((value) => !value)} aria-label={mobileNavOpen ? "关闭网站导航" : "打开网站导航"} aria-expanded={mobileNavOpen}>
+          <button ref={mobileNavTriggerRef} type="button" className="home-mobile-menu-button" onClick={() => setMobileNavOpen((value) => !value)} aria-label={mobileNavOpen ? "关闭网站导航" : "打开网站导航"} aria-expanded={mobileNavOpen} aria-controls="home-mobile-navigation">
             {mobileNavOpen ? <X size={19} /> : <Menu size={19} />}
           </button>
           {authReady && (user ? (
@@ -196,7 +219,7 @@ export default function OfficialHome({
         </div>
 
         {mobileNavOpen && (
-          <nav className="home-mobile-nav" aria-label="移动端官网导航">
+          <nav ref={mobileNavRef} id="home-mobile-navigation" className="home-mobile-nav" aria-label="移动端官网导航">
             {NAV_ITEMS.map((item) => <a key={item.href} href={item.href} onClick={() => setMobileNavOpen(false)}>{item.label}<ArrowRight size={16} /></a>)}
             <button type="button" onClick={() => openDeveloper("overview")}>开发者平台<ArrowRight size={16} /></button>
             <a href="#faq" onClick={() => setMobileNavOpen(false)}>常见问题<ArrowRight size={16} /></a>

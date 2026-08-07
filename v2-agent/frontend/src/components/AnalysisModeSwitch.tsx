@@ -84,7 +84,7 @@ export default function AnalysisModeSwitch({ mode, disabled = false, onChange }:
       >
         <span className="analysis-model-trigger-icon"><BrandArtIcon name={selected.icon} /></span>
         <span className="analysis-model-trigger-copy">
-          <small>检测模式</small>
+          <small>图片检测模型</small>
           <strong>{selected.label}</strong>
         </span>
         <ChevronDown size={15} className="analysis-model-chevron" aria-hidden="true" />

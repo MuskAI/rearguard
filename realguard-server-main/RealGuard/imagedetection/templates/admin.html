@@ -150,6 +150,7 @@
     .toast{position:fixed;right:20px;bottom:20px;max-width:460px;background:#101828;color:#fff;border-radius:var(--radius);padding:13px 15px;box-shadow:0 18px 36px rgba(15,23,42,.22);display:none;z-index:20}
     .inline-state{border:1px solid var(--line-soft);background:#f8fafc;border-radius:var(--radius);padding:18px;color:var(--muted);display:grid;gap:10px;justify-items:start}
     .inline-state.error{border-color:#fecaca;background:#fff7f7;color:#991b1b}
+    .metrics>.inline-state{grid-column:1/-1;width:100%}
     .skeleton{min-height:84px;border-radius:var(--radius);background:linear-gradient(100deg,#eef2f1 20%,#f8faf9 38%,#eef2f1 56%);background-size:220% 100%;animation:skeleton 1.1s ease-in-out infinite}
     @keyframes skeleton{to{background-position-x:-220%}}
     .sync-status{font-size:12px;color:var(--muted);white-space:nowrap}
@@ -394,17 +395,19 @@
         <span><span class="brand-title">慧鉴 AI</span><span class="brand-sub">管理控制台</span></span>
       </a>
       <nav class="nav-group">
-        <div class="nav-label">运行</div>
+        <div class="nav-label">监控</div>
         <a class="nav-item active" href="#dashboard" data-route="dashboard" title="控制台"><i class="nav-icon fa fa-dashboard"></i><span class="nav-text">控制台</span></a>
         {% if "topology.view" in admin_permissions %}
         <a class="nav-item" href="#assurance" data-route="assurance" title="在线保障"><i class="nav-icon fa fa-shield"></i><span class="nav-text">在线保障</span></a>
+        <a class="nav-item" href="#system" data-route="system" title="服务健康"><i class="nav-icon fa fa-heartbeat"></i><span class="nav-text">服务健康</span></a>
+        <div class="nav-label">模型运营</div>
         <a class="nav-item" href="#models" data-route="models" title="模型管理"><i class="nav-icon fa fa-cubes"></i><span class="nav-text">模型管理</span></a>
         <a class="nav-item" href="#swarm" data-route="swarm" title="专家会诊模式"><i class="nav-icon fa fa-sitemap"></i><span class="nav-text">专家会诊模式</span></a>
-        <a class="nav-item" href="#system" data-route="system" title="服务健康"><i class="nav-icon fa fa-heartbeat"></i><span class="nav-text">服务健康</span></a>
         {% endif %}
         {% if "testing.view" in admin_permissions %}
         <a class="nav-item" href="/admin/testing" data-route="testing" title="内部测试平台"><i class="nav-icon fa fa-flask"></i><span class="nav-text">内部测试</span></a>
         {% endif %}
+        <div class="nav-label">治理</div>
         {% if "alerts.manage" in admin_permissions or "audit.view" in admin_permissions %}
         <a class="nav-item" href="#governance" data-route="governance" title="审计告警"><i class="nav-icon fa fa-bell"></i><span class="nav-text">审计告警</span></a>
         {% endif %}
@@ -884,10 +887,11 @@
       }catch(_error){}
       let message='服务器响应格式异常';
       if(status===413) message='上传内容超过网关允许大小，请缩小单次数据集总字节数';
+      else if(status===404) message='管理接口不存在，请确认网页与服务端版本已经同步';
       else if([502,503,504].includes(status)) message=`服务暂不可用（HTTP ${status}），请稍后重试`;
       else if(status) message=`服务器返回 HTTP ${status}${statusText?` ${statusText}`:''}，但没有返回可读取的 JSON`;
       const clean=String(text || '').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
-      if(clean && clean.length<240) message+=`：${clean}`;
+      if(clean && clean.length<240 && ![404,413,502,503,504].includes(status)) message+=`：${clean}`;
       return {status:'error',message};
     }
     function apiRequestError(message,status=0,retryAfter=''){
@@ -1035,16 +1039,18 @@
       const timezone = win.timezone || 'Asia/Shanghai';
       const windowHours = traffic.windowHours || 24;
       const onlineMinutes = traffic.onlineWindowMinutes || 5;
+      const trafficReady = traffic.ready === true;
+      const trafficMessage = traffic?.source?.message || '访问统计暂不可用';
       const items = [
         {label:'今日检测', value: metrics?.detections?.today ?? '--', hint:`${dateLabel} · 图像 ${metrics?.detections?.todayImages ?? '--'} / 视频 ${metrics?.detections?.todayVideos ?? '--'} · ${timezone}`},
-        {label:'主页访客', value: traffic.homepageUniqueVisitors ?? '--', hint:`最近 ${windowHours} 小时 · ${traffic.homepagePageViews ?? '--'} 次访问`},
-        {label:'网站访问量', value: traffic.sitePageViews ?? '--', hint:`最近 ${windowHours} 小时 · ${traffic.siteUniqueVisitors ?? '--'} 位访客`},
-        {label:'当前在线', value: traffic.onlineVisitors ?? '--', hint:`最近 ${onlineMinutes} 分钟有页面活动`},
+        {label:'主页访客', value: trafficReady ? (traffic.homepageUniqueVisitors ?? '--') : '--', hint:trafficReady ? `最近 ${windowHours} 小时 · ${traffic.homepagePageViews ?? '--'} 次访问` : trafficMessage},
+        {label:'网站访问量', value: trafficReady ? (traffic.sitePageViews ?? '--') : '--', hint:trafficReady ? `最近 ${windowHours} 小时 · ${traffic.siteUniqueVisitors ?? '--'} 位访客` : trafficMessage},
+        {label:'当前在线', value: trafficReady ? (traffic.onlineVisitors ?? '--') : '--', hint:trafficReady ? `最近 ${onlineMinutes} 分钟有页面活动` : trafficMessage},
       ];
       $('metrics').innerHTML = items.map((item) => `<article class="metric ${String(item.value || '').length > 8 ? 'compact' : ''}"><small>${esc(item.label)}</small><strong>${esc(item.value)}</strong><em>${esc(item.hint || '')}</em></article>`).join('');
       $('secondaryStats').innerHTML = [
-        ['网站独立访客', `${traffic.siteUniqueVisitors ?? '--'} 人 · 最近 ${windowHours} 小时`],
-        ['累计网站访问', traffic.cumulativeReady ? `${traffic.cumulativeSitePageViews ?? '--'} 次 · ${traffic.cumulativeSiteUniqueVisitors ?? '--'} 位访客` : '数据准备中'],
+        ['网站独立访客', trafficReady ? `${traffic.siteUniqueVisitors ?? '--'} 人 · 最近 ${windowHours} 小时` : trafficMessage],
+        ['累计网站访问', traffic.cumulativeReady ? `${traffic.cumulativeSitePageViews ?? '--'} 次 · ${traffic.cumulativeSiteUniqueVisitors ?? '--'} 位访客` : '累计统计尚未就绪'],
         ['用户总数', `${metrics?.users?.total ?? '--'} 人 · 今日新增 ${metrics?.users?.todayNew ?? '--'}`],
         ['活跃 API 密钥', `${metrics?.users?.apiKeys ?? '--'} 个`],
         ['累计起始时间', traffic.cumulativeReady ? (traffic.cumulativeSince || '--') : '--'],
@@ -1249,7 +1255,7 @@
             <i class="fa fa-angle-down model-chevron" aria-hidden="true"></i>
           </summary>
           <div class="kv">
-            <span>启用</span><label><input type="checkbox" ${m.enabled ? 'checked' : ''} data-field="enabled"></label>
+            <span>启用</span><label><input type="checkbox" ${m.enabled ? 'checked' : ''} data-field="enabled" ${active && m.enabled ? 'disabled title="主模型需先切换路由后才能停用" aria-label="主模型已启用，需先切换路由后才能停用"' : ''}></label>
             <span>Endpoint</span><input class="input" value="${esc(m.endpoint)}" data-field="endpoint">
             <span>Health</span><input class="input" value="${esc(m.healthUrl)}" data-field="healthUrl">
             <span>Version</span><input class="input" value="${esc(m.version)}" data-field="version">
@@ -1544,6 +1550,16 @@
       if(!card){ toast(`未找到模型编辑卡: ${id}`); return; }
       const payload = {};
       card.querySelectorAll('[data-field]').forEach(el => payload[el.dataset.field] = el.type === 'checkbox' ? el.checked : el.value);
+      const current=(state.models || []).find(model=>model.id===id) || {};
+      const primary=state.routing?.imagePrimary===id;
+      if(primary && payload.enabled===false){ toast('当前主模型不能直接停用，请先切换主路由'); return; }
+      const changedRuntimeFields=['endpoint','healthUrl'].filter(field=>String(payload[field] || '').trim()!==String(current[field] || '').trim());
+      if(primary && changedRuntimeFields.length){
+        const labels={endpoint:'Endpoint',healthUrl:'Health URL'};
+        const approval=await requestAction({title:'确认修改线上主模型',message:`将修改：${changedRuntimeFields.map(field=>labels[field]).join('、')}\n模型：${current.name || id}`,warning:'服务地址变更会立即影响新检测任务。请确认新地址已完成健康检查与真实探测。',confirmText:'确认保存并生效',danger:true});
+        if(!approval) return;
+        payload.confirmPrimaryRuntimeChange=true;
+      }
       const data = await api(`/api/admin/models/${encodeURIComponent(id)}`, {method:'POST', body:JSON.stringify(payload)});
       const i = state.models.findIndex(m => m.id === id); if(i >= 0) state.models[i] = data.model;
       renderModelCards('models', state.models); renderRoutingSummary(); renderSwitchboard(); renderOperationsSummary(); toast('模型配置已保存'); await loadAudit();
@@ -2542,7 +2558,7 @@
     document.querySelectorAll('[data-route]').forEach(el => el.addEventListener('click', e => { e.preventDefault(); switchRoute(el.dataset.route); }));
     const initial = (location.hash || `#${SERVER_INITIAL_ROUTE}`).slice(1);
     const initialRoute = (titles[initial] && routeAllowed(initial)) ? initial : 'dashboard';
-    switchRoute(initialRoute); loadAll();
+    switchRoute(initialRoute); loadOverview();
   </script>
 {% endif %}
 </body>

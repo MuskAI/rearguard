@@ -185,6 +185,35 @@
 
 .developer-scroll { min-height: 0; flex: 1; overflow-y: auto; }
 
+.developer-loading-state {
+  width: min(520px, calc(100% - 32px));
+  min-height: 112px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: clamp(72px, 14vh, 150px) auto 0;
+  padding: 22px;
+  color: var(--primary-strong);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+}
+
+.developer-loading-state > span {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  display: grid;
+  place-items: center;
+  background: var(--primary-soft);
+  border-radius: 7px;
+}
+
+.developer-loading-state div { min-width: 0; }
+.developer-loading-state strong { color: var(--ink-strong); font-size: 14px; }
+.developer-loading-state p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+
 .developer-page {
   width: min(1240px, calc(100% - 40px));
   margin: 0 auto;
@@ -778,8 +807,23 @@
 }
 
 @media (max-width: 620px) {
-  .developer-sidebar nav button { display: flex; justify-content: center; }
-  .developer-sidebar nav button span { display: none; }
+  .developer-sidebar nav button {
+    min-height: 50px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+    padding: 5px 2px;
+    text-align: center;
+  }
+  .developer-sidebar nav button span {
+    display: block;
+    overflow: hidden;
+    font-size: 9px;
+    line-height: 1.1;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .developer-topbar-actions .developer-primary-action { width: 38px; padding: 0; }
   .developer-topbar-actions .developer-primary-action svg { margin: 0; }
   .developer-topbar-actions .developer-primary-action span { display: none; }
@@ -793,7 +837,9 @@
   .developer-metric-strip.usage-metrics article:last-child { grid-column: auto; }
   .developer-metric-strip strong { font-size: 20px; }
   .developer-endpoint-band { align-items: stretch; flex-direction: column; }
+  .developer-endpoint-band > div { width: 100%; }
   .developer-endpoint-band > div > div { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .developer-endpoint-band code { width: 100%; max-width: 100%; }
   .developer-endpoint-band button { width: 100%; justify-content: center; }
   .developer-doc-content > section { padding: 17px 14px; }
   .developer-mode-selector, .developer-response-grid { grid-template-columns: 1fr; }
