@@ -63,7 +63,7 @@
       <div class="panel">
         <div class="panel-brand"><span class="mark" aria-hidden="true"></span><span>慧鉴AI 管理台</span></div>
         {% if can_register %}<div class="tabs">
-          <a class="tab {% if mode != 'register' %}active{% endif %}" href="/admin/login">登录</a>
+          <a class="tab {% if mode != 'register' %}active{% endif %}" href="{{ url_for('admin_blueprint.admin_login', next=next_path) }}">登录</a>
           <a class="tab {% if mode == 'register' %}active{% endif %}" href="/admin/register">注册</a>
         </div>{% endif %}
         {% if mode == 'register' %}
@@ -88,6 +88,7 @@
           <h2>管理员登录</h2>
           <p>使用管理员账号或手机号登录后台控制台。</p>
           <form action="/admin/login" method="post">
+            <input type="hidden" name="next" value="{{ next_path }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <label>账号 / 手机号<input name="identity" autocomplete="username" required></label>
             <label>密码<input type="password" name="password" autocomplete="current-password" required></label>

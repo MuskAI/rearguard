@@ -14,6 +14,7 @@ import sqlite3
 import threading
 from typing import Callable, Iterable
 from urllib.parse import parse_qs, urlsplit
+import uuid
 
 try:
     import ip2region.searcher as ip2_searcher
@@ -28,6 +29,7 @@ DEFAULT_CUMULATIVE_DB_PATH = "/opt/realguard-data/traffic-cumulative.sqlite3"
 DEFAULT_WINDOW_HOURS = 24
 DEFAULT_ONLINE_WINDOW_MINUTES = 5
 DEFAULT_VISITOR_DETAIL_LIMIT = 20
+DEFAULT_ACCOUNT_LINK_RETENTION_DAYS = 180
 HOMEPAGE_PATHS = {"/", "/index.html"}
 CONFIRMED_PAGE_TYPES = {"home", "workspace", "developer", "image", "video", "history"}
 
@@ -223,9 +225,16 @@ def _open_cumulative_db(path: str) -> sqlite3.Connection:
             event_hash TEXT PRIMARY KEY,
             occurred_at INTEGER NOT NULL,
             visitor_hash TEXT NOT NULL DEFAULT '',
+            account_hash TEXT NOT NULL DEFAULT '',
             path TEXT NOT NULL DEFAULT '',
             is_homepage INTEGER NOT NULL DEFAULT 0,
-            confirmed INTEGER NOT NULL DEFAULT 0
+            confirmed INTEGER NOT NULL DEFAULT 0,
+            country TEXT NOT NULL DEFAULT '',
+            province TEXT NOT NULL DEFAULT '',
+            city TEXT NOT NULL DEFAULT '',
+            isp TEXT NOT NULL DEFAULT '',
+            iso_code TEXT NOT NULL DEFAULT '',
+            agent TEXT NOT NULL DEFAULT ''
         );
         CREATE INDEX IF NOT EXISTS idx_traffic_events_occurred_at
             ON traffic_events(occurred_at);
@@ -258,12 +267,47 @@ def _open_cumulative_db(path: str) -> sqlite3.Connection:
     }
     for column, definition in (
         ("visitor_hash", "TEXT NOT NULL DEFAULT ''"),
+        ("account_hash", "TEXT NOT NULL DEFAULT ''"),
         ("path", "TEXT NOT NULL DEFAULT ''"),
         ("is_homepage", "INTEGER NOT NULL DEFAULT 0"),
         ("confirmed", "INTEGER NOT NULL DEFAULT 0"),
+        ("country", "TEXT NOT NULL DEFAULT ''"),
+        ("province", "TEXT NOT NULL DEFAULT ''"),
+        ("city", "TEXT NOT NULL DEFAULT ''"),
+        ("isp", "TEXT NOT NULL DEFAULT ''"),
+        ("iso_code", "TEXT NOT NULL DEFAULT ''"),
+        ("agent", "TEXT NOT NULL DEFAULT ''"),
     ):
         if column not in event_columns:
             connection.execute(f"ALTER TABLE traffic_events ADD COLUMN {column} {definition}")
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_traffic_events_account_time "
+        "ON traffic_events(account_hash, occurred_at)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_traffic_events_province_account_time "
+        "ON traffic_events(province, account_hash, occurred_at)"
+    )
+    retention_days = max(
+        1,
+        int(os.getenv("REALGUARD_TRAFFIC_ACCOUNT_LINK_RETENTION_DAYS", str(DEFAULT_ACCOUNT_LINK_RETENTION_DAYS))),
+    )
+    cleanup_marker = f"{datetime.now().astimezone().date().isoformat()}:{retention_days}"
+    cleanup_row = connection.execute(
+        "SELECT value FROM traffic_metadata WHERE key = ?",
+        ("account_link_cleanup",),
+    ).fetchone()
+    if not cleanup_row or str(cleanup_row["value"]) != cleanup_marker:
+        cutoff = int((datetime.now().astimezone() - timedelta(days=retention_days)).timestamp())
+        connection.execute(
+            "UPDATE traffic_events SET account_hash = '' "
+            "WHERE account_hash != '' AND occurred_at < ?",
+            (cutoff,),
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO traffic_metadata (key, value) VALUES (?, ?)",
+            ("account_link_cleanup", cleanup_marker),
+        )
     connection.commit()
     return connection
 
@@ -277,6 +321,20 @@ def _metadata_value(connection: sqlite3.Connection, key: str, factory: Callable[
     return value
 
 
+def _normalized_account_uuid(value: str) -> str:
+    try:
+        return str(uuid.UUID(str(value or "").strip()))
+    except (ValueError, AttributeError, TypeError):
+        return ""
+
+
+def _account_hash(salt: str, account_uuid: str) -> str:
+    normalized = _normalized_account_uuid(account_uuid)
+    if not normalized:
+        return ""
+    return hashlib.sha256(f"{salt}\0account\0{normalized}".encode("utf-8")).hexdigest()
+
+
 def record_confirmed_pageview(
     *,
     ip: str,
@@ -284,6 +342,7 @@ def record_confirmed_pageview(
     visitor_id: str,
     event_id: str,
     page: str,
+    account_uuid: str = "",
     resolver: Callable[[str], dict] = resolve_ip,
     occurred_at: datetime | None = None,
 ) -> bool:
@@ -313,16 +372,23 @@ def record_confirmed_pageview(
                 salt = _metadata_value(connection, "visitor_salt", lambda: secrets.token_hex(32))
                 visitor_hash = hashlib.sha256(f"{salt}\0{visitor_id}".encode("utf-8")).hexdigest()
                 event_hash = hashlib.sha256(f"{salt}\0{event_id}".encode("utf-8")).hexdigest()
+                account_hash = _account_hash(salt, account_uuid)
                 cursor = connection.execute(
                     """
                     INSERT OR IGNORE INTO traffic_events (
-                        event_hash, occurred_at, visitor_hash, path, is_homepage, confirmed
-                    ) VALUES (?, ?, ?, ?, ?, 1)
+                        event_hash, occurred_at, visitor_hash, account_hash, path, is_homepage, confirmed
+                    ) VALUES (?, ?, ?, ?, ?, ?, 1)
                     """,
-                    (event_hash, epoch, visitor_hash, clean_path, int(is_homepage)),
+                    (event_hash, epoch, visitor_hash, account_hash, clean_path, int(is_homepage)),
                 )
                 if cursor.rowcount != 1:
-                    connection.rollback()
+                    if account_hash:
+                        connection.execute(
+                            "UPDATE traffic_events SET account_hash = ? "
+                            "WHERE event_hash = ? AND account_hash = ''",
+                            (account_hash, event_hash),
+                        )
+                    connection.commit()
                     return True
                 location = resolver(ip) or {}
                 country = _clean_region_part(location.get("country", ""))
@@ -330,6 +396,14 @@ def record_confirmed_pageview(
                 city = _clean_region_part(location.get("city", ""))
                 isp = _clean_region_part(location.get("isp", ""))
                 iso_code = _clean_region_part(location.get("isoCode", ""))
+                connection.execute(
+                    """
+                    UPDATE traffic_events
+                    SET country = ?, province = ?, city = ?, isp = ?, iso_code = ?, agent = ?
+                    WHERE event_hash = ?
+                    """,
+                    (country, province, city, isp, iso_code, agent, event_hash),
+                )
                 connection.execute(
                     """
                     INSERT INTO traffic_visitors (
@@ -373,6 +447,123 @@ def record_confirmed_pageview(
                 connection.close()
     except (OSError, sqlite3.Error):
         return False
+
+
+def registered_account_activity(
+    account_uuids: Iterable[str],
+    *,
+    province: str,
+    scope: str = "recent",
+    now: datetime | None = None,
+    window_hours: int = DEFAULT_WINDOW_HOURS,
+    limit: int = 50,
+) -> dict:
+    """Return account-linked pageviews for an authenticated admin workflow.
+
+    The cumulative traffic database stores only salted account hashes. Callers
+    must supply the currently valid account UUID allowlist from the user store.
+    """
+    province = normalize_province(province)
+    scope = str(scope or "recent").strip().lower()
+    if not province or scope not in {"recent", "cumulative"}:
+        return {"ready": True, "province": province, "scope": scope, "total": 0, "accounts": []}
+    now = now or datetime.now().astimezone()
+    if now.tzinfo is None:
+        now = now.astimezone()
+    limit = max(1, min(int(limit or 50), 100))
+    try:
+        with _CUMULATIVE_LOCK:
+            connection = _open_cumulative_db(_cumulative_db_path())
+            salt = _metadata_value(connection, "visitor_salt", lambda: secrets.token_hex(32))
+            connection.commit()
+        try:
+            account_by_hash = {
+                digest: normalized
+                for value in account_uuids
+                if (normalized := _normalized_account_uuid(value))
+                if (digest := _account_hash(salt, normalized))
+            }
+            if not account_by_hash:
+                return {"ready": True, "province": province, "scope": scope, "total": 0, "accounts": []}
+            connection.execute(
+                "CREATE TEMP TABLE permitted_account_hashes "
+                "(account_hash TEXT PRIMARY KEY) WITHOUT ROWID"
+            )
+            connection.executemany(
+                "INSERT OR IGNORE INTO permitted_account_hashes (account_hash) VALUES (?)",
+                ((digest,) for digest in account_by_hash),
+            )
+            where = ["events.confirmed = 1", "events.province = ?"]
+            params: list[object] = [province]
+            if scope == "recent":
+                where.append("events.occurred_at >= ?")
+                params.append(int((now - timedelta(hours=max(1, window_hours))).timestamp()))
+            rows = connection.execute(
+                f"""
+                WITH scoped AS (
+                    SELECT events.account_hash, events.path, events.occurred_at,
+                           events.city, events.isp, events.agent,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY events.account_hash ORDER BY events.occurred_at DESC
+                           ) AS latest_rank
+                    FROM traffic_events AS events
+                    JOIN permitted_account_hashes AS permitted
+                      ON permitted.account_hash = events.account_hash
+                    WHERE {' AND '.join(where)}
+                ), aggregated AS (
+                    SELECT account_hash,
+                           COUNT(*) AS requests,
+                           COUNT(DISTINCT path) AS pages,
+                           MIN(occurred_at) AS first_seen,
+                           MAX(occurred_at) AS last_seen
+                    FROM scoped
+                    GROUP BY account_hash
+                )
+                SELECT aggregated.*, scoped.city, scoped.isp, scoped.agent,
+                       COUNT(*) OVER () AS total_accounts
+                FROM aggregated
+                JOIN scoped
+                  ON scoped.account_hash = aggregated.account_hash
+                 AND scoped.latest_rank = 1
+                ORDER BY aggregated.last_seen DESC
+                LIMIT ?
+                """,
+                tuple(params) + (limit + 1,),
+            ).fetchall()
+            accounts = []
+            for row in rows[:limit]:
+                first_seen = datetime.fromtimestamp(int(row["first_seen"])).astimezone()
+                last_seen = datetime.fromtimestamp(int(row["last_seen"])).astimezone()
+                accounts.append({
+                    "accountUuid": account_by_hash[str(row["account_hash"])],
+                    "requests": int(row["requests"]),
+                    "pages": int(row["pages"]),
+                    "firstSeen": first_seen.strftime("%Y-%m-%d %H:%M"),
+                    "lastSeen": last_seen.strftime("%Y-%m-%d %H:%M"),
+                    "city": _clean_region_part(row["city"]),
+                    "network": _clean_region_part(row["isp"]),
+                    "device": _device_label(row["agent"]),
+                    "browser": _browser_label(row["agent"]),
+                })
+            return {
+                "ready": True,
+                "province": province,
+                "scope": scope,
+                "total": int(rows[0]["total_accounts"]) if rows else 0,
+                "hasMore": len(rows) > limit,
+                "accounts": accounts,
+            }
+        finally:
+            connection.close()
+    except (OSError, sqlite3.Error) as exc:
+        return {
+            "ready": False,
+            "province": province,
+            "scope": scope,
+            "total": 0,
+            "accounts": [],
+            "message": f"注册用户地域统计暂不可用：{exc}",
+        }
 
 
 def _historical_page_from_referer(referer: str, allowed_hosts: set[str]) -> str | None:
@@ -485,6 +676,14 @@ def import_historical_browser_sessions(
                     isp = _clean_region_part(location.get("isp", ""))
                     iso_code = _clean_region_part(location.get("isoCode", ""))
                     epoch = int(timestamp.timestamp())
+                    connection.execute(
+                        """
+                        UPDATE traffic_events
+                        SET country = ?, province = ?, city = ?, isp = ?, iso_code = ?, agent = ?
+                        WHERE event_hash = ?
+                        """,
+                        (country, province, city, isp, iso_code, agent, event_hash),
+                    )
                     connection.execute(
                         """
                         INSERT INTO traffic_visitors (

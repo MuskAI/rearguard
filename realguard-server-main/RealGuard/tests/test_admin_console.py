@@ -31,6 +31,7 @@ def client(monkeypatch):
     admin.model_registry.clear_health_cache()
     admin._clear_dashboard_metrics_cache()
     admin._clear_big_screen_cache()
+    admin._clear_registered_user_cache()
     app = creat_app()
     app.config.update(TESTING=True)
     return app.test_client()
@@ -252,6 +253,11 @@ def test_admin_screen_renders_interactive_operations_controls(client, monkeypatc
     assert "algorithm?.transportStatus" in html
     assert "algorithm?.inferenceStatus" in html
     assert "algorithm?.verdictStatus" in html
+    assert 'id="mobilePriority"' in html
+    assert 'data-mobile-detail="overall"' in html
+    assert 'id="mobileDetailsToggle"' in html
+    assert "renderMobilePriority();" in html
+    assert ".screen:not(.mobile-details-open) .trend-panel" in html
     assert "/static/js/echarts-6.1.0.min.js" in html
     assert 'id="inspector" role="dialog" aria-modal="true"' in html
     assert 'id="sessionExpired" role="alertdialog" aria-modal="true"' in html
@@ -259,6 +265,82 @@ def test_admin_screen_renders_interactive_operations_controls(client, monkeypatc
     assert "document.querySelector('.screen').inert=true" in html
     assert "document.addEventListener('keydown',trapInspectorFocus)" in html
     assert "['trend','routes','distribution'].forEach(setupCanvas)" in html
+    assert "const CAN_VIEW_REGISTERED_USERS = false;" in html
+    assert "/api/admin/traffic/registered-users" in html
+    assert 'id="mobileNavToggle"' in client.get("/admin").get_data(as_text=True)
+    assert 'id="adminSidebar"' in client.get("/admin").get_data(as_text=True)
+    assert "transform:translateX(-105%)" in client.get("/admin").get_data(as_text=True)
+
+
+def test_registered_users_by_province_requires_admin_and_masks_without_pii_permission(client, monkeypatch):
+    account_uuid = "11111111-1111-4111-8111-111111111111"
+    monkeypatch.setenv("REALGUARD_BIG_SCREEN_TOKEN", "screen-secret")
+    denied = client.get(
+        "/api/admin/traffic/registered-users?province=浙江",
+        headers={"X-RealGuard-Screen-Token": "screen-secret"},
+    )
+    assert denied.status_code == 401
+
+    _login_session(client, admin_role="admin")
+    original_permission = admin._has_admin_permission
+    monkeypatch.setattr(
+        admin,
+        "_has_admin_permission",
+        lambda user, permission: False if permission == "user.read_pii" else original_permission(user, permission),
+    )
+    screen = client.get("/admin/screen")
+    assert "const CAN_VIEW_REGISTERED_USERS = true;" in screen.get_data(as_text=True)
+    monkeypatch.setattr(
+        admin,
+        "excute_sql",
+        lambda *_args, **_kwargs: [{
+            "Userid": 7,
+            "account_uuid": account_uuid,
+            "phone": "13812345678",
+            "username": "杭州测试用户",
+            "created_at": "2026-07-18 10:00:00",
+        }],
+    )
+    monkeypatch.setattr(
+        admin.traffic_geo,
+        "registered_account_activity",
+        lambda account_uuids, **_kwargs: {
+            "ready": True,
+            "total": 1,
+            "accounts": [{
+                "accountUuid": list(account_uuids)[0],
+                "requests": 4,
+                "pages": 2,
+                "firstSeen": "2026-07-18 10:10",
+                "lastSeen": "2026-07-18 10:20",
+                "city": "杭州市",
+                "network": "示例网络",
+                "device": "移动端",
+                "browser": "Safari",
+            }],
+        },
+    )
+
+    response = client.get("/api/admin/traffic/registered-users?province=浙江省&scope=recent")
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["province"] == "浙江"
+    assert payload["users"][0]["phone"] == "138****5678"
+    assert payload["users"][0]["activity"]["requests"] == 4
+    assert payload["hasMore"] is False
+    assert payload["privacy"] == {"rawIpsIncluded": False, "accountUuidIncluded": False}
+    assert account_uuid not in response.get_data(as_text=True)
+
+
+def test_registered_users_by_province_reports_directory_failure(client, monkeypatch):
+    _login_session(client, admin_role="admin")
+    monkeypatch.setattr(admin, "_registered_user_rows", lambda: None)
+
+    response = client.get("/api/admin/traffic/registered-users?province=浙江")
+
+    assert response.status_code == 503
+    assert response.get_json()["message"] == "用户目录暂时无法读取"
 
 
 def test_admin_page_exposes_exact_developer_call_quota_control(client, monkeypatch):
@@ -317,6 +399,61 @@ def test_admin_account_login_sets_admin_session(client, monkeypatch):
         assert sess["admin_user"]["username"] == "ops"
         assert sess["admin_user"]["authType"] == "admin_account"
         assert sess[admin.ADMIN_CSRF_SESSION_KEY] != "test-csrf-token"
+
+
+def test_admin_screen_login_preserves_safe_target_and_clears_screen_session(client, monkeypatch):
+    password_hash = admin.generate_password_hash("StrongPass123")
+    monkeypatch.setattr(admin, "_admin_account_count", lambda: 1)
+    monkeypatch.setattr(admin, "_find_admin_account", lambda _identity: {
+        "id": 3,
+        "username": "ops",
+        "phone": "13329825566",
+        "password_hash": password_hash,
+        "role": "admin",
+        "status": "active",
+    })
+    monkeypatch.setattr(admin, "_update_admin_login", lambda _account: None)
+    monkeypatch.setattr(admin, "_audit", lambda *_args, **_kwargs: None)
+    with client.session_transaction() as sess:
+        sess[admin.ADMIN_SCREEN_SESSION_KEY] = "old-screen-session"
+        sess[admin.ADMIN_SCREEN_SESSION_ISSUED_KEY] = int(time.time())
+
+    redirect_to_login = client.get("/admin/screen")
+    response = client.post(
+        "/admin/login",
+        data={"identity": "ops", "password": "StrongPass123", "next": "/admin/screen"},
+        headers=_csrf_headers(client),
+    )
+
+    assert redirect_to_login.status_code == 302
+    assert redirect_to_login.headers["Location"].endswith("/admin/login?next=/admin/screen")
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/admin/screen")
+    with client.session_transaction() as sess:
+        assert admin.ADMIN_SCREEN_SESSION_KEY not in sess
+        assert admin.ADMIN_SCREEN_SESSION_ISSUED_KEY not in sess
+
+
+def test_admin_login_rejects_external_next_target(client, monkeypatch):
+    monkeypatch.setattr(admin, "_admin_account_count", lambda: 0)
+
+    response = client.get("/admin/login?next=https://example.com/steal")
+
+    assert response.status_code == 200
+    assert 'name="next" value="/admin"' in response.get_data(as_text=True)
+
+
+def test_real_admin_session_takes_precedence_over_screen_session(client, monkeypatch):
+    monkeypatch.setenv("REALGUARD_BIG_SCREEN_TOKEN", "screen-secret")
+    _login_session(client, admin_role="admin")
+    with client.session_transaction() as sess:
+        sess[admin.ADMIN_SCREEN_SESSION_KEY] = admin._configured_screen_token_digest()
+        sess[admin.ADMIN_SCREEN_SESSION_ISSUED_KEY] = int(time.time())
+
+    response = client.get("/admin/screen")
+
+    assert response.status_code == 200
+    assert "const CAN_VIEW_REGISTERED_USERS = true;" in response.get_data(as_text=True)
 
 
 def test_admin_login_hides_account_inventory_and_sets_security_headers(client, monkeypatch):
@@ -1425,7 +1562,7 @@ def test_big_screen_query_token_is_rejected_and_header_is_exchanged_for_signed_s
     )
 
     assert rejected.status_code == 302
-    assert rejected.headers["Location"].endswith("/admin/login")
+    assert rejected.headers["Location"].endswith("/admin/login?next=/admin/screen")
     assert exchanged.status_code == 200
     assert "screen-secret" not in exchanged.get_data(as_text=True)
     with client.session_transaction() as sess:

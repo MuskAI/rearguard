@@ -42,6 +42,7 @@ from imagedetection.views.utils import (
     get_db_connection,
     legacy_record_preview,
     list_legacy_record_claims,
+    normalize_account_uuid,
     reject_legacy_record_claim,
     request_legacy_record_claim,
 )
@@ -205,6 +206,9 @@ _BIG_SCREEN_CACHE = {"expires": 0, "payload": None}
 DASHBOARD_METRICS_CACHE_TTL_SECONDS = int(os.environ.get("REALGUARD_DASHBOARD_METRICS_CACHE_SECONDS", "15"))
 _DASHBOARD_METRICS_CACHE = {"expires": 0, "payload": None}
 _TRAFFIC_SUMMARY_CACHE = {"expires": 0, "payload": None}
+_REGISTERED_USER_CACHE_TTL_SECONDS = 60
+_REGISTERED_USER_CACHE = {"expires": 0.0, "rows": None}
+_REGISTERED_USER_CACHE_LOCK = threading.Lock()
 _PROCESS_STARTED_MONOTONIC = time.monotonic()
 _ALERT_WORKER_LOCK = threading.Lock()
 _ALERT_WORKER_THREAD = None
@@ -1059,7 +1063,15 @@ def _clear_admin_login_failures(identity=None):
     session.pop(ADMIN_LOGIN_ATTEMPTS_KEY, None)
 
 
-def _admin_auth_context(mode="login", error="", message=""):
+def _safe_admin_next(value):
+    raw = str(value or "").strip()
+    parsed = urlparse(raw)
+    if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
+        return "/admin"
+    return raw if raw in {"/admin", "/admin/testing", "/admin/screen"} else "/admin"
+
+
+def _admin_auth_context(mode="login", error="", message="", next_path="/admin"):
     can_register = _admin_registration_allowed()
     return {
         "mode": mode if mode != "register" or can_register else "login",
@@ -1070,7 +1082,39 @@ def _admin_auth_context(mode="login", error="", message=""):
         "can_register": can_register,
         "admin_account_count": _admin_account_count() if can_register else None,
         "role_options": ADMIN_ROLE_LABELS,
+        "next_path": _safe_admin_next(next_path),
     }
+
+
+def _clear_registered_user_cache():
+    with _REGISTERED_USER_CACHE_LOCK:
+        _REGISTERED_USER_CACHE.update({"expires": 0.0, "rows": None})
+
+
+def _registered_user_rows():
+    now = time.monotonic()
+    with _REGISTERED_USER_CACHE_LOCK:
+        if _REGISTERED_USER_CACHE["rows"] is not None and now < _REGISTERED_USER_CACHE["expires"]:
+            return _REGISTERED_USER_CACHE["rows"]
+        rows = excute_sql(
+            """
+            SELECT Userid, account_uuid, phone, username, created_at
+            FROM user
+            WHERE account_uuid IS NOT NULL AND account_uuid <> ''
+            """
+        )
+        if rows is None:
+            return None
+        normalized_rows = {
+            normalized: row
+            for row in rows
+            if (normalized := normalize_account_uuid(row.get("account_uuid")))
+        }
+        _REGISTERED_USER_CACHE.update({
+            "expires": now + _REGISTERED_USER_CACHE_TTL_SECONDS,
+            "rows": normalized_rows,
+        })
+        return normalized_rows
 
 
 def _admin_account_payload(row):
@@ -2684,10 +2728,10 @@ def _render_admin_console(initial_route="dashboard"):
     active_user, permission_error = _admin_required("view")
     if permission_error:
         if permission_error[1] == 401:
-            return redirect(url_for("admin_blueprint.admin_login"))
+            return redirect(url_for("admin_blueprint.admin_login", next=request.path))
         return permission_error
     if not active_user:
-        return redirect(url_for("admin_blueprint.admin_login"))
+        return redirect(url_for("admin_blueprint.admin_login", next=request.path))
     role = _normalize_admin_role((active_user.get("role") if isinstance(active_user, dict) else "") or "admin")
     return render_template(
         "admin.html",
@@ -2716,6 +2760,7 @@ def admin_testing_console():
 
 @admin_blueprint.route("/admin/login", methods=["GET", "POST"])
 def admin_login():
+    next_path = _safe_admin_next(request.form.get("next") if request.method == "POST" else request.args.get("next"))
     if request.method == "POST":
         identity = str(request.form.get("identity") or "").strip()
         password = str(request.form.get("password") or "")
@@ -2723,21 +2768,26 @@ def admin_login():
         if locked > 0:
             return render_template(
                 "admin_auth.html",
-                **_admin_auth_context("login", error=f"登录尝试过多，请 {locked} 秒后再试"),
+                **_admin_auth_context("login", error=f"登录尝试过多，请 {locked} 秒后再试", next_path=next_path),
             ), 429
         account = _find_admin_account(identity)
         if not account or account.get("status") != "active" or not check_password_hash(str(account.get("password_hash") or ""), password):
             _record_admin_login_failure(identity)
-            return render_template("admin_auth.html", **_admin_auth_context("login", error="管理员账号或密码错误")), 401
+            return render_template(
+                "admin_auth.html",
+                **_admin_auth_context("login", error="管理员账号或密码错误", next_path=next_path),
+            ), 401
         _clear_admin_login_failures(identity)
         _update_admin_login(account)
         admin_user = _admin_session_payload(account)
         session.permanent = True
         session[ADMIN_SESSION_KEY] = admin_user
         session[ADMIN_CSRF_SESSION_KEY] = secrets.token_urlsafe(32)
+        session.pop(ADMIN_SCREEN_SESSION_KEY, None)
+        session.pop(ADMIN_SCREEN_SESSION_ISSUED_KEY, None)
         _audit(admin_user, "admin.login", str(account.get("id") or identity), meta={"ip": _client_ip()})
-        return redirect(url_for("admin_blueprint.admin_console"))
-    return render_template("admin_auth.html", **_admin_auth_context("login"))
+        return redirect(next_path)
+    return render_template("admin_auth.html", **_admin_auth_context("login", next_path=next_path))
 
 
 @admin_blueprint.route("/admin/register", methods=["GET", "POST"])
@@ -2832,17 +2882,40 @@ def admin_logout():
 @admin_blueprint.route("/admin/screen")
 def admin_screen():
     request_token = _screen_token_from_request()
+    admin_user = _current_admin_user()
+    if admin_user and _has_admin_permission(admin_user, "view"):
+        return render_template(
+            "admin_screen.html",
+            admin_user=admin_user,
+            screen_token="",
+            can_view_registered_users=_has_admin_permission(admin_user, "user.view"),
+        )
     if _screen_token_matches(request_token):
         session[ADMIN_SCREEN_SESSION_KEY] = _configured_screen_token_digest()
         session[ADMIN_SCREEN_SESSION_ISSUED_KEY] = int(time.time())
         session.modified = True
-        return render_template("admin_screen.html", admin_user=_screen_token_user(), screen_token="")
+        return render_template(
+            "admin_screen.html",
+            admin_user=_screen_token_user(),
+            screen_token="",
+            can_view_registered_users=False,
+        )
     if _screen_session_valid():
-        return render_template("admin_screen.html", admin_user=_screen_token_user(), screen_token="")
+        return render_template(
+            "admin_screen.html",
+            admin_user=_screen_token_user(),
+            screen_token="",
+            can_view_registered_users=False,
+        )
     user, error = _admin_required("view")
     if error:
-        return redirect(url_for("admin_blueprint.admin_login"))
-    return render_template("admin_screen.html", admin_user=user, screen_token="")
+        return redirect(url_for("admin_blueprint.admin_login", next="/admin/screen"))
+    return render_template(
+        "admin_screen.html",
+        admin_user=user,
+        screen_token="",
+        can_view_registered_users=_has_admin_permission(user, "user.view"),
+    )
 
 
 @admin_blueprint.route("/api/admin/overview")
@@ -2871,6 +2944,65 @@ def admin_big_screen():
     if error:
         return error
     return jsonify({"status": "success", **_cached_big_screen_payload()})
+
+
+@admin_blueprint.route("/api/admin/traffic/registered-users")
+def admin_registered_users_by_province():
+    actor, error = _admin_required("user.view")
+    if error:
+        return error
+    province = traffic_geo.normalize_province(request.args.get("province", ""))
+    scope = str(request.args.get("scope") or "recent").strip().lower()
+    if not province:
+        return jsonify({"status": "error", "message": "请选择省份"}), 400
+    if scope not in {"recent", "cumulative"}:
+        return jsonify({"status": "error", "message": "统计范围无效"}), 400
+    limit = _limit_arg(50, 100)
+    by_account = _registered_user_rows()
+    if by_account is None:
+        return jsonify({"status": "error", "message": "用户目录暂时无法读取"}), 503
+    activity = traffic_geo.registered_account_activity(
+        by_account.keys(),
+        province=province,
+        scope=scope,
+        limit=limit,
+    )
+    if not activity.get("ready"):
+        return jsonify({
+            "status": "error",
+            "message": activity.get("message") or "注册用户地域统计暂不可用",
+        }), 503
+    include_pii = _has_admin_permission(actor, "user.read_pii")
+    users = []
+    for item in activity.get("accounts", []):
+        row = by_account.get(str(item.get("accountUuid") or ""))
+        if not row:
+            continue
+        users.append({
+            "id": row.get("Userid"),
+            "username": row.get("username") or "未命名用户",
+            "phone": row.get("phone") if include_pii else _mask_phone(row.get("phone")),
+            "createdAt": format_createtime(row.get("created_at")),
+            "activity": {
+                "requests": item.get("requests", 0),
+                "pages": item.get("pages", 0),
+                "firstSeen": item.get("firstSeen"),
+                "lastSeen": item.get("lastSeen"),
+                "city": item.get("city") or "省内位置未细分",
+                "network": item.get("network") or "未知网络",
+                "device": item.get("device") or "未知设备",
+                "browser": item.get("browser") or "未知浏览器",
+            },
+        })
+    return jsonify({
+        "status": "success",
+        "province": province,
+        "scope": scope,
+        "total": activity.get("total", len(users)),
+        "hasMore": bool(activity.get("hasMore")),
+        "users": users,
+        "privacy": {"rawIpsIncluded": False, "accountUuidIncluded": False},
+    })
 
 
 @admin_blueprint.route("/api/admin/system")

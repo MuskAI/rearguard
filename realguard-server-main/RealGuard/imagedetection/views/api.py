@@ -570,12 +570,14 @@ def record_analytics_pageview():
     if request.headers.get("X-RealGuard-Browser-Event") != "1":
         return jsonify({"status": "error", "message": "无效的页面访问事件"}), 400
     payload = request.get_json(silent=True) or {}
+    current_user = _current_user() or {}
     accepted = traffic_geo.record_confirmed_pageview(
         ip=_developer_request_ip(),
         agent=request.headers.get("User-Agent", ""),
         visitor_id=payload.get("visitorId", ""),
         event_id=payload.get("eventId", ""),
         page=payload.get("page", ""),
+        account_uuid=normalize_account_uuid(current_user.get("account_uuid")),
     )
     if not accepted:
         return jsonify({"status": "error", "message": "页面访问事件未通过校验"}), 400

@@ -219,6 +219,139 @@ def test_confirmed_pageview_tracks_workspace_and_developer_as_distinct_surfaces(
     assert payload["provinces"][0]["visitorDetails"][0]["pages"] == 2
 
 
+def test_registered_account_activity_is_separate_from_anonymous_big_screen_payload(tmp_path, monkeypatch):
+    monkeypatch.setenv("REALGUARD_TRAFFIC_CUMULATIVE_DB", str(tmp_path / "traffic.sqlite3"))
+    account_uuid = "11111111-1111-4111-8111-111111111111"
+    other_uuid = "22222222-2222-4222-8222-222222222222"
+    common = {
+        "ip": "8.8.8.8",
+        "agent": "Mozilla/5.0 Chrome/126.0",
+        "visitor_id": "visitor-00000001",
+        "resolver": lambda _ip: {
+            "country": "中国", "province": "浙江省", "city": "杭州市", "isoCode": "CN",
+        },
+    }
+    assert traffic_geo.record_confirmed_pageview(
+        event_id="event-account-00001", page="home", account_uuid=account_uuid,
+        occurred_at=NOW - timedelta(minutes=2), **common,
+    )
+    assert traffic_geo.record_confirmed_pageview(
+        event_id="event-account-00002", page="workspace", account_uuid=account_uuid,
+        occurred_at=NOW - timedelta(minutes=1), **common,
+    )
+    assert traffic_geo.record_confirmed_pageview(
+        event_id="event-anonymous-0001", page="developer", account_uuid="",
+        occurred_at=NOW, **common,
+    )
+
+    activity = traffic_geo.registered_account_activity(
+        [account_uuid, other_uuid], province="浙江省", now=NOW,
+    )
+    public_payload = traffic_geo.confirmed_traffic_summary(now=NOW)
+
+    assert activity["total"] == 1
+    assert activity["accounts"][0]["accountUuid"] == account_uuid
+    assert activity["accounts"][0]["requests"] == 2
+    assert activity["accounts"][0]["pages"] == 2
+    assert activity["accounts"][0]["city"] == "杭州市"
+    assert account_uuid not in str(public_payload)
+    assert "accountUuid" not in str(public_payload)
+    assert public_payload["site"] == {"pageViews": 3, "uniqueVisitors": 1}
+
+
+def test_registered_account_activity_keeps_event_province_when_visitor_moves(tmp_path, monkeypatch):
+    monkeypatch.setenv("REALGUARD_TRAFFIC_CUMULATIVE_DB", str(tmp_path / "traffic.sqlite3"))
+    account_uuid = "11111111-1111-4111-8111-111111111111"
+    locations = {
+        "8.8.8.8": {"country": "中国", "province": "浙江省", "city": "杭州市", "isoCode": "CN"},
+        "1.1.1.1": {"country": "中国", "province": "四川省", "city": "成都市", "isoCode": "CN"},
+    }
+    common = {
+        "agent": "Mozilla/5.0 Safari/605.1",
+        "visitor_id": "visitor-moving-0001",
+        "account_uuid": account_uuid,
+        "resolver": lambda ip: locations[ip],
+    }
+    assert traffic_geo.record_confirmed_pageview(
+        ip="8.8.8.8", event_id="event-moving-00001", page="home",
+        occurred_at=NOW - timedelta(hours=1), **common,
+    )
+    assert traffic_geo.record_confirmed_pageview(
+        ip="1.1.1.1", event_id="event-moving-00002", page="workspace",
+        occurred_at=NOW, **common,
+    )
+
+    zhejiang = traffic_geo.registered_account_activity(
+        [account_uuid], province="浙江", scope="cumulative", now=NOW,
+    )
+    sichuan = traffic_geo.registered_account_activity(
+        [account_uuid], province="四川", scope="cumulative", now=NOW,
+    )
+
+    assert zhejiang["accounts"][0]["requests"] == 1
+    assert zhejiang["accounts"][0]["city"] == "杭州市"
+    assert sichuan["accounts"][0]["requests"] == 1
+    assert sichuan["accounts"][0]["city"] == "成都市"
+
+
+def test_existing_traffic_database_migrates_account_hash_column(tmp_path):
+    database = tmp_path / "legacy-traffic.sqlite3"
+    connection = traffic_geo.sqlite3.connect(database)
+    connection.execute(
+        "CREATE TABLE traffic_events (event_hash TEXT PRIMARY KEY, occurred_at INTEGER NOT NULL)"
+    )
+    connection.commit()
+    connection.close()
+
+    migrated = traffic_geo._open_cumulative_db(str(database))
+    columns = {
+        row["name"] for row in migrated.execute("PRAGMA table_info(traffic_events)").fetchall()
+    }
+    indexes = {
+        row["name"] for row in migrated.execute("PRAGMA index_list(traffic_events)").fetchall()
+    }
+    migrated.close()
+
+    assert "account_hash" in columns
+    assert {"province", "city", "isp", "agent"}.issubset(columns)
+    assert "idx_traffic_events_account_time" in indexes
+    assert "idx_traffic_events_province_account_time" in indexes
+
+
+def test_account_link_expires_while_anonymous_pageview_remains(tmp_path, monkeypatch):
+    database = tmp_path / "traffic.sqlite3"
+    monkeypatch.setenv("REALGUARD_TRAFFIC_CUMULATIVE_DB", str(database))
+    monkeypatch.setenv("REALGUARD_TRAFFIC_ACCOUNT_LINK_RETENTION_DAYS", "180")
+    current = datetime.now().astimezone()
+    account_uuid = "11111111-1111-4111-8111-111111111111"
+    assert traffic_geo.record_confirmed_pageview(
+        ip="8.8.8.8",
+        agent="Mozilla/5.0 Chrome/126.0",
+        visitor_id="visitor-retention-01",
+        event_id="event-retention-0001",
+        page="home",
+        account_uuid=account_uuid,
+        resolver=lambda _ip: {"country": "中国", "province": "浙江省", "isoCode": "CN"},
+        occurred_at=current,
+    )
+    connection = traffic_geo.sqlite3.connect(database)
+    connection.execute(
+        "UPDATE traffic_events SET occurred_at = ?",
+        (int((current - timedelta(days=181)).timestamp()),),
+    )
+    connection.execute("DELETE FROM traffic_metadata WHERE key = 'account_link_cleanup'")
+    connection.commit()
+    connection.close()
+
+    activity = traffic_geo.registered_account_activity(
+        [account_uuid], province="浙江", scope="cumulative", now=current,
+    )
+    public_payload = traffic_geo.confirmed_traffic_summary(now=current)
+
+    assert activity["total"] == 0
+    assert public_payload["cumulative"]["site"] == {"pageViews": 1, "uniqueVisitors": 1}
+
+
 def test_historical_referer_recognizes_current_spa_surfaces():
     allowed = {"www.rrreal.cn"}
 

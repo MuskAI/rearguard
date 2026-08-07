@@ -136,6 +136,9 @@ export default function OfficialHome({
 
   useEffect(() => {
     if (!mobileNavOpen) return;
+    const focusFrame = window.requestAnimationFrame(() => {
+      mobileNavRef.current?.querySelector<HTMLElement>("a[href], button:not([disabled])")?.focus();
+    });
     const closeOutside = (event: PointerEvent) => {
       const target = event.target as Node;
       if (!mobileNavRef.current?.contains(target) && !mobileNavTriggerRef.current?.contains(target)) {
@@ -150,6 +153,7 @@ export default function OfficialHome({
     document.addEventListener("pointerdown", closeOutside);
     document.addEventListener("keydown", closeOnEscape);
     return () => {
+      window.cancelAnimationFrame(focusFrame);
       document.removeEventListener("pointerdown", closeOutside);
       document.removeEventListener("keydown", closeOnEscape);
     };
@@ -221,7 +225,9 @@ export default function OfficialHome({
         {mobileNavOpen && (
           <nav ref={mobileNavRef} id="home-mobile-navigation" className="home-mobile-nav" aria-label="移动端官网导航">
             {NAV_ITEMS.map((item) => <a key={item.href} href={item.href} onClick={() => setMobileNavOpen(false)}>{item.label}<ArrowRight size={16} /></a>)}
-            <button type="button" onClick={() => openDeveloper("overview")}>开发者平台<ArrowRight size={16} /></button>
+            <button type="button" onClick={() => openDeveloper("overview")}>开发者概览<ArrowRight size={16} /></button>
+            <button type="button" onClick={() => openDeveloper("tester")}>在线调试<ArrowRight size={16} /></button>
+            <button type="button" onClick={() => openDeveloper("docs")}>接入文档<ArrowRight size={16} /></button>
             <a href="#faq" onClick={() => setMobileNavOpen(false)}>常见问题<ArrowRight size={16} /></a>
           </nav>
         )}

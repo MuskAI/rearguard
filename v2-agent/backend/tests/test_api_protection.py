@@ -15,11 +15,17 @@ from urllib.parse import parse_qs, urlsplit
 
 from fastapi.testclient import TestClient
 import pytest
+from reportlab.pdfgen import canvas
 
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from app import detector as detector_module  # noqa: E402
+
+
+REAL_DETECTOR_ANALYZE = detector_module.analyze
 
 
 def _png_chunk(kind: bytes, payload: bytes) -> bytes:
@@ -32,6 +38,14 @@ def _png_with_itxt(keyword: str, text: str) -> bytes:
     itxt = keyword.encode("utf-8") + b"\x00\x00\x00\x00\x00" + text.encode("utf-8")
     idat = zlib.compress(b"\x00\xff\xff\xff")
     return signature + _png_chunk(b"IHDR", ihdr) + _png_chunk(b"iTXt", itxt) + _png_chunk(b"IDAT", idat) + _png_chunk(b"IEND", b"")
+
+
+def _pdf_bytes(text: str) -> bytes:
+    output = io.BytesIO()
+    document = canvas.Canvas(output)
+    document.drawString(72, 760, text)
+    document.save()
+    return output.getvalue()
 
 
 def _vlm_analysis(
@@ -71,14 +85,14 @@ class ConsentTestClient(TestClient):
         if url == "/api/detect":
             data = dict(kwargs.pop("data", {}) or {})
             data.setdefault("upload_consent", "1")
-            data.setdefault("consent_version", "2026-08-07+2026-08-08")
+            data.setdefault("consent_version", "2026-08-07+2026-08-08.1")
             data.setdefault(
                 "terms_sha256",
                 "619aee74677629f4f5e2c4ccbaa99c458671086de45c0a586e76c8c8c062d2c5",
             )
             data.setdefault(
                 "privacy_sha256",
-                "f5e9e4ba233857667176949017d2f36964d47e0595e4b1d36d2c80254c3adc38",
+                "e2dd0904fbbccef7df74168ede051da7a93029f00b072d0a5f1bd41b7ebf826c",
             )
             headers = dict(kwargs.pop("headers", {}) or {})
             headers.setdefault("Idempotency-Key", str(uuid.uuid4()))
@@ -178,6 +192,34 @@ def test_public_detect_persists_pseudonymous_upload_consent(client):
     assert len(row["subject_hash"]) == 64
     assert len(row["upload_sha256"]) == 64
     assert row["channel"] == "v2_public_detect"
+
+
+def test_public_detect_accepts_valid_pdf_and_rejects_malformed_pdf(client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    captured = {}
+
+    def fake_vlm(text: str):
+        captured["text"] = text
+        return _vlm_analysis(file_type="document")
+
+    monkeypatch.setattr(main.detector, "analyze", REAL_DETECTOR_ANALYZE)
+    monkeypatch.setattr(main.detector, "analyze_text_vlm", fake_vlm)
+    response = client.post(
+        "/api/detect",
+        files={"file": ("evidence.pdf", _pdf_bytes("Independent PDF extraction path."), "application/pdf")},
+        headers={"Idempotency-Key": "pdf-document-001"},
+    )
+    malformed = client.post(
+        "/api/detect",
+        files={"file": ("broken.pdf", b"%PDF-1.4 broken fixture", "application/pdf")},
+        headers={"Idempotency-Key": "pdf-document-002"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["fileMeta"]["type"] == "document"
+    assert "Independent PDF extraction path." in captured["text"]
+    assert malformed.status_code == 503
 
 
 def test_public_detect_response_does_not_expose_backend_model_identity(client):

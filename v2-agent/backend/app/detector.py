@@ -376,7 +376,7 @@ def analyze_text_vlm(text: str) -> dict | None:
     client = _get_client()
     if client is None:
         return None
-    snippet = text[:4000]
+    snippet = document_utils.analysis_excerpt(text, 4000)
     try:
         resp = client.chat.completions.create(
             model=VLM_MODEL,

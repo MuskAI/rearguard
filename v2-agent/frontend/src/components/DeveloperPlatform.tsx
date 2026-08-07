@@ -70,7 +70,7 @@ interface Props {
 
 const NAV_ITEMS: Array<{ key: DeveloperTab; label: string; icon: typeof LayoutDashboard }> = [
   { key: "overview", label: "概览", icon: LayoutDashboard },
-  { key: "keys", label: "API Keys", icon: KeyRound },
+  { key: "keys", label: "API 密钥", icon: KeyRound },
   { key: "tester", label: "在线调试", icon: SquareTerminal },
   { key: "docs", label: "接入文档", icon: BookOpen },
   { key: "usage", label: "用量与账单", icon: Activity },
@@ -1064,7 +1064,7 @@ function KeysPanel({ keys, loadError, busy, loading, onCreate, onRotate, onRevok
   const activeCount = keys.filter((key) => key.status === "active").length;
   return (
     <div className="developer-page">
-      <section className="developer-section-heading"><div><p>凭据管理</p><h2>API Keys</h2><small>按环境拆分密钥，降低泄露后的影响范围。完整 Key 仅在创建或轮换时展示一次。</small></div><button type="button" className="developer-primary-action" onClick={(event) => onCreate(event.currentTarget)} disabled={loading || Boolean(loadError) || activeCount >= 5 || busy !== null}><Plus size={16} /> 创建 API Key</button></section>
+      <section className="developer-section-heading"><div><p>凭据管理</p><h2>API 密钥</h2><small>按环境拆分 API Key，降低泄露后的影响范围。完整密钥仅在创建或轮换时展示一次。</small></div><button type="button" className="developer-primary-action" onClick={(event) => onCreate(event.currentTarget)} disabled={loading || Boolean(loadError) || activeCount >= 5 || busy !== null}><Plus size={16} /> 创建 API Key</button></section>
       <section className="developer-security-rail"><ShieldCheck size={19} /><div><strong>服务端只保存 Key 哈希</strong><span>建议设置有效期与 IP 白名单，并定期轮换生产密钥。</span></div><small>{loadError ? "状态未知" : `${activeCount} / 5 个 active`}</small></section>
       <section className="developer-table-section developer-key-table"><header><div><h3>密钥列表</h3><p>撤销后立即失效，不影响账号额度和历史账单。</p></div></header><div className="developer-table-wrap"><table><thead><tr><th>名称</th><th>Key</th><th>权限</th><th>限制</th><th>最后使用</th><th aria-label="操作" /></tr></thead><tbody>
         {loadError ? <tr><td colSpan={6} className="developer-empty-cell developer-load-error">{loadError}，为避免重复创建，当前已暂停凭据操作</td></tr> : keys.length ? keys.map((key) => <tr key={`${key.id}-${key.status}`}><td><strong>{key.name}</strong><span className={`developer-key-state ${key.status}`}>{keyStatusLabel(key)}</span></td><td><code>{key.preview}</code></td><td><div className="developer-scope-list">{key.scopes.map((scope) => <span key={scope}>{scope === "image:fast" ? "快速" : scope === "image:swarm" ? "Swarm" : scope === "reports" ? "报告" : scope}</span>)}</div></td><td><small>{key.expiresAt ? `到期 ${compactDate(key.expiresAt)}` : "未设置到期时间"}</small><small>{key.ipAllowlist?.length ? `${key.ipAllowlist.length} 条 IP 规则` : "不限 IP"}</small></td><td>{compactDate(key.lastUsedAt)}</td><td><div className="developer-row-actions">{key.status === "active" && <><button type="button" title="轮换 Key" aria-label={`轮换 ${key.name}`} disabled={busy !== null} onClick={(event) => onRotate(key, event.currentTarget)}>{busy === key.id ? <LoaderCircle className="spin" size={16} /> : <RotateCw size={16} />}</button><button type="button" className="danger" title="撤销 Key" aria-label={`撤销 ${key.name}`} disabled={busy !== null} onClick={() => onRevoke(key)}><Trash2 size={16} /></button></>}</div></td></tr>) : <tr><td colSpan={6} className="developer-empty-cell">尚未创建 API Key</td></tr>}

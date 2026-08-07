@@ -851,6 +851,7 @@ def test_browser_pageview_endpoint_records_same_origin_event(client, monkeypatch
         return True
 
     monkeypatch.setattr(api.traffic_geo, "record_confirmed_pageview", fake_record)
+    monkeypatch.setattr(api, "_current_user", lambda: {"account_uuid": ACCOUNT_UUID})
 
     response = client.post(
         "/api/analytics/pageview",
@@ -872,6 +873,7 @@ def test_browser_pageview_endpoint_records_same_origin_event(client, monkeypatch
     assert recorded["ip"] == "203.0.113.12"
     assert recorded["page"] == "home"
     assert recorded["visitor_id"] == "visitor-00000001"
+    assert recorded["account_uuid"] == ACCOUNT_UUID
 
 
 def test_browser_pageview_endpoint_rejects_cross_site_and_unmarked_requests(client, monkeypatch):

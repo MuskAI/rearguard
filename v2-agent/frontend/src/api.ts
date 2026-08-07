@@ -771,7 +771,7 @@ function videoRequestKey(file: File) {
   return key;
 }
 
-export async function detect(file: File, fileType?: FileType): Promise<DetectResult> {
+export async function detect(file: File, fileType?: FileType, signal?: AbortSignal): Promise<DetectResult> {
   const fd = new FormData();
   fd.append("file", file);
   if (fileType) fd.append("fileType", fileType);
@@ -779,6 +779,7 @@ export async function detect(file: File, fileType?: FileType): Promise<DetectRes
   const res = await fetch("/v2-api/detect", withSession({
     method: "POST",
     body: fd,
+    signal,
     headers: { "Idempotency-Key": documentRequestKey(file) },
   }));
   return normalizeDetectResult(await parseJson(res, `检测失败 (${res.status})`));

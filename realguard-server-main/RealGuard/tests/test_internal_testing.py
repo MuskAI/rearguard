@@ -1239,4 +1239,4 @@ def test_internal_testing_direct_entry_requires_admin_login(client):
     response = client.get("/admin/testing")
 
     assert response.status_code == 302
-    assert response.headers["Location"].endswith("/admin/login")
+    assert response.headers["Location"].endswith("/admin/login?next=/admin/testing")

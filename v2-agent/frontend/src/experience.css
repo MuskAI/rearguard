@@ -3271,7 +3271,12 @@
     padding-right: 8px;
     padding-left: 8px;
   }
-  .topbar-title { gap: 5px; }
+  .topbar-title { gap: 8px; }
+  .agent-topbar .brand-mark { overflow: hidden; }
+  .agent-topbar .brand-mark .brand-art-icon {
+    width: 32px;
+    height: 32px;
+  }
   .topbar-actions { gap: 5px; }
   .analysis-model-picker {
     width: 164px;

@@ -51,14 +51,14 @@ function visitorId(): string {
   return created;
 }
 
-function eventId(page: AnalyticsPage): string {
+function eventId(page: AnalyticsPage, forceNew = false): string {
   try {
     const previous = JSON.parse(window.sessionStorage.getItem(EVENT_KEY) || "null") as {
       page?: string;
       at?: number;
       id?: string;
     } | null;
-    if (previous?.page === page && Date.now() - Number(previous.at || 0) < 1500 && previous.id) {
+    if (!forceNew && previous?.page === page && Date.now() - Number(previous.at || 0) < 1500 && previous.id) {
       return previous.id;
     }
     const event = { page, at: Date.now(), id: randomId() };
@@ -69,7 +69,7 @@ function eventId(page: AnalyticsPage): string {
   }
 }
 
-export function trackPageview(page: AnalyticsPage): void {
+export function trackPageview(page: AnalyticsPage, forceNew = false): void {
   if (
     typeof window === "undefined"
     || navigator.webdriver
@@ -77,10 +77,10 @@ export function trackPageview(page: AnalyticsPage): void {
   ) return;
   if (new URLSearchParams(window.location.search).get("demo") === "1") return;
   if (analyticsConsent() !== "granted") return;
-  const body = JSON.stringify({ visitorId: visitorId(), eventId: eventId(page), page });
+  const body = JSON.stringify({ visitorId: visitorId(), eventId: eventId(page, forceNew), page });
   void fetch("/api/analytics/pageview", {
     method: "POST",
-    credentials: "omit",
+    credentials: "same-origin",
     cache: "no-store",
     keepalive: true,
     headers: {

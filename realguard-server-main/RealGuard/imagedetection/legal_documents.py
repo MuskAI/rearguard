@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-_VERSION_RE = re.compile(r"版本[：:]\s*(\d{4}-\d{2}-\d{2})")
+_VERSION_RE = re.compile(r"版本[：:]\s*(\d{4}-\d{2}-\d{2}(?:\.\d+)?)")
 
 
 @dataclass(frozen=True)
@@ -20,8 +20,8 @@ _PINNED_IDENTITIES = {
         sha256="619aee74677629f4f5e2c4ccbaa99c458671086de45c0a586e76c8c8c062d2c5",
     ),
     "privacy": LegalDocumentIdentity(
-        version="2026-08-08",
-        sha256="f5e9e4ba233857667176949017d2f36964d47e0595e4b1d36d2c80254c3adc38",
+        version="2026-08-08.1",
+        sha256="e2dd0904fbbccef7df74168ede051da7a93029f00b072d0a5f1bd41b7ebf826c",
     ),
 }
 

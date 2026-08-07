@@ -67,7 +67,7 @@ const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 256 * 1024 * 1024;
 const AGENT_POLL_INITIAL_MS = 1_200;
 const AGENT_POLL_RATE_LIMIT_RETRIES = 8;
-const ACCEPTED_FILES = "image/jpeg,image/png,image/webp,image/bmp,image/gif,image/heic,image/heif,.heic,.heif,video/mp4,video/quicktime,video/webm,.txt,.md,.csv,.json,.log,.docx,.mp4,.mov,.webm";
+const ACCEPTED_FILES = "image/jpeg,image/png,image/webp,image/bmp,image/gif,image/heic,image/heif,.heic,.heif,video/mp4,video/quicktime,video/webm,application/pdf,.txt,.md,.csv,.json,.log,.docx,.pdf,.mp4,.mov,.webm";
 
 type UploadKind = "image" | "video" | "audio" | "document" | "unknown";
 type AppView = "home" | "workspace" | "developer";
@@ -91,7 +91,7 @@ function inferKind(name: string): UploadKind {
   if (["jpg", "jpeg", "png", "webp", "bmp", "gif", "heic", "heif"].includes(ext)) return "image";
   if (["mp4", "mov", "webm", "avi", "mkv", "flv", "wmv"].includes(ext)) return "video";
   if (["mp3", "wav", "m4a", "flac", "aac", "ogg"].includes(ext)) return "audio";
-  if (["txt", "md", "csv", "json", "log", "docx"].includes(ext)) return "document";
+  if (["txt", "md", "csv", "json", "log", "docx", "pdf"].includes(ext)) return "document";
   return "unknown";
 }
 
@@ -372,12 +372,14 @@ export default function App() {
   }, [view]);
 
   useEffect(() => {
-    if (!analyticsEnabled) return;
+    if (!analyticsEnabled || !authReady) return;
     const page = view === "home" ? "home" : view === "developer" ? "developer" : "workspace";
-    if (lastTrackedPageRef.current === page) return;
-    lastTrackedPageRef.current = page;
-    trackPageview(page);
-  }, [analyticsEnabled, view]);
+    const trackingKey = `${page}:${user?.Userid ?? "guest"}`;
+    if (lastTrackedPageRef.current === trackingKey) return;
+    const forceNew = lastTrackedPageRef.current !== null;
+    lastTrackedPageRef.current = trackingKey;
+    trackPageview(page, forceNew);
+  }, [analyticsEnabled, authReady, user?.Userid, view]);
 
   const outcomeId = outcome?.id;
   useEffect(() => {
@@ -689,7 +691,7 @@ export default function App() {
     }
     if (kind === "unknown") {
       setPendingFile({ name: file.name, size: file.size, typeLabel: kindLabel(kind) });
-      setErrorMessage("暂不支持这个文件格式。可上传常见图片和手机实况照片、MP4/MOV/WEBM 视频，以及 TXT、MD、CSV、JSON、LOG、DOCX 文档。");
+      setErrorMessage("暂不支持这个文件格式。可上传常见图片和手机实况照片、MP4/MOV/WEBM 视频，以及 PDF、TXT、MD、CSV、JSON、LOG、DOCX 文档。");
       return;
     }
     if (kind === "audio") {
@@ -733,7 +735,7 @@ export default function App() {
         setOutcome({ kind: "video", id: `video:${response.result.itemid}`, result: response.result, file, previewUrl });
       } else {
         setProgress({ title: "正在分析文档", detail: "提取正文并检查生成式写作线索", percent: 48, stage: "evidence" });
-        const result = await detect(file, "document");
+        const result = await detect(file, "document", controller.signal);
         if (runTokenRef.current !== token) return;
         setProgress({ title: "鉴伪完成", detail: "文本结论与证据维度已经整理完成", percent: 100, stage: "report" });
         setOutcome({ kind: "evidence", id: `evidence:${result.taskId}`, result, file });
@@ -1324,7 +1326,7 @@ function WelcomeWorkspace({
               </label>
             )}
             {consentWarning && !user && <p className="guest-consent-warning" role="alert">勾选授权后即可选择或拖放文件。</p>}
-            <small className="upload-limits">支持手机实况照片 · 图片与文档最高 {formatBytes(maxUploadBytes)} · 视频最高 {formatBytes(MAX_VIDEO_BYTES)}</small>
+            <small className="upload-limits">支持手机实况照片与 PDF 正文提取 · 图片与文档最高 {formatBytes(maxUploadBytes)} · 视频最高 {formatBytes(MAX_VIDEO_BYTES)}</small>
           </div>
         </section>
       </section>

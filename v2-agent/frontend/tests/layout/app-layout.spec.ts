@@ -1,4 +1,5 @@
 import { expect, Page, test } from "@playwright/test";
+import { createServer } from "node:http";
 
 const viewports = [
   { name: "mobile", width: 390, height: 844 },
@@ -252,7 +253,12 @@ test("移动官网导航支持键盘关闭并恢复焦点", async ({ page }) => 
 
   const trigger = page.getByRole("button", { name: "打开网站导航" });
   await trigger.click();
-  await expect(page.getByRole("navigation", { name: "移动端官网导航" })).toBeVisible();
+  const navigation = page.getByRole("navigation", { name: "移动端官网导航" });
+  await expect(navigation).toBeVisible();
+  await expect(navigation.locator("a").first()).toBeFocused();
+  await expect(navigation.getByRole("button", { name: "开发者概览" })).toBeVisible();
+  await expect(navigation.getByRole("button", { name: "在线调试" })).toBeVisible();
+  await expect(navigation.getByRole("button", { name: "接入文档" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("navigation", { name: "移动端官网导航" })).toBeHidden();
   await expect(trigger).toBeFocused();
@@ -274,8 +280,21 @@ for (const viewport of viewports.slice(0, 2)) {
     expect(Math.abs((upload!.x + upload!.width / 2) - viewport.width / 2), "匿名上传入口未相对整个视口居中").toBeLessThanOrEqual(2);
     await expect(page.locator(".sidebar-desktop")).toHaveCount(0);
     await expect(page.locator(".mobile-history-button")).toHaveCount(0);
+    await expect(page.locator('input[type="file"]')).toHaveAttribute("accept", /application\/pdf/);
     const homeButton = page.getByRole("button", { name: "返回慧鉴AI官网首页" });
     await expect(homeButton).toBeVisible();
+    if (viewport.name === "mobile") {
+      const brandDimensions = await homeButton.evaluate((element) => ({
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+      }));
+      const pickerBox = await page.getByRole("button", { name: "选择图片检测模型" }).boundingBox();
+      const homeBox = await homeButton.boundingBox();
+      expect(brandDimensions.scrollWidth, "移动端品牌按钮内容越界").toBeLessThanOrEqual(brandDimensions.clientWidth);
+      expect(pickerBox).not.toBeNull();
+      expect(homeBox).not.toBeNull();
+      expect(pickerBox!.x - (homeBox!.x + homeBox!.width), "品牌按钮与模型选择器间距不足").toBeGreaterThanOrEqual(8);
+    }
 
     await page.getByRole("button", { name: "选择图片检测模型" }).click();
     const modelMenu = page.getByRole("listbox", { name: "图片检测模型" });
@@ -290,6 +309,39 @@ for (const viewport of viewports.slice(0, 2)) {
     await expect(page.locator(".home-v3")).toBeVisible();
   });
 }
+
+test("登录态访问统计携带同源会话 Cookie", async ({ page, context }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(Navigator.prototype, "webdriver", { configurable: true, get: () => false });
+    Object.defineProperty(Navigator.prototype, "userAgent", { configurable: true, get: () => "Mozilla/5.0 Safari/605.1.15" });
+  });
+  await context.addCookies([{ name: "session", value: "analytics-user", url: "http://127.0.0.1:4173" }]);
+  await installBaseMocks(page, true);
+  await page.unroute("**/api/analytics/pageview");
+  let resolveCaptured!: (value: { cookie: string; body: string }) => void;
+  const captured = new Promise<{ cookie: string; body: string }>((resolve) => { resolveCaptured = resolve; });
+  const receiver = createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      resolveCaptured({ cookie: request.headers.cookie || "", body: Buffer.concat(chunks).toString("utf8") });
+      response.writeHead(204);
+      response.end();
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    receiver.once("error", reject);
+    receiver.listen(45873, "127.0.0.1", resolve);
+  });
+  try {
+    await page.goto("/?workspace=1");
+    const request = await captured;
+    expect(request.cookie).toContain("session=analytics-user");
+    expect(JSON.parse(request.body).page).toBe("workspace");
+  } finally {
+    await new Promise<void>((resolve, reject) => receiver.close((error) => error ? reject(error) : resolve()));
+  }
+});
 
 test("登录用户可以隐藏并恢复最近任务侧栏", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -314,16 +366,16 @@ test("开发者平台移动布局与 API Key 弹窗满足键盘交互", async ({
   await page.goto("/?developer=1");
 
   await expect(page.getByRole("heading", { name: "把慧鉴AI接入你的业务流程" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "API Keys" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "API 密钥" })).toBeVisible();
   await expect(page.getByRole("button", { name: "返回慧鉴AI官网" })).toBeVisible();
   await expect(page.getByRole("button", { name: "官网", exact: true })).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
 
-  await page.getByRole("button", { name: "API Keys" }).click();
+  await page.getByRole("button", { name: "API 密钥" }).click();
   await expect(page).toHaveURL(/developerTab=keys/);
   await page.goBack();
   await expect(page.getByRole("heading", { name: "把慧鉴AI接入你的业务流程" })).toBeVisible();
-  await page.getByRole("button", { name: "API Keys" }).click();
+  await page.getByRole("button", { name: "API 密钥" }).click();
   const createButton = page.getByRole("button", { name: "创建 API Key" });
   await createButton.click();
   const dialog = page.getByRole("dialog", { name: "创建 API Key" });
