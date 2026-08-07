@@ -134,7 +134,7 @@ activate_version() {
   nginx -t >/dev/null
   curl -kfsS --connect-timeout 2 --max-time 12 \
     -H 'Host: www.rrreal.cn' https://127.0.0.1/ \
-    | grep -q '<div id="root"></div>'
+    | grep -Eq '<div[^>]*id="root"[^>]*>'
 
   rm -rf -- "$previous_dir"
   previous_moved=0
