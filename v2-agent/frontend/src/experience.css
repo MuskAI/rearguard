@@ -3263,6 +3263,7 @@
   .home-v3 .brand-copy small { display: none; }
   .home-v3 .home-header-actions { gap: 5px; }
   .home-v3 .home-login-button { width: 42px; padding: 0; justify-content: center; }
+  .home-v3 .home-login-button > svg { display: block; }
   .home-v3 .home-login-button span { display: none; }
   .home-v3 .home-workspace-button { min-height: 42px; padding: 0 11px; box-shadow: 3px 3px 0 #c8dedb; }
   .home-v3 .home-label-wide { display: none; }
