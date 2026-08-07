@@ -2,9 +2,10 @@ import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from
 import {
   Bot,
   Check,
-  CircleDashed,
   Code2,
+  FileCheck2,
   FileText,
+  Fingerprint,
   Image as ImageIcon,
   LoaderCircle,
   LogIn,
@@ -14,9 +15,7 @@ import {
   Send,
   ShieldCheck,
   UploadCloud,
-  UserRound,
   Video,
-  Volume2,
 } from "lucide-react";
 import {
   AccountUser,
@@ -55,14 +54,21 @@ import { binaryVerdictLabel } from "./binaryVerdict";
 import { startFastImageAgent, submitImageFeedback } from "./imageInteractionApi";
 import AgentHistory, { MobileHistoryButton } from "./components/AgentHistory";
 import AnalysisModeSwitch from "./components/AnalysisModeSwitch";
+import AccountMenu from "./components/AccountMenu";
 import AgentResult from "./components/AgentResult";
 import AuthDialog from "./components/AuthDialog";
 import DeveloperPlatform from "./components/DeveloperPlatform";
 import HuijianBrand from "./components/HuijianBrand";
 import OfficialHome from "./components/OfficialHome";
 import ResultFeedback from "./components/ResultFeedback";
-import { trackPageview } from "./analytics";
+import {
+  analyticsConsent,
+  resetAnalyticsConsent,
+  setAnalyticsConsent,
+  trackPageview,
+} from "./analytics";
 import "./interaction.css";
+import "./experience.css";
 
 const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 256 * 1024 * 1024;
@@ -186,6 +192,11 @@ function isAuthenticationRequiredError(error: unknown): error is ApiRequestError
     && (error.status === 401 || AUTHENTICATION_ERROR_CODES.has(error.code));
 }
 
+function isGuestLimitError(error: unknown): error is ApiRequestError {
+  return error instanceof ApiRequestError
+    && (error.code === "guest_detection_limit_reached" || error.code === "guest_limit_reached");
+}
+
 function isUploadConsentRequiredError(error: unknown): error is ApiRequestError {
   return error instanceof ApiRequestError
     && (error.status === 428 || error.code === "upload_consent_required" || error.code === "legal_documents_changed");
@@ -211,14 +222,17 @@ function wait(ms: number, signal: AbortSignal) {
 
 function progressFromJob(job: ImageAgentJob, mode: ImageAnalysisMode): AgentProgress {
   const progress = Math.max(mode === "fast" ? 30 : 8, Math.min(Number(job.progress || 0), 98));
-  if (mode === "fast") {
-    if (progress >= 78) return { title: "正在校验检测结果", detail: job.summary || "核对主模型输出与文件信息", percent: progress, stage: "report", analysisMode: mode };
-    if (progress >= 42) return { title: "主模型正在 GPU 推理", detail: job.summary || "正在提取图像鉴伪特征", percent: progress, stage: "evidence", analysisMode: mode };
-    return { title: "快速检测任务已启动", detail: job.summary || "主鉴伪模型正在接收图像", percent: progress, stage: "dispatch", analysisMode: mode };
+  const publicStage = job.publicStage || (job.status === "success" ? "report_ready" : job.status === "running" ? "authenticity_analysis" : "secure_receive");
+  if (publicStage === "report_ready") {
+    return { title: "鉴伪报告已经就绪", detail: "结论与关键证据已完成整理", percent: 100, stage: "report", experts: job.experts, analysisMode: mode };
   }
-  if (progress >= 78) return { title: "正在形成综合意见", detail: job.summary || "汇总共识、分歧与关键证据", percent: progress, stage: "report", experts: job.experts, analysisMode: mode };
-  if (progress >= 42) return { title: "正在交叉核验证据", detail: job.summary || "比对模型、元数据与内容凭证", percent: progress, stage: "evidence", experts: job.experts, analysisMode: mode };
-  return { title: "已调度鉴伪角色", detail: job.summary || "多源检测正在并行执行", percent: progress, stage: "dispatch", experts: job.experts, analysisMode: mode };
+  if (publicStage === "evidence_summary") {
+    return { title: "正在汇总关键证据", detail: mode === "swarm" ? "整理一致意见、分歧与来源线索" : "核对真实性信号、可见水印与文件信息", percent: Math.max(progress, 82), stage: "report", experts: job.experts, analysisMode: mode };
+  }
+  if (publicStage === "authenticity_analysis") {
+    return { title: "正在核验内容真实性", detail: mode === "swarm" ? "多个证据源正在并行复核" : "正在分析生成痕迹、水印与来源线索", percent: Math.max(progress, 34), stage: "evidence", experts: job.experts, analysisMode: mode };
+  }
+  return { title: "文件已安全接收", detail: "正在确认格式并安排分析能力", percent: Math.min(progress, 28), stage: "validate", experts: job.experts, analysisMode: mode };
 }
 
 export default function App() {
@@ -251,6 +265,8 @@ export default function App() {
   const [fallbackOffer, setFallbackOffer] = useState<FallbackOffer | null>(null);
   const [guestConsent, setGuestConsent] = useState(false);
   const [consentWarning, setConsentWarning] = useState(false);
+  const [guestLimitReached, setGuestLimitReached] = useState(false);
+  const [analyticsChoice, setAnalyticsChoice] = useState(analyticsConsent);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const resultRef = useRef<HTMLDivElement>(null);
@@ -264,9 +280,11 @@ export default function App() {
   const retryModeRef = useRef<ImageAnalysisMode>("fast");
   const feedbackTokenRef = useRef(0);
   const pendingSwarmFileRef = useRef<File | null>(null);
+  const pendingGuestFileRef = useRef<File | null>(null);
   const activeJobIdRef = useRef<string | null>(null);
   const webRequestKeysRef = useRef(new WeakMap<File, Partial<Record<ImageAnalysisMode, string>>>());
   const historyOutcomeCacheRef = useRef(new Map<string, AgentOutcome>());
+  const lastTrackedPageRef = useRef<string | null>(null);
 
   const refreshHealth = useCallback(async () => {
     try {
@@ -360,9 +378,12 @@ export default function App() {
   }, [view]);
 
   useEffect(() => {
+    if (analyticsChoice !== "granted") return;
     const page = view === "home" ? "home" : view === "developer" ? "history" : "image";
+    if (lastTrackedPageRef.current === page) return;
+    lastTrackedPageRef.current = page;
     trackPageview(page);
-  }, [view]);
+  }, [analyticsChoice, view]);
 
   const outcomeId = outcome?.id;
   useEffect(() => {
@@ -401,6 +422,8 @@ export default function App() {
     setFeedbackBusy(false);
     setFeedbackError("");
     setFallbackOffer(null);
+    setGuestLimitReached(false);
+    pendingGuestFileRef.current = null;
     setActiveKey(undefined);
     activeJobIdRef.current = null;
   }, []);
@@ -441,9 +464,21 @@ export default function App() {
     setView(nextView);
   }, []);
 
+  const navigateToDeveloper = useCallback((tab: "overview" | "tester" | "docs" = "overview") => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("workspace");
+    url.searchParams.set("developer", "1");
+    url.searchParams.set("developerTab", tab);
+    url.hash = "";
+    window.history.pushState({ view: "developer", developerTab: tab }, "", url);
+    setView("developer");
+  }, []);
+
   function authenticated(nextUser: AccountUser) {
     const pendingSwarmFile = pendingSwarmFileRef.current;
+    const pendingGuestFile = pendingGuestFileRef.current;
     pendingSwarmFileRef.current = null;
+    pendingGuestFileRef.current = null;
     resetTask();
     historyTokenRef.current += 1;
     historyOutcomeCacheRef.current.clear();
@@ -454,6 +489,7 @@ export default function App() {
     setAuthReady(true);
     void loadHistoryForUser(nextUser);
     if (pendingSwarmFile) void analyzeFile(pendingSwarmFile, "swarm", nextUser);
+    else if (pendingGuestFile) void analyzeFile(pendingGuestFile, retryModeRef.current, nextUser);
   }
 
   async function logout() {
@@ -474,6 +510,7 @@ export default function App() {
     setMobileHistoryOpen(false);
     setGuestConsent(false);
     setConsentWarning(false);
+    setGuestLimitReached(false);
   }
 
   async function runImage(
@@ -509,7 +546,7 @@ export default function App() {
           if (!result) throw new Error("任务已完成，但没有返回可展示的鉴伪结果");
           setProgress({
             title: "鉴伪完成",
-            detail: mode === "swarm" ? "综合结论与证据已经整理完成" : "主模型结论已经整理完成",
+            detail: mode === "swarm" ? "综合结论与证据已经整理完成" : "检测结论与关键证据已经整理完成",
             percent: 100,
             stage: "report",
             experts: job.experts,
@@ -656,7 +693,7 @@ export default function App() {
     }
     if (kind === "unknown") {
       setPendingFile({ name: file.name, size: file.size, typeLabel: kindLabel(kind) });
-      setErrorMessage("暂不支持这个文件格式。可上传 JPG、PNG、WebP、HEIC/HEIF 实况照片静态帧、MP4/MOV/WEBM 视频，以及 TXT、MD、CSV、JSON、LOG、DOCX 文档。");
+      setErrorMessage("暂不支持这个文件格式。可上传常见图片和手机实况照片、MP4/MOV/WEBM 视频，以及 TXT、MD、CSV、JSON、LOG、DOCX 文档。");
       return;
     }
     if (kind === "audio") {
@@ -687,7 +724,7 @@ export default function App() {
     });
     setBusy(true);
     setErrorMessage("");
-    setProgress({ title: "正在校验文件", detail: "确认格式、大小与可用检测能力", percent: 12, stage: "validate", analysisMode: kind === "image" ? modeOverride : undefined });
+    setProgress({ title: "正在安全接收文件", detail: "确认格式、大小与处理授权", percent: 12, stage: "validate", analysisMode: kind === "image" ? modeOverride : undefined });
 
     try {
       if (kind === "image") {
@@ -709,10 +746,18 @@ export default function App() {
       if (historyUser && userIdRef.current === historyUser.Userid) void loadHistoryForUser(historyUser);
     } catch (error) {
       if (isAbort(error) || runTokenRef.current !== token) return;
-      const message = error instanceof Error ? error.message : "鉴伪任务未完成，请稍后重试";
       setProgress(null);
-      setErrorMessage(message);
-      if (isAuthenticationRequiredError(error)) setAuthOpen(true);
+      if (!user && isGuestLimitError(error)) {
+        pendingGuestFileRef.current = file;
+        setPendingFile(null);
+        setFallbackOffer(null);
+        setErrorMessage("");
+        setGuestLimitReached(true);
+      } else {
+        const message = error instanceof Error ? error.message : "鉴伪任务未完成，请稍后重试";
+        setErrorMessage(message);
+        if (isAuthenticationRequiredError(error)) setAuthOpen(true);
+      }
       if (!user && isUploadConsentRequiredError(error)) {
         setGuestConsent(false);
         setConsentWarning(true);
@@ -1001,11 +1046,17 @@ export default function App() {
           authReady={authReady}
           user={user}
           onEnterWorkspace={() => navigateToView("workspace")}
-          onDeveloper={() => {
-            navigateToView("developer");
+          onDeveloper={(entry) => {
+            navigateToDeveloper(entry);
             if (!user) setAuthOpen(true);
           }}
           onLogin={() => setAuthOpen(true)}
+          onLogout={() => void logout()}
+          onAnalyticsPreference={() => {
+            resetAnalyticsConsent();
+            lastTrackedPageRef.current = null;
+            setAnalyticsChoice(null);
+          }}
         />
       ) : view === "developer" ? (
         <DeveloperPlatform
@@ -1056,22 +1107,27 @@ export default function App() {
           </div>
           <div className="topbar-actions">
             {authReady && (user ? (
-              <button type="button" className="user-pill" onClick={() => setMobileHistoryOpen(true)} aria-label={`打开${user.username || "慧鉴用户"}的个人任务`}><UserRound size={16} /><span>{user.username || "慧鉴用户"}</span></button>
+              <AccountMenu compact user={user} onWorkspace={() => setMobileHistoryOpen(true)} onDeveloper={() => navigateToDeveloper("overview")} onLogout={() => void logout()} className="workspace-account-menu" />
             ) : (
               <button type="button" className="secondary-button topbar-login" onClick={() => setAuthOpen(true)}><LogIn size={16} /> 登录</button>
             ))}
-            <button type="button" className="workspace-developer-button" onClick={() => navigateToView("developer")} title="开发者平台"><Code2 size={16} /><span>开发者</span></button>
+            <button type="button" className="workspace-developer-button" onClick={() => navigateToDeveloper("overview")} title="开发者平台"><Code2 size={16} /><span>开发者</span></button>
           </div>
         </header>
 
         <div className="agent-workspace" ref={workspaceRef}>
-          {!pendingFile && !outcome && !errorMessage && (
+          {guestLimitReached && !user && (
+            <GuestLimitGate fileName={pendingGuestFileRef.current?.name} onLogin={() => setAuthOpen(true)} />
+          )}
+
+          {!guestLimitReached && !pendingFile && !outcome && !errorMessage && (
             <WelcomeWorkspace
               busy={busy}
               dragging={dragging}
               user={user}
               guestConsent={guestConsent}
               consentWarning={consentWarning}
+              maxUploadBytes={Number(health?.limits?.maxUploadBytes || MAX_DOCUMENT_BYTES)}
               onGuestConsentChange={(checked) => {
                 setGuestConsent(checked);
                 if (checked) setConsentWarning(false);
@@ -1155,9 +1211,43 @@ export default function App() {
       </div>
       )}
 
+      {analyticsChoice === null && (
+        <section className="analytics-consent" aria-label="匿名访问统计选择">
+          <div>
+            <strong>是否允许匿名访问统计？</strong>
+            <p>仅在你允许后，使用随机访客标识与脱敏 IP 统计访问量，不关联登录账号。<a href="/legal/privacy.html" target="_blank" rel="noreferrer">查看隐私政策</a></p>
+          </div>
+          <div className="analytics-consent-actions">
+            <button type="button" onClick={() => { setAnalyticsConsent("denied"); setAnalyticsChoice("denied"); }}>暂不统计</button>
+            <button type="button" className="is-primary" onClick={() => { setAnalyticsConsent("granted"); lastTrackedPageRef.current = null; setAnalyticsChoice("granted"); }}>允许匿名统计</button>
+          </div>
+        </section>
+      )}
+
       <input ref={fileInputRef} className="sr-only" type="file" accept={ACCEPTED_FILES} onChange={chooseFile} tabIndex={-1} aria-hidden="true" />
       <AuthDialog open={authOpen} onClose={() => { pendingSwarmFileRef.current = null; setAuthOpen(false); }} onAuthenticated={authenticated} />
     </>
+  );
+}
+
+function GuestLimitGate({ fileName, onLogin }: { fileName?: string; onLogin: () => void }) {
+  return (
+    <section className="guest-limit-gate" aria-labelledby="guest-limit-title">
+      <div className="guest-limit-visual" aria-hidden="true">
+        <img src="/brand/huijian-mascot.webp" alt="" />
+        <span><ShieldCheck size={18} /></span>
+      </div>
+      <p>访客体验已完成</p>
+      <h2 id="guest-limit-title">登录后继续这次鉴伪</h2>
+      <span>每位访客可免费体验一次。登录后，你可以继续处理{fileName ? `“${fileName}”` : "刚才选择的文件"}，并保存个人历史与报告。</span>
+      <div className="guest-limit-benefits" aria-label="登录后的能力">
+        <b><Check size={14} /> 继续当前文件</b>
+        <b><Check size={14} /> 保存鉴伪记录</b>
+        <b><Check size={14} /> 下载完整报告</b>
+      </div>
+      <button type="button" className="primary-button" onClick={onLogin}><LogIn size={17} /> 登录或注册后继续</button>
+      <small>登录成功后将自动恢复当前任务，无需再次选择文件。</small>
+    </section>
   );
 }
 
@@ -1167,6 +1257,7 @@ function WelcomeWorkspace({
   user,
   guestConsent,
   consentWarning,
+  maxUploadBytes,
   onOpenFile,
   onDragEnter,
   onDragLeave,
@@ -1178,6 +1269,7 @@ function WelcomeWorkspace({
   user: AccountUser | null;
   guestConsent: boolean;
   consentWarning: boolean;
+  maxUploadBytes: number;
   onOpenFile: () => void;
   onDragEnter: () => void;
   onDragLeave: () => void;
@@ -1200,26 +1292,27 @@ function WelcomeWorkspace({
             <span><i /> 统一鉴伪入口</span>
             <small>按所选模式调度</small>
           </div>
-          {!user && (
-            <label className={`guest-upload-consent ${consentWarning ? "has-error" : ""}`}>
-              <input type="checkbox" checked={guestConsent} onChange={(event) => onGuestConsentChange(event.target.checked)} />
-              <span>我同意将文件上传用于本次鉴伪处理，并已阅读 <a href="/legal/terms.html" target="_blank" rel="noreferrer">用户协议</a> 与 <a href="/legal/privacy.html" target="_blank" rel="noreferrer">隐私政策</a></span>
-            </label>
-          )}
-          {consentWarning && !user && <p className="guest-consent-warning" role="alert">请先确认文件处理与隐私授权，再选择或拖放文件。</p>}
           <button type="button" className="upload-stage-core" disabled={busy} onClick={onOpenFile}>
             <div className="upload-stage-icon"><UploadCloud size={28} /></div>
             <h3>{dragging ? "松开即可开始鉴伪" : "上传或拖放待鉴别内容"}</h3>
-            <p>图片、视频或文档，会自动进入对应的分析链路</p>
+            <p>图片、视频或文档会自动进入对应的证据链路</p>
             <span className="primary-button upload-button"><Paperclip size={17} /> 选择文件</span>
           </button>
-          <div className="capability-strip" aria-label="支持的内容类型">
-            <div><ImageIcon size={18} /><span><strong>图像</strong><small>智能鉴伪</small></span><Check size={14} /></div>
-            <div><Video size={18} /><span><strong>视频</strong><small>抽帧分析</small></span><Check size={14} /></div>
-            <div><FileText size={18} /><span><strong>文档</strong><small>正文检测</small></span><Check size={14} /></div>
-            <div className="unavailable"><Volume2 size={18} /><span><strong>音频</strong><small>尚未部署</small></span><CircleDashed size={14} /></div>
+          <div className="capability-strip compact-capability-strip" aria-label="支持的内容类型">
+            <div><ImageIcon size={17} /><span><strong>图片</strong><small>真假与水印</small></span></div>
+            <div><Video size={17} /><span><strong>视频</strong><small>关键帧分析</small></span></div>
+            <div><FileText size={17} /><span><strong>文档</strong><small>内容检测</small></span></div>
           </div>
-          <small className="upload-limits">图片支持 HEIC/HEIF 实况照片静态帧 · 图片/文档不超过 25 MB · 视频不超过 256 MB</small>
+          <div className="upload-policy-footer">
+            {!user && (
+              <label className={`guest-upload-consent ${consentWarning ? "has-error" : ""}`}>
+                <input type="checkbox" checked={guestConsent} onChange={(event) => onGuestConsentChange(event.target.checked)} />
+                <span>我授权平台处理本次上传文件，并已阅读 <a href="/legal/terms.html" target="_blank" rel="noreferrer">用户协议</a> 与 <a href="/legal/privacy.html" target="_blank" rel="noreferrer">隐私政策</a></span>
+              </label>
+            )}
+            {consentWarning && !user && <p className="guest-consent-warning" role="alert">勾选授权后即可选择或拖放文件。</p>}
+            <small className="upload-limits">支持手机实况照片 · 图片与文档最高 {formatBytes(maxUploadBytes)} · 视频最高 {formatBytes(MAX_VIDEO_BYTES)}</small>
+          </div>
         </section>
       </section>
     </div>
@@ -1228,31 +1321,29 @@ function WelcomeWorkspace({
 
 function AgentProgressPanel({ progress, onStopWaiting }: { progress: AgentProgress | null; onStopWaiting: () => void }) {
   const current = progress || { title: "正在准备鉴伪任务", detail: "请稍候", percent: 8, stage: "validate" as const };
-  const stages = current.analysisMode === "fast" ? [
-    { key: "validate", label: "文件校验" },
-    { key: "dispatch", label: "模型准备" },
-    { key: "evidence", label: "GPU 推理" },
-    { key: "report", label: "结果校验" },
-  ] as const : current.analysisMode === "swarm" ? [
-    { key: "validate", label: "文件校验" },
-    { key: "dispatch", label: "角色调度" },
-    { key: "evidence", label: "证据核验" },
-    { key: "report", label: "综合意见" },
-  ] as const : [
-    { key: "validate", label: "文件校验" },
-    { key: "dispatch", label: "能力调度" },
-    { key: "evidence", label: "证据核验" },
-    { key: "report", label: "结论整理" },
+  const stages = [
+    { key: "receive", label: "安全接收", note: "格式与权限", icon: ShieldCheck },
+    { key: "analyze", label: "真实性分析", note: current.analysisMode === "swarm" ? "多源并行复核" : "痕迹与水印", icon: Fingerprint },
+    { key: "report", label: "证据成稿", note: "结论与依据", icon: FileCheck2 },
   ] as const;
-  const stageIndex = stages.findIndex((stage) => stage.key === current.stage);
+  const stageIndex = current.stage === "report" ? 2 : current.stage === "evidence" ? 1 : 0;
   return (
     <div className="agent-progress-message" role="status" aria-live="polite">
       <div className="agent-avatar"><img src="/brand/huijian-mascot.webp" alt="" /></div>
       <div className="progress-panel">
         <div className="progress-heading"><span><LoaderCircle size={17} className={current.percent < 100 ? "spin" : ""} /></span><div><strong>{current.title}</strong><p>{current.detail}</p></div><b>{Math.round(current.percent)}%</b></div>
         <div className="progress-track" role="progressbar" aria-label={current.title} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(current.percent)}><i style={{ width: `${current.percent}%` }} /></div>
-        <div className="progress-stages">
-          {stages.map((stage, index) => <span key={stage.key} className={index < stageIndex ? "done" : index === stageIndex ? "active" : ""}><i>{index < stageIndex ? <Check size={11} /> : index + 1}</i>{stage.label}</span>)}
+        <div className="progress-stages progress-system">
+          {stages.map((stage, index) => {
+            const StageIcon = stage.icon;
+            return (
+              <span key={stage.key} className={index < stageIndex ? "done" : index === stageIndex ? "active" : ""}>
+                <i>{index < stageIndex ? <Check size={13} /> : <StageIcon size={15} />}</i>
+                <b>{stage.label}</b>
+                <small>{stage.note}</small>
+              </span>
+            );
+          })}
         </div>
         {current.experts && current.experts.length > 0 && (
           <div className="progress-experts">

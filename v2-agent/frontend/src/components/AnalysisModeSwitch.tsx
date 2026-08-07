@@ -1,5 +1,5 @@
-import { Check, ChevronDown, Gauge, Layers3 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Check, ChevronDown, ScanLine, Waypoints } from "lucide-react";
+import { KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
 import type { ImageAnalysisMode } from "../agentTypes";
 
 interface Props {
@@ -13,21 +13,26 @@ const OPTIONS: Array<{
   label: string;
   detail: string;
   note: string;
-  icon: typeof Gauge;
+  icon: typeof ScanLine;
 }> = [
-  { mode: "fast", label: "快速检测", detail: "主模型 + 水印", note: "速度优先，适合日常检测", icon: Gauge },
-  { mode: "swarm", label: "Soar 模式", detail: "多源模型复核", note: "证据更充分，耗时更长", icon: Layers3 },
+  { mode: "fast", label: "快速检测", detail: "即时鉴别", note: "真实性分析与 AI 水印同步核验", icon: ScanLine },
+  { mode: "swarm", label: "Soar 模式", detail: "多源复核", note: "更多独立证据源参与交叉判断", icon: Waypoints },
 ];
 
 export default function AnalysisModeSwitch({ mode, disabled = false, onChange }: Props) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const pendingFocusRef = useRef<number | null>(null);
   const selected = OPTIONS.find((option) => option.mode === mode) || OPTIONS[0];
   const Icon = selected.icon;
 
   useEffect(() => {
     if (!open) return;
+    const focusIndex = pendingFocusRef.current ?? Math.max(0, OPTIONS.findIndex((option) => option.mode === mode));
+    pendingFocusRef.current = null;
+    window.requestAnimationFrame(() => optionRefs.current[focusIndex]?.focus());
     const closeOutside = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     };
@@ -42,7 +47,23 @@ export default function AnalysisModeSwitch({ mode, disabled = false, onChange }:
       document.removeEventListener("pointerdown", closeOutside);
       document.removeEventListener("keydown", closeOnEscape);
     };
-  }, [open]);
+  }, [mode, open]);
+
+  function openWithFocus(index: number) {
+    pendingFocusRef.current = index;
+    setOpen(true);
+  }
+
+  function handleOptionKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, index: number) {
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowDown") nextIndex = (index + 1) % OPTIONS.length;
+    if (event.key === "ArrowUp") nextIndex = (index - 1 + OPTIONS.length) % OPTIONS.length;
+    if (event.key === "Home") nextIndex = 0;
+    if (event.key === "End") nextIndex = OPTIONS.length - 1;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    optionRefs.current[nextIndex]?.focus();
+  }
 
   return (
     <div ref={rootRef} className={`analysis-model-picker ${open ? "is-open" : ""}`}>
@@ -55,27 +76,35 @@ export default function AnalysisModeSwitch({ mode, disabled = false, onChange }:
         aria-expanded={open}
         aria-label="选择图片检测模型"
         onClick={() => setOpen((value) => !value)}
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+          event.preventDefault();
+          openWithFocus(event.key === "ArrowDown" ? 0 : OPTIONS.length - 1);
+        }}
       >
         <span className="analysis-model-trigger-icon" aria-hidden="true"><Icon size={16} /></span>
         <span className="analysis-model-trigger-copy">
-          <small>当前模型</small>
+          <small>检测模式</small>
           <strong>{selected.label}</strong>
         </span>
         <ChevronDown size={15} className="analysis-model-chevron" aria-hidden="true" />
       </button>
       {open && (
         <div className="analysis-model-menu" role="listbox" aria-label="图片检测模型">
-          <div className="analysis-model-menu-heading"><strong>选择检测模型</strong><small>仅对图片任务生效</small></div>
+          <div className="analysis-model-menu-heading"><strong>选择分析方式</strong><small>仅对图片任务生效</small></div>
           {OPTIONS.map((option) => {
             const OptionIcon = option.icon;
             const active = option.mode === mode;
             return (
               <button
+                ref={(element) => { optionRefs.current[OPTIONS.indexOf(option)] = element; }}
                 key={option.mode}
                 type="button"
                 role="option"
                 aria-selected={active}
+                tabIndex={-1}
                 className={active ? "is-selected" : ""}
+                onKeyDown={(event) => handleOptionKeyDown(event, OPTIONS.indexOf(option))}
                 onClick={() => {
                   onChange(option.mode);
                   setOpen(false);

@@ -79,10 +79,7 @@ export function initialAnalyticsPage(): AnalyticsPage {
 
 export function trackConfirmedPageview(page: AnalyticsPage) {
   if (typeof window === "undefined" || navigator.webdriver) return;
-  // Traffic totals are anonymous and opt-out. A visitor who explicitly
-  // denies analytics is never recorded; an untouched choice still allows the
-  // public dashboard to reflect real visits instead of staying at zero.
-  if (analyticsConsent() === "denied") return;
+  if (analyticsConsent() !== "granted") return;
   if (new URLSearchParams(window.location.search).get("demo") === "1") return;
   const body = JSON.stringify({
     visitorId: analyticsVisitorId(),

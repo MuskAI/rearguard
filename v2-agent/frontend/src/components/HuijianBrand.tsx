@@ -1,5 +1,3 @@
-import { ScanEye } from "lucide-react";
-
 interface Props {
   compact?: boolean;
   onClick?: () => void;
@@ -9,11 +7,11 @@ export default function HuijianBrand({ compact = false, onClick }: Props) {
   const content = (
     <>
       <span className="brand-mark" aria-hidden="true">
-        <ScanEye size={compact ? 19 : 22} strokeWidth={2.1} />
-        <i />
+        <span className="brand-monogram">慧</span>
+        <span className="brand-signal"><i /><i /></span>
       </span>
       <span className="brand-copy">
-        <strong>慧鉴AI</strong>
+        <strong>慧鉴 <em>AI</em></strong>
         {!compact && <small>数字内容鉴伪智能体</small>}
       </span>
     </>

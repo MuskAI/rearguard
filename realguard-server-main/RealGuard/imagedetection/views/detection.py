@@ -5,6 +5,7 @@ import io
 import copy
 import hashlib
 import ipaddress
+import re
 import requests
 import socket
 import threading
@@ -327,6 +328,8 @@ def _enqueue_persistent_web_job(job, image_bytes, filename, mimetype, user_info,
             guest_subject,
             idempotency_key,
         )
+    except developer_platform.GuestAllowanceError as exc:
+        return False, "guest_detection_limit_reached", str(exc), None, False
     except developer_platform.QueueCapacityError as exc:
         return False, "server_busy", str(exc) or "当前检测任务较多，请稍后重试", None, False
     except Exception as exc:
@@ -625,7 +628,11 @@ def _detection_actor():
     guest_count = int(session.get(GUEST_DETECTION_SESSION_KEY, 0) or 0)
     if guest_count >= GUEST_DETECTION_LIMIT:
         return None, True, (
-            jsonify({'status': 'error', 'message': '访客免费检测次数已用完，请登录后继续检测'}),
+            jsonify({
+                'status': 'error',
+                'code': 'guest_detection_limit_reached',
+                'message': '访客免费检测次数已用完，请登录后继续检测',
+            }),
             401
         )
 
@@ -2148,6 +2155,9 @@ def image_detect_for_actor(user_info, *, is_guest=False):
         )
     finally:
         BACKGROUND_JOB_SLOTS.release()
+    if isinstance(payload, dict) and isinstance(payload.get('result'), dict):
+        payload = copy.deepcopy(payload)
+        payload['result'] = _public_detection_result(payload['result'])
     return jsonify(payload), status_code
 
 
@@ -2323,6 +2333,97 @@ def _public_swarm_result(result):
     return _suppress_review_only_scores(public_result)
 
 
+_PUBLIC_INTERNAL_RESULT_KEYS = {
+    'activeprovider',
+    'backend',
+    'crop',
+    'device',
+    'detector',
+    'detectorversion',
+    'endpoint',
+    'engine',
+    'engineversion',
+    'executionprovider',
+    'gpu',
+    'hardware',
+    'inferenceaudit',
+    'internalendpoint',
+    'localizationmodel',
+    'localizationmodelrevision',
+    'model',
+    'modelid',
+    'modelname',
+    'modelrevision',
+    'modelrun',
+    'modelversion',
+    'providermodel',
+    'rawevidence',
+    'remoteendpoint',
+    'remoteevidence',
+    'runtime',
+    'tokenusage',
+}
+_PUBLIC_FILE_OR_URL_KEYS = {
+    'filename', 'file_name', 'name', 'image_url', 'imageurl', 'preview',
+    'thumbnail', 'url', 'reporturl', 'selfurl',
+}
+_PUBLIC_MODEL_TERM_RE = re.compile(
+    r'(?i)(?:\bDINOv?3?\b|\bViT(?:[-_ ]?\d+[A-Za-z]*)?\b|\bONNX(?:Runtime)?\b|'
+    r'\b(?:CPU|CUDA)ExecutionProvider\b|\bCUDA\b|\bYOLO(?:v?\d+[A-Za-z]*)?\b|'
+    r'\bRapidOCR\b|\bFAISS\b|\bCLIP\b|\bRealGuard(?:[-_ ]?v?\d+)?\b|'
+    r'[A-Za-z0-9_.-]+/(?:dino|yolo|clip)[A-Za-z0-9_./-]*)'
+)
+
+
+def _public_key_name(value):
+    return re.sub(r'[^a-z0-9]', '', str(value or '').lower())
+
+
+def _redact_public_model_terms(value):
+    if not isinstance(value, str) or not _PUBLIC_MODEL_TERM_RE.search(value):
+        return value
+    return _PUBLIC_MODEL_TERM_RE.sub('内部分析服务', value)
+
+
+def _sanitize_public_detection_value(value, *, field_name=''):
+    """Remove implementation details while preserving user-owned file metadata.
+
+    `all_metadata` intentionally remains byte-for-byte equivalent at the JSON
+    value level: it is evidence extracted from the user's file, not a runtime
+    description of our model stack.
+    """
+    if isinstance(value, dict):
+        clean = {}
+        for key, child in value.items():
+            key_text = str(key)
+            normalized = _public_key_name(key_text)
+            if normalized == 'allmetadata':
+                clean[key] = copy.deepcopy(child)
+                continue
+            if normalized in _PUBLIC_INTERNAL_RESULT_KEYS:
+                continue
+            clean[key] = _sanitize_public_detection_value(child, field_name=key_text)
+        return clean
+    if isinstance(value, list):
+        return [_sanitize_public_detection_value(item, field_name=field_name) for item in value]
+    if isinstance(value, tuple):
+        return [_sanitize_public_detection_value(item, field_name=field_name) for item in value]
+    if isinstance(value, str) and str(field_name or '').lower() not in _PUBLIC_FILE_OR_URL_KEYS:
+        return _redact_public_model_terms(value)
+    return value
+
+
+def _public_detection_result(result, *, swarm=False):
+    if not isinstance(result, dict):
+        return result
+    public_result = (
+        _public_swarm_result(result)
+        if swarm
+        else _suppress_review_only_scores(copy.deepcopy(result))
+    )
+    return _sanitize_public_detection_value(public_result)
+
+
 def _visible_watermark_from_raw_experts(experts):
     for expert in experts or []:
         if not isinstance(expert, dict) or expert.get('id') != 'primary':
@@ -2365,42 +2466,49 @@ def _public_detection_job(job):
     if not isinstance(job, dict):
         return job
     public_job = copy.deepcopy(job)
-    if public_job.get('mode') != 'swarm' and public_job.get('kind') != 'swarm':
-        public_job['version'] = _detection_job_version(public_job)
-        return public_job
-    recovered_visible = _visible_watermark_from_raw_experts(public_job.get('experts') or [])
-    _apply_visible_watermark_to_experts(public_job.get('experts') or [], recovered_visible)
-    public_job['experts'] = [
-        _public_swarm_expert(expert, index)
-        for index, expert in enumerate(public_job.get('experts') or [])
-    ]
     status = str(public_job.get('status') or '')
-    progress = int(public_job.get('progress') or 0)
-    if status == 'success':
-        public_job['summary'] = 'Swarm 专家会诊完成'
-    elif status == 'failed':
-        public_job['summary'] = 'Swarm 专家会诊暂不可用'
-    elif progress > 0:
-        public_job['summary'] = '多名鉴伪专家正在复核'
-    else:
-        public_job['summary'] = '等待专家队列启动'
+    public_stage = str(public_job.get('publicStage') or '').strip()
+    if public_stage not in {'secure_receive', 'authenticity_analysis', 'evidence_summary', 'report_ready'}:
+        public_stage = (
+            'report_ready' if status == 'success'
+            else 'authenticity_analysis' if status == 'running'
+            else 'secure_receive'
+        )
+    public_job['publicStage'] = public_stage
+    public_job['summary'] = {
+        'secure_receive': '文件已安全接收，等待分析',
+        'authenticity_analysis': '正在核验真实性与来源线索',
+        'evidence_summary': '正在汇总关键证据',
+        'report_ready': '结论与证据报告已就绪',
+    }[public_stage]
+    is_swarm = public_job.get('mode') == 'swarm' or public_job.get('kind') == 'swarm'
+    recovered_visible = None
+    if is_swarm:
+        recovered_visible = _visible_watermark_from_raw_experts(public_job.get('experts') or [])
+        _apply_visible_watermark_to_experts(public_job.get('experts') or [], recovered_visible)
+        public_job['experts'] = [
+            _public_swarm_expert(expert, index)
+            for index, expert in enumerate(public_job.get('experts') or [])
+        ]
+    if status == 'failed':
+        public_job['summary'] = '本次分析未完成，请稍后重试'
+        public_job['error'] = '本次分析未完成，请稍后重试'
     if isinstance(public_job.get('result'), dict):
         payload = public_job['result']
         if isinstance(payload.get('result'), dict):
-            if isinstance(recovered_visible, dict):
+            if is_swarm and isinstance(recovered_visible, dict):
                 payload['result']['visibleWatermark'] = copy.deepcopy(recovered_visible)
                 swarm = payload['result'].get('swarm')
                 if isinstance(swarm, dict):
                     _apply_visible_watermark_to_experts(swarm.get('experts') or [], recovered_visible)
-            payload['result'] = _public_swarm_result(payload['result'])
-        if isinstance(payload.get('experts'), list):
+            payload['result'] = _public_detection_result(payload['result'], swarm=is_swarm)
+        if is_swarm and isinstance(payload.get('experts'), list):
             _apply_visible_watermark_to_experts(payload['experts'], recovered_visible)
             payload['experts'] = [
                 _public_swarm_expert(expert, index)
                 for index, expert in enumerate(payload.get('experts') or [])
             ]
-    if public_job.get('error'):
-        public_job['error'] = 'Swarm 专家会诊暂不可用，请稍后重试'
+    public_job = _sanitize_public_detection_value(public_job)
     public_job['version'] = _detection_job_version(public_job)
     return public_job
 
@@ -2439,7 +2547,16 @@ def _swarm_set_expert(experts, expert_id, **updates):
     return None
 
 
-def _swarm_update_job(job_id, experts, progress, summary='', status='running', result=None, error=None):
+def _swarm_update_job(
+    job_id,
+    experts,
+    progress,
+    summary='',
+    status='running',
+    result=None,
+    error=None,
+    public_stage='authenticity_analysis',
+):
     if not job_id:
         return
     updates = {
@@ -2447,6 +2564,7 @@ def _swarm_update_job(job_id, experts, progress, summary='', status='running', r
         'mode': 'swarm',
         'progress': max(0, min(100, int(progress))),
         'experts': experts,
+        'publicStage': public_stage,
     }
     if summary:
         updates['summary'] = summary
@@ -3397,7 +3515,7 @@ def _run_swarm_detection_payload(image_bytes, filename, mimetype, user_info, *, 
     if not enabled_ids:
         return {'status': 'error', 'message': 'Swarm 蜂群模式没有启用任何专家'}, 400
     experts = _swarm_initial_experts()
-    _swarm_update_job(job_id, experts, 3, 'Swarm 专家队列已创建')
+    _swarm_update_job(job_id, experts, 3, 'Swarm 专家队列已创建', public_stage='secure_receive')
 
     primary_finished = threading.Event()
     if 'primary' not in enabled_ids:
@@ -3499,6 +3617,14 @@ def _run_swarm_detection_payload(image_bytes, filename, mimetype, user_info, *, 
         expert_name = (expert or {}).get('name') or expert_id
         _swarm_update_job(job_id, experts, progress, f'{expert_name}完成')
 
+    _swarm_update_job(
+        job_id,
+        experts,
+        96,
+        '正在汇总多源证据',
+        public_stage='evidence_summary',
+    )
+
     fallback_result = None
     if not primary_result:
         fallback_result = _swarm_fallback_display_result(image_bytes, filename, backend_openid, phone)
@@ -3544,7 +3670,15 @@ def _run_swarm_detection_payload(image_bytes, filename, mimetype, user_info, *, 
     )
     _suppress_review_only_scores(final_result)
     payload = {'status': 'success', 'result': final_result}
-    _swarm_update_job(job_id, experts, 100, 'Swarm 专家会诊完成', status='success', result=payload)
+    _swarm_update_job(
+        job_id,
+        experts,
+        100,
+        'Swarm 专家会诊完成',
+        status='success',
+        result=payload,
+        public_stage='report_ready',
+    )
     return payload, 200
 
 
@@ -3553,6 +3687,7 @@ def _run_async_image_job(job_id, image_bytes, filename, mimetype, user_info, is_
         "status": "running",
         "progress": 44,
         "summary": "主鉴伪模型正在 GPU 推理",
+        "publicStage": "authenticity_analysis",
     })
     try:
         payload, status_code = _run_image_detection_payload(
@@ -3577,6 +3712,7 @@ def _run_async_image_job(job_id, image_bytes, filename, mimetype, user_info, is_
             "result": payload,
             "progress": 100,
             "summary": "主模型检测完成",
+            "publicStage": "report_ready",
         })
     except Exception as exc:
         admin_state.update_detection_job(job_id, {"status": "failed", "error": str(exc), "progress": 100})
@@ -3642,6 +3778,12 @@ def image_detect_async():
         })
         if error_code == 'server_busy':
             return _busy_response()
+        if error_code == 'guest_detection_limit_reached':
+            return jsonify({
+                'status': 'error',
+                'code': error_code,
+                'message': error_message,
+            }), 429
         return jsonify({
             'status': 'error',
             'code': error_code,
@@ -3703,6 +3845,12 @@ def image_detect_swarm():
         })
         if error_code == 'server_busy':
             return _busy_response()
+        if error_code == 'guest_detection_limit_reached':
+            return jsonify({
+                'status': 'error',
+                'code': error_code,
+                'message': error_message,
+            }), 429
         return jsonify({
             'status': 'error',
             'code': error_code,
@@ -3893,8 +4041,7 @@ def image_result_api():
     visible_watermark = _runtime_visible_watermark_for_item(item.get('itemid'))
     if isinstance(visible_watermark, dict):
         result['visibleWatermark'] = visible_watermark
-    _suppress_review_only_scores(result)
-    return jsonify({'status': 'success', 'result': result})
+    return jsonify({'status': 'success', 'result': _public_detection_result(result)})
 
 
 @image_upload_blueprint.route('/image_upload/report')
@@ -3946,7 +4093,7 @@ def image_report_api():
     visible_watermark = _runtime_visible_watermark_for_item(item.get('itemid'))
     if isinstance(visible_watermark, dict):
         result['visibleWatermark'] = visible_watermark
-    _suppress_review_only_scores(result)
+    result = _public_detection_result(result)
     pdf = reporting.image_report_pdf(item, result)
     return Response(
         pdf,

@@ -1,5 +1,5 @@
 import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
-import { Check, KeyRound, LoaderCircle, MessageSquareText, Smartphone, UserRound, X } from "lucide-react";
+import { Check, ExternalLink, FileCheck2, KeyRound, LoaderCircle, LockKeyhole, MessageSquareText, Smartphone, UserRound, X } from "lucide-react";
 import {
   AccountUser,
   completeSmsPasswordSetup,
@@ -270,11 +270,22 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
             </label>
           )}
 
-          {panel !== "setup" && <label className="terms-check">
-            <input type="checkbox" checked={accepted} onChange={(event) => setAccepted(event.target.checked)} />
-            <span className="check-visual"><Check size={13} /></span>
-            <span>我已阅读并同意 <a href="/legal/terms.html" target="_blank" rel="noreferrer">用户协议</a> 和 <a href="/legal/privacy.html" target="_blank" rel="noreferrer">隐私政策</a></span>
-          </label>}
+          {panel !== "setup" && (
+            <section className="auth-consent-brief" aria-labelledby="auth-consent-title">
+              <header><LockKeyhole size={16} /><div><strong id="auth-consent-title">账号与隐私摘要</strong><small>同意前请了解本次数据处理</small></div></header>
+              <ul>
+                <li><FileCheck2 size={14} /><span>手机号用于登录与账号安全，上传文件用于鉴伪、报告和个人历史。</span></li>
+                <li><Check size={14} /><span>任务与报告按账号隔离，除你主动创建分享链接外不会公开。</span></li>
+                <li><Check size={14} /><span>你可以删除个人历史、撤销分享链接，并按隐私政策提出数据请求。</span></li>
+              </ul>
+              <div className="auth-legal-links"><a href="/legal/terms.html" target="_blank" rel="noreferrer">查看用户协议 <ExternalLink size={12} /></a><a href="/legal/privacy.html" target="_blank" rel="noreferrer">查看隐私政策 <ExternalLink size={12} /></a></div>
+              <label className="terms-check">
+                <input type="checkbox" checked={accepted} onChange={(event) => setAccepted(event.target.checked)} />
+                <span className="check-visual"><Check size={13} /></span>
+                <span>我已阅读并同意上述用户协议和隐私政策</span>
+              </label>
+            </section>
+          )}
 
           {message && <div className="auth-message" role="status">{message}</div>}
           <button className="primary-button auth-submit" type="submit" disabled={busy || !validPhone || (panel !== "setup" && !accepted)}>

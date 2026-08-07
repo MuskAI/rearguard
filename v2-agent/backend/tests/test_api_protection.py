@@ -71,14 +71,14 @@ class ConsentTestClient(TestClient):
         if url == "/api/detect":
             data = dict(kwargs.pop("data", {}) or {})
             data.setdefault("upload_consent", "1")
-            data.setdefault("consent_version", "2026-07-15+2026-07-20")
+            data.setdefault("consent_version", "2026-08-07+2026-08-07")
             data.setdefault(
                 "terms_sha256",
-                "09707ba3b915db9904cc6f8b4951b5c9bbfff7e768fd237c04eedf90fef89ff3",
+                "619aee74677629f4f5e2c4ccbaa99c458671086de45c0a586e76c8c8c062d2c5",
             )
             data.setdefault(
                 "privacy_sha256",
-                "5c505aaf82abe1af5cac83fef81c60ec66e89a76377110fba6348ed0567d8935",
+                "54d98f687f8c6bc6ddf7c1256958d070fd5d2af7421059ada38fc3366acb56eb",
             )
             headers = dict(kwargs.pop("headers", {}) or {})
             headers.setdefault("Idempotency-Key", str(uuid.uuid4()))
@@ -180,6 +180,20 @@ def test_public_detect_persists_pseudonymous_upload_consent(client):
     assert row["channel"] == "v2_public_detect"
 
 
+def test_public_detect_response_does_not_expose_backend_model_identity(client):
+    response = client.post(
+        "/api/detect",
+        files={"file": ("public-redaction.txt", b"public model redaction", "text/plain")},
+        headers={"Idempotency-Key": "public-model-redaction-001"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "modelVersion" not in payload
+    assert payload["tokenUsage"]["totalTokens"] == 0
+    assert "pytest-vlm" not in json.dumps(payload, ensure_ascii=False)
+
+
 def test_forensic_normalizer_hides_natural_language_verdicts():
     from app import detector
 
@@ -278,6 +292,52 @@ def developer_key_client(monkeypatch, tmp_path):
 
     monkeypatch.setattr(main, "_verify_developer_key_sync", fake_verify)
     return TestClient(main.app, client=("127.0.0.1", 50000))
+
+
+def test_public_result_payload_redacts_model_stack_and_preserves_user_evidence(client):
+    import app.main as main  # noqa: WPS433
+
+    metadata = {"EXIF:Make": "Apple", "EXIF:Model": "iPhone 16 Pro"}
+    public = main._public_result_payload({
+        "taskId": "task-public-redaction",
+        "modelVersion": "DINOv3 ViT-7B ONNX FP16",
+        "executionProvider": "CUDAExecutionProvider",
+        "tokenUsage": {"promptTokens": 12, "completionTokens": 4, "totalTokens": 16},
+        "all_metadata": metadata,
+        "visibleWatermark": {
+            "detected": True,
+            "provider": "jimeng",
+            "hits": [{
+                "provider": "jimeng",
+                "confidence": 0.93,
+                "bbox": {"x": 0.72, "y": 0.81, "w": 0.2, "h": 0.08},
+                "localizationModel": "corzent/yolo11x_watermark_detection",
+                "modelRevision": "revision-1",
+            }],
+            "detector": {"model": "YOLO11x", "engineVersion": "internal-v2"},
+        },
+        "unifiedForensics": {
+            "generator_attribution": {
+                "model": "Midjourney",
+                "family": "known platform",
+            },
+            "compute_cost": {"model_version": "DINOv3", "elapsed_ms": 18},
+        },
+    })
+
+    assert public["all_metadata"] == metadata
+    assert public["tokenUsage"]["totalTokens"] == 16
+    assert public["visibleWatermark"]["provider"] == "jimeng"
+    assert public["visibleWatermark"]["hits"][0]["bbox"]["x"] == pytest.approx(0.72)
+    assert public["unifiedForensics"]["generator_attribution"]["model"] == "Midjourney"
+    assert "modelVersion" not in public
+    assert "executionProvider" not in public
+    assert "localizationModel" not in public["visibleWatermark"]["hits"][0]
+    assert "detector" not in public["visibleWatermark"]
+    assert "model_version" not in public["unifiedForensics"]["compute_cost"]
+    rendered = json.dumps({**public, "all_metadata": {}}, ensure_ascii=False)
+    for internal_term in ("DINO", "ViT", "ONNX", "CUDA", "YOLO"):
+        assert internal_term not in rendered
 
 
 def test_fast_only_developer_key_cannot_read_history_or_reports(developer_key_client):

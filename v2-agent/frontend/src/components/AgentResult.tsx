@@ -1,4 +1,13 @@
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   AlertTriangle,
   BadgeCheck,
@@ -71,6 +80,22 @@ const AI_WATERMARK_PROVIDERS = new Set(["gemini", "doubao", "jimeng", "jimeng_pi
 
 function clamp01(value: number) {
   return Math.max(0, Math.min(value, 1));
+}
+
+function publicCopy(value: unknown) {
+  return String(value ?? "")
+    .replace(/\bDINO(?:v?3)?(?:[-\s_/]+ViT[-\s_/]*[A-Za-z0-9.]+)?/gi, "鉴伪分析")
+    .replace(/\bViT(?:[-\s_/]+[A-Za-z0-9.]+)*/gi, "鉴伪分析")
+    .replace(/\b(?:CUDA|CPU)ExecutionProvider\b/gi, "计算服务")
+    .replace(/\bONNX(?:Runtime)?\b/gi, "推理服务")
+    .replace(/\bYOLO(?:v?\d+)?[A-Za-z0-9_./-]*/gi, "区域定位")
+    .replace(/\bRapidOCR\b/gi, "文字识别")
+    .replace(/\b(?:FAISS|CLIP)(?:\/CLIP)?\b/gi, "图形检索")
+    .replace(/wiltodelta\/remove-ai-watermarks/gi, "平台标记匹配")
+    .replace(/corzent\/yolo11x_watermark_detection/gi, "区域定位")
+    .replace(/\b(?:GPU|CPU)\b/gi, "计算服务")
+    .replace(/\s{2,}/g, " ")
+    .trim();
 }
 
 interface PreviewWatermarkMark {
@@ -188,12 +213,18 @@ function ImageLightbox({
   onClose: () => void;
 }) {
   const closeRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const lensRef = useRef<HTMLDivElement>(null);
+  const lensPositionRef = useRef({ x: 0.5, y: 0.5 });
+  const onCloseRef = useRef(onClose);
   const [mode, setMode] = useState<"view" | "lens">("view");
 
-  const moveLens = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    if (mode !== "lens") return;
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  const positionLens = useCallback((normalizedX: number, normalizedY: number) => {
     const stage = stageRef.current;
     const lens = lensRef.current;
     const image = stage?.querySelector("img");
@@ -204,40 +235,95 @@ function ImageLightbox({
     const imageHeight = image.naturalHeight * scale;
     const imageLeft = (rect.width - imageWidth) / 2;
     const imageTop = (rect.height - imageHeight) / 2;
-    const localX = Math.max(imageLeft, Math.min(event.clientX - rect.left, imageLeft + imageWidth));
-    const localY = Math.max(imageTop, Math.min(event.clientY - rect.top, imageTop + imageHeight));
-    const normalizedX = (localX - imageLeft) / imageWidth;
-    const normalizedY = (localY - imageTop) / imageHeight;
+    const clampedX = clamp01(normalizedX);
+    const clampedY = clamp01(normalizedY);
+    const localX = imageLeft + clampedX * imageWidth;
+    const localY = imageTop + clampedY * imageHeight;
     const lensSize = lens.offsetWidth;
     const zoom = 3;
+    lensPositionRef.current = { x: clampedX, y: clampedY };
     lens.style.opacity = "1";
     lens.style.transform = `translate(${localX - lensSize / 2}px, ${localY - lensSize / 2}px)`;
     lens.style.backgroundSize = `${imageWidth * zoom}px ${imageHeight * zoom}px`;
-    lens.style.backgroundPosition = `${lensSize / 2 - normalizedX * imageWidth * zoom}px ${lensSize / 2 - normalizedY * imageHeight * zoom}px`;
-  }, [mode]);
+    lens.style.backgroundPosition = `${lensSize / 2 - clampedX * imageWidth * zoom}px ${lensSize / 2 - clampedY * imageHeight * zoom}px`;
+  }, []);
+
+  const moveLens = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (mode !== "lens") return;
+    const stage = stageRef.current;
+    const image = stage?.querySelector("img");
+    if (!stage || !image || image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
+    const rect = stage.getBoundingClientRect();
+    const scale = Math.min(rect.width / image.naturalWidth, rect.height / image.naturalHeight);
+    const imageWidth = image.naturalWidth * scale;
+    const imageHeight = image.naturalHeight * scale;
+    const imageLeft = (rect.width - imageWidth) / 2;
+    const imageTop = (rect.height - imageHeight) / 2;
+    positionLens(
+      (event.clientX - rect.left - imageLeft) / imageWidth,
+      (event.clientY - rect.top - imageTop) / imageHeight,
+    );
+  }, [mode, positionLens]);
+
+  function handleLensKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (mode !== "lens" || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+    event.preventDefault();
+    const current = lensPositionRef.current;
+    const step = event.shiftKey ? 0.1 : 0.03;
+    positionLens(
+      current.x + (event.key === "ArrowRight" ? step : event.key === "ArrowLeft" ? -step : 0),
+      current.y + (event.key === "ArrowDown" ? step : event.key === "ArrowUp" ? -step : 0),
+    );
+  }
 
   useEffect(() => {
-    if (mode !== "lens" && lensRef.current) lensRef.current.style.opacity = "0";
-  }, [mode]);
+    if (mode !== "lens") {
+      if (lensRef.current) lensRef.current.style.opacity = "0";
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      stageRef.current?.focus();
+      positionLens(lensPositionRef.current.x, lensPositionRef.current.y);
+    });
+  }, [mode, positionLens]);
 
   useEffect(() => {
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     closeRef.current?.focus();
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+    const handleDialogKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(panelRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ) || []).filter((element) => !element.hasAttribute("hidden"));
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
-    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("keydown", handleDialogKey);
     return () => {
       document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("keydown", handleDialogKey);
+      previouslyFocused?.focus({ preventScroll: true });
     };
-  }, [onClose]);
+  }, []);
 
   return createPortal(
     <div className="image-lightbox" role="dialog" aria-modal="true" aria-label={`放大查看${alt}`}>
-      <button type="button" className="image-lightbox-backdrop" onClick={onClose} aria-label="关闭图片预览" />
-      <div className="image-lightbox-panel">
+      <button type="button" tabIndex={-1} className="image-lightbox-backdrop" onClick={onClose} aria-label="关闭图片预览" />
+      <div ref={panelRef} className="image-lightbox-panel">
         <div className="image-lightbox-modebar" role="group" aria-label="图片查看方式">
           <button type="button" className={mode === "view" ? "is-active" : ""} aria-pressed={mode === "view"} onClick={() => setMode("view")} title="普通查看">
             <MousePointer2 size={16} /><span>普通查看</span>
@@ -252,6 +338,10 @@ function ImageLightbox({
         <div
           ref={stageRef}
           className={`image-lightbox-stage ${mode === "lens" ? "is-lens-active" : ""}`}
+          tabIndex={mode === "lens" ? 0 : -1}
+          role="group"
+          aria-label={mode === "lens" ? "局部放大区域，使用方向键移动放大镜，按住 Shift 可大步移动" : "图片预览区域"}
+          onKeyDown={handleLensKeyDown}
           onPointerMove={moveLens}
           onPointerDown={(event) => {
             if (mode !== "lens") return;
@@ -392,7 +482,7 @@ function EvidenceList({ items }: { items: string[] }) {
   return (
     <ul className="evidence-list">
       {items.map((item, index) => (
-        <li key={`${index}-${item}`}><span>{index + 1}</span><p>{item}</p></li>
+        <li key={`${index}-${item}`}><span>{index + 1}</span><p>{publicCopy(item)}</p></li>
       ))}
     </ul>
   );
@@ -524,30 +614,24 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
       available: Boolean(suppliedRegistry?.available ?? report.supported),
       detected: hasPlatformHit,
       count: platformHits.length,
-      model: suppliedRegistry?.model || "wiltodelta/remove-ai-watermarks",
-      version: suppliedRegistry?.version || platformHits[0]?.modelRevision,
       role: "attribution",
     },
     {
       ...(suppliedFusion || {}),
       id: "explicit_ai_watermark_fusion",
-      label: "OCR / 检索融合",
+      label: "文字与图形联合核验",
       available: Boolean(suppliedFusion?.available ?? report.explicitWatermark?.available),
       detected: Boolean(suppliedFusion?.detected ?? decisiveWatermark),
       count: suppliedFusion?.count ?? (decisiveWatermark ? platformHits.filter((hit) => hit.decisive).length : 0),
-      model: suppliedFusion?.model || "RapidOCR + FAISS/CLIP + rule fusion",
-      version: suppliedFusion?.version || "explicit-ai-watermark-v2",
       role: "attribution",
     },
     {
       ...(suppliedYolo || {}),
       id: "yolo_visible_watermark",
-      label: "YOLO 可见水印检测",
+      label: "可见水印区域定位",
       available: Boolean(suppliedYolo?.available),
       detected: Boolean(suppliedYolo?.detected ?? (genericHits.length > 0 || confirmedHits.length > 0)),
       count: suppliedYolo?.count ?? (genericHits.length + confirmedHits.length),
-      model: suppliedYolo?.model || genericHits[0]?.model || platformHits[0]?.localizationModel || "corzent/yolo11x_watermark_detection",
-      version: suppliedYolo?.version || genericHits[0]?.modelRevision || platformHits[0]?.localizationModelRevision,
       role: "localization",
     },
   ];
@@ -559,11 +643,11 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
         : "该定位证据来自同一账号对完全相同文件（SHA-256 一致）的最近一次成功扫描；系统会按当前水印规则重新计算结论。"
       : hasPlatformHit
         ? decisiveWatermark
-          ? `匹配到 ${platformHits.length} 处强 AI 水印证据，并通过平台匹配、区域定位与 OCR/检索融合复核；该证据已参与最终判定。`
-          : `匹配到 ${platformHits.length} 处 AI 平台标记${confirmedHits.length > 0 ? `，其中 ${confirmedHits.length} 处通过 YOLO 区域复核` : ""}${genericHits.length > 0 ? `；另有 ${genericHits.length} 处可见水印的平台归属待确认` : ""}，但尚未通过强水印授权门槛。`
+          ? `匹配到 ${platformHits.length} 处强 AI 水印证据，并通过平台匹配、区域定位与文字/图形联合核验；该证据已参与最终判定。`
+          : `匹配到 ${platformHits.length} 处 AI 平台标记${confirmedHits.length > 0 ? `，其中 ${confirmedHits.length} 处通过区域复核` : ""}${genericHits.length > 0 ? `；另有 ${genericHits.length} 处可见水印的平台归属待确认` : ""}，但尚未通过强水印授权门槛。`
         : detected
           ? "已定位到可见水印但尚不能确认平台归属；定位框仅作为上下文线索，不会单独改变鉴伪结论。"
-          : "平台注册表与 YOLO 可见水印检测均未发现水印。";
+          : "平台标记库与可见水印区域扫描均未发现水印。";
   return (
     <section className="result-band watermark-band">
       <div className="section-title">
@@ -610,9 +694,9 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
                       <small>
                         {AI_WATERMARK_PROVIDERS.has(hit.provider)
                           ? hit.method === "explicit_ai_watermark_fusion"
-                            ? "OCR 生成语义 · FAISS 平台检索 · YOLO 区域定位"
-                            : `remove-ai-watermarks 平台匹配${hit.localizationConfirmed ? " · YOLO 区域复核" : " · 视觉归属线索"}`
-                          : "YOLO 可见水印定位 · 仅作上下文线索"}
+                            ? "文字生成语义 · 平台图形检索 · 区域定位"
+                            : `平台标记匹配${hit.localizationConfirmed ? " · 区域复核" : " · 视觉归属线索"}`
+                          : "可见水印区域定位 · 仅作上下文线索"}
                       </small>
                       <i><em style={{ width: `${clamp01(hit.confidence) * 100}%` }} /></i>
                     </div>
@@ -621,16 +705,15 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
                 ))}
               </ol>
             ) : (
-              <div className="watermark-clear-state"><CheckCircle2 size={18} /><span><strong>未发现可见水印</strong><small>已完成平台规则与 YOLO 扫描</small></span></div>
+              <div className="watermark-clear-state"><CheckCircle2 size={18} /><span><strong>未发现可见水印</strong><small>已完成平台标记与区域扫描</small></span></div>
             )}
             <div className="watermark-model-meta">
-              <span>检测引擎</span>
+              <span>检测能力</span>
               <div className="watermark-engine-list">
                 {engines.map((engine) => (
                   <div key={engine.id}>
                     <span>
                       <strong>{engine.label}</strong>
-                      <small>{engine.model}{engine.version ? ` · ${engine.version}` : ""}</small>
                     </span>
                     <b className={engine.available ? engine.detected ? "is-hit" : "is-ready" : "is-offline"}>
                       {engine.available ? engine.detected ? `${engine.count || 0} 处` : "已扫描" : "不可用"}
@@ -650,44 +733,24 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
 
 function SynthIDSection({ report }: { report?: SynthIDResult }) {
   if (!report) return null;
-  const modelResults = report.modelResults || [];
   const state = report.detected ? "detected" : report.possiblyDetected ? "possible" : report.supported ? "clear" : "unavailable";
   const stateLabel = state === "detected" ? "检出" : state === "possible" ? "疑似信号" : state === "clear" ? "未检出" : "暂不可用";
-  const attributed = modelResults.find((item) => item.modelProfile === report.attributedModelProfile);
-  const summary = attributed?.modelLabel
-    ? `最接近 ${attributed.modelLabel} 档案`
-    : report.candidateModelProfiles?.length
-      ? `${report.candidateModelProfiles.length} 个模型档案存在匹配`
-      : `已扫描 ${modelResults.length} 个模型档案`;
+  const summary = state === "detected"
+    ? "检测到可复核的 Google 内容标记信号"
+    : state === "possible"
+      ? "发现低强度内容标记线索"
+      : state === "clear"
+        ? "内容标记核验完成，本次未检出"
+        : "本次未能完成内容标记核验";
   return (
     <section className="result-band synthid-band">
-      <div className="section-title"><Fingerprint size={18} /><div><h3>SynthID 多模型核验</h3><p>Google 图像模型频谱档案并行比对</p></div></div>
+      <div className="section-title"><Fingerprint size={18} /><div><h3>Google 内容标记核验</h3><p>检查文件中可复核的隐式平台标记。</p></div></div>
       <div className={`watermark-status is-${state}`}>
         <span>{stateLabel}</span>
         <strong>{summary}</strong>
         {report.elapsedMs ? <time>{report.elapsedMs} ms</time> : null}
       </div>
-      {modelResults.length > 0 && (
-        <div className="watermark-model-meta synthid-models">
-          <span>模型档案</span>
-          <div className="watermark-engine-list">
-            {modelResults.map((model) => {
-              const modelState = model.detected ? "检出" : model.possiblyDetected ? "疑似" : model.supported ? "未检出" : "不可用";
-              const stateClass = model.detected ? "is-hit" : model.possiblyDetected ? "is-possible" : model.supported ? "is-ready" : "is-offline";
-              return (
-                <div key={model.modelProfile}>
-                  <span>
-                    <strong>{model.modelLabel || model.modelProfile}</strong>
-                    <small>{model.exactResolutionMatch ? "原始分辨率档案" : "近邻分辨率档案"} · 相位 {Math.round(clamp01(model.phaseMatch) * 100)}%</small>
-                  </span>
-                  <b className={stateClass}>{modelState} · {Math.round(clamp01(model.confidence) * 100)}%</b>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-      <div className="watermark-note"><Info size={15} /><p>{report.note} 实验引擎：<a href="https://github.com/aloshdenny/reverse-SynthID" target="_blank" rel="noreferrer">reverse-SynthID by Alosh Denny</a>。不等同于 Google 官方验证，也不会凭低强度信号单独定案。</p></div>
+      <div className="watermark-note"><Info size={15} /><p>{publicCopy(report.note)} 本项属于辅助来源证据，不等同于平台官方验证，也不会凭低强度信号单独定案。</p></div>
     </section>
   );
 }
@@ -702,7 +765,7 @@ function ProbabilitySection({ model }: { model?: ProbabilityModel }) {
     <section className="result-band probability-band">
       <div className="section-title">
         <Gauge size={18} />
-        <div><h3>综合风险依据</h3><p>像素模型形成风险基线，独立来源证据通过规则化证据权重更新结果。</p></div>
+        <div><h3>综合风险依据</h3><p>真实性分析形成风险基线，独立来源证据按公开规则更新结果。</p></div>
       </div>
       <div className="probability-flow" aria-label={`策略风险分从 ${Math.round(baseline * 100)} 更新到 ${Math.round(posterior * 100)}`}>
         <div>
@@ -726,7 +789,7 @@ function ProbabilitySection({ model }: { model?: ProbabilityModel }) {
           return (
             <div className={lowersRisk ? "is-supporting-real" : "is-supporting-fake"} key={`${factor.kind}-${factor.source || index}`}>
               <span>{String(index + 1).padStart(2, "0")}</span>
-              <strong>{factor.label}</strong>
+              <strong>{publicCopy(factor.label)}</strong>
               <small>{Number(factor.correlationExponent ?? 1) < 1 ? "同源折扣" : lowersRisk ? "降低风险" : "抬高风险"}</small>
             </div>
           );
@@ -948,8 +1011,9 @@ export default function AgentResult(props: Props) {
             <div className="result-explanation result-rationale is-priority" role="list">
               {keyExplanationPoints.map((point, index) => (
                 <div className={point.decisive ? "is-decisive" : ""} role="listitem" key={`${point.label}-${index}`}>
+                  <span className="rationale-rank" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
                   <strong>{point.label}</strong>
-                  <p>{point.text}</p>
+                  <p>{publicCopy(point.text)}</p>
                 </div>
               ))}
             </div>
@@ -960,7 +1024,7 @@ export default function AgentResult(props: Props) {
                   {additionalExplanationPoints.map((point, index) => (
                     <div className={point.decisive ? "is-decisive" : ""} role="listitem" key={`${point.label}-${index}`}>
                       <strong>{point.label}</strong>
-                      <p>{point.text}</p>
+                      <p>{publicCopy(point.text)}</p>
                     </div>
                   ))}
                 </div>
@@ -979,12 +1043,12 @@ export default function AgentResult(props: Props) {
                 <div className="result-explanation result-rationale" role="list">
                   <div role="listitem">
                     <strong>补充说明</strong>
-                    <p>{visualReview.note || "视觉 LLM 仅提供补充解释，不回写或推翻已经发布的主结论。"}</p>
+                    <p>{publicCopy(visualReview.note || "视觉复核仅提供补充解释，不回写或推翻已经发布的主结论。")}</p>
                   </div>
                   {(visualReview.evidence || []).map((item, index) => (
                     <div role="listitem" key={`visual-review-${index}`}>
                       <strong>视觉线索 {index + 1}</strong>
-                      <p>{item}</p>
+                      <p>{publicCopy(item)}</p>
                     </div>
                   ))}
                 </div>
@@ -1060,7 +1124,7 @@ export default function AgentResult(props: Props) {
           {(!verdict.reviewOnly && (probabilityModel || (props.outcome.kind === "image" && props.outcome.result.swarm?.enabled))) && (
             <ResultDisclosure
               icon={<Gauge size={18} />}
-              title="模型与风险计算"
+              title="风险与证据计算"
               description="查看多源共识、风险基线和证据融合过程"
             >
               {!verdict.reviewOnly && props.outcome.kind === "image" && props.outcome.result.swarm?.enabled && (
@@ -1119,7 +1183,7 @@ export default function AgentResult(props: Props) {
               <div className="dimension-list">
                 {props.outcome.result.dimensions.map((dimension) => (
                   <div key={dimension.key}>
-                    <span><strong>{dimension.label}</strong><small>{dimension.result}</small></span>
+                    <span><strong>{dimension.label}</strong><small>{publicCopy(dimension.result)}</small></span>
                     <b>{Math.round(clamp01(Number(dimension.score || 0)) * 100)}%</b>
                     <i><em style={{ width: `${Math.round(clamp01(Number(dimension.score || 0)) * 100)}%` }} /></i>
                   </div>

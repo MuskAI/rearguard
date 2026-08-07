@@ -17,6 +17,32 @@ const STATUS_LABEL: Record<string, string> = {
   skipped: "已跳过",
 };
 
+const PUBLIC_STAGE_LABELS: Record<string, string> = {
+  decode: "文件读取",
+  metadata: "来源信息",
+  registry: "平台标记",
+  yolo: "区域定位",
+  ocr: "文字识别",
+  retrieval: "图形检索",
+  fusion: "证据融合",
+  verdict: "最终判断",
+};
+
+const PUBLIC_STAGE_SUMMARIES: Record<string, string> = {
+  decode: "读取原始文件并确认用于分析的尺寸。",
+  metadata: "检查文件中可复核的来源与生成声明。",
+  registry: "比对已登记的 AI 平台标记特征。",
+  yolo: "定位可能属于显式水印的图像区域。",
+  ocr: "识别候选区域中的文字与生成语义。",
+  retrieval: "将候选图形与参考库进行相似度比对。",
+  fusion: "综合位置、文字、图形和来源证据。",
+  verdict: "根据已通过门槛的证据形成水印判断。",
+};
+
+function publicStageLabel(stage: WatermarkPipelineStage) {
+  return PUBLIC_STAGE_LABELS[stage.id] || "证据处理";
+}
+
 function data(value: unknown): Data {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Data : {};
 }
@@ -52,7 +78,7 @@ function CandidateList({ items }: { items: Data[] }) {
   return <div className="pipeline-candidates">{items.map((item, index) => (
     <div key={`${index}-${item.label || item.provider || "candidate"}`}>
       <b>{String(index + 1).padStart(2, "0")}</b>
-      <span><strong>{value(item.label || item.provider, "未知候选")}</strong><small>{value(item.location || item.position, "localized")}</small></span>
+      <span><strong>{value(item.label || item.provider, "未知候选")}</strong><small>{value(item.location || item.position, "已定位")}</small></span>
       <em>{score(item.confidence)}</em>
     </div>
   ))}</div>;
@@ -73,7 +99,6 @@ function RetrievalStage({ details }: { details: Data }) {
         <Fact label="平台间距">{Number(item.margin || 0).toFixed(4)}</Fact>
         <Fact label="最小间距">{Number(item.minimumMargin || 0).toFixed(4)}</Fact>
         <Fact label="决策原因">{item.reason}</Fact>
-        <Fact label="参考样本">{item.referenceId}</Fact>
       </dl>
       {matches.length > 0 && <div className="pipeline-ranking">{matches.map((match, matchIndex) => (
         <div key={`${matchIndex}-${match.referenceId || match.platform}`}><span>{matchIndex + 1}</span><strong>{value(match.platform)}</strong><i><b style={{ width: `${Math.max(0, Math.min(1, Number(match.similarity) || 0)) * 100}%` }} /></i><em>{Number(match.similarity || 0).toFixed(4)}</em></div>
@@ -98,7 +123,7 @@ function StageDetails({ stage }: { stage: WatermarkPipelineStage }) {
   if (stage.id === "registry") return <CandidateList items={list(details.hits)} />;
   if (stage.id === "yolo") {
     const runtime = data(details.runtime);
-    return <><dl className="pipeline-facts"><Fact label="定位模型">{runtime.model}</Fact><Fact label="运行设备">{runtime.gpu || runtime.device}</Fact><Fact label="模型耗时">{duration(runtime.elapsedMs)}</Fact><Fact label="往返耗时">{duration(runtime.roundTripMs)}</Fact></dl><CandidateList items={list(details.candidates)} /></>;
+    return <><dl className="pipeline-facts"><Fact label="区域定位耗时">{duration(runtime.elapsedMs)}</Fact><Fact label="服务往返耗时">{duration(runtime.roundTripMs)}</Fact></dl><CandidateList items={list(details.candidates)} /></>;
   }
   if (stage.id === "ocr") {
     const results = list(details.results);
@@ -117,7 +142,7 @@ function StageDetails({ stage }: { stage: WatermarkPipelineStage }) {
     const label = verdict.verdict === "yes" ? "存在 AI 水印" : verdict.verdict === "no" ? "未发现 AI 水印" : "需要复核";
     return <><dl className="pipeline-facts"><Fact label="判断" tone={verdict.verdict === "yes" ? "hit" : ""}>{label}</Fact><Fact label="置信度">{score(verdict.confidence)}</Fact><Fact label="来源平台">{details.sourcePlatform}</Fact><Fact label="相关证据">{verdict.relevantHitCount ?? 0}</Fact></dl><p className="pipeline-rationale">{value(verdict.reason, stage.summary)}</p></>;
   }
-  return <Empty>{stage.summary || "本阶段没有可展示的数据。"}</Empty>;
+  return <Empty>本阶段没有更多可公开展示的数据。</Empty>;
 }
 
 export default function WatermarkPipeline({ trace }: Props) {
@@ -133,22 +158,22 @@ export default function WatermarkPipeline({ trace }: Props) {
 
   return <details className="watermark-pipeline">
     <summary className="pipeline-heading">
-      <div><Activity size={17} /><span><strong>检测流水线</strong><small>逐阶段查看真实输入、输出与阈值</small></span></div>
+      <div><Activity size={17} /><span><strong>检测流水线</strong><small>逐阶段查看公开证据与判定门槛</small></span></div>
       <p><Clock3 size={14} /> 总耗时 <strong>{duration(trace.totalElapsedMs)}</strong></p>
       <ChevronDown className="pipeline-toggle" size={16} />
     </summary>
     <div className="pipeline-body">
       <div className="pipeline-stage-tabs" role="tablist" aria-label="检测阶段">
-        {stages.map((stage, index) => <button key={stage.id} type="button" role="tab" aria-selected={stage.id === selected.id} className={`${stage.status} ${stage.id === selected.id ? "active" : ""}`} onClick={() => setSelectedId(stage.id)}><i>{String(index + 1).padStart(2, "0")}</i><strong>{stage.label}</strong><small>{duration(stage.elapsedMs)}</small><b aria-hidden="true" /></button>)}
+        {stages.map((stage, index) => <button key={stage.id} type="button" role="tab" aria-selected={stage.id === selected.id} className={`${stage.status} ${stage.id === selected.id ? "active" : ""}`} onClick={() => setSelectedId(stage.id)}><i>{String(index + 1).padStart(2, "0")}</i><strong>{publicStageLabel(stage)}</strong><small>{duration(stage.elapsedMs)}</small><b aria-hidden="true" /></button>)}
       </div>
       <div className="pipeline-workspace">
         <aside className="pipeline-waterfall" aria-label="阶段耗时">
           <header><strong>阶段耗时</strong><span>并行分支不累加</span></header>
-          {stages.map((stage) => <button key={stage.id} type="button" className={stage.id === selected.id ? "active" : ""} onClick={() => setSelectedId(stage.id)}><span>{stage.label}</span><i><b className={stage.status} style={{ width: `${Math.max(2, (Number(stage.elapsedMs) || 0) / maxElapsed * 100)}%` }} /></i><em>{duration(stage.elapsedMs)}</em></button>)}
+          {stages.map((stage) => <button key={stage.id} type="button" className={stage.id === selected.id ? "active" : ""} onClick={() => setSelectedId(stage.id)}><span>{publicStageLabel(stage)}</span><i><b className={stage.status} style={{ width: `${Math.max(2, (Number(stage.elapsedMs) || 0) / maxElapsed * 100)}%` }} /></i><em>{duration(stage.elapsedMs)}</em></button>)}
         </aside>
         <article className="pipeline-stage-detail" role="tabpanel">
-          <header><div><span>STAGE {String(stages.indexOf(selected) + 1).padStart(2, "0")}</span><h4>{selected.label}</h4></div><b className={selected.status}>{STATUS_LABEL[selected.status] || selected.status}</b></header>
-          <p className="pipeline-summary">{selected.summary}</p>
+          <header><div><span>STAGE {String(stages.indexOf(selected) + 1).padStart(2, "0")}</span><h4>{publicStageLabel(selected)}</h4></div><b className={selected.status}>{STATUS_LABEL[selected.status] || selected.status}</b></header>
+          <p className="pipeline-summary">{PUBLIC_STAGE_SUMMARIES[selected.id] || "本阶段只展示可公开的证据信息。"}</p>
           <StageDetails stage={selected} />
         </article>
       </div>

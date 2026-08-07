@@ -1,16 +1,20 @@
 import { KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
+  AlertTriangle,
   ArrowLeft,
   BookOpen,
   Check,
   ChevronRight,
   CircleDollarSign,
+  Clock3,
   Code2,
   Copy,
+  Download,
   ExternalLink,
   FileJson,
   Gauge,
+  Image as ImageIcon,
   KeyRound,
   LayoutDashboard,
   LoaderCircle,
@@ -18,12 +22,14 @@ import {
   LogIn,
   LogOut,
   Plus,
+  Play,
   RefreshCw,
   RotateCw,
   ShieldCheck,
   SquareTerminal,
   Trash2,
   UserRound,
+  UploadCloud,
   WalletCards,
   X,
 } from "lucide-react";
@@ -43,7 +49,7 @@ import {
 import HuijianBrand from "./HuijianBrand";
 import "./DeveloperPlatform.css";
 
-type DeveloperTab = "overview" | "keys" | "docs" | "usage";
+type DeveloperTab = "overview" | "keys" | "tester" | "docs" | "usage";
 type CodeLanguage = "curl" | "python" | "typescript" | "java" | "go";
 type CreateKeyPayload = Parameters<typeof createDeveloperKey>[0];
 
@@ -65,9 +71,15 @@ interface Props {
 const NAV_ITEMS: Array<{ key: DeveloperTab; label: string; icon: typeof LayoutDashboard }> = [
   { key: "overview", label: "概览", icon: LayoutDashboard },
   { key: "keys", label: "API Keys", icon: KeyRound },
+  { key: "tester", label: "在线调试", icon: SquareTerminal },
   { key: "docs", label: "接入文档", icon: BookOpen },
   { key: "usage", label: "用量与账单", icon: Activity },
 ];
+
+function initialDeveloperTab(): DeveloperTab {
+  const requested = new URLSearchParams(window.location.search).get("developerTab");
+  return NAV_ITEMS.some((item) => item.key === requested) ? requested as DeveloperTab : "overview";
+}
 
 const LANGUAGE_LABELS: Record<CodeLanguage, string> = {
   curl: "cURL",
@@ -100,6 +112,21 @@ function statusLabel(status: string) {
     failed: "失败",
     rejected: "未受理",
   }[status] || status;
+}
+
+function billingStatusLabel(status: string) {
+  return {
+    reserved: "已预占",
+    settled: "已结算",
+    released: "已释放",
+  }[status] || status || "待结算";
+}
+
+function testerVerdictLabel(verdict: string) {
+  const normalized = verdict.trim().toLowerCase();
+  if (["real", "真实", "真实图像", "real image"].includes(normalized)) return "真实图像";
+  if (["fake", "ai", "ai-generated", "ai_generated", "ai生成图像", "ai 生成图像"].includes(normalized)) return "AI生成图像";
+  return verdict || "-";
 }
 
 function keyStatusLabel(key: DeveloperApiKey) {
@@ -266,7 +293,7 @@ function integrationExamples(origin: string, mode: "fast" | "swarm"): Record<Cod
 }
 
 export default function DeveloperPlatform({ authReady, user, onLogin, onHome, onWorkspace, onLogout }: Props) {
-  const [tab, setTab] = useState<DeveloperTab>("overview");
+  const [tab, setTab] = useState<DeveloperTab>(initialDeveloperTab);
   const [days, setDays] = useState<7 | 14 | 30 | 90>(30);
   const [account, setAccount] = useState<DeveloperAccountResponse | null>(null);
   const [keys, setKeys] = useState<DeveloperApiKey[]>([]);
@@ -279,6 +306,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
   const [copied, setCopied] = useState("");
   const [language, setLanguage] = useState<CodeLanguage>("curl");
   const [docMode, setDocMode] = useState<"fast" | "swarm">("fast");
+  const [testerKeySeed, setTesterKeySeed] = useState("");
   const [newKeyName, setNewKeyName] = useState("生产环境");
   const [newKeyExpiry, setNewKeyExpiry] = useState("90");
   const [newKeyScopes, setNewKeyScopes] = useState({ fast: true, swarm: false, reports: false });
@@ -317,6 +345,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
     setError("");
     setCreateOpen(false);
     setRevealedKey(null);
+    setTesterKeySeed("");
     setKeyBusy(null);
     setLoading(false);
     createOperationRef.current = null;
@@ -386,6 +415,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
       setKeys((current) => [response.key, ...current]);
       setCreateOpen(false);
       setRevealedKey({ value: response.apiKey, title: "API Key 已创建" });
+      setTesterKeySeed(response.apiKey);
     } catch (requestError) {
       if (operationIdentity !== accountIdentityRef.current) return;
       const retryWithSameKey = hasUnknownOperationOutcome(requestError);
@@ -431,6 +461,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
       rotateOperationKeysRef.current.delete(key.id);
       setKeys((current) => [response.key, ...current.map((item) => item.id === key.id ? { ...item, status: "revoked" } : item)]);
       setRevealedKey({ value: response.apiKey, title: "API Key 已轮换" });
+      setTesterKeySeed(response.apiKey);
     } catch (requestError) {
       if (operationIdentity !== accountIdentityRef.current) return;
       const retryWithSameKey = hasUnknownOperationOutcome(requestError);
@@ -505,8 +536,9 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
 
         <div className="developer-scroll">
           {error && <div className="developer-page-error" role="alert">{error}</div>}
-          {tab === "overview" && <Overview account={account} available={Boolean(account && !error)} endpoint={endpoint} copied={copied} onCopy={copyText} onOpenKeys={() => setTab("keys")} onOpenDocs={() => setTab("docs")} />}
+          {tab === "overview" && <Overview account={account} endpoint={endpoint} copied={copied} onCopy={copyText} onOpenKeys={() => setTab("keys")} onOpenDocs={() => setTab("docs")} />}
           {tab === "keys" && <KeysPanel keys={keys} busy={keyBusy} onCreate={() => { setError(""); setCreateOpen(true); }} onRotate={rotateKey} onRevoke={revokeKey} />}
+          {tab === "tester" && <ApiTesterPanel key={accountIdentity} endpoint={endpoint} apiKeySeed={testerKeySeed} />}
           {tab === "docs" && (
             <DocsPanel
               endpoint={endpoint}
@@ -530,8 +562,8 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
             <label><span>名称</span><input autoFocus value={newKeyName} onChange={(event) => setNewKeyName(event.target.value)} maxLength={120} placeholder="例如：生产环境" /></label>
             <fieldset>
               <legend>检测权限</legend>
-              <label className="developer-check-row"><input type="checkbox" checked={newKeyScopes.fast} onChange={(event) => setNewKeyScopes((value) => ({ ...value, fast: event.target.checked }))} /><span><strong>快速检测</strong><small>主模型与水印检测</small></span></label>
-              <label className="developer-check-row"><input type="checkbox" checked={newKeyScopes.swarm} onChange={(event) => setNewKeyScopes((value) => ({ ...value, swarm: event.target.checked }))} /><span><strong>Swarm 检测</strong><small>多源专家交叉复核</small></span></label>
+              <label className="developer-check-row"><input type="checkbox" checked={newKeyScopes.fast} onChange={(event) => setNewKeyScopes((value) => ({ ...value, fast: event.target.checked }))} /><span><strong>快速检测</strong><small>真实性分析与水印证据</small></span></label>
+              <label className="developer-check-row"><input type="checkbox" checked={newKeyScopes.swarm} onChange={(event) => setNewKeyScopes((value) => ({ ...value, swarm: event.target.checked }))} /><span><strong>Soar 多源复核</strong><small>多条独立证据交叉核验</small></span></label>
               <label className="developer-check-row"><input type="checkbox" checked={newKeyScopes.reports} onChange={(event) => setNewKeyScopes((value) => ({ ...value, reports: event.target.checked }))} /><span><strong>报告下载</strong><small>读取该 Key 创建任务的 PDF 报告</small></span></label>
             </fieldset>
             <label><span>有效期</span><select value={newKeyExpiry} onChange={(event) => setNewKeyExpiry(event.target.value)}><option value="30">30 天</option><option value="90">90 天</option><option value="365">1 年</option><option value="never">永不过期</option></select></label>
@@ -555,9 +587,305 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
   );
 }
 
-function Overview({ account, available, endpoint, copied, onCopy, onOpenKeys, onOpenDocs }: {
+type TesterTask = Record<string, unknown>;
+
+function testerObject(value: unknown): TesterTask {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as TesterTask : {};
+}
+
+function testerString(value: unknown, fallback = "") {
+  return value === null || value === undefined ? fallback : String(value);
+}
+
+function testerLink(task: TesterTask, key: "self" | "report") {
+  const links = testerObject(task.links);
+  const value = testerString(links[key]);
+  return value ? new URL(value, window.location.origin).toString() : "";
+}
+
+function testerTaskId(task: TesterTask) {
+  return testerString(task.id || task.taskId || task.jobId, "-");
+}
+
+function waitForTester(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException("Aborted", "AbortError"));
+      return;
+    }
+    const timer = window.setTimeout(resolve, ms);
+    signal.addEventListener("abort", () => {
+      window.clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    }, { once: true });
+  });
+}
+
+async function readTesterResponse(response: Response) {
+  const text = await response.text();
+  let payload: unknown = {};
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(`接口返回了非 JSON 响应（HTTP ${response.status}）`);
+  }
+  const body = testerObject(payload);
+  if (!response.ok) {
+    const error = testerObject(body.error);
+    const message = testerString(body.message || body.detail || error.message, `请求失败（HTTP ${response.status}）`);
+    throw new Error(message);
+  }
+  return body;
+}
+
+function ApiTesterPanel({ endpoint, apiKeySeed }: { endpoint: string; apiKeySeed: string }) {
+  const [apiKey, setApiKey] = useState(apiKeySeed);
+  const [mode, setMode] = useState<"fast" | "swarm">("fast");
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState("");
+  const [running, setRunning] = useState(false);
+  const [phase, setPhase] = useState<"idle" | "submitting" | "polling" | "complete">("idle");
+  const [task, setTask] = useState<TesterTask | null>(null);
+  const [error, setError] = useState("");
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [pollCount, setPollCount] = useState(0);
+  const [requestId, setRequestId] = useState("");
+  const [reportBusy, setReportBusy] = useState(false);
+  const controllerRef = useRef<AbortController | null>(null);
+  const requestOperationRef = useRef<{ fingerprint: string; idempotencyKey: string } | null>(null);
+  const fileDigestRef = useRef(new WeakMap<File, Promise<string>>());
+
+  useEffect(() => {
+    setApiKey(apiKeySeed);
+    requestOperationRef.current = null;
+  }, [apiKeySeed]);
+
+  useEffect(() => () => controllerRef.current?.abort(), []);
+
+  useEffect(() => () => {
+    if (preview) URL.revokeObjectURL(preview);
+  }, [preview]);
+
+  function chooseTesterFile(next: File | null) {
+    if (preview) URL.revokeObjectURL(preview);
+    setFile(next);
+    setPreview(next ? URL.createObjectURL(next) : "");
+    setTask(null);
+    setError("");
+    setPhase("idle");
+    requestOperationRef.current = null;
+  }
+
+  async function fileDigest(value: File) {
+    const cached = fileDigestRef.current.get(value);
+    if (cached) return cached;
+    const pending = (async () => {
+      if (!globalThis.crypto?.subtle) return `${value.name}:${value.size}:${value.lastModified}`;
+      const digest = await globalThis.crypto.subtle.digest("SHA-256", await value.arrayBuffer());
+      return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+    })();
+    fileDigestRef.current.set(value, pending);
+    return pending;
+  }
+
+  function resetTesterRequest() {
+    requestOperationRef.current = null;
+    setTask(null);
+    setError("");
+    setPhase("idle");
+  }
+
+  async function runTest() {
+    if (running || !file || !apiKey.trim()) return;
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    const startedAt = performance.now();
+    setRunning(true);
+    setPhase("submitting");
+    setTask(null);
+    setError("");
+    setElapsedMs(0);
+    setPollCount(0);
+    setRequestId("");
+    try {
+      const fingerprint = `${mode}:${apiKey.trim()}:${await fileDigest(file)}`;
+      let operation = requestOperationRef.current;
+      if (!operation || operation.fingerprint !== fingerprint) {
+        operation = { fingerprint, idempotencyKey: globalThis.crypto.randomUUID() };
+        requestOperationRef.current = operation;
+      }
+      const body = new FormData();
+      body.append("mode", mode);
+      body.append("image", file);
+      const response = await fetch(endpoint, {
+        method: "POST",
+        body,
+        signal: controller.signal,
+        headers: {
+          Authorization: `Bearer ${apiKey.trim()}`,
+          "Idempotency-Key": operation.idempotencyKey,
+        },
+      });
+      setRequestId(response.headers.get("X-Request-ID") || response.headers.get("X-Request-Id") || "");
+      const created = await readTesterResponse(response);
+      let current = Object.keys(testerObject(created.task)).length ? testerObject(created.task) : created;
+      setTask(current);
+      const pollUrl = testerLink(current, "self") || `${endpoint}/${encodeURIComponent(testerTaskId(current))}`;
+      const deadline = performance.now() + 300_000;
+      let polls = 0;
+      while (!["success", "failed", "rejected"].includes(testerString(current.status)) && performance.now() < deadline) {
+        setPhase("polling");
+        await waitForTester(1_400, controller.signal);
+        const pollResponse = await fetch(pollUrl, {
+          signal: controller.signal,
+          headers: { Authorization: `Bearer ${apiKey.trim()}` },
+        });
+        if (pollResponse.status === 429) {
+          const retrySeconds = Math.max(1, Number(pollResponse.headers.get("Retry-After") || 2));
+          await waitForTester(retrySeconds * 1000, controller.signal);
+          continue;
+        }
+        current = await readTesterResponse(pollResponse);
+        polls += 1;
+        setPollCount(polls);
+        setTask(current);
+        setElapsedMs(Math.round(performance.now() - startedAt));
+      }
+      if (!["success", "failed", "rejected"].includes(testerString(current.status))) {
+        throw new Error("任务在 5 分钟内未进入终态，请稍后使用任务编号继续查询");
+      }
+      setTask(current);
+      setPhase("complete");
+      if (testerString(current.status) !== "success") {
+        const taskError = testerObject(current.error);
+        setError(testerString(taskError.message || current.message, `任务状态：${testerString(current.status)}`));
+      }
+    } catch (requestError) {
+      if (requestError instanceof DOMException && requestError.name === "AbortError") {
+        setError("已停止等待；服务器任务可能仍在运行。任务编号可在响应区查看。");
+      } else {
+        setError(requestError instanceof Error ? requestError.message : "API 调用失败");
+      }
+    } finally {
+      setElapsedMs(Math.round(performance.now() - startedAt));
+      setRunning(false);
+      controllerRef.current = null;
+    }
+  }
+
+  async function downloadTesterReport() {
+    if (!task || reportBusy) return;
+    const reportUrl = testerLink(task, "report");
+    if (!reportUrl) {
+      setError("当前响应没有返回报告下载地址");
+      return;
+    }
+    setReportBusy(true);
+    setError("");
+    try {
+      const response = await fetch(reportUrl, { headers: { Authorization: `Bearer ${apiKey.trim()}` } });
+      if (!response.ok) {
+        const contentType = response.headers.get("content-type") || "";
+        if (contentType.includes("json")) await readTesterResponse(response);
+        throw new Error(`报告下载失败（HTTP ${response.status}）`);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `huijian-${testerTaskId(task)}.pdf`;
+      anchor.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (downloadError) {
+      setError(downloadError instanceof Error ? downloadError.message : "报告下载失败");
+    } finally {
+      setReportBusy(false);
+    }
+  }
+
+  const statusCode = testerString(task?.status, phase === "idle" ? "idle" : phase === "submitting" ? "submitting" : "running");
+  const billing = testerObject(task?.billing);
+  const resultEnvelope = testerObject(task?.result);
+  const result = Object.keys(testerObject(resultEnvelope.result)).length ? testerObject(resultEnvelope.result) : resultEnvelope;
+  const verdict = testerVerdictLabel(testerString(result.final_label || result.verdict || task?.verdict, "-"));
+
+  return (
+    <section className="developer-tester-page" aria-labelledby="api-tester-title">
+      <header className="developer-page-heading">
+        <div><p>API CONSOLE</p><h2 id="api-tester-title">在线调用调试</h2><span>使用真实 API Key 与公开接口验证请求、耗时和计费结果。</span></div>
+        <span className="developer-tester-security"><LockKeyhole size={15} /> Key 仅保存在当前页面内存</span>
+      </header>
+      <div className="developer-tester-grid">
+        <section className="tester-request-panel">
+          <div className="tester-endpoint"><span>POST</span><code>{endpoint.replace(window.location.origin, "")}</code></div>
+          <label className="tester-field"><span>API Key</span><input type="password" autoComplete="off" spellCheck={false} value={apiKey} onChange={(event) => { setApiKey(event.target.value); resetTesterRequest(); }} placeholder="rg_sk_..." /></label>
+          <fieldset className="tester-mode-field">
+            <legend>检测模式</legend>
+            <button type="button" aria-pressed={mode === "fast"} className={mode === "fast" ? "is-active" : ""} onClick={() => { setMode("fast"); resetTesterRequest(); }}><Gauge size={17} /><span><strong>快速检测</strong><small>日常筛查</small></span></button>
+            <button type="button" aria-pressed={mode === "swarm"} className={mode === "swarm" ? "is-active" : ""} onClick={() => { setMode("swarm"); resetTesterRequest(); }}><ShieldCheck size={17} /><span><strong>Soar 模式</strong><small>多源复核</small></span></button>
+          </fieldset>
+          <label
+            className={`tester-file-drop ${file ? "has-file" : ""}`}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+              event.preventDefault();
+              chooseTesterFile(event.dataTransfer.files?.[0] || null);
+            }}
+          >
+            <input type="file" accept="image/jpeg,image/png,image/webp,image/bmp,image/heic,image/heif,.heic,.heif" onChange={(event) => chooseTesterFile(event.target.files?.[0] || null)} />
+            {preview ? <img src={preview} alt="待调试图片预览" /> : <span><UploadCloud size={25} /></span>}
+            <div><strong>{file ? file.name : "选择或拖入测试图片"}</strong><small>{file ? `${(file.size / 1024 / 1024).toFixed(2)} MB · 点击可替换` : "使用公开接口支持的图片格式"}</small></div>
+          </label>
+          <div className="tester-actions">
+            <button type="button" className="developer-primary-action" disabled={running || !file || !apiKey.trim()} onClick={() => void runTest()}>{running ? <LoaderCircle className="spin" size={16} /> : <Play size={16} />}{running ? "正在调用" : phase === "complete" ? "重新查询同一请求" : "发送真实请求"}</button>
+            {running && <button type="button" className="developer-secondary-action" onClick={() => controllerRef.current?.abort()}>停止等待</button>}
+          </div>
+          {file && <p className="tester-idempotency-note"><ShieldCheck size={14} /> 网络中断后重试会复用同一请求，不会重复创建任务或扣量。</p>}
+        </section>
+
+        <section className="tester-response-panel" aria-live="polite">
+          <header><div><SquareTerminal size={18} /><span><strong>响应监视器</strong><small>{phase === "idle" ? "等待发送请求" : phase === "submitting" ? "正在创建任务" : phase === "polling" ? `正在轮询 · ${pollCount} 次` : "任务已进入终态"}</small></span></div><b className={`tester-status ${statusCode}`}>{statusCode === "idle" ? "未运行" : statusCode === "submitting" ? "正在提交" : statusLabel(statusCode)}</b></header>
+          {!task && !error && phase === "idle" && <div className="tester-empty"><ImageIcon size={28} /><strong>还没有调用结果</strong><p>左侧填写 Key、选择图片并发送请求。</p></div>}
+          {(running || task) && (
+            <div className="tester-metrics">
+              <div><Clock3 size={15} /><span><small>总耗时</small><strong>{elapsedMs ? `${(elapsedMs / 1000).toFixed(2)} s` : "计算中"}</strong></span></div>
+              <div><Activity size={15} /><span><small>任务状态</small><strong>{statusCode === "submitting" ? "正在提交" : statusLabel(statusCode)}</strong></span></div>
+              <div><CircleDollarSign size={15} /><span><small>计费状态</small><strong>{billingStatusLabel(testerString(billing.status))}</strong></span></div>
+            </div>
+          )}
+          {task && (
+            <>
+              <dl className="tester-result-facts">
+                <div><dt>任务编号</dt><dd>{testerTaskId(task)}</dd></div>
+                <div><dt>检测模式</dt><dd>{mode === "swarm" ? "Soar" : "快速"}</dd></div>
+                <div><dt>检测结论</dt><dd>{verdict}</dd></div>
+                <div><dt>请求编号</dt><dd>{requestId || "未返回"}</dd></div>
+              </dl>
+              <div className="tester-response-actions">
+                {testerString(task.status) === "success" && testerLink(task, "report") && <button type="button" className="developer-secondary-action" disabled={reportBusy} onClick={() => void downloadTesterReport()}>{reportBusy ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} 下载 PDF</button>}
+                <button type="button" className="developer-secondary-action" onClick={() => void copyTextForTester(task)}><Copy size={15} /> 复制 JSON</button>
+              </div>
+              <details className="tester-json"><summary>查看完整结构化响应 <ChevronRight size={14} /></summary><pre>{JSON.stringify(task, null, 2)}</pre></details>
+            </>
+          )}
+          {error && <div className="tester-error" role="alert"><AlertTriangle size={17} /><span><strong>调用提示</strong><p>{error}</p></span></div>}
+        </section>
+      </div>
+    </section>
+  );
+}
+
+async function copyTextForTester(task: TesterTask) {
+  const text = JSON.stringify(task, null, 2);
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    window.prompt("复制 JSON 响应", text);
+  }
+}
+
+function Overview({ account, endpoint, copied, onCopy, onOpenKeys, onOpenDocs }: {
   account: DeveloperAccountResponse | null;
-  available: boolean;
   endpoint: string;
   copied: string;
   onCopy: (value: string, token: string) => void;
@@ -567,13 +895,13 @@ function Overview({ account, available, endpoint, copied, onCopy, onOpenKeys, on
   const metrics = [
     { label: "赠送额度剩余", value: formatNumber(account?.account.freeRemaining), note: `共 ${formatNumber(account?.account.freeTotal)} 次`, icon: Gauge },
     { label: "快速检测", value: formatNumber(account?.modeSummary.fast.calls), note: "当前统计周期", icon: Activity },
-    { label: "Swarm 检测", value: formatNumber(account?.modeSummary.swarm.calls), note: "当前统计周期", icon: ShieldCheck },
+    { label: "Soar 多源复核", value: formatNumber(account?.modeSummary.swarm.calls), note: "当前统计周期", icon: ShieldCheck },
     { label: "Token 用量", value: formatNumber(account?.usage.summary.totalTokens), note: "模型调用累计", icon: Code2 },
     { label: "可用余额", value: formatMoney(account?.account.availableBalanceFen), note: "手工充值账户", icon: WalletCards },
   ];
   return (
     <div className="developer-page developer-overview">
-      <section className="developer-section-heading"><div><p>API 状态 <span className={available ? "" : "is-unknown"}><i /> {available ? "账号数据已连接" : "状态尚未确认"}</span></p><h2>把慧鉴AI接入你的业务流程</h2><small>一期开放图像鉴伪，快速与 Swarm 模式使用同一套异步任务接口。</small></div><button type="button" className="developer-primary-action" onClick={onOpenKeys}><KeyRound size={16} /> 创建 API Key</button></section>
+      <section className="developer-section-heading"><div><p>开发者平台 <span><i /> 账号级权限与用量</span></p><h2>把慧鉴AI接入你的业务流程</h2><small>一期开放图像鉴伪，快速检测与 Soar 多源复核使用同一套异步任务接口。</small></div><button type="button" className="developer-primary-action" onClick={onOpenKeys}><KeyRound size={16} /> 创建 API Key</button></section>
       <section className="developer-metric-strip" aria-label="开发者账户指标">
         {metrics.map((item) => { const Icon = item.icon; return <article key={item.label}><span><Icon size={18} /></span><div><small>{item.label}</small><strong>{item.value}</strong><p>{item.note}</p></div></article>; })}
       </section>
@@ -609,7 +937,7 @@ function RecentTasks({ tasks }: { tasks: DeveloperAccountResponse["recentTasks"]
     <section className="developer-table-section">
       <header><div><h3>最近任务</h3><p>只显示当前账号通过开发者 API 创建的任务。</p></div></header>
       <div className="developer-table-wrap"><table><thead><tr><th>文件</th><th>模式</th><th>状态</th><th>结算</th><th>创建时间</th></tr></thead><tbody>
-        {tasks.length ? tasks.map((task) => <tr key={task.id}><td><strong>{task.filename}</strong><small>{task.id}</small></td><td>{task.mode === "swarm" ? "Swarm" : "快速"}</td><td><span className={`developer-status ${task.status}`}>{statusLabel(task.status)}</span></td><td>{task.billing?.status === "settled" ? (task.billing.source === "free" ? "赠送额度" : formatMoney(task.billing.amountFen)) : task.billing?.status === "reserved" ? "已预占" : "未结算"}</td><td>{compactDate(task.createdAt)}</td></tr>) : <tr><td colSpan={5} className="developer-empty-cell">还没有 API 任务</td></tr>}
+        {tasks.length ? tasks.map((task) => <tr key={task.id}><td><strong>{task.filename}</strong><small>{task.id}</small></td><td>{task.mode === "swarm" ? "Soar" : "快速"}</td><td><span className={`developer-status ${task.status}`}>{statusLabel(task.status)}</span></td><td>{task.billing?.status === "settled" ? (task.billing.source === "free" ? "赠送额度" : formatMoney(task.billing.amountFen)) : task.billing?.status === "reserved" ? "已预占" : "未结算"}</td><td>{compactDate(task.createdAt)}</td></tr>) : <tr><td colSpan={5} className="developer-empty-cell">还没有 API 任务</td></tr>}
       </tbody></table></div>
     </section>
   );
@@ -622,7 +950,7 @@ function KeysPanel({ keys, busy, onCreate, onRotate, onRevoke }: { keys: Develop
       <section className="developer-section-heading"><div><p>凭据管理</p><h2>API Keys</h2><small>按环境拆分密钥，降低泄露后的影响范围。完整 Key 仅在创建或轮换时展示一次。</small></div><button type="button" className="developer-primary-action" onClick={onCreate} disabled={activeCount >= 5 || busy !== null}><Plus size={16} /> 创建 API Key</button></section>
       <section className="developer-security-rail"><ShieldCheck size={19} /><div><strong>服务端只保存 Key 哈希</strong><span>建议设置有效期与 IP 白名单，并定期轮换生产密钥。</span></div><small>{activeCount} / 5 个 active</small></section>
       <section className="developer-table-section developer-key-table"><header><div><h3>密钥列表</h3><p>撤销后立即失效，不影响账号额度和历史账单。</p></div></header><div className="developer-table-wrap"><table><thead><tr><th>名称</th><th>Key</th><th>权限</th><th>限制</th><th>最后使用</th><th aria-label="操作" /></tr></thead><tbody>
-        {keys.length ? keys.map((key) => <tr key={`${key.id}-${key.status}`}><td><strong>{key.name}</strong><span className={`developer-key-state ${key.status}`}>{keyStatusLabel(key)}</span></td><td><code>{key.preview}</code></td><td><div className="developer-scope-list">{key.scopes.map((scope) => <span key={scope}>{scope === "image:fast" ? "快速" : scope === "image:swarm" ? "Swarm" : scope === "reports" ? "报告" : scope}</span>)}</div></td><td><small>{key.expiresAt ? `到期 ${compactDate(key.expiresAt)}` : "永不过期"}</small><small>{key.ipAllowlist?.length ? `${key.ipAllowlist.length} 条 IP 规则` : "不限 IP"}</small></td><td>{compactDate(key.lastUsedAt)}</td><td><div className="developer-row-actions">{key.status === "active" && <><button type="button" title="轮换 Key" aria-label={`轮换 ${key.name}`} disabled={busy !== null} onClick={() => onRotate(key)}>{busy === key.id ? <LoaderCircle className="spin" size={16} /> : <RotateCw size={16} />}</button><button type="button" className="danger" title="撤销 Key" aria-label={`撤销 ${key.name}`} disabled={busy !== null} onClick={() => onRevoke(key)}><Trash2 size={16} /></button></>}</div></td></tr>) : <tr><td colSpan={6} className="developer-empty-cell">尚未创建 API Key</td></tr>}
+        {keys.length ? keys.map((key) => <tr key={`${key.id}-${key.status}`}><td><strong>{key.name}</strong><span className={`developer-key-state ${key.status}`}>{keyStatusLabel(key)}</span></td><td><code>{key.preview}</code></td><td><div className="developer-scope-list">{key.scopes.map((scope) => <span key={scope}>{scope === "image:fast" ? "快速" : scope === "image:swarm" ? "Soar" : scope === "reports" ? "报告" : scope}</span>)}</div></td><td><small>{key.expiresAt ? `到期 ${compactDate(key.expiresAt)}` : "永不过期"}</small><small>{key.ipAllowlist?.length ? `${key.ipAllowlist.length} 条 IP 规则` : "不限 IP"}</small></td><td>{compactDate(key.lastUsedAt)}</td><td><div className="developer-row-actions">{key.status === "active" && <><button type="button" title="轮换 Key" aria-label={`轮换 ${key.name}`} disabled={busy !== null} onClick={() => onRotate(key)}>{busy === key.id ? <LoaderCircle className="spin" size={16} /> : <RotateCw size={16} />}</button><button type="button" className="danger" title="撤销 Key" aria-label={`撤销 ${key.name}`} disabled={busy !== null} onClick={() => onRevoke(key)}><Trash2 size={16} /></button></>}</div></td></tr>) : <tr><td colSpan={6} className="developer-empty-cell">尚未创建 API Key</td></tr>}
       </tbody></table></div></section>
     </div>
   );
@@ -631,12 +959,12 @@ function KeysPanel({ keys, busy, onCreate, onRotate, onRevoke }: { keys: Develop
 function DocsPanel({ endpoint, mode, language, code, copied, onModeChange, onLanguageChange, onCopy }: { endpoint: string; mode: "fast" | "swarm"; language: CodeLanguage; code: string; copied: string; onModeChange: (mode: "fast" | "swarm") => void; onLanguageChange: (language: CodeLanguage) => void; onCopy: (value: string, token: string) => void }) {
   return (
     <div className="developer-page developer-docs-page">
-      <section className="developer-section-heading"><div><p>API v1</p><h2>图像鉴伪接入</h2><small>统一异步任务接口，支持快速检测与 Swarm 多源复核。请求头使用 Bearer API Key。</small></div><a className="developer-secondary-action" href="/api/developer/openapi.json" target="_blank" rel="noreferrer"><FileJson size={16} /> OpenAPI JSON</a></section>
+      <section className="developer-section-heading"><div><p>API v1</p><h2>图像鉴伪接入</h2><small>统一异步任务接口，支持快速检测与 Soar 多源复核。请求头使用 Bearer API Key。</small></div><a className="developer-secondary-action" href="/api/developer/openapi.json" target="_blank" rel="noreferrer"><FileJson size={16} /> OpenAPI JSON</a></section>
       <section className="developer-doc-callout"><LockKeyhole size={18} /><div><strong>请求认证</strong><code>Authorization: Bearer rg_sk_...</code></div><span>HTTPS only</span></section>
       <div className="developer-doc-layout">
         <aside className="developer-doc-index"><strong>图像鉴伪</strong><a href="#create-task" className="is-active">创建任务</a><a href="#poll-task">查询状态</a><a href="#download-report">下载报告</a><strong>Agent</strong><a href="#agent-skill">慧鉴AI Skill</a></aside>
         <div className="developer-doc-content">
-          <section id="create-task"><p className="developer-method-line"><span>POST</span><code>/api/openapi/v1/image-detections</code></p><h3>创建图像鉴伪任务</h3><p>使用 multipart/form-data 上传图片。相同的 Idempotency-Key 与文件可安全重试，不会重复扣费。</p><div className="developer-mode-selector" role="group" aria-label="示例检测模式"><button type="button" aria-pressed={mode === "fast"} className={mode === "fast" ? "is-active" : ""} onClick={() => onModeChange("fast")}><Gauge size={16} /><span><strong>快速检测</strong><small>主模型 + 水印</small></span></button><button type="button" aria-pressed={mode === "swarm"} className={mode === "swarm" ? "is-active" : ""} onClick={() => onModeChange("swarm")}><ShieldCheck size={16} /><span><strong>Swarm</strong><small>多源交叉复核</small></span></button></div></section>
+          <section id="create-task"><p className="developer-method-line"><span>POST</span><code>/api/openapi/v1/image-detections</code></p><h3>创建图像鉴伪任务</h3><p>使用 multipart/form-data 上传图片。相同的 Idempotency-Key 与文件可安全重试，不会重复扣费。</p><div className="developer-mode-selector" role="group" aria-label="示例检测模式"><button type="button" aria-pressed={mode === "fast"} className={mode === "fast" ? "is-active" : ""} onClick={() => onModeChange("fast")}><Gauge size={16} /><span><strong>快速检测</strong><small>真实性分析 + 水印证据</small></span></button><button type="button" aria-pressed={mode === "swarm"} className={mode === "swarm" ? "is-active" : ""} onClick={() => onModeChange("swarm")}><ShieldCheck size={16} /><span><strong>Soar 多源复核</strong><small>API 参数：swarm</small></span></button></div></section>
           <section className="developer-code-section"><header><div className="developer-language-tabs" role="tablist" aria-label="示例代码语言" onKeyDown={moveTabFocus}>{(Object.keys(LANGUAGE_LABELS) as CodeLanguage[]).map((item) => <button id={`developer-language-${item}`} type="button" role="tab" aria-selected={language === item} aria-controls="developer-code-panel" tabIndex={language === item ? 0 : -1} key={item} className={language === item ? "is-active" : ""} onClick={() => onLanguageChange(item)}>{LANGUAGE_LABELS[item]}</button>)}</div><button type="button" onClick={() => void onCopy(code, "code")}>{copied === "code" ? <Check size={15} /> : <Copy size={15} />}{copied === "code" ? "已复制" : "复制"}</button></header><pre id="developer-code-panel" role="tabpanel" aria-labelledby={`developer-language-${language}`} tabIndex={0}><code>{code}</code></pre></section>
           <section id="poll-task"><p className="developer-method-line"><span className="get">GET</span><code>/api/openapi/v1/image-detections/{'{task_id}'}</code></p><h3>查询任务状态</h3><p>建议从 1.5 秒间隔开始轮询，并逐步放慢；收到 429 时遵守 Retry-After。终态为 success、failed 或 rejected，只有 success 会完成额度结算。</p><div className="developer-response-grid"><div><small>status</small><code>queued · running · success · failed · rejected</code></div><div><small>billing.status</small><code>reserved · settled · released</code></div></div></section>
           <section id="download-report"><p className="developer-method-line"><span className="get">GET</span><code>/api/openapi/v1/image-detections/{'{task_id}'}/report</code></p><h3>下载 PDF 报告</h3><p>任务成功后可下载报告。报告与任务都按开发者账号隔离，轮换 Key 后仍可使用同账号的新 Key 访问。</p></section>
@@ -654,9 +982,9 @@ function UsagePanel({ account, ledger, days, onDaysChange }: { account: Develope
   return (
     <div className="developer-page">
       <section className="developer-section-heading"><div><p>账号级统计</p><h2>用量与账单</h2><small>检测次数、Token 用量和计费结算按账号汇总，不随 API Key 轮换变化。</small></div><select className="developer-days-select" value={days} onChange={(event) => onDaysChange(Number(event.target.value) as 7 | 14 | 30 | 90)}><option value={7}>近 7 天</option><option value={14}>近 14 天</option><option value={30}>近 30 天</option><option value={90}>近 90 天</option></select></section>
-      <section className="developer-metric-strip usage-metrics"><article><span><Activity size={18} /></span><div><small>成功调用</small><strong>{formatNumber((account?.modeSummary.fast.calls || 0) + (account?.modeSummary.swarm.calls || 0))}</strong><p>仅统计已结算任务</p></div></article><article><span><Gauge size={18} /></span><div><small>快速检测</small><strong>{formatNumber(account?.modeSummary.fast.calls)}</strong><p>{formatMoney(account?.modeSummary.fast.spendFen)} 支出</p></div></article><article><span><ShieldCheck size={18} /></span><div><small>Swarm 检测</small><strong>{formatNumber(account?.modeSummary.swarm.calls)}</strong><p>{formatMoney(account?.modeSummary.swarm.spendFen)} 支出</p></div></article><article><span><Code2 size={18} /></span><div><small>Token 用量</small><strong>{formatNumber(account?.usage.summary.totalTokens)}</strong><p>输入与输出合计</p></div></article></section>
+      <section className="developer-metric-strip usage-metrics"><article><span><Activity size={18} /></span><div><small>成功调用</small><strong>{formatNumber((account?.modeSummary.fast.calls || 0) + (account?.modeSummary.swarm.calls || 0))}</strong><p>仅统计已结算任务</p></div></article><article><span><Gauge size={18} /></span><div><small>快速检测</small><strong>{formatNumber(account?.modeSummary.fast.calls)}</strong><p>{formatMoney(account?.modeSummary.fast.spendFen)} 支出</p></div></article><article><span><ShieldCheck size={18} /></span><div><small>Soar 多源复核</small><strong>{formatNumber(account?.modeSummary.swarm.calls)}</strong><p>{formatMoney(account?.modeSummary.swarm.spendFen)} 支出</p></div></article><article><span><Code2 size={18} /></span><div><small>Token 用量</small><strong>{formatNumber(account?.usage.summary.totalTokens)}</strong><p>输入与输出合计</p></div></article></section>
       <section className="developer-usage-chart"><header><div><h3>调用趋势</h3><p>每天成功记录到开发者用量系统的请求。</p></div></header><div className="developer-bars" aria-label="每日 API 调用趋势">{chart.map((item) => <div key={item.date} title={`${item.date}: ${item.requests} 次`}><span style={{ height: `${Math.max(item.requests ? 8 : 2, (Number(item.requests || 0) / maxCalls) * 100)}%` }} /><small>{chart.length <= 14 || item.date.endsWith("01") || item === chart[chart.length - 1] ? item.date.slice(5).replace("-", "/") : ""}</small></div>)}</div></section>
-      <section className="developer-table-section"><header><div><h3>计费账本</h3><p>赠送额度消费、付费扣款与管理员调整均保留审计记录。</p></div></header><div className="developer-table-wrap"><table><thead><tr><th>时间</th><th>类型</th><th>模式 / 任务</th><th>额度变化</th><th>余额变化</th><th>说明</th></tr></thead><tbody>{ledger.length ? ledger.map((entry) => <tr key={entry.id}><td>{compactDate(entry.createdAt)}</td><td>{entry.type === "detection_free" ? "赠送额度" : entry.type === "detection_charge" ? "检测扣款" : "后台调整"}</td><td><strong>{entry.mode === "swarm" ? "Swarm" : entry.mode === "fast" ? "快速" : "-"}</strong><small>{entry.taskId || "-"}</small></td><td className={entry.freeCallsDelta < 0 ? "negative" : "positive"}>{entry.freeCallsDelta ? `${entry.freeCallsDelta > 0 ? "+" : ""}${entry.freeCallsDelta} 次` : "-"}</td><td className={entry.balanceDeltaFen < 0 ? "negative" : entry.balanceDeltaFen > 0 ? "positive" : ""}>{entry.balanceDeltaFen ? `${entry.balanceDeltaFen > 0 ? "+" : "-"}${formatMoney(Math.abs(entry.balanceDeltaFen))}` : "-"}</td><td>{entry.note}</td></tr>) : <tr><td colSpan={6} className="developer-empty-cell">账本暂无记录</td></tr>}</tbody></table></div></section>
+      <section className="developer-table-section"><header><div><h3>计费账本</h3><p>赠送额度消费、付费扣款与管理员调整均保留审计记录。</p></div></header><div className="developer-table-wrap"><table><thead><tr><th>时间</th><th>类型</th><th>模式 / 任务</th><th>额度变化</th><th>余额变化</th><th>说明</th></tr></thead><tbody>{ledger.length ? ledger.map((entry) => <tr key={entry.id}><td>{compactDate(entry.createdAt)}</td><td>{entry.type === "detection_free" ? "赠送额度" : entry.type === "detection_charge" ? "检测扣款" : "后台调整"}</td><td><strong>{entry.mode === "swarm" ? "Soar" : entry.mode === "fast" ? "快速" : "-"}</strong><small>{entry.taskId || "-"}</small></td><td className={entry.freeCallsDelta < 0 ? "negative" : "positive"}>{entry.freeCallsDelta ? `${entry.freeCallsDelta > 0 ? "+" : ""}${entry.freeCallsDelta} 次` : "-"}</td><td className={entry.balanceDeltaFen < 0 ? "negative" : entry.balanceDeltaFen > 0 ? "positive" : ""}>{entry.balanceDeltaFen ? `${entry.balanceDeltaFen > 0 ? "+" : "-"}${formatMoney(Math.abs(entry.balanceDeltaFen))}` : "-"}</td><td>{entry.note}</td></tr>) : <tr><td colSpan={6} className="developer-empty-cell">账本暂无记录</td></tr>}</tbody></table></div></section>
     </div>
   );
 }

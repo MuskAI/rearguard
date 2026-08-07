@@ -31,12 +31,14 @@ BACKEND_DIR="$ROOT_DIR/v2-agent/backend"
 FRONTEND_DIR="$ROOT_DIR/v2-agent/frontend"
 SERVICE_UNIT="$ROOT_DIR/deploy/systemd/jianzhen-v2-backend.service"
 ACTIVATE_SCRIPT="$ROOT_DIR/scripts/remote/activate_v2.sh"
+FRONTEND_VERSION_SCRIPT="$ROOT_DIR/scripts/remote/manage_v2_frontend.sh"
 DEPLOY_PATHS=(
   v2-agent/backend
   v2-agent/frontend
   deploy/systemd/jianzhen-v2-backend.service
   scripts/deploy_v2.sh
   scripts/remote/activate_v2.sh
+  scripts/remote/manage_v2_frontend.sh
   scripts/deploy_common.sh
 )
 assert_deploy_paths_clean "${DEPLOY_PATHS[@]}"
@@ -66,6 +68,7 @@ trap cleanup EXIT
 log_step 1 "Verify V2 backend"
 run_local "$BACKEND_DIR/.venv/bin/python" -m compileall "$BACKEND_DIR/app"
 run_local bash -n "$ACTIVATE_SCRIPT"
+run_local bash -n "$FRONTEND_VERSION_SCRIPT"
 (
   cd "$BACKEND_DIR"
   run_local .venv/bin/python -m pytest tests
@@ -99,6 +102,7 @@ run_scp "$FRONTEND_ARCHIVE_PATH" "$REMOTE:$REMOTE_STAGE/jianzhen-v2-frontend.tgz
 run_scp "$MARKER_PATH" "$REMOTE:$REMOTE_STAGE/jianzhen-v2.DEPLOYED_COMMIT"
 run_scp "$SERVICE_UNIT" "$REMOTE:$REMOTE_STAGE/jianzhen-v2-backend.service"
 run_scp "$ACTIVATE_SCRIPT" "$REMOTE:$REMOTE_STAGE/jianzhen-activate-v2.sh"
+run_scp "$FRONTEND_VERSION_SCRIPT" "$REMOTE:$REMOTE_STAGE/huijian-frontend-version"
 
 log_step 5 "Create and verify a pre-migration backup"
 run_remote "sudo bash -lc 'set -euo pipefail; test -x /usr/local/sbin/realguard-backup; set -a; for env_file in /etc/realguard/session.env /etc/realguard/realguard-backend.env /etc/realguard/detector-db.env /etc/realguard/jianzhen-v2.env /etc/realguard/backup.env; do [ ! -f \"\$env_file\" ] || . \"\$env_file\"; done; set +a; backup_output=\$(/usr/local/sbin/realguard-backup 2>&1); printf \"%s\\n\" \"\$backup_output\"; backup_dir=\$(printf \"%s\\n\" \"\$backup_output\" | sed -n \"s/^RealGuard backup completed: //p\" | tail -n 1); test -n \"\$backup_dir\"; test -d \"\$backup_dir\"; cd \"\$backup_dir\"; sha256sum -c SHA256SUMS'"
@@ -108,7 +112,7 @@ remote_activation="$(cat <<EOF
 set -euo pipefail
 stage='$REMOTE_STAGE'
 promoted=0
-fixed_files='jianzhen-v2-backend.tgz jianzhen-v2-frontend.tgz jianzhen-v2.DEPLOYED_COMMIT jianzhen-v2-backend.service jianzhen-activate-v2.sh'
+fixed_files='jianzhen-v2-backend.tgz jianzhen-v2-frontend.tgz jianzhen-v2.DEPLOYED_COMMIT jianzhen-v2-backend.service jianzhen-activate-v2.sh huijian-frontend-version'
 cleanup_stage() {
   if [[ "\$promoted" == "1" ]]; then
     for name in \$fixed_files; do

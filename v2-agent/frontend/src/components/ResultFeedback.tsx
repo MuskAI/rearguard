@@ -23,7 +23,7 @@ export default function ResultFeedback({ outcome, submitting, upgradeBusy, requi
           <Layers3 size={20} aria-hidden="true" />
           <div>
             <span className="result-mode-label">备用链路结果</span>
-            <strong>{requestedSwarm ? "Soar 模式未完成，当前展示备用模型结果" : "主模型未完成，当前展示备用模型结果"}</strong>
+            <strong>{requestedSwarm ? "Soar 模式未完成，当前展示备用证据链结果" : "快速检测未完成，当前展示备用证据链结果"}</strong>
             <p>当前报告来自备用视觉链路，已与原请求模式明确区分。</p>
           </div>
           {!requestedSwarm && (

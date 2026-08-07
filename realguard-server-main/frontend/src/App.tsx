@@ -604,7 +604,7 @@ function App() {
   }, [loading, page]);
 
   useEffect(() => {
-    if (loading || analyticsChoice === "denied" || lastTrackedPage.current === page) return;
+    if (loading || analyticsChoice !== "granted" || lastTrackedPage.current === page) return;
     lastTrackedPage.current = page;
     trackConfirmedPageview(page);
   }, [analyticsChoice, loading, page]);
@@ -733,8 +733,8 @@ function App() {
             <strong>{lang === "zh" ? "匿名访问统计" : "Anonymous analytics"}</strong>
             <p>
               {lang === "zh"
-                ? "默认仅使用随机访客标识和脱敏 IP 统计省级访问量，不关联登录账号；你可以随时关闭。"
-                : "We use a random visitor ID and masked IP for province-level traffic totals, without linking your account. You can turn it off at any time."}
+                ? "仅在你选择允许后，使用随机访客标识和脱敏 IP 统计省级访问量，不关联登录账号；你可以随时关闭。"
+                : "Only after you opt in, we use a random visitor ID and masked IP for province-level traffic totals without linking your account."}
               {" "}<a href="/legal/privacy.html" target="_blank" rel="noreferrer">{lang === "zh" ? "隐私政策" : "Privacy policy"}</a>
             </p>
           </div>
@@ -746,7 +746,7 @@ function App() {
                 setAnalyticsChoice("denied");
               }}
             >
-              {lang === "zh" ? "关闭匿名统计" : "Turn off analytics"}
+              {lang === "zh" ? "暂不统计" : "Not now"}
             </button>
             <button
               type="button"
@@ -757,7 +757,7 @@ function App() {
                 setAnalyticsChoice("granted");
               }}
             >
-              {lang === "zh" ? "继续匿名统计" : "Continue anonymous analytics"}
+              {lang === "zh" ? "允许匿名统计" : "Allow anonymous analytics"}
             </button>
           </div>
         </section>

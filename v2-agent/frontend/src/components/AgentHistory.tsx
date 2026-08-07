@@ -146,7 +146,11 @@ function HistoryContent(props: Props & { closeButtonRef?: RefObject<HTMLButtonEl
             <button type="button" className="icon-button" onClick={props.onLogout} aria-label="退出登录" title="退出登录"><LogOut size={17} /></button>
           </>
         ) : (
-          <button type="button" className="sidebar-login" onClick={props.onLogin}><LogIn size={16} /> 登录或注册</button>
+          <button type="button" className="sidebar-login sidebar-login-prominent" onClick={props.onLogin}>
+            <span><LogIn size={17} /></span>
+            <span><strong>登录或注册</strong><small>保存历史与鉴伪报告</small></span>
+            <ChevronRight size={16} />
+          </button>
         )}
       </div>
       <a className="icp-link" href="https://beian.miit.gov.cn/" target="_blank" rel="noreferrer">浙ICP备2026051442号</a>

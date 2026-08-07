@@ -1,7 +1,7 @@
 export const LEGAL_CONSENT = {
-  version: "2026-07-15+2026-07-20",
-  termsSha256: "09707ba3b915db9904cc6f8b4951b5c9bbfff7e768fd237c04eedf90fef89ff3",
-  privacySha256: "5c505aaf82abe1af5cac83fef81c60ec66e89a76377110fba6348ed0567d8935",
+  version: "2026-08-07+2026-08-07",
+  termsSha256: "619aee74677629f4f5e2c4ccbaa99c458671086de45c0a586e76c8c8c062d2c5",
+  privacySha256: "54d98f687f8c6bc6ddf7c1256958d070fd5d2af7421059ada38fc3366acb56eb",
 } as const;
 
 export function appendUploadConsent(body: FormData) {

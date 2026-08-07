@@ -203,6 +203,10 @@ class QueueCapacityError(RuntimeError):
     pass
 
 
+class GuestAllowanceError(QueueCapacityError):
+    pass
+
+
 def _error(message, status_code, code):
     if has_request_context():
         request_id = getattr(g, "realguard_request_id", "")
@@ -880,7 +884,7 @@ def _enqueue_web_detection_task(
                 if daily_rows is None:
                     raise TaskRecoveryError("failed to inspect global guest detection allowance")
                 if int((daily_rows or [{}])[0].get("cnt") or 0) >= WEB_GUEST_DAILY_GLOBAL_LIMIT:
-                    raise QueueCapacityError("今日访客免费检测总额度已用完，请登录后继续检测")
+                    raise GuestAllowanceError("今日访客免费检测总额度已用完，请登录后继续检测")
                 reserved = excute_sql(
                     """
                     INSERT IGNORE INTO web_guest_daily_usage (subject_hash, usage_day)
@@ -892,7 +896,7 @@ def _enqueue_web_detection_task(
                 if reserved is None:
                     raise TaskRecoveryError("failed to reserve guest detection allowance")
                 if reserved != 1:
-                    raise QueueCapacityError("今日访客免费检测次数已用完，请登录后继续检测")
+                    raise GuestAllowanceError("今日访客免费检测次数已用完，请登录后继续检测")
                 guest_usage_reserved = True
             spool_name = _write_web_task_spool(job_id, image_bytes)
             inserted = excute_sql(
@@ -3480,8 +3484,11 @@ def _public_result_payload(payload, mode):
     if not isinstance(payload, dict):
         return None
     public_payload = json.loads(json.dumps(payload, ensure_ascii=False, default=str))
-    if mode == "swarm" and isinstance(public_payload.get("result"), dict):
-        public_payload["result"] = detection._public_swarm_result(public_payload["result"])
+    if isinstance(public_payload.get("result"), dict):
+        public_payload["result"] = detection._public_detection_result(
+            public_payload["result"],
+            swarm=mode == "swarm",
+        )
     result = public_payload.get("result")
     if isinstance(result, dict):
         result["final_label"] = binary_final_label(

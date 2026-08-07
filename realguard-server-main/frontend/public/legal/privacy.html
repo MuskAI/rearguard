@@ -3,97 +3,117 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>慧鉴 AI 隐私政策</title>
-    <style>
-      :root {
-        color: #172033;
-        background: #eef3ed;
-        font-family: "Noto Serif SC", "Songti SC", serif;
-      }
-      body { margin: 0; }
-      main {
-        width: min(880px, calc(100% - 32px));
-        margin: 0 auto;
-        padding: 56px 0 72px;
-      }
-      .paper {
-        background: #fbfff6;
-        border: 1px solid rgba(23, 32, 51, 0.14);
-        border-radius: 8px 28px 8px 28px;
-        box-shadow: 0 24px 70px rgba(23, 32, 51, 0.12);
-        padding: clamp(24px, 5vw, 52px);
-      }
-      h1 {
-        margin: 0 0 10px;
-        font-size: clamp(2rem, 7vw, 4rem);
-        line-height: 0.98;
-        letter-spacing: -0.06em;
-      }
-      .meta { color: #697389; margin: 0 0 32px; }
-      h2 { margin: 28px 0 10px; font-size: 1.2rem; }
-      p, li { line-height: 1.85; color: #334155; }
-      ul { padding-left: 1.25rem; }
-      a { color: #0b5cff; font-weight: 700; }
-      footer {
-        margin-top: 24px;
-        text-align: center;
-        color: #697389;
-        font: 13px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      }
-      footer a {
-        color: inherit;
-        font-weight: 500;
-        text-decoration: none;
-      }
-      footer a:hover { color: #0b5cff; text-decoration: underline; }
-      .en {
-        margin-top: 40px;
-        padding-top: 28px;
-        border-top: 1px solid rgba(23, 32, 51, 0.12);
-        font-family: Georgia, "Times New Roman", serif;
-      }
-    </style>
+    <meta name="color-scheme" content="light" />
+    <title>慧鉴AI 隐私政策</title>
+    <link rel="stylesheet" href="/legal/legal.css" />
   </head>
   <body>
-    <main>
-      <article class="paper">
-        <h1>隐私政策</h1>
-        <p class="meta">版本：2026-07-20 | 适用于慧鉴 AI 数字内容鉴伪工作台</p>
+    <header class="legal-topbar">
+      <a class="legal-brand" href="/" aria-label="返回慧鉴AI官网"><span class="legal-brand-mark" aria-hidden="true">慧</span><span>慧鉴AI</span></a>
+      <nav aria-label="法律文件"><a href="/">官网</a><a href="/legal/terms.html">用户协议</a><a href="/legal/privacy.html" aria-current="page">隐私政策</a></nav>
+    </header>
+    <main class="legal-layout">
+      <aside class="legal-index">
+        <small>PRIVACY NOTICE</small>
+        <strong>隐私政策</strong>
+        <nav aria-label="本页目录">
+          <a href="#collect">收集信息</a><a href="#purpose">使用目的</a><a href="#processing">处理与共享</a><a href="#retention">保存期限</a><a href="#rights">你的权利</a><a href="#security">安全措施</a><a href="#contact">联系与更新</a>
+        </nav>
+      </aside>
+      <article class="legal-document">
+        <header>
+          <p class="legal-kicker">我们只处理完成服务所需的信息</p>
+          <h1>隐私政策</h1>
+          <p class="legal-meta">版本：2026-08-07 · 生效日期：2026-08-07 · 适用于 rrreal.cn 及慧鉴AI相关服务</p>
+          <p class="legal-lead">本政策说明慧鉴AI在账号登录、内容鉴伪、报告、开发者接口和安全运营中如何处理信息。请在上传文件或创建账号前阅读；不同意时，请不要提交文件或注册账号。</p>
+        </header>
 
-        <h2>1. 我们收集的信息</h2>
-        <p>为提供登录、检测、深度分析、报告和安全审计服务，平台可能收集手机号、用户名、加密后的密码、协议同意记录、访问凭证摘要、调用次数、Token 用量、上传文件、检测结果、报告编号、访问时间和必要的设备/网络日志。访问公开报告分享链接时，平台会记录访问 IP、浏览器 User-Agent、访问结果和对应分享编号，用于防滥用、故障排查和分享安全审计。</p>
+        <div class="legal-summary" aria-label="隐私重点">
+          <div><small>账号隔离</small><strong>历史、报告和开发者数据按不可变账号标识隔离</strong></div>
+          <div><small>不出售数据</small><strong>不会将上传文件或个人信息出售给无关第三方</strong></div>
+          <div><small>可主动管理</small><strong>可删除个人历史、撤销分享链接和 API Key</strong></div>
+        </div>
 
-        <h2>2. 使用目的</h2>
-        <ul>
-          <li>完成账号注册、登录、密码找回、短信验证码校验和账号安全保护。</li>
-          <li>提供图像/视频鉴伪、深度分析、历史记录和报告下载。</li>
-          <li>统计调用次数、Token 用量、缓存命中、接口错误和系统稳定性指标。</li>
-          <li>排查故障、防止滥用、满足必要的安全审计和合规管理要求。</li>
-        </ul>
-
-        <h2>3. 匿名访问统计</h2>
-        <p>在获得单独允许后，官网会生成随机访客标识，并将访问 IP 在服务端加盐哈希、以脱敏形式处理，用于统计页面访问量、独立访客和省级来源。该统计不与登录账号关联；拒绝不会影响检测、登录或报告功能。你可以清除浏览器站点数据撤回本地选择，清除后平台不会继续发送新的匿名访问事件。</p>
-
-        <h2>4. 存储与保护</h2>
-        <p>密码和账号访问凭证不以明文保存。平台仅在创建访问凭证时展示完整内容，之后只保存哈希和预览信息。公开报告分享的访问 IP 与 User-Agent 默认保留 90 天，分享记录在失效后最长保留 730 天；法律义务、安全事件调查或争议处理要求冻结的除外。其他业务数据按照提供服务所必需的期限保存，达到期限后删除或匿名化。我们会采取访问控制、日志审计和必要的加密/脱敏措施降低未授权访问风险。</p>
-
-        <h2>5. 共享与公开</h2>
-        <p>除获得授权、履行法律义务、处理安全事件或完成用户请求外，平台不会主动向无关第三方公开个人信息或检测文件。用户主动共享检测结果或报告链接的行为由用户自行管理；分享链接可由创建者撤销，到期后停止访问。账号访问凭证不得转交无关第三方。</p>
-
-        <h2>6. 用户权利</h2>
-        <p>用户可以登录平台查看历史记录、管理账号访问凭证、重置密码。如需更正、删除账号相关信息或提出隐私问题，请通过平台公开的联系方式提交请求。</p>
-
-        <h2>7. 政策更新</h2>
-        <p>当服务能力、合规要求或数据处理方式发生变化时，平台可能更新本政策，并通过页面或文档提示新版本。</p>
-
-        <section class="en" lang="en">
-          <h2>English Summary</h2>
-        <p>Huijian AI processes account, security, uploaded content, usage, report, and audit data to provide the service. Public report access IP addresses and user agents are retained for 90 days by default; expired share records may be retained for up to 730 days. Passwords and account access credentials are not stored in plaintext. Users may manage credentials, reset passwords, revoke report links, and request support for account or privacy issues through published contact channels.</p>
+        <section id="collect">
+          <h2>1. 我们收集哪些信息</h2>
+          <div class="legal-table-wrap">
+            <table class="legal-table">
+              <thead><tr><th>类别</th><th>具体信息</th><th>何时产生</th></tr></thead>
+              <tbody>
+                <tr><td>账号与验证</td><td>手机号、用户名、密码哈希、验证码校验结果、协议同意版本和时间</td><td>注册、登录、找回密码或重新确认协议时</td></tr>
+                <tr><td>鉴伪内容</td><td>上传文件、文件名、原始元数据、文件哈希、检测结果、证据、报告和用户反馈</td><td>你主动上传或提交任务时</td></tr>
+                <tr><td>开发者数据</td><td>API Key 哈希与预览、权限、IP 白名单、调用次数、Token 用量、计费与任务状态</td><td>创建凭证或调用接口时</td></tr>
+                <tr><td>运行与安全</td><td>访问时间、请求路径、响应状态、必要的 IP/设备信息、错误和审计日志</td><td>访问、登录、调用接口或发生异常时</td></tr>
+                <tr><td>分享访问</td><td>分享编号、访问结果、IP、User-Agent 和访问时间</td><td>创建或访问公开报告链接时</td></tr>
+              </tbody>
+            </table>
+          </div>
         </section>
+
+        <section id="purpose">
+          <h2>2. 信息的使用目的</h2>
+          <ul>
+            <li>完成账号注册、登录、密码找回、短信校验和访问控制。</li>
+            <li>处理你提交的图像、视频或文档，生成证据、结论、历史记录和报告。</li>
+            <li>提供 API Key、额度、计费、幂等重试、任务查询和用量统计。</li>
+            <li>识别异常流量、排查故障、审计敏感操作并保护不同账号之间的数据隔离。</li>
+            <li>在单独获得允许后，以随机访客标识统计官网访问量、独立访客和省级来源。</li>
+          </ul>
+        </section>
+
+        <section id="processing">
+          <h2>3. 模型处理、共享与公开</h2>
+          <p>平台会在自有或受控服务器上处理任务。使用 Soar 多源复核或其他明确标注的能力时，为完成你选择的任务，文件本身或必要的派生信息可能被发送到平台配置的第三方模型服务；平台只在完成任务所需范围内传输，并通过访问控制、最小权限和审计降低风险。</p>
+          <p>除获得你的授权、履行法定义务、处理安全事件或完成你主动请求外，平台不会向无关第三方公开或出售个人信息及上传文件。只有你主动创建分享链接时，对应报告才会在链接有效期内向持有链接的人开放。</p>
+          <div class="legal-callout">普通检测记录和公开分享是两件事。默认历史仅当前账号可见；分享必须由用户主动创建，并可撤销。</div>
+        </section>
+
+        <section id="retention">
+          <h2>4. 保存位置与期限</h2>
+          <p>业务数据保存在平台受控的服务器和数据库中。内部模型评测数据与普通用户上传数据分区管理，不会因为内部评测而改变普通用户数据的访问边界。</p>
+          <div class="legal-table-wrap">
+            <table class="legal-table">
+              <thead><tr><th>数据</th><th>默认保存期限</th><th>删除或例外</th></tr></thead>
+              <tbody>
+                <tr><td>检测文件、证据与历史</td><td>保存至用户删除对应历史，或服务不再需要该数据</td><td>删除入口会清理对应业务记录和可删除文件；法定留存或争议冻结除外</td></tr>
+                <tr><td>请求与安全事件</td><td>默认 90 天</td><td>重大安全事件可在调查所需期限内延长</td></tr>
+                <tr><td>Token 与用量账本</td><td>默认 730 天</td><td>计费、审计或争议处理依法需要时延长</td></tr>
+                <tr><td>分享访问 IP 与 User-Agent</td><td>默认 90 天</td><td>用于防滥用和安全审计</td></tr>
+                <tr><td>分享记录</td><td>失效后最长 730 天</td><td>链接撤销或到期后立即停止公开访问</td></tr>
+                <tr><td>匿名访问统计</td><td>按聚合统计需要保存</td><td>不与登录账号关联；浏览器可清除本地选择</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="rights">
+          <h2>5. 你的权利与选择</h2>
+          <ul>
+            <li>登录后查看个人历史、报告、开发者凭证和用量记录。</li>
+            <li>删除个人检测历史、撤销分享链接、撤销或轮换 API Key。</li>
+            <li>拒绝匿名访问统计；拒绝不会影响登录、检测或报告功能。</li>
+            <li>请求更正账号信息，或在完成身份核验后提出个人信息删除和账号处置请求。</li>
+          </ul>
+          <p>当法律规定、争议处理、安全审计或他人合法权益要求保留部分记录时，平台可能无法立即删除全部数据，但会限制其继续用于无关目的。</p>
+        </section>
+
+        <section id="security">
+          <h2>6. 安全保护与未成年人</h2>
+          <p>平台采用密码和 API Key 哈希、HTTPS、账号级数据隔离、权限控制、CSRF 防护、敏感操作审计以及必要的脱敏措施。没有任何网络系统能够保证绝对安全；发生可能影响用户权益的安全事件时，平台会依法采取补救并在需要时通知。</p>
+          <p>本服务主要面向具备相应民事行为能力的用户。未成年人应在监护人指导下使用，不应上传包含敏感个人信息或无权处理的他人内容。</p>
+        </section>
+
+        <section id="contact">
+          <h2>7. 联系方式与政策更新</h2>
+          <p>一般产品问题可通过登录后的检测结果反馈功能提交。涉及个人信息更正、删除或账号处置的请求，需要使用对应登录账号完成身份核验。运营主体信息以工信部备案系统中 rrreal.cn 的备案记录为准；独立电子受理邮箱上线后，本页将同步公示。</p>
+          <p>当数据处理目的、范围或保存期限发生实质变化时，平台会更新版本并通过页面提示；依法需要重新同意的，将在继续处理前再次征求你的确认。</p>
+        </section>
+
+        <footer class="legal-footer">
+          <span>慧鉴AI · 数字内容鉴伪辅助平台</span>
+          <div><a href="/legal/terms.html">用户协议</a><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">浙ICP备2026051442号</a></div>
+        </footer>
       </article>
-      <footer>
-        <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">浙ICP备2026051442号</a>
-      </footer>
     </main>
   </body>
 </html>

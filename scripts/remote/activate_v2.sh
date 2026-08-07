@@ -10,11 +10,15 @@ flock -n 9 || { printf 'Another V2 activation is already running.\n' >&2; exit 7
 
 commit_sha="$(tr -d '[:space:]' </tmp/jianzhen-v2.DEPLOYED_COMMIT)"
 [[ "$commit_sha" =~ ^[0-9a-f]{7,40}$ ]]
+frontend_version="v2-${commit_sha}"
+frontend_version_root="/var/www/huijian-frontends"
+frontend_release_root="${frontend_version_root}/${frontend_version}"
 release_id="${commit_sha}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 release_root="/opt/jianzhen-v2/releases/$release_id"
 current_app=""
 current_runtime=""
-frontend_switched=0
+frontend_previous_moved=0
+frontend_installed=0
 app_switched=0
 runtime_switched=0
 unit_switched=0
@@ -24,7 +28,10 @@ rollback() {
   trap - ERR
   set +e
   printf 'V2 activation failed; restoring the previous application.\n' >&2
-  if [[ "$frontend_switched" == "1" && -d /var/www/v2.previous ]]; then
+  if [[ "$frontend_installed" == "1" ]]; then
+    sudo rm -rf /var/www/v2
+  fi
+  if [[ "$frontend_previous_moved" == "1" && -d /var/www/v2.previous ]]; then
     sudo rm -rf /var/www/v2
     sudo mv /var/www/v2.previous /var/www/v2
   fi
@@ -49,6 +56,18 @@ rollback() {
   exit "$status"
 }
 trap rollback ERR
+
+validate_frontend_assets() {
+  local release_dir="$1"
+  local asset_ref asset_count=0
+  test -s "$release_dir/index.html"
+  test -d "$release_dir/assets"
+  while IFS= read -r asset_ref; do
+    asset_count=$((asset_count + 1))
+    test -f "$release_dir$asset_ref"
+  done < <(grep -oE '/assets/[A-Za-z0-9._/-]+' "$release_dir/index.html" | sort -u)
+  test "$asset_count" -gt 0
+}
 
 sudo install -d -m 700 /etc/realguard
 # The service user owns the signing key but must be able to traverse the
@@ -110,6 +129,7 @@ sudo chmod 600 /etc/realguard/jianzhen-v2.env
 sudo chown root:root /etc/realguard/jianzhen-v2.env
 
 sudo install -d -m 755 -o ubuntu -g ubuntu /opt/jianzhen-v2/releases
+sudo install -d -m 755 -o root -g root "$frontend_version_root"
 sudo install -d -m 700 -o ubuntu -g ubuntu /opt/jianzhen-v2/data
 sudo rm -rf "$release_root"
 sudo install -d -m 755 -o ubuntu -g ubuntu "$release_root"
@@ -170,23 +190,34 @@ done
 test "$health_ready" = "1"
 systemctl is-active --quiet jianzhen-v2-backend.service
 
-sudo rm -rf /var/www/v2.next
-sudo install -d -m 755 /var/www/v2.next
-sudo tar -xzf /tmp/jianzhen-v2-frontend.tgz -C /var/www/v2.next
-sudo chown -R root:root /var/www/v2.next
+sudo rm -rf /var/www/v2.next "${frontend_release_root}.next"
+sudo install -d -m 755 "${frontend_release_root}.next"
+sudo tar -xzf /tmp/jianzhen-v2-frontend.tgz -C "${frontend_release_root}.next"
+sudo install -m 644 /tmp/jianzhen-v2.DEPLOYED_COMMIT "${frontend_release_root}.next/DEPLOYED_COMMIT"
+printf '%s\n' "$frontend_version" | sudo tee "${frontend_release_root}.next/.HUIJIAN_FRONTEND_VERSION" >/dev/null
+validate_frontend_assets "${frontend_release_root}.next"
+sudo chown -R root:root "${frontend_release_root}.next"
+sudo rm -rf "$frontend_release_root"
+sudo mv "${frontend_release_root}.next" "$frontend_release_root"
+sudo cp -a "$frontend_release_root" /var/www/v2.next
 sudo rm -rf /var/www/v2.previous
 if [[ -d /var/www/v2 ]]; then
   sudo mv /var/www/v2 /var/www/v2.previous
+  frontend_previous_moved=1
 fi
 sudo mv /var/www/v2.next /var/www/v2
-frontend_switched=1
+frontend_installed=1
+validate_frontend_assets /var/www/v2
+
+sudo install -m 755 -o root -g root /tmp/huijian-frontend-version /usr/local/sbin/huijian-frontend-version
 
 # The direct backend readiness check above is the atomic release gate. Public
 # Nginx checks happen after this pointer switch; a transient proxy connection
 # during file promotion must not roll back a healthy backend release.
 sudo install -m 644 /tmp/jianzhen-v2.DEPLOYED_COMMIT /opt/jianzhen-v2/DEPLOYED_COMMIT
 sudo rm -rf /var/www/v2.previous
-frontend_switched=0
+frontend_previous_moved=0
+frontend_installed=0
 app_switched=0
 runtime_switched=0
 unit_switched=0
@@ -206,6 +237,7 @@ rm -f \
   /tmp/jianzhen-v2-frontend.tgz \
   /tmp/jianzhen-v2.DEPLOYED_COMMIT \
   /tmp/jianzhen-v2-backend.service \
-  /tmp/jianzhen-activate-v2.sh
+  /tmp/jianzhen-activate-v2.sh \
+  /tmp/huijian-frontend-version
 
 cat /opt/jianzhen-v2/DEPLOYED_COMMIT

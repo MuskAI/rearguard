@@ -3,93 +3,90 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>慧鉴 AI 用户协议</title>
-    <style>
-      :root {
-        color: #172033;
-        background: #f4f0e8;
-        font-family: "Noto Serif SC", "Songti SC", serif;
-      }
-      body { margin: 0; }
-      main {
-        width: min(880px, calc(100% - 32px));
-        margin: 0 auto;
-        padding: 56px 0 72px;
-      }
-      .paper {
-        background: #fffaf0;
-        border: 1px solid rgba(23, 32, 51, 0.14);
-        border-radius: 28px 8px 28px 8px;
-        box-shadow: 0 24px 70px rgba(23, 32, 51, 0.12);
-        padding: clamp(24px, 5vw, 52px);
-      }
-      h1 {
-        margin: 0 0 10px;
-        font-size: clamp(2rem, 7vw, 4rem);
-        line-height: 0.98;
-        letter-spacing: -0.06em;
-      }
-      .meta { color: #697389; margin: 0 0 32px; }
-      h2 { margin: 28px 0 10px; font-size: 1.2rem; }
-      p, li { line-height: 1.85; color: #334155; }
-      ul { padding-left: 1.25rem; }
-      a { color: #0b5cff; font-weight: 700; }
-      footer {
-        margin-top: 24px;
-        text-align: center;
-        color: #697389;
-        font: 13px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      }
-      footer a {
-        color: inherit;
-        font-weight: 500;
-        text-decoration: none;
-      }
-      footer a:hover { color: #0b5cff; text-decoration: underline; }
-      .en {
-        margin-top: 40px;
-        padding-top: 28px;
-        border-top: 1px solid rgba(23, 32, 51, 0.12);
-        font-family: Georgia, "Times New Roman", serif;
-      }
-    </style>
+    <meta name="color-scheme" content="light" />
+    <title>慧鉴AI 用户协议</title>
+    <link rel="stylesheet" href="/legal/legal.css" />
   </head>
   <body>
-    <main>
-      <article class="paper">
-        <h1>用户协议</h1>
-        <p class="meta">版本：2026-07-15 | 适用于慧鉴 AI 数字内容鉴伪工作台</p>
+    <header class="legal-topbar">
+      <a class="legal-brand" href="/" aria-label="返回慧鉴AI官网"><span class="legal-brand-mark" aria-hidden="true">慧</span><span>慧鉴AI</span></a>
+      <nav aria-label="法律文件"><a href="/">官网</a><a href="/legal/terms.html" aria-current="page">用户协议</a><a href="/legal/privacy.html">隐私政策</a></nav>
+    </header>
+    <main class="legal-layout">
+      <aside class="legal-index">
+        <small>LEGAL DOCUMENT</small>
+        <strong>用户协议</strong>
+        <nav aria-label="本页目录">
+          <a href="#service">服务范围</a><a href="#account">账号安全</a><a href="#content">内容与使用</a><a href="#results">检测结果</a><a href="#developer">开发者服务</a><a href="#change">变更与中断</a><a href="#contact">联系与争议</a>
+        </nav>
+      </aside>
+      <article class="legal-document">
+        <header>
+          <p class="legal-kicker">使用服务前请仔细阅读</p>
+          <h1>用户协议</h1>
+          <p class="legal-meta">版本：2026-08-07 · 生效日期：2026-08-07 · 适用于 rrreal.cn 及慧鉴AI相关服务</p>
+          <p class="legal-lead">本协议说明你可以如何使用慧鉴AI，以及平台和用户各自需要承担的责任。勾选同意、注册账号或继续使用服务，即表示你已阅读并接受本协议与隐私政策。</p>
+        </header>
 
-        <h2>1. 服务范围</h2>
-        <p>慧鉴 AI 提供图像/视频鉴伪、深度分析、历史记录和报告生成服务。平台输出为技术辅助判断，不替代司法鉴定、行政认定或其他具有法律效力的结论。</p>
+        <div class="legal-summary" aria-label="协议重点">
+          <div><small>服务性质</small><strong>鉴伪辅助分析，不替代司法或行政认定</strong></div>
+          <div><small>你的责任</small><strong>确保上传和使用行为合法并妥善保管账号</strong></div>
+          <div><small>重要提醒</small><strong>高风险决策应结合原件、来源与人工复核</strong></div>
+        </div>
 
-        <h2>2. 账号与安全</h2>
-        <ul>
-          <li>注册时应提供真实、可接收验证码的手机号，并妥善保管密码、短信验证码和账号访问凭证。</li>
-          <li>账号访问凭证仅限账号本人或授权系统使用，不得公开发布、转售或用于绕过平台限制。</li>
-          <li>发现账号或凭证异常时，应及时重置密码、撤销凭证或联系平台处理。</li>
-        </ul>
-
-        <h2>3. 合规使用</h2>
-        <p>用户不得上传、检测或分发违法内容，不得攻击平台服务，不得批量抓取、逆向工程或滥用接口。因用户上传内容、使用方式或对结果的解释造成的争议，由用户自行承担相应责任。</p>
-
-        <h2>4. 数据与结果</h2>
-        <p>平台会记录必要的账号、调用次数、Token 用量、检测历史、报告编号和安全审计信息，用于服务交付、问题排查、成本统计和安全风控。用户应自行判断检测结果的适用场景，并在重要决策前进行复核。</p>
-
-        <h2>5. 服务变更</h2>
-        <p>平台可根据安全、合规、模型能力或运营需要调整功能、接口、配额和文档。重大变更会尽量通过页面提示、文档更新或其他合理方式说明。</p>
-
-        <h2>6. 联系方式</h2>
-        <p>如需账号、数据、接口或协议相关支持，请通过平台公开的联系方式与慧鉴 AI 团队联系。</p>
-
-        <section class="en" lang="en">
-          <h2>English Summary</h2>
-          <p>Huijian AI provides technical assistance for digital content forensics. Results are advisory and do not replace legal, judicial, or administrative determinations. Users are responsible for account security, lawful use, and proper interpretation of outputs. The platform may record account, usage, report, and audit data required to deliver and secure the service.</p>
+        <section id="service">
+          <h2>1. 服务范围</h2>
+          <p>慧鉴AI提供图像、视频和文档的数字内容鉴伪辅助分析，并可提供历史记录、证据展示、报告下载、开发者接口及相关管理功能。具体可用能力以你使用时页面和接口实际展示为准。</p>
+          <div class="legal-callout warning">平台给出的“真实”或“AI生成”等结论是基于当前文件和可用证据形成的技术判断，不构成司法鉴定、行政认定、新闻事实核验或投资、医疗、法律意见。</div>
         </section>
+
+        <section id="account">
+          <h2>2. 账号与安全</h2>
+          <ul>
+            <li>注册或验证时应使用本人有权使用且能够接收验证码的手机号，并按页面要求设置密码。</li>
+            <li>你应妥善保管密码、短信验证码、API Key 和分享链接；通过你的有效凭证完成的操作原则上视为由你发起。</li>
+            <li>发现异常登录或凭证泄露时，应立即重置密码、撤销 API Key 或分享链接，并停止继续使用已泄露凭证。</li>
+            <li>不得出售、出租账号，不得利用多个账号绕过配额、并发、计费或安全限制。</li>
+          </ul>
+        </section>
+
+        <section id="content">
+          <h2>3. 上传内容与合规使用</h2>
+          <p>你应确保对上传内容拥有合法处理权限，并仅将结果用于合法目的。你不得上传违法内容，不得侵犯他人的隐私、肖像、著作权、商业秘密或其他权益，也不得通过攻击、批量抓取、逆向工程、恶意压测或伪造身份等方式干扰服务。</p>
+          <p>你保留对上传内容依法享有的权利。为完成你发起的任务，你授权平台在必要范围内接收、转换、分析、缓存并生成结果和报告；具体数据处理规则见<a href="/legal/privacy.html">隐私政策</a>。</p>
+        </section>
+
+        <section id="results">
+          <h2>4. 检测结果与责任边界</h2>
+          <ul>
+            <li>压缩、截图、裁剪、重编码、未知生成器或证据缺失都可能影响检测准确性。</li>
+            <li>你应结合原始文件、来源链、元数据、水印证据和使用场景理解结果，不应只凭单一分数作出重大决定。</li>
+            <li>涉及新闻发布、司法取证、金融风控、学术处分等高风险场景时，应由具备相应资质或职责的人员复核。</li>
+            <li>用户主动创建的公开分享链接由用户管理；公开前应确认其中不包含不应披露的信息。</li>
+          </ul>
+        </section>
+
+        <section id="developer">
+          <h2>5. 开发者接口、额度与计费</h2>
+          <p>开发者接口按账号和 API Key 授权。赠送额度、模式单价、并发限制和扣费规则以开发者平台当时展示为准；一般仅成功任务结算，失败或已释放的预占不应重复扣费。你应使用幂等键和状态查询机制处理网络重试，不得将完整 API Key 暴露在浏览器、公开仓库或客户端日志中。</p>
+        </section>
+
+        <section id="change">
+          <h2>6. 服务变更、中断与终止</h2>
+          <p>平台可能基于安全、合规、模型能力、维护或运营需要调整功能、接口、配额和文档，并会对影响用户权利的重要变更通过页面提示或重新征求同意。发生不可抗力、第三方服务故障或安全事件时，部分能力可能临时中断；平台会尽合理努力恢复并避免返回伪造结果。</p>
+        </section>
+
+        <section id="contact">
+          <h2>7. 联系、协议更新与争议</h2>
+          <p>一般产品问题可通过登录后的检测结果反馈功能提交。涉及账号、个人信息更正或删除的请求，需要使用对应登录账号完成身份核验。运营主体信息以工信部备案系统中 rrreal.cn 的备案记录为准；独立电子受理邮箱上线后，本页将同步公示。</p>
+          <p>本协议适用中华人民共和国大陆地区法律。发生争议时，双方应先友好协商；协商不成的，依法向有管辖权的人民法院提起诉讼。</p>
+        </section>
+
+        <footer class="legal-footer">
+          <span>慧鉴AI · 数字内容鉴伪辅助平台</span>
+          <div><a href="/legal/privacy.html">隐私政策</a><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">浙ICP备2026051442号</a></div>
+        </footer>
       </article>
-      <footer>
-        <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">浙ICP备2026051442号</a>
-      </footer>
     </main>
   </body>
 </html>

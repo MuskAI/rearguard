@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from . import evidence_manifest_v2, privacy_erasure_ledger, watermark_verdict
+from . import evidence_manifest_v2, privacy_erasure_ledger, public_payload, watermark_verdict
 from .verdict_labels import binary_verdict
 
 
@@ -1083,7 +1083,7 @@ def put_report_artifact(
                 )
                 if (
                     evidence_manifest_v2.canonical_json(report_payload.get(field))
-                    != evidence_manifest_v2.canonical_json(current_value)
+                    != evidence_manifest_v2.canonical_json(public_payload.sanitize(current_value))
                 ):
                     raise EvidenceConflictError(
                         f"report payload {field} does not match current evidence attachments"

@@ -2,7 +2,10 @@ export type AnalyticsPage = "home" | "image" | "video" | "history";
 
 const VISITOR_KEY = "realguard_analytics_visitor";
 const EVENT_KEY = "realguard_last_page_event";
+const CONSENT_KEY = "realguard_analytics_consent_v1";
 let transientVisitor = "";
+
+export type AnalyticsConsent = "granted" | "denied" | null;
 
 function randomId(): string {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
@@ -20,6 +23,25 @@ function storage(): Storage | null {
   } catch {
     return null;
   }
+}
+
+export function analyticsConsent(): AnalyticsConsent {
+  const value = storage()?.getItem(CONSENT_KEY);
+  return value === "granted" || value === "denied" ? value : null;
+}
+
+export function setAnalyticsConsent(value: Exclude<AnalyticsConsent, null>): void {
+  storage()?.setItem(CONSENT_KEY, value);
+  if (value === "denied") {
+    storage()?.removeItem(VISITOR_KEY);
+    transientVisitor = "";
+  }
+}
+
+export function resetAnalyticsConsent(): void {
+  storage()?.removeItem(CONSENT_KEY);
+  storage()?.removeItem(VISITOR_KEY);
+  transientVisitor = "";
 }
 
 function visitorId(): string {
@@ -54,7 +76,7 @@ function eventId(page: AnalyticsPage): string {
 export function trackPageview(page: AnalyticsPage): void {
   if (typeof window === "undefined" || navigator.webdriver) return;
   if (new URLSearchParams(window.location.search).get("demo") === "1") return;
-  if (storage()?.getItem("realguard_analytics_consent_v1") === "denied") return;
+  if (analyticsConsent() !== "granted") return;
   const body = JSON.stringify({ visitorId: visitorId(), eventId: eventId(page), page });
   void fetch("/api/analytics/pageview", {
     method: "POST",

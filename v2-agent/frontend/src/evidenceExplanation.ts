@@ -120,9 +120,9 @@ function imageExplanation(outcome: Extract<AgentOutcome, { kind: "image" }>, ris
   const points: ExplanationPoint[] = [
     watermarkPoint(report),
     {
-      label: "主模型",
+      label: "真实性分析",
       text: watermarkDecisive && result.modelDecisionReady !== true
-        ? "主模型尚未通过独立校准门禁，因此其原始分数不对外发布；本次自动结论由强 AI 水印来源证据独立授权。"
+        ? "真实性分析尚未通过独立校准门禁，因此其原始分数不对外发布；本次自动结论由强 AI 水印来源证据独立授权。"
         : reviewOnly
         ? `模型分析已完成并给出“${verdictLabel}”二元结论，但签名校准门禁未通过；原始审计分不作为已校准真假概率展示。`
         : `签名校准门禁已通过，本次发布的 AI 生成风险为 ${percent(risk)}。`,

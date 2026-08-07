@@ -1102,6 +1102,47 @@ def test_public_result_marks_review_only_as_non_billable():
     assert payload["result"]["confidence"] == "低"
 
 
+def test_public_developer_result_redacts_model_stack_and_keeps_watermark_attribution():
+    metadata = {"EXIF:Make": "Apple", "EXIF:Model": "iPhone 16"}
+    payload = platform._public_result_payload(
+        {
+            "status": "success",
+            "result": {
+                "itemid": 9,
+                "final_label": "AI生成图像",
+                "decisionStatus": "verdict",
+                "billable": True,
+                "modelVersion": "DINOv3 ViT-7B ONNX",
+                "executionProvider": "CUDAExecutionProvider",
+                "all_metadata": metadata,
+                "visibleWatermark": {
+                    "detected": True,
+                    "provider": "jimeng",
+                    "hits": [{
+                        "provider": "jimeng",
+                        "confidence": 0.91,
+                        "bbox": {"x": 0.7, "y": 0.8, "w": 0.2, "h": 0.1},
+                        "localizationModel": "corzent/yolo11x_watermark_detection",
+                    }],
+                },
+            },
+        },
+        "fast",
+    )
+
+    result = payload["result"]
+    assert payload["billable"] is True
+    assert result["all_metadata"] == metadata
+    assert result["visibleWatermark"]["provider"] == "jimeng"
+    assert result["visibleWatermark"]["hits"][0]["bbox"]["x"] == pytest.approx(0.7)
+    assert "modelVersion" not in result
+    assert "executionProvider" not in result
+    assert "localizationModel" not in result["visibleWatermark"]["hits"][0]
+    rendered = json.dumps({**result, "all_metadata": {}}, ensure_ascii=False)
+    for internal_term in ("DINO", "ViT", "ONNX", "CUDA", "YOLO"):
+        assert internal_term not in rendered
+
+
 def test_public_result_requires_explicit_boolean_true_to_bill():
     missing = object()
     for value in (missing, None, False, "true", 1):
@@ -3456,7 +3497,7 @@ def test_guest_web_task_rejects_reused_daily_subject(monkeypatch, tmp_path):
     }
     user_info = {"Userid": None, "account_uuid": "", "phone": "", "openid": "guest-2"}
 
-    with pytest.raises(platform.QueueCapacityError, match="免费检测次数"):
+    with pytest.raises(platform.GuestAllowanceError, match="免费检测次数"):
         platform._enqueue_web_detection_task(
             job, b"image-bytes", "photo.png", "image/png", user_info, True, "b" * 64, "guest-reuse-001"
         )
@@ -3484,7 +3525,7 @@ def test_guest_web_task_enforces_global_daily_budget(monkeypatch, tmp_path):
         "actor": {"id": None, "account_uuid": "", "phone": "", "openid": "guest"},
     }
 
-    with pytest.raises(platform.QueueCapacityError, match="总额度"):
+    with pytest.raises(platform.GuestAllowanceError, match="总额度"):
         platform._enqueue_web_detection_task(
             job,
             b"image-bytes",

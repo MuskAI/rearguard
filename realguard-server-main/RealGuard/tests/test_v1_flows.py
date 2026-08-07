@@ -14,7 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from imagedetection import creat_app, legal_documents  # noqa: E402
-from imagedetection.views import api, detection, evidence_manifest, historical_record, reporting  # noqa: E402
+from imagedetection.views import api, detection, developer_platform, evidence_manifest, historical_record, reporting  # noqa: E402
 import detector_backend  # noqa: E402
 
 ACCOUNT_UUID = "11111111-1111-4111-8111-111111111111"
@@ -1571,6 +1571,77 @@ def test_swarm_detect_async_job_returns_expert_consensus(client, monkeypatch, tm
     assert all("风险评分" not in item for item in result["swarm"]["evidence"])
 
 
+def test_public_detection_result_removes_runtime_details_but_preserves_evidence():
+    metadata = {
+        "EXIF:Make": "Canon",
+        "XMP:CreatorTool": "ONNX Camera Companion",
+        "Nested": {"Model": "ViT user metadata"},
+    }
+    raw = {
+        "final_label": "AI生成图像",
+        "decisionStatus": "verdict",
+        "modelVersion": "DINOv3 ViT-7B ONNX FP16",
+        "executionProvider": "CUDAExecutionProvider",
+        "explanation": "DINOv3 与 YOLO 完成分析，RapidOCR 和 CLIP 完成复核。",
+        "all_metadata": metadata,
+        "visibleWatermark": {
+            "detected": True,
+            "provider": "jimeng",
+            "hits": [{
+                "provider": "jimeng",
+                "bbox": {"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.1},
+                "model": "corzent/yolo11x_watermark_detection",
+                "modelRevision": "revision-1",
+                "confidence": 0.94,
+            }],
+            "detector": {"model": "YOLO11x", "activeProvider": "CPUExecutionProvider"},
+        },
+        "remoteEvidence": {"internalEndpoint": "http://10.1.20.66:15000"},
+    }
+
+    public = detection._public_detection_result(raw)
+
+    assert public["all_metadata"] == metadata
+    assert public["visibleWatermark"]["provider"] == "jimeng"
+    assert public["visibleWatermark"]["hits"][0]["bbox"] == raw["visibleWatermark"]["hits"][0]["bbox"]
+    assert public["visibleWatermark"]["hits"][0]["confidence"] == pytest.approx(0.94)
+    assert "modelVersion" not in public
+    assert "remoteEvidence" not in public
+    assert "model" not in public["visibleWatermark"]["hits"][0]
+    assert "modelRevision" not in public["visibleWatermark"]["hits"][0]
+    assert "detector" not in public["visibleWatermark"]
+    public_without_metadata = dict(public)
+    public_without_metadata.pop("all_metadata")
+    rendered = json.dumps(public_without_metadata, ensure_ascii=False)
+    for internal_term in ("DINO", "ViT", "ONNX", "CUDA", "YOLO", "RapidOCR", "CLIP", "10.1.20.66"):
+        assert internal_term not in rendered
+
+
+def test_public_fast_job_sanitizes_nested_result_and_failed_error():
+    public = detection._public_detection_job({
+        "id": "job_public_redaction",
+        "kind": "image",
+        "mode": "fast",
+        "status": "failed",
+        "summary": "DINOv3 GPU inference failed",
+        "error": "CUDAExecutionProvider failed at /home/ymk/model_registry",
+        "result": {
+            "status": "success",
+            "result": {
+                "final_label": "真实图像",
+                "decisionStatus": "verdict",
+                "model": "DINOv3 ViT-7B",
+                "all_metadata": {"EXIF:Model": "iPhone 15 Pro"},
+            },
+        },
+    })
+
+    assert public["summary"] == "本次分析未完成，请稍后重试"
+    assert public["error"] == "本次分析未完成，请稍后重试"
+    assert "model" not in public["result"]["result"]
+    assert public["result"]["result"]["all_metadata"]["EXIF:Model"] == "iPhone 15 Pro"
+
+
 def test_image_job_long_poll_returns_when_version_changes(client, monkeypatch):
     _login_session(client)
     running = {
@@ -1606,18 +1677,19 @@ def test_image_job_long_poll_returns_when_version_changes(client, monkeypatch):
         return versions[min(len(calls) - 1, len(versions) - 1)]
 
     monkeypatch.setattr(detection, "_load_persistent_web_job", load_job)
+    running_version = detection._public_detection_job(running)["version"]
     response = client.get(
         "/image_upload/jobs/job_long_poll",
         query_string={
             "wait": "1",
-            "after": detection._detection_job_version(running),
+            "after": running_version,
         },
     )
 
     assert response.status_code == 200
     payload = response.get_json()["job"]
     assert payload["status"] == "success"
-    assert payload["version"] != detection._detection_job_version(running)
+    assert payload["version"] != running_version
     assert "no-store" in response.headers["Cache-Control"]
     assert calls == ["job_long_poll", "job_long_poll"]
 
@@ -1640,12 +1712,13 @@ def test_image_job_long_poll_rechecks_owner_after_reload(client, monkeypatch):
     }
     jobs = iter((running, foreign))
     monkeypatch.setattr(detection, "_load_persistent_web_job", lambda job_id: next(jobs))
+    running_version = detection._public_detection_job(running)["version"]
 
     response = client.get(
         "/image_upload/jobs/job_owner_reload",
         query_string={
             "wait": "1",
-            "after": detection._detection_job_version(running),
+            "after": running_version,
         },
     )
 
@@ -1728,6 +1801,72 @@ def test_async_image_upload_returns_429_when_job_capacity_is_full(client, monkey
     assert response.status_code == 429
     assert response.headers["Retry-After"] == "5"
     assert response.get_json()["code"] == "server_busy"
+
+
+def test_guest_limit_contract_is_distinct_from_server_capacity(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(detection.admin_state, "STATE_PATH", tmp_path / "admin_state.json")
+    monkeypatch.setattr(detection, "_record_guest_upload_consent", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        detection,
+        "_enqueue_persistent_web_job",
+        lambda *_args, **_kwargs: (
+            False,
+            "guest_detection_limit_reached",
+            "今日访客免费检测次数已用完，请登录后继续检测",
+            None,
+            False,
+        ),
+    )
+
+    response = client.post(
+        "/image_upload/detect_async",
+        data={"image": (BytesIO(VALID_PNG_BYTES), "sample.png")},
+        content_type="multipart/form-data",
+        headers={"Idempotency-Key": "guest-limit-queue-001"},
+    )
+
+    assert response.status_code == 429
+    assert response.get_json()["code"] == "guest_detection_limit_reached"
+    assert "登录" in response.get_json()["message"]
+
+
+def test_persistent_queue_maps_guest_allowance_to_public_contract(monkeypatch):
+    monkeypatch.setattr(detection, "_guest_capacity_subject", lambda: "d" * 64)
+    monkeypatch.setattr(
+        developer_platform,
+        "_enqueue_web_detection_task",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            developer_platform.GuestAllowanceError("访客额度已用完")
+        ),
+    )
+
+    queued = detection._enqueue_persistent_web_job(
+        {"id": "job_guest_contract"},
+        VALID_PNG_BYTES,
+        "sample.png",
+        "image/png",
+        {"openid": "guest-1"},
+        True,
+        "guest-contract-001",
+    )
+
+    assert queued == (
+        False,
+        "guest_detection_limit_reached",
+        "访客额度已用完",
+        None,
+        False,
+    )
+
+
+def test_guest_session_limit_returns_actionable_error_code(client):
+    with client.session_transaction() as sess:
+        sess[detection.GUEST_DETECTION_SESSION_KEY] = detection.GUEST_DETECTION_LIMIT
+
+    response = client.post("/image_upload/detect_async", data={"probe": "1"})
+
+    assert response.status_code == 401
+    assert response.get_json()["code"] == "guest_detection_limit_reached"
 
 
 def test_async_image_replay_does_not_leave_orphan_progress_job(client, monkeypatch, tmp_path):

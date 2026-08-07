@@ -34,6 +34,7 @@ from . import (
     privacy_erasure_ledger,
     provenance,
     provenance_precheck,
+    public_payload,
     reporting,
     storage,
     synthid_detector,
@@ -68,9 +69,9 @@ SESSION_CSRF_HEADER = "x-huijian-csrf"
 DEVELOPER_AUTH_CONFIGURED = bool(DEVELOPER_AUTH_URL and DEVELOPER_AUTH_SECRET)
 REPORT_SHARE_SECRET = os.getenv("JIANZHEN_REPORT_SHARE_SECRET", "").strip()
 CONSENT_AUDIT_SALT = os.getenv("JIANZHEN_CONSENT_AUDIT_SALT", "").strip()
-LEGAL_CONSENT_VERSION = "2026-07-15+2026-07-20"
-LEGAL_TERMS_SHA256 = "09707ba3b915db9904cc6f8b4951b5c9bbfff7e768fd237c04eedf90fef89ff3"
-LEGAL_PRIVACY_SHA256 = "5c505aaf82abe1af5cac83fef81c60ec66e89a76377110fba6348ed0567d8935"
+LEGAL_CONSENT_VERSION = "2026-08-07+2026-08-07"
+LEGAL_TERMS_SHA256 = "619aee74677629f4f5e2c4ccbaa99c458671086de45c0a586e76c8c8c062d2c5"
+LEGAL_PRIVACY_SHA256 = "54d98f687f8c6bc6ddf7c1256958d070fd5d2af7421059ada38fc3366acb56eb"
 PUBLIC_BASE_URL = os.getenv("JIANZHEN_PUBLIC_BASE_URL", "").strip().rstrip("/")
 REPORT_SHARE_DEFAULT_SECONDS = int(os.getenv("JIANZHEN_REPORT_SHARE_DEFAULT_SECONDS", str(7 * 24 * 60 * 60)))
 REPORT_SHARE_MAX_SECONDS = int(os.getenv("JIANZHEN_REPORT_SHARE_MAX_SECONDS", str(30 * 24 * 60 * 60)))
@@ -930,6 +931,10 @@ def _token_usage_from_payload(payload: dict | None, *, cache_hit: bool = False) 
     }
 
 
+def _public_result_payload(value: object) -> object:
+    return public_payload.sanitize(value)
+
+
 def _authorize_analysis(analysis: dict, *, allow_decisive_provenance: bool) -> dict:
     """Normalize every public analysis through an explicit fail-closed decision gate."""
     normalized = dict(analysis or {})
@@ -1102,7 +1107,7 @@ def _build_result(
     return result
 
 
-def _strip_internal_history_fields(item: dict) -> dict:
+def _strip_internal_history_fields(item: dict, *, public: bool = True) -> dict:
     clean = dict(item)
     clean.pop("_developerUserId", None)
     clean.pop("_developerAccountUuid", None)
@@ -1111,7 +1116,8 @@ def _strip_internal_history_fields(item: dict) -> dict:
     if isinstance(precheck, dict):
         clean = watermark_yolo.merge(clean, precheck)
     watermark_verdict.apply(clean, clean.get("visibleWatermark"))
-    return _authorize_analysis(clean, allow_decisive_provenance=True)
+    clean = _authorize_analysis(clean, allow_decisive_provenance=True)
+    return _public_result_payload(clean) if public else clean
 
 
 @app.get("/api/health")
@@ -1359,7 +1365,9 @@ async def _detect_with_slot(
         verdict=result["verdict"],
         cache_hit=cache_hit,
     )
-    return result
+    if actor.get("mode") in {"admin", "internal"}:
+        return result
+    return _public_result_payload(result)
 
 
 @app.post("/api/forensics")
@@ -1454,7 +1462,9 @@ async def forensics(
             history_item["taskId"],
             forensics=report,
         )
-    return report
+    if actor.get("mode") in {"admin", "internal"}:
+        return report
+    return _public_result_payload(report)
 
 
 @app.post("/api/provenance")
@@ -1538,7 +1548,12 @@ def history(request: Request) -> dict:
         has_watermark=_parse_bool("hasWatermark"),
         has_synthid=_parse_bool("hasSynthid"),
     )
-    return {"items": items, "total": total, "filterCounts": filter_counts}
+    public_items = (
+        items
+        if actor.get("mode") == "admin"
+        else [_public_result_payload(item) for item in items]
+    )
+    return {"items": public_items, "total": total, "filterCounts": filter_counts}
 
 
 @app.get("/api/history/{task_id}")
@@ -1546,8 +1561,8 @@ def history_item(task_id: str, request: Request) -> dict:
     item = storage.get_history(task_id)
     if not item:
         raise HTTPException(status_code=404, detail="记录不存在")
-    _require_owned_item(request, item, missing_detail="记录不存在", required_scope="reports")
-    return _strip_internal_history_fields(item)
+    actor = _require_owned_item(request, item, missing_detail="记录不存在", required_scope="reports")
+    return _strip_internal_history_fields(item, public=actor.get("mode") != "admin")
 
 
 @app.post("/api/history/{task_id}/artifacts")
@@ -1578,8 +1593,8 @@ def report(report_id: str, request: Request) -> dict:
     item = storage.get_history(report_id)
     if not item:
         raise HTTPException(status_code=404, detail="报告不存在")
-    _require_report_access(request, item)
-    return _strip_internal_history_fields(item)
+    actor = _require_report_access(request, item)
+    return _strip_internal_history_fields(item, public=actor.get("mode") != "admin")
 
 
 def _frozen_report_artifact(report_id: str, item: dict) -> dict:
@@ -2037,7 +2052,7 @@ def _revalidate_public_report_share(
 def report_public(report_id: str, request: Request) -> Response:
     item, share, expires, signature = _resolve_public_report_share(report_id, request)
     artifact = _frozen_report_artifact(report_id, item)
-    clean_item = dict(artifact["reportPayload"])
+    clean_item = _public_result_payload(dict(artifact["reportPayload"]))
     clean_item.pop("_developerUserId", None)
     clean_item.pop("_developerAccountUuid", None)
     clean_item.pop("_developerKeyId", None)

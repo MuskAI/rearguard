@@ -990,6 +990,7 @@ export interface ImageAgentJob {
   createdAt?: string;
   updatedAt?: string;
   progress?: number;
+  publicStage?: "secure_receive" | "authenticity_analysis" | "evidence_summary" | "report_ready" | string;
   experts?: ImageAgentExpert[];
   summary?: string;
   error?: string;

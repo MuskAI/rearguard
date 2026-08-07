@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
 
@@ -130,15 +131,16 @@ def test_history_results_remain_immutable_for_same_user_and_exact_sha(isolated_s
 
 def test_metrics_fail_closed_for_legacy_unauthorized_verdicts(isolated_storage):
     storage = isolated_storage
+    recent = datetime.now(timezone.utc) - timedelta(minutes=2)
     legacy = _result(
         "legacy-verdict",
-        "2026-07-19T08:12:00+00:00",
+        recent.isoformat(),
         _clear_report(),
         verdict="real",
     )
     authorized = _result(
         "authorized-provenance",
-        "2026-07-19T08:13:00+00:00",
+        (recent + timedelta(minutes=1)).isoformat(),
         _clear_report(),
         verdict="highly_suspected_fake",
     )
