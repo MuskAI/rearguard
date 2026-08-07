@@ -30,7 +30,9 @@ function storage() {
 
 export function analyticsConsent(): AnalyticsConsent {
   const value = storage()?.getItem(ANALYTICS_CONSENT_KEY);
-  return value === "granted" || value === "denied" ? value : null;
+  if (value === "granted" || value === "denied") return value;
+  storage()?.setItem(ANALYTICS_CONSENT_KEY, "granted");
+  return "granted";
 }
 
 export function setAnalyticsConsent(value: Exclude<AnalyticsConsent, null>) {

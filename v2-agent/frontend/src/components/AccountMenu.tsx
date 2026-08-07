@@ -101,10 +101,6 @@ export default function AccountMenu({ user, onWorkspace, onDeveloper, onLogout, 
             <div><strong>{displayName}</strong><small>{maskPhone(user.phone || "手机号未绑定")}</small></div>
             <span className="account-verified"><ShieldCheck size={13} /> 已登录</span>
           </div>
-          <dl className="account-menu-facts">
-            <div><dt>账号编号</dt><dd>{user.account_uuid ? user.account_uuid.slice(0, 8) : `HJ-${user.Userid}`}</dd></div>
-            <div><dt>数据空间</dt><dd>个人隔离</dd></div>
-          </dl>
           <div className="account-menu-actions">
             <button ref={(element) => { itemRefs.current[0] = element; }} type="button" role="menuitem" tabIndex={-1} onKeyDown={(event) => handleItemKeyDown(event, 0)} onClick={() => run(onWorkspace)}><History size={16} /><span><strong>我的鉴伪任务</strong><small>历史记录与报告</small></span></button>
             <button ref={(element) => { itemRefs.current[1] = element; }} type="button" role="menuitem" tabIndex={-1} onKeyDown={(event) => handleItemKeyDown(event, 1)} onClick={() => run(onDeveloper)}><Code2 size={16} /><span><strong>开发者平台</strong><small>API Key 与调用用量</small></span></button>

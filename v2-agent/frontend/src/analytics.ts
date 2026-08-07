@@ -27,7 +27,9 @@ function storage(): Storage | null {
 
 export function analyticsConsent(): AnalyticsConsent {
   const value = storage()?.getItem(CONSENT_KEY);
-  return value === "granted" || value === "denied" ? value : null;
+  if (value === "granted" || value === "denied") return value;
+  storage()?.setItem(CONSENT_KEY, "granted");
+  return "granted";
 }
 
 export function setAnalyticsConsent(value: Exclude<AnalyticsConsent, null>): void {
@@ -36,12 +38,6 @@ export function setAnalyticsConsent(value: Exclude<AnalyticsConsent, null>): voi
     storage()?.removeItem(VISITOR_KEY);
     transientVisitor = "";
   }
-}
-
-export function resetAnalyticsConsent(): void {
-  storage()?.removeItem(CONSENT_KEY);
-  storage()?.removeItem(VISITOR_KEY);
-  transientVisitor = "";
 }
 
 function visitorId(): string {

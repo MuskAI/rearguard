@@ -1,25 +1,14 @@
 import {
   ArrowRight,
-  BadgeCheck,
-  BookOpen,
-  Braces,
   ChevronDown,
-  CircleHelp,
-  Code2,
-  FileCheck2,
-  Fingerprint,
-  Image as ImageIcon,
-  Layers3,
-  LockKeyhole,
   LogIn,
-  ScanSearch,
-  ShieldCheck,
-  Sparkles,
-  Waypoints,
+  Menu,
+  X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from "react";
 import type { AccountUser } from "../api";
 import AccountMenu from "./AccountMenu";
+import BrandArtIcon, { BrandArtIconName } from "./BrandArtIcon";
 import HuijianBrand from "./HuijianBrand";
 
 export type DeveloperEntry = "overview" | "tester" | "docs";
@@ -27,25 +16,103 @@ export type DeveloperEntry = "overview" | "tester" | "docs";
 interface Props {
   authReady: boolean;
   user: AccountUser | null;
+  analyticsEnabled: boolean;
   onEnterWorkspace: () => void;
   onDeveloper: (entry?: DeveloperEntry) => void;
   onLogin: () => void;
   onLogout: () => void;
-  onAnalyticsPreference: () => void;
+  onToggleAnalytics: () => void;
 }
 
-const FAQS = [
-  { question: "慧鉴AI 会直接替我做最终判断吗？", answer: "系统提供二元辅助结论，并同步展示最关键的证据与限制。新闻、司法、金融等高风险场景仍应核对原始来源并由专业人员复核。" },
-  { question: "上传的文件会被其他用户看到吗？", answer: "不会。登录用户的任务、历史和报告按账号隔离；公开分享只会在你主动创建限时链接后发生，并且可以随时撤销。" },
-  { question: "快速检测与 Soar 模式有什么区别？", answer: "快速检测适合日常筛查，优先返回主结论与关键水印线索；Soar 模式会调度更多独立证据源进行交叉复核，耗时更长。" },
-  { question: "为什么结论还需要看证据？", answer: "任何检测都可能受压缩、裁剪、截图或未知生成器影响。证据能帮助你判断结论是否适用于当前文件，而不是只相信一个孤立分数。" },
-  { question: "如何把鉴伪能力接入自己的产品？", answer: "登录开发者平台后可创建 API Key、查看多语言示例，并直接在网页调试台上传样本验证请求与响应。" },
+const NAV_ITEMS = [
+  { label: "产品能力", href: "#capabilities" },
+  { label: "应用场景", href: "#scenarios" },
+  { label: "工作方式", href: "#workflow" },
 ] as const;
 
-export default function OfficialHome({ authReady, user, onEnterWorkspace, onDeveloper, onLogin, onLogout, onAnalyticsPreference }: Props) {
+const FAQS = [
+  { question: "慧鉴AI 会直接给出真假结论吗？", answer: "会。系统先给出 Real 或 Fake 的二元辅助结论，再展示支持结论的关键证据、冲突和局限。新闻、司法、金融等高风险场景仍应结合原始来源复核。" },
+  { question: "快速检测与 Swarm 模式有什么区别？", answer: "快速检测面向日常筛查，同步核验真实性信号与 AI 水印；Swarm 会调度更多独立证据源进行交叉复核，适合难例与重要内容。" },
+  { question: "手机拍摄照片会被轻易判假吗？", answer: "系统会读取相机型号、拍摄参数和其他原始元数据，将可信拍摄链路作为倾向真实的证据，同时说明这些信息可能被修改，避免把单一字段当成绝对证明。" },
+  { question: "上传的文件会被其他用户看到吗？", answer: "不会。登录账号的任务、历史和报告按账号隔离；只有你主动创建限时分享链接时，指定报告才会被访问，并且可以撤销。" },
+  { question: "如何把鉴伪能力接入自己的产品？", answer: "登录开发者平台后可以创建 API Key、查看计费和用量、复制多语言示例，并在网页调试台发送真实请求。" },
+] as const;
+
+const CAPABILITIES: Array<{
+  number: string;
+  eyebrow: string;
+  title: string;
+  description: string;
+  icon: BrandArtIconName;
+  tags: string[];
+}> = [
+  {
+    number: "01",
+    eyebrow: "FAST CHECK",
+    title: "快速检测",
+    description: "一次完成真实性分析与 AI 水印核验，先给明确结论，再呈现最重要的依据。",
+    icon: "fast",
+    tags: ["日常筛查", "水印同步", "快速返回"],
+  },
+  {
+    number: "02",
+    eyebrow: "SWARM REVIEW",
+    title: "Swarm 蜂群复核",
+    description: "调度多条独立证据链并行判断，把一致意见、证据冲突和不确定性放在同一份结果中。",
+    icon: "swarm",
+    tags: ["多源交叉", "难例复核", "并行分析"],
+  },
+  {
+    number: "03",
+    eyebrow: "EVIDENCE REPORT",
+    title: "证据报告",
+    description: "保留水印位置、原始元数据与关键判断依据，让结果可以被再次检查、归档和分享。",
+    icon: "report",
+    tags: ["水印标注", "完整元数据", "报告归档"],
+  },
+];
+
+const SCENARIOS: Array<{ icon: BrandArtIconName; title: string; description: string }> = [
+  { icon: "image", title: "媒体内容核验", description: "在发布与引用之前，快速检查图片和视频来源风险。" },
+  { icon: "document", title: "教学与科研", description: "批量评测数据集，观察准确率、分数与资源消耗。" },
+  { icon: "workflow", title: "平台内容治理", description: "通过 API 接入审核流程，统一记录调用与检测结果。" },
+  { icon: "developer", title: "品牌与合规", description: "定位平台水印和来源线索，为人工复核提供上下文。" },
+];
+
+export default function OfficialHome({
+  authReady,
+  user,
+  analyticsEnabled,
+  onEnterWorkspace,
+  onDeveloper,
+  onLogin,
+  onLogout,
+  onToggleAnalytics,
+}: Props) {
   const [developerOpen, setDeveloperOpen] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const siteRef = useRef<HTMLDivElement>(null);
   const developerRootRef = useRef<HTMLDivElement>(null);
   const developerTriggerRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const root = siteRef.current;
+    if (!root) return;
+    const nodes = Array.from(root.querySelectorAll<HTMLElement>("[data-reveal]"));
+    if (!("IntersectionObserver" in window)) {
+      nodes.forEach((node) => node.classList.add("is-visible"));
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        entry.target.classList.add("is-visible");
+        observer.unobserve(entry.target);
+      });
+    }, { threshold: 0.14, rootMargin: "0px 0px -7% 0px" });
+    nodes.forEach((node) => observer.observe(node));
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     if (!developerOpen) return;
@@ -67,36 +134,59 @@ export default function OfficialHome({ authReady, user, onEnterWorkspace, onDeve
 
   function openDeveloper(entry: DeveloperEntry) {
     setDeveloperOpen(false);
+    setMobileNavOpen(false);
     onDeveloper(entry);
   }
 
+  function moveHero(event: ReactPointerEvent<HTMLElement>) {
+    if (event.pointerType !== "mouse") return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = (event.clientX - rect.left) / rect.width - 0.5;
+    const y = (event.clientY - rect.top) / rect.height - 0.5;
+    event.currentTarget.style.setProperty("--hero-rx", `${(-y * 5).toFixed(2)}deg`);
+    event.currentTarget.style.setProperty("--hero-ry", `${(x * 7).toFixed(2)}deg`);
+    event.currentTarget.style.setProperty("--hero-tx", `${(x * 12).toFixed(1)}px`);
+    event.currentTarget.style.setProperty("--hero-ty", `${(y * 10).toFixed(1)}px`);
+  }
+
+  function resetHero(event: ReactPointerEvent<HTMLElement>) {
+    event.currentTarget.style.setProperty("--hero-rx", "0deg");
+    event.currentTarget.style.setProperty("--hero-ry", "0deg");
+    event.currentTarget.style.setProperty("--hero-tx", "0px");
+    event.currentTarget.style.setProperty("--hero-ty", "0px");
+  }
+
   return (
-    <div className="official-site home-vnext">
+    <div ref={siteRef} className="official-site home-vnext home-v3">
       <header className="home-header">
         <a className="home-brand-link" href="#home" aria-label="返回慧鉴AI官网首页"><HuijianBrand /></a>
-        <nav className="home-nav" aria-label="官网导航">
+
+        <nav className="home-nav home-desktop-nav" aria-label="官网导航">
+          {NAV_ITEMS.map((item) => <a key={item.href} href={item.href}>{item.label}</a>)}
           <div
             ref={developerRootRef}
             className={`home-developer-menu ${developerOpen ? "is-open" : ""}`}
             onPointerEnter={() => setDeveloperOpen(true)}
-            onPointerLeave={(event) => {
-              if (event.pointerType === "mouse") setDeveloperOpen(false);
-            }}
+            onPointerLeave={(event) => { if (event.pointerType === "mouse") setDeveloperOpen(false); }}
           >
             <button ref={developerTriggerRef} type="button" aria-haspopup="menu" aria-expanded={developerOpen} onClick={() => setDeveloperOpen((value) => !value)}>
-              <Code2 size={17} /><span className="home-label-wide">开发者平台</span><span className="home-label-compact">开发者</span><ChevronDown size={14} />
+              <span>开发者平台</span><ChevronDown size={14} />
             </button>
             {developerOpen && (
               <div className="home-developer-popover" role="menu" aria-label="开发者平台入口">
-                <button type="button" role="menuitem" onClick={() => openDeveloper("overview")}><span><Braces size={18} /></span><div><strong>平台概览</strong><small>额度、调用与账户</small></div><ArrowRight size={15} /></button>
-                <button type="button" role="menuitem" onClick={() => openDeveloper("tester")}><span><Sparkles size={18} /></span><div><strong>在线调试</strong><small>在网页中发送真实请求</small></div><ArrowRight size={15} /></button>
-                <button type="button" role="menuitem" onClick={() => openDeveloper("docs")}><span><BookOpen size={18} /></span><div><strong>接入文档</strong><small>多语言示例与错误码</small></div><ArrowRight size={15} /></button>
+                <button type="button" role="menuitem" onClick={() => openDeveloper("overview")}><BrandArtIcon name="developer" /><div><strong>平台概览</strong><small>API Key、额度与调用</small></div><ArrowRight size={15} /></button>
+                <button type="button" role="menuitem" onClick={() => openDeveloper("tester")}><BrandArtIcon name="fast" /><div><strong>在线调试</strong><small>发送真实检测请求</small></div><ArrowRight size={15} /></button>
+                <button type="button" role="menuitem" onClick={() => openDeveloper("docs")}><BrandArtIcon name="report" /><div><strong>接入文档</strong><small>多语言示例与错误码</small></div><ArrowRight size={15} /></button>
               </div>
             )}
           </div>
-          <a className="home-faq-link" href="#faq"><CircleHelp size={17} /><span>常见问题</span></a>
+          <a href="#faq">常见问题</a>
         </nav>
+
         <div className="home-header-actions">
+          <button type="button" className="home-mobile-menu-button" onClick={() => setMobileNavOpen((value) => !value)} aria-label={mobileNavOpen ? "关闭网站导航" : "打开网站导航"} aria-expanded={mobileNavOpen}>
+            {mobileNavOpen ? <X size={19} /> : <Menu size={19} />}
+          </button>
           {authReady && (user ? (
             <AccountMenu user={user} onWorkspace={onEnterWorkspace} onDeveloper={() => onDeveloper("overview")} onLogout={onLogout} />
           ) : (
@@ -104,85 +194,118 @@ export default function OfficialHome({ authReady, user, onEnterWorkspace, onDeve
           ))}
           <button type="button" className="home-workspace-button" onClick={onEnterWorkspace}><span className="home-label-wide">开始鉴伪</span><span className="home-label-compact">鉴伪</span><ArrowRight size={17} /></button>
         </div>
+
+        {mobileNavOpen && (
+          <nav className="home-mobile-nav" aria-label="移动端官网导航">
+            {NAV_ITEMS.map((item) => <a key={item.href} href={item.href} onClick={() => setMobileNavOpen(false)}>{item.label}<ArrowRight size={16} /></a>)}
+            <button type="button" onClick={() => openDeveloper("overview")}>开发者平台<ArrowRight size={16} /></button>
+            <a href="#faq" onClick={() => setMobileNavOpen(false)}>常见问题<ArrowRight size={16} /></a>
+          </nav>
+        )}
       </header>
 
       <main>
         <section className="home-hero" id="home" aria-labelledby="official-home-title">
-          <div className="home-hero-copy">
-            <p className="home-eyebrow"><span><ShieldCheck size={15} /></span> 面向真实世界的内容鉴伪</p>
+          <div className="home-hero-copy" data-reveal>
+            <p className="home-eyebrow"><i /> AI 内容真实性基础设施</p>
             <h1 id="official-home-title" tabIndex={-1}>慧鉴AI</h1>
-            <h2>把真假判断，变成一条<br />看得懂的证据链。</h2>
-            <p className="home-hero-description">从模型判断、可见水印到来源信息，在一个任务里给出明确结论、关键依据与可追溯报告。</p>
+            <h2>把真假判断，落成<br />可以复核的证据。</h2>
+            <p className="home-hero-description">从快速筛查到 Swarm 蜂群复核，把水印、元数据与多源判断组织成一份真正看得懂的结论。</p>
             <div className="home-hero-actions">
               <button type="button" onClick={onEnterWorkspace}>上传内容开始鉴伪 <ArrowRight size={19} /></button>
-              <a href="#how-it-works">看看证据如何形成 <ChevronDown size={18} /></a>
-            </div>
-            <div className="home-hero-assurances" aria-label="服务特性">
-              <span><BadgeCheck size={15} /> 真实检测链路</span>
-              <span><LockKeyhole size={15} /> 账号数据隔离</span>
-              <span><FileCheck2 size={15} /> 结果可复核</span>
+              <a href="#capabilities">探索产品能力 <ChevronDown size={18} /></a>
             </div>
           </div>
-          <figure className="home-hero-visual" aria-label="慧鉴AI品牌助手小鉴正在整理内容证据">
-            <div className="home-scan-field" aria-hidden="true">
-              <i className="scan-line-a" /><i className="scan-line-b" /><i className="scan-line-c" />
-              <span className="home-evidence-chip chip-model"><ScanSearch size={15} /> 真实性分析 <b>完成</b></span>
-              <span className="home-evidence-chip chip-source"><Fingerprint size={15} /> 来源线索 <b>核验中</b></span>
-              <span className="home-evidence-chip chip-report"><FileCheck2 size={15} /> 证据报告 <b>可追溯</b></span>
+
+          <figure className="home-hero-visual" aria-label="慧鉴AI品牌助手小鉴与鉴伪工具" onPointerMove={moveHero} onPointerLeave={resetHero} data-reveal>
+            <div className="home-hero-visual-stage">
+              <span className="hero-orbit orbit-one" aria-hidden="true" />
+              <span className="hero-orbit orbit-two" aria-hidden="true" />
+              <img src="/brand/huijian-mascot.webp" alt="慧鉴AI品牌助手小鉴" width="594" height="800" />
+              <span className="hero-art-token token-fast"><BrandArtIcon name="fast" /><b>快速检测</b></span>
+              <span className="hero-art-token token-swarm"><BrandArtIcon name="swarm" /><b>Swarm</b></span>
+              <span className="hero-art-token token-report"><BrandArtIcon name="report" /><b>证据报告</b></span>
             </div>
-            <img src="/brand/huijian-mascot.webp" alt="慧鉴AI品牌助手小鉴" width="594" height="800" />
           </figure>
         </section>
 
-        <section className="home-proof-strip" aria-label="慧鉴AI核心能力">
-          <article><span>01</span><div><strong>给出明确结论</strong><small>真假判断不绕弯</small></div></article>
-          <article><span>02</span><div><strong>突出关键证据</strong><small>重要线索先看见</small></div></article>
-          <article><span>03</span><div><strong>保留原始信息</strong><small>元数据完整呈现</small></div></article>
+        <section className="home-value-rail" aria-label="慧鉴AI核心价值" data-reveal>
+          <article><strong>图片 · 视频 · 文档</strong><span>一个入口自动分流</span></article>
+          <article><strong>快速 · Swarm</strong><span>按任务重要程度选择</span></article>
+          <article><strong>水印 · 元数据 · 报告</strong><span>关键证据集中呈现</span></article>
         </section>
 
-        <section className="home-capabilities" id="how-it-works" aria-labelledby="home-capabilities-title">
-          <div className="home-section-heading">
-            <p>一份内容，三条证据路径</p>
-            <h2 id="home-capabilities-title">结论先到，依据紧随其后。</h2>
-            <span>系统会按文件类型组织证据，不把复杂的技术实现留给用户理解。</span>
+        <section className="home-capabilities" id="capabilities" aria-labelledby="home-capabilities-title">
+          <div className="home-section-heading" data-reveal>
+            <p>产品能力</p>
+            <h2 id="home-capabilities-title">不是多堆几个分数，<br />而是让每条证据各就其位。</h2>
+            <span>根据任务风险选择分析深度，所有模式都给出明确结论和可核验依据。</span>
           </div>
-          <div className="home-capability-grid">
-            <article><span className="home-capability-icon"><ScanSearch size={24} /></span><small>主判断</small><h3>真实性分析</h3><p>识别生成痕迹与局部异常，形成真假风险基线。</p><b>01</b></article>
-            <article><span className="home-capability-icon"><Fingerprint size={24} /></span><small>强线索</small><h3>水印与来源</h3><p>定位可见水印，核对平台标记、拍摄信息与内容凭证。</p><b>02</b></article>
-            <article><span className="home-capability-icon"><Layers3 size={24} /></span><small>可复核</small><h3>证据汇总</h3><p>把支持、冲突与限制放进同一份报告，便于再次核查。</p><b>03</b></article>
+          <div className="home-capability-list">
+            {CAPABILITIES.map((item) => (
+              <article key={item.number} data-reveal>
+                <span className="home-capability-number">{item.number}</span>
+                <BrandArtIcon name={item.icon} className="home-capability-art" />
+                <div className="home-capability-copy">
+                  <small>{item.eyebrow}</small>
+                  <h3>{item.title}</h3>
+                  <p>{item.description}</p>
+                  <ul>{item.tags.map((tag) => <li key={tag}>{tag}</li>)}</ul>
+                </div>
+                <button type="button" onClick={onEnterWorkspace} aria-label={`使用${item.title}`}><ArrowRight size={22} /></button>
+              </article>
+            ))}
           </div>
         </section>
 
-        <section className="home-evidence-story" aria-labelledby="home-evidence-title">
-          <figure><img src="/brand/huijian-evidence-studio.webp" alt="小鉴正在整理图像、视频与文档证据" width="1536" height="1024" loading="lazy" /></figure>
-          <div>
-            <p>统一 Agent 工作台</p>
-            <h2 id="home-evidence-title">不用在不同版本和入口之间来回切换。</h2>
-            <ol>
-              <li><span><ImageIcon size={17} /></span><div><strong>上传内容</strong><small>拖入图片、视频或文档</small></div></li>
-              <li><span><Waypoints size={17} /></span><div><strong>观察进度</strong><small>只展示用户真正关心的阶段</small></div></li>
-              <li><span><FileCheck2 size={17} /></span><div><strong>复核证据</strong><small>放大原图并查看完整文件信息</small></div></li>
-            </ol>
+        <section className="home-scenarios" id="scenarios" aria-labelledby="home-scenarios-title">
+          <div className="home-section-heading" data-reveal>
+            <p>应用场景</p>
+            <h2 id="home-scenarios-title">从单张核验，到批量治理。</h2>
+            <span>面向需要判断内容来源、规模化测试或接入审核流程的真实工作。</span>
+          </div>
+          <div className="home-scenario-grid">
+            {SCENARIOS.map((item) => (
+              <article key={item.title} data-reveal>
+                <BrandArtIcon name={item.icon} />
+                <div><h3>{item.title}</h3><p>{item.description}</p></div>
+                <ArrowRight size={19} aria-hidden="true" />
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="home-workflow" id="workflow" aria-labelledby="home-workflow-title">
+          <div className="home-workflow-heading" data-reveal>
+            <p>工作方式</p>
+            <h2 id="home-workflow-title">三步完成一次可复核判断。</h2>
             <button type="button" onClick={onEnterWorkspace}>进入统一工作台 <ArrowRight size={18} /></button>
           </div>
+          <ol>
+            <li data-reveal><span>01</span><BrandArtIcon name="image" /><div><strong>提交内容</strong><p>上传或拖入图片、视频和文档，系统自动识别处理链路。</p></div></li>
+            <li data-reveal><span>02</span><BrandArtIcon name="workflow" /><div><strong>观察分析</strong><p>只展示用户真正关心的阶段，重要证据优先出现。</p></div></li>
+            <li data-reveal><span>03</span><BrandArtIcon name="report" /><div><strong>复核与归档</strong><p>放大查看水印区域，核对元数据并下载完整报告。</p></div></li>
+          </ol>
         </section>
 
         <section className="home-faq" id="faq" aria-labelledby="home-faq-title">
-          <div className="home-section-heading">
+          <div className="home-section-heading" data-reveal>
+            <BrandArtIcon name="faq" className="home-faq-art" />
             <p>常见问题</p>
-            <h2 id="home-faq-title">开始之前，先把边界说清楚。</h2>
+            <h2 id="home-faq-title">开始之前，把能力与边界说清楚。</h2>
           </div>
-          <div className="home-faq-list">
+          <div className="home-faq-list" data-reveal>
             {FAQS.map((item, index) => (
               <details key={item.question} name="huijian-faq">
-                <summary><span>{String(index + 1).padStart(2, "0")}</span><strong>{item.question}</strong><i><ChevronDown size={18} /></i></summary>
+                <summary><span>{String(index + 1).padStart(2, "0")}</span><strong>{item.question}</strong><i><ChevronDown size={19} /></i></summary>
                 <p>{item.answer}</p>
               </details>
             ))}
           </div>
         </section>
 
-        <section className="home-final-cta" aria-labelledby="home-final-title">
+        <section className="home-final-cta" aria-labelledby="home-final-title" data-reveal>
+          <BrandArtIcon name="fast" />
           <div><p>从第一份内容开始</p><h2 id="home-final-title">让每个判断，都能找到依据。</h2></div>
           <button type="button" onClick={onEnterWorkspace}>开始鉴伪 <ArrowRight size={20} /></button>
         </section>
@@ -191,7 +314,12 @@ export default function OfficialHome({ authReady, user, onEnterWorkspace, onDeve
       <footer className="home-footer">
         <HuijianBrand compact />
         <p>慧鉴AI 提供数字内容鉴伪辅助分析，不替代专业机构与人工最终判断。</p>
-        <div><a href="/legal/terms.html" target="_blank" rel="noreferrer">用户协议</a><a href="/legal/privacy.html" target="_blank" rel="noreferrer">隐私政策</a><button type="button" onClick={onAnalyticsPreference}>匿名统计偏好</button><a href="https://beian.miit.gov.cn/" target="_blank" rel="noreferrer">浙ICP备2026051442号</a></div>
+        <div>
+          <a href="/legal/terms.html" target="_blank" rel="noreferrer">用户协议</a>
+          <a href="/legal/privacy.html" target="_blank" rel="noreferrer">隐私政策</a>
+          <button type="button" onClick={onToggleAnalytics} aria-pressed={analyticsEnabled}>匿名统计：{analyticsEnabled ? "已开启" : "已关闭"}</button>
+          <a href="https://beian.miit.gov.cn/" target="_blank" rel="noreferrer">浙ICP备2026051442号</a>
+        </div>
       </footer>
     </div>
   );

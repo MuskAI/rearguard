@@ -2,11 +2,6 @@ import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from
 import {
   Bot,
   Check,
-  Code2,
-  FileCheck2,
-  FileText,
-  Fingerprint,
-  Image as ImageIcon,
   LoaderCircle,
   LogIn,
   PanelLeftOpen,
@@ -14,8 +9,6 @@ import {
   RefreshCw,
   Send,
   ShieldCheck,
-  UploadCloud,
-  Video,
 } from "lucide-react";
 import {
   AccountUser,
@@ -57,13 +50,13 @@ import AnalysisModeSwitch from "./components/AnalysisModeSwitch";
 import AccountMenu from "./components/AccountMenu";
 import AgentResult from "./components/AgentResult";
 import AuthDialog from "./components/AuthDialog";
+import BrandArtIcon from "./components/BrandArtIcon";
 import DeveloperPlatform from "./components/DeveloperPlatform";
 import HuijianBrand from "./components/HuijianBrand";
 import OfficialHome from "./components/OfficialHome";
 import ResultFeedback from "./components/ResultFeedback";
 import {
   analyticsConsent,
-  resetAnalyticsConsent,
   setAnalyticsConsent,
   trackPageview,
 } from "./analytics";
@@ -266,7 +259,7 @@ export default function App() {
   const [guestConsent, setGuestConsent] = useState(false);
   const [consentWarning, setConsentWarning] = useState(false);
   const [guestLimitReached, setGuestLimitReached] = useState(false);
-  const [analyticsChoice, setAnalyticsChoice] = useState(analyticsConsent);
+  const [analyticsEnabled, setAnalyticsEnabled] = useState(() => analyticsConsent() !== "denied");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const resultRef = useRef<HTMLDivElement>(null);
@@ -378,12 +371,12 @@ export default function App() {
   }, [view]);
 
   useEffect(() => {
-    if (analyticsChoice !== "granted") return;
+    if (!analyticsEnabled) return;
     const page = view === "home" ? "home" : view === "developer" ? "history" : "image";
     if (lastTrackedPageRef.current === page) return;
     lastTrackedPageRef.current = page;
     trackPageview(page);
-  }, [analyticsChoice, view]);
+  }, [analyticsEnabled, view]);
 
   const outcomeId = outcome?.id;
   useEffect(() => {
@@ -562,7 +555,7 @@ export default function App() {
         if (job.status === "failed") {
           terminalFailure = true;
           activeJobIdRef.current = null;
-          throw new Error(job.error || (mode === "swarm" ? "Soar 模式暂不可用" : "快速检测暂不可用"));
+          throw new Error(job.error || (mode === "swarm" ? "Swarm 模式暂不可用" : "快速检测暂不可用"));
         }
         let polled: Awaited<ReturnType<typeof fetchImageAgentJob>>;
         try {
@@ -597,7 +590,7 @@ export default function App() {
       return;
     } catch (error) {
       if (isAbort(error) || runTokenRef.current !== token) throw error;
-      const message = error instanceof Error ? error.message : (mode === "swarm" ? "Soar 模式暂不可用" : "快速检测暂不可用");
+      const message = error instanceof Error ? error.message : (mode === "swarm" ? "Swarm 模式暂不可用" : "快速检测暂不可用");
       if (isAuthenticationRequiredError(error) || isUploadConsentRequiredError(error)) throw error;
       if (isRateLimitedError(error)) {
         throw new Error("当前提交任务较多，请稍候几秒后重试当前文件");
@@ -1045,6 +1038,7 @@ export default function App() {
         <OfficialHome
           authReady={authReady}
           user={user}
+          analyticsEnabled={analyticsEnabled}
           onEnterWorkspace={() => navigateToView("workspace")}
           onDeveloper={(entry) => {
             navigateToDeveloper(entry);
@@ -1052,10 +1046,11 @@ export default function App() {
           }}
           onLogin={() => setAuthOpen(true)}
           onLogout={() => void logout()}
-          onAnalyticsPreference={() => {
-            resetAnalyticsConsent();
+          onToggleAnalytics={() => {
+            const next = !analyticsEnabled;
+            setAnalyticsConsent(next ? "granted" : "denied");
             lastTrackedPageRef.current = null;
-            setAnalyticsChoice(null);
+            setAnalyticsEnabled(next);
           }}
         />
       ) : view === "developer" ? (
@@ -1111,7 +1106,7 @@ export default function App() {
             ) : (
               <button type="button" className="secondary-button topbar-login" onClick={() => setAuthOpen(true)}><LogIn size={16} /> 登录</button>
             ))}
-            <button type="button" className="workspace-developer-button" onClick={() => navigateToDeveloper("overview")} title="开发者平台"><Code2 size={16} /><span>开发者</span></button>
+            <button type="button" className="workspace-developer-button" onClick={() => navigateToDeveloper("overview")} title="开发者平台"><BrandArtIcon name="developer" /><span>开发者</span></button>
           </div>
         </header>
 
@@ -1142,7 +1137,7 @@ export default function App() {
           {pendingFile && (
             <div className="conversation-flow">
               <div className="user-file-message">
-                <div className="file-message-copy"><span>请帮我鉴别这份内容</span><strong>{pendingFile.name}</strong><small>{pendingFile.typeLabel}{pendingFile.size ? ` · ${formatBytes(pendingFile.size)}` : " · 已归档任务"}{pendingFile.analysisMode ? <span className="pending-mode-chip">{pendingFile.analysisMode === "swarm" ? "Soar 模式" : "快速检测"}</span> : null}</small></div>
+                <div className="file-message-copy"><span>请帮我鉴别这份内容</span><strong>{pendingFile.name}</strong><small>{pendingFile.typeLabel}{pendingFile.size ? ` · ${formatBytes(pendingFile.size)}` : " · 已归档任务"}{pendingFile.analysisMode ? <span className="pending-mode-chip">{pendingFile.analysisMode === "swarm" ? "Swarm 模式" : "快速检测"}</span> : null}</small></div>
                 {pendingFile.previewUrl ? <img src={pendingFile.previewUrl} alt="待检测文件预览" /> : <span className="file-message-icon"><Paperclip size={20} /></span>}
               </div>
               {(progress || busy) && !outcome && <AgentProgressPanel progress={progress} onStopWaiting={stopWaitingForTask} />}
@@ -1150,7 +1145,7 @@ export default function App() {
                 <div className="fallback-choice" role="alert" aria-live="polite">
                   <span><ShieldCheck size={19} /></span>
                   <div>
-                    <strong>{fallbackOffer.jobId ? "任务仍在服务器运行" : fallbackOffer.mode === "swarm" ? "Soar 模式未完成" : "快速检测未完成"}</strong>
+                    <strong>{fallbackOffer.jobId ? "任务仍在服务器运行" : fallbackOffer.mode === "swarm" ? "Swarm 模式未完成" : "快速检测未完成"}</strong>
                     <p>{fallbackOffer.reason}。{fallbackOffer.jobId ? "继续查询不会重复提交，也不会重复扣减额度。" : fallbackOffer.submitted ? "文件已经提交到服务器，本次未形成可用结论；你可以重试原模式，或明确选择备用证据链。" : "文件尚未提交到备用模型，你可以重试原模式，或明确选择备用证据链。"}</p>
                     <div className="fallback-choice-actions">
                       {fallbackOffer.jobId ? (
@@ -1201,7 +1196,7 @@ export default function App() {
           <div className="composer-dock">
             <button type="button" className="composer-compact" disabled={busy} onClick={() => fileInputRef.current?.click()}>
               <span className="composer-attach"><Paperclip size={18} /></span>
-              <span><strong>{busy ? "小鉴正在分析，请稍候" : "继续上传新的内容"}</strong><small>图片使用{imageAnalysisMode === "swarm" ? " Soar 模式" : "快速检测"}，视频与文档自动分流</small></span>
+              <span><strong>{busy ? "小鉴正在分析，请稍候" : "继续上传新的内容"}</strong><small>图片使用{imageAnalysisMode === "swarm" ? " Swarm 模式" : "快速检测"}，视频与文档自动分流</small></span>
               <span className="composer-send"><Send size={17} /></span>
             </button>
             <p>检测结果仅作辅助判断，高风险场景请结合原始来源和人工复核。</p>
@@ -1209,19 +1204,6 @@ export default function App() {
         )}
       </main>
       </div>
-      )}
-
-      {analyticsChoice === null && (
-        <section className="analytics-consent" aria-label="匿名访问统计选择">
-          <div>
-            <strong>是否允许匿名访问统计？</strong>
-            <p>仅在你允许后，使用随机访客标识与脱敏 IP 统计访问量，不关联登录账号。<a href="/legal/privacy.html" target="_blank" rel="noreferrer">查看隐私政策</a></p>
-          </div>
-          <div className="analytics-consent-actions">
-            <button type="button" onClick={() => { setAnalyticsConsent("denied"); setAnalyticsChoice("denied"); }}>暂不统计</button>
-            <button type="button" className="is-primary" onClick={() => { setAnalyticsConsent("granted"); lastTrackedPageRef.current = null; setAnalyticsChoice("granted"); }}>允许匿名统计</button>
-          </div>
-        </section>
       )}
 
       <input ref={fileInputRef} className="sr-only" type="file" accept={ACCEPTED_FILES} onChange={chooseFile} tabIndex={-1} aria-hidden="true" />
@@ -1293,15 +1275,15 @@ function WelcomeWorkspace({
             <small>按所选模式调度</small>
           </div>
           <button type="button" className="upload-stage-core" disabled={busy} onClick={onOpenFile}>
-            <div className="upload-stage-icon"><UploadCloud size={28} /></div>
+            <div className="upload-stage-icon"><BrandArtIcon name="workflow" /></div>
             <h3>{dragging ? "松开即可开始鉴伪" : "上传或拖放待鉴别内容"}</h3>
             <p>图片、视频或文档会自动进入对应的证据链路</p>
             <span className="primary-button upload-button"><Paperclip size={17} /> 选择文件</span>
           </button>
           <div className="capability-strip compact-capability-strip" aria-label="支持的内容类型">
-            <div><ImageIcon size={17} /><span><strong>图片</strong><small>真假与水印</small></span></div>
-            <div><Video size={17} /><span><strong>视频</strong><small>关键帧分析</small></span></div>
-            <div><FileText size={17} /><span><strong>文档</strong><small>内容检测</small></span></div>
+            <div><BrandArtIcon name="image" /><span><strong>图片</strong><small>真假与水印</small></span></div>
+            <div><BrandArtIcon name="video" /><span><strong>视频</strong><small>关键帧分析</small></span></div>
+            <div><BrandArtIcon name="document" /><span><strong>文档</strong><small>内容检测</small></span></div>
           </div>
           <div className="upload-policy-footer">
             {!user && (
@@ -1322,9 +1304,9 @@ function WelcomeWorkspace({
 function AgentProgressPanel({ progress, onStopWaiting }: { progress: AgentProgress | null; onStopWaiting: () => void }) {
   const current = progress || { title: "正在准备鉴伪任务", detail: "请稍候", percent: 8, stage: "validate" as const };
   const stages = [
-    { key: "receive", label: "安全接收", note: "格式与权限", icon: ShieldCheck },
-    { key: "analyze", label: "真实性分析", note: current.analysisMode === "swarm" ? "多源并行复核" : "痕迹与水印", icon: Fingerprint },
-    { key: "report", label: "证据成稿", note: "结论与依据", icon: FileCheck2 },
+    { key: "receive", label: "安全接收", note: "格式与权限", icon: "document" as const },
+    { key: "analyze", label: "真实性分析", note: current.analysisMode === "swarm" ? "多源并行复核" : "痕迹与水印", icon: current.analysisMode === "swarm" ? "swarm" as const : "fast" as const },
+    { key: "report", label: "证据成稿", note: "结论与依据", icon: "report" as const },
   ] as const;
   const stageIndex = current.stage === "report" ? 2 : current.stage === "evidence" ? 1 : 0;
   return (
@@ -1335,10 +1317,9 @@ function AgentProgressPanel({ progress, onStopWaiting }: { progress: AgentProgre
         <div className="progress-track" role="progressbar" aria-label={current.title} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(current.percent)}><i style={{ width: `${current.percent}%` }} /></div>
         <div className="progress-stages progress-system">
           {stages.map((stage, index) => {
-            const StageIcon = stage.icon;
             return (
               <span key={stage.key} className={index < stageIndex ? "done" : index === stageIndex ? "active" : ""}>
-                <i>{index < stageIndex ? <Check size={13} /> : <StageIcon size={15} />}</i>
+                <i>{index < stageIndex ? <Check size={13} /> : <BrandArtIcon name={stage.icon} />}</i>
                 <b>{stage.label}</b>
                 <small>{stage.note}</small>
               </span>

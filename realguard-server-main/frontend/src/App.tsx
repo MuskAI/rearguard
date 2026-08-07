@@ -42,7 +42,7 @@ import {
   publicExpertReviewEvidence,
   publicExpertReviewJobSummary,
 } from "./swarmPublic";
-import { analyticsConsent, resetAnalyticsConsent, setAnalyticsConsent, trackConfirmedPageview } from "./analytics";
+import { analyticsConsent, setAnalyticsConsent, trackConfirmedPageview } from "./analytics";
 import { LEGAL_CONSENT } from "./legalConsent";
 
 type PageKey = "home" | "image" | "video" | "history";
@@ -720,48 +720,14 @@ function App() {
 
       <Footer
         lang={lang}
-        onAnalyticsChoice={() => {
-          resetAnalyticsConsent();
+        analyticsEnabled={analyticsChoice !== "denied"}
+        onToggleAnalytics={() => {
+          const next = analyticsChoice === "denied" ? "granted" : "denied";
+          setAnalyticsConsent(next);
           lastTrackedPage.current = null;
-          setAnalyticsChoice(null);
+          setAnalyticsChoice(next);
         }}
       />
-
-      {analyticsChoice === null && (
-        <section className="analytics-consent" aria-label={lang === "zh" ? "匿名访问统计选择" : "Anonymous analytics choice"}>
-          <div>
-            <strong>{lang === "zh" ? "匿名访问统计" : "Anonymous analytics"}</strong>
-            <p>
-              {lang === "zh"
-                ? "仅在你选择允许后，使用随机访客标识和脱敏 IP 统计省级访问量，不关联登录账号；你可以随时关闭。"
-                : "Only after you opt in, we use a random visitor ID and masked IP for province-level traffic totals without linking your account."}
-              {" "}<a href="/legal/privacy.html" target="_blank" rel="noreferrer">{lang === "zh" ? "隐私政策" : "Privacy policy"}</a>
-            </p>
-          </div>
-          <div className="analytics-consent-actions">
-            <button
-              type="button"
-              onClick={() => {
-                setAnalyticsConsent("denied");
-                setAnalyticsChoice("denied");
-              }}
-            >
-              {lang === "zh" ? "暂不统计" : "Not now"}
-            </button>
-            <button
-              type="button"
-              className="primary"
-              onClick={() => {
-                setAnalyticsConsent("granted");
-                lastTrackedPage.current = null;
-                setAnalyticsChoice("granted");
-              }}
-            >
-              {lang === "zh" ? "允许匿名统计" : "Allow anonymous analytics"}
-            </button>
-          </div>
-        </section>
-      )}
 
       {authOpen && (
         <AuthModal
@@ -2835,7 +2801,7 @@ function AuthInput({
   );
 }
 
-function Footer({ lang, onAnalyticsChoice }: { lang: Lang; onAnalyticsChoice: () => void }) {
+function Footer({ lang, analyticsEnabled, onToggleAnalytics }: { lang: Lang; analyticsEnabled: boolean; onToggleAnalytics: () => void }) {
   const text = UI_TEXT[lang].footer;
   return (
     <footer className="footer">
@@ -2846,8 +2812,8 @@ function Footer({ lang, onAnalyticsChoice }: { lang: Lang; onAnalyticsChoice: ()
           {text.icp}
         </a>
       </p>
-      <button type="button" className="footer-privacy-choice" onClick={onAnalyticsChoice}>
-        {lang === "zh" ? "匿名统计偏好" : "Analytics preferences"}
+      <button type="button" className="footer-privacy-choice" onClick={onToggleAnalytics} aria-pressed={analyticsEnabled}>
+        {lang === "zh" ? `匿名统计：${analyticsEnabled ? "已开启" : "已关闭"}` : `Anonymous analytics: ${analyticsEnabled ? "on" : "off"}`}
       </button>
     </footer>
   );

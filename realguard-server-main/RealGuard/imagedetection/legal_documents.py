@@ -20,8 +20,8 @@ _PINNED_IDENTITIES = {
         sha256="619aee74677629f4f5e2c4ccbaa99c458671086de45c0a586e76c8c8c062d2c5",
     ),
     "privacy": LegalDocumentIdentity(
-        version="2026-08-07",
-        sha256="54d98f687f8c6bc6ddf7c1256958d070fd5d2af7421059ada38fc3366acb56eb",
+        version="2026-08-08",
+        sha256="f5e9e4ba233857667176949017d2f36964d47e0595e4b1d36d2c80254c3adc38",
     ),
 }
 

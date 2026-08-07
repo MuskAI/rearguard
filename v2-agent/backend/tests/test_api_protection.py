@@ -71,14 +71,14 @@ class ConsentTestClient(TestClient):
         if url == "/api/detect":
             data = dict(kwargs.pop("data", {}) or {})
             data.setdefault("upload_consent", "1")
-            data.setdefault("consent_version", "2026-08-07+2026-08-07")
+            data.setdefault("consent_version", "2026-08-07+2026-08-08")
             data.setdefault(
                 "terms_sha256",
                 "619aee74677629f4f5e2c4ccbaa99c458671086de45c0a586e76c8c8c062d2c5",
             )
             data.setdefault(
                 "privacy_sha256",
-                "54d98f687f8c6bc6ddf7c1256958d070fd5d2af7421059ada38fc3366acb56eb",
+                "f5e9e4ba233857667176949017d2f36964d47e0595e4b1d36d2c80254c3adc38",
             )
             headers = dict(kwargs.pop("headers", {}) or {})
             headers.setdefault("Idempotency-Key", str(uuid.uuid4()))
