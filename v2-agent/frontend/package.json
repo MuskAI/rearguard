@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "test:layout": "npm run build && playwright test",
     "test:layout:built": "playwright test",
-    "test:layout:install": "playwright install chromium"
+    "test:layout:install": "playwright install chromium webkit"
   },
   "dependencies": {
     "fft.js": "^4.0.4",

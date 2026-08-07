@@ -341,6 +341,23 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
   const accountIdentityRef = useRef(accountIdentity);
   accountIdentityRef.current = accountIdentity;
 
+  const restoreModalOpener = useCallback(() => {
+    const opener = modalOpenerRef.current;
+    window.setTimeout(() => {
+      if (opener?.isConnected) opener.focus();
+    }, 0);
+  }, []);
+
+  const closeCreateDialog = useCallback(() => {
+    setCreateOpen(false);
+    restoreModalOpener();
+  }, [restoreModalOpener]);
+
+  const closeSecretDialog = useCallback(() => {
+    setRevealedKey(null);
+    restoreModalOpener();
+  }, [restoreModalOpener]);
+
   const load = useCallback(async () => {
     if (!user) return;
     const generation = ++loadGeneration.current;
@@ -388,7 +405,6 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
   useEffect(() => {
     const dialog = revealedKey ? secretDialogRef.current : createOpen ? createDialogRef.current : null;
     if (!dialog) return;
-    const opener = modalOpenerRef.current;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const focusTimer = window.requestAnimationFrame(() => {
@@ -397,7 +413,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !revealedKey) {
         event.preventDefault();
-        setCreateOpen(false);
+        closeCreateDialog();
         return;
       }
       if (event.key !== "Tab") return;
@@ -418,9 +434,8 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
       window.cancelAnimationFrame(focusTimer);
       document.removeEventListener("keydown", handleKeyDown);
       document.body.style.overflow = previousOverflow;
-      opener?.focus();
     };
-  }, [createOpen, revealedKey]);
+  }, [closeCreateDialog, createOpen, revealedKey]);
 
   const origin = window.location.origin;
   const endpoint = `${origin}/api/openapi/v1/image-detections`;
@@ -505,10 +520,10 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
     }
   }
 
-  async function rotateKey(key: DeveloperApiKey) {
+  async function rotateKey(key: DeveloperApiKey, opener?: HTMLElement) {
     if (keyMutationInFlightRef.current) return;
     if (!window.confirm(`轮换 ${key.name}？旧 Key 会立即撤销。`)) return;
-    modalOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    modalOpenerRef.current = opener || (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     const idempotencyKey = rotateOperationKeysRef.current.get(key.id) || globalThis.crypto.randomUUID();
     rotateOperationKeysRef.current.set(key.id, idempotencyKey);
     keyMutationInFlightRef.current = true;
@@ -533,8 +548,8 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
     }
   }
 
-  function openCreateDialog() {
-    modalOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  function openCreateDialog(opener?: HTMLElement) {
+    modalOpenerRef.current = opener || (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     setError("");
     setCreateOpen(true);
   }
@@ -624,9 +639,9 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
       </main>
 
       {createOpen && (
-        <div className="developer-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setCreateOpen(false); }}>
+        <div className="developer-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) closeCreateDialog(); }}>
           <section ref={createDialogRef} className="developer-modal" role="dialog" aria-modal="true" aria-labelledby="create-key-title">
-            <header><div><h2 id="create-key-title">创建 API Key</h2><p>明文只展示一次，创建后请立即保存。</p></div><button type="button" onClick={() => setCreateOpen(false)} aria-label="关闭"><X size={19} /></button></header>
+            <header><div><h2 id="create-key-title">创建 API Key</h2><p>明文只展示一次，创建后请立即保存。</p></div><button type="button" onClick={closeCreateDialog} aria-label="关闭"><X size={19} /></button></header>
             <label><span>名称</span><input autoFocus value={newKeyName} onChange={(event) => setNewKeyName(event.target.value)} maxLength={120} placeholder="例如：生产环境" /></label>
             <fieldset>
               <legend>检测权限</legend>
@@ -637,7 +652,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
             <label><span>有效期</span><select value={newKeyExpiry} onChange={(event) => setNewKeyExpiry(event.target.value)}><option value="30">30 天</option><option value="90">90 天</option><option value="365">1 年</option><option value="never">永不过期</option></select></label>
             <label><span>IP 白名单 <small>可选，每行一个 IP 或 CIDR</small></span><textarea value={newKeyIps} onChange={(event) => setNewKeyIps(event.target.value)} rows={3} placeholder="203.0.113.10&#10;10.0.0.0/24" /></label>
             {error && <p className="developer-modal-error" role="alert">{error}</p>}
-            <footer><button type="button" className="developer-secondary-action" onClick={() => setCreateOpen(false)}>取消</button><button type="button" className="developer-primary-action" onClick={() => void createKey()} disabled={keyBusy === "create" || !newKeyName.trim() || (!newKeyScopes.fast && !newKeyScopes.swarm)}>{keyBusy === "create" ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />} 创建 Key</button></footer>
+            <footer><button type="button" className="developer-secondary-action" onClick={closeCreateDialog}>取消</button><button type="button" className="developer-primary-action" onClick={() => void createKey()} disabled={keyBusy === "create" || !newKeyName.trim() || (!newKeyScopes.fast && !newKeyScopes.swarm)}>{keyBusy === "create" ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />} 创建 Key</button></footer>
           </section>
         </div>
       )}
@@ -647,7 +662,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
           <section ref={secretDialogRef} className="developer-modal developer-secret-modal" role="dialog" aria-modal="true" aria-labelledby="secret-title">
             <header><div><h2 id="secret-title">{revealedKey.title}</h2><p>关闭后将无法再次查看完整 Key。</p></div></header>
             <div className="developer-secret-value"><code>{revealedKey.value}</code><button type="button" onClick={() => void copyText(revealedKey.value, "secret")}>{copied === "secret" ? <Check size={17} /> : <Copy size={17} />}{copied === "secret" ? "已复制" : "复制"}</button></div>
-            <footer><button autoFocus type="button" className="developer-primary-action" onClick={() => setRevealedKey(null)}>我已保存</button></footer>
+            <footer><button autoFocus type="button" className="developer-primary-action" onClick={closeSecretDialog}>我已保存</button></footer>
           </section>
         </div>
       )}
@@ -1020,14 +1035,14 @@ function RecentTasks({ tasks }: { tasks: DeveloperAccountResponse["recentTasks"]
   );
 }
 
-function KeysPanel({ keys, busy, loading, onCreate, onRotate, onRevoke }: { keys: DeveloperApiKey[]; busy: number | "create" | null; loading: boolean; onCreate: () => void; onRotate: (key: DeveloperApiKey) => void; onRevoke: (key: DeveloperApiKey) => void }) {
+function KeysPanel({ keys, busy, loading, onCreate, onRotate, onRevoke }: { keys: DeveloperApiKey[]; busy: number | "create" | null; loading: boolean; onCreate: (opener: HTMLElement) => void; onRotate: (key: DeveloperApiKey, opener: HTMLElement) => void; onRevoke: (key: DeveloperApiKey) => void }) {
   const activeCount = keys.filter((key) => key.status === "active").length;
   return (
     <div className="developer-page">
-      <section className="developer-section-heading"><div><p>凭据管理</p><h2>API Keys</h2><small>按环境拆分密钥，降低泄露后的影响范围。完整 Key 仅在创建或轮换时展示一次。</small></div><button type="button" className="developer-primary-action" onClick={onCreate} disabled={loading || activeCount >= 5 || busy !== null}><Plus size={16} /> 创建 API Key</button></section>
+      <section className="developer-section-heading"><div><p>凭据管理</p><h2>API Keys</h2><small>按环境拆分密钥，降低泄露后的影响范围。完整 Key 仅在创建或轮换时展示一次。</small></div><button type="button" className="developer-primary-action" onClick={(event) => onCreate(event.currentTarget)} disabled={loading || activeCount >= 5 || busy !== null}><Plus size={16} /> 创建 API Key</button></section>
       <section className="developer-security-rail"><ShieldCheck size={19} /><div><strong>服务端只保存 Key 哈希</strong><span>建议设置有效期与 IP 白名单，并定期轮换生产密钥。</span></div><small>{activeCount} / 5 个 active</small></section>
       <section className="developer-table-section developer-key-table"><header><div><h3>密钥列表</h3><p>撤销后立即失效，不影响账号额度和历史账单。</p></div></header><div className="developer-table-wrap"><table><thead><tr><th>名称</th><th>Key</th><th>权限</th><th>限制</th><th>最后使用</th><th aria-label="操作" /></tr></thead><tbody>
-        {keys.length ? keys.map((key) => <tr key={`${key.id}-${key.status}`}><td><strong>{key.name}</strong><span className={`developer-key-state ${key.status}`}>{keyStatusLabel(key)}</span></td><td><code>{key.preview}</code></td><td><div className="developer-scope-list">{key.scopes.map((scope) => <span key={scope}>{scope === "image:fast" ? "快速" : scope === "image:swarm" ? "Swarm" : scope === "reports" ? "报告" : scope}</span>)}</div></td><td><small>{key.expiresAt ? `到期 ${compactDate(key.expiresAt)}` : "永不过期"}</small><small>{key.ipAllowlist?.length ? `${key.ipAllowlist.length} 条 IP 规则` : "不限 IP"}</small></td><td>{compactDate(key.lastUsedAt)}</td><td><div className="developer-row-actions">{key.status === "active" && <><button type="button" title="轮换 Key" aria-label={`轮换 ${key.name}`} disabled={busy !== null} onClick={() => onRotate(key)}>{busy === key.id ? <LoaderCircle className="spin" size={16} /> : <RotateCw size={16} />}</button><button type="button" className="danger" title="撤销 Key" aria-label={`撤销 ${key.name}`} disabled={busy !== null} onClick={() => onRevoke(key)}><Trash2 size={16} /></button></>}</div></td></tr>) : <tr><td colSpan={6} className="developer-empty-cell">尚未创建 API Key</td></tr>}
+        {keys.length ? keys.map((key) => <tr key={`${key.id}-${key.status}`}><td><strong>{key.name}</strong><span className={`developer-key-state ${key.status}`}>{keyStatusLabel(key)}</span></td><td><code>{key.preview}</code></td><td><div className="developer-scope-list">{key.scopes.map((scope) => <span key={scope}>{scope === "image:fast" ? "快速" : scope === "image:swarm" ? "Swarm" : scope === "reports" ? "报告" : scope}</span>)}</div></td><td><small>{key.expiresAt ? `到期 ${compactDate(key.expiresAt)}` : "永不过期"}</small><small>{key.ipAllowlist?.length ? `${key.ipAllowlist.length} 条 IP 规则` : "不限 IP"}</small></td><td>{compactDate(key.lastUsedAt)}</td><td><div className="developer-row-actions">{key.status === "active" && <><button type="button" title="轮换 Key" aria-label={`轮换 ${key.name}`} disabled={busy !== null} onClick={(event) => onRotate(key, event.currentTarget)}>{busy === key.id ? <LoaderCircle className="spin" size={16} /> : <RotateCw size={16} />}</button><button type="button" className="danger" title="撤销 Key" aria-label={`撤销 ${key.name}`} disabled={busy !== null} onClick={() => onRevoke(key)}><Trash2 size={16} /></button></>}</div></td></tr>) : <tr><td colSpan={6} className="developer-empty-cell">尚未创建 API Key</td></tr>}
       </tbody></table></div></section>
     </div>
   );

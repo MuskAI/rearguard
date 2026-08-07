@@ -124,7 +124,7 @@ cd v2-agent/backend && uv run --with pytest pytest tests
 cd v2-agent/frontend && npm run lint && npm run test:layout
 ```
 
-首次运行浏览器布局测试时，先执行 `npm run test:layout:install`。布局测试会用生产构建检查手机、桌面和超宽屏，阻止标题竖排、页面横向溢出、控件重叠与关键键盘交互回归。
+首次运行浏览器布局测试时，先执行 `npm run test:layout:install`。布局测试会用 Chromium 与 WebKit 检查手机、短屏桌面、宽屏和关键断点，阻止标题折成单字列、首屏内容被裁切、横向溢出、控件重叠与键盘交互回归。
 
 生产状态：
 

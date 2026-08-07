@@ -70,7 +70,11 @@ function eventId(page: AnalyticsPage): string {
 }
 
 export function trackPageview(page: AnalyticsPage): void {
-  if (typeof window === "undefined" || navigator.webdriver) return;
+  if (
+    typeof window === "undefined"
+    || navigator.webdriver
+    || /HeadlessChrome|Playwright|Puppeteer/i.test(navigator.userAgent)
+  ) return;
   if (new URLSearchParams(window.location.search).get("demo") === "1") return;
   if (analyticsConsent() !== "granted") return;
   const body = JSON.stringify({ visitorId: visitorId(), eventId: eventId(page), page });

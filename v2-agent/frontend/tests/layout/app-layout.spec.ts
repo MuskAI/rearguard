@@ -3,6 +3,8 @@ import { expect, Page, test } from "@playwright/test";
 const viewports = [
   { name: "mobile", width: 390, height: 844 },
   { name: "desktop", width: 1440, height: 1000 },
+  { name: "short-desktop", width: 1440, height: 800 },
+  { name: "safari-wide", width: 1990, height: 1240 },
   { name: "wide", width: 2560, height: 1440 },
 ] as const;
 
@@ -122,11 +124,17 @@ async function installDeveloperMocks(page: Page) {
 }
 
 async function expectNoHorizontalOverflow(page: Page) {
-  const dimensions = await page.evaluate(() => ({
-    clientWidth: document.documentElement.clientWidth,
-    scrollWidth: document.documentElement.scrollWidth,
-  }));
-  expect(dimensions.scrollWidth, `页面横向溢出 ${dimensions.scrollWidth - dimensions.clientWidth}px`).toBeLessThanOrEqual(dimensions.clientWidth + 1);
+  const containers = await page.evaluate(() => [
+    { name: "document", clientWidth: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth },
+    ...Array.from(document.querySelectorAll<HTMLElement>(".official-site"), (element) => ({
+      name: ".official-site",
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+    })),
+  ]);
+  for (const dimensions of containers) {
+    expect(dimensions.scrollWidth, `${dimensions.name} 横向溢出 ${dimensions.scrollWidth - dimensions.clientWidth}px`).toBeLessThanOrEqual(dimensions.clientWidth + 1);
+  }
 }
 
 async function expectHorizontalHeading(page: Page, selector: string) {
@@ -136,6 +144,51 @@ async function expectHorizontalHeading(page: Page, selector: string) {
   expect(box).not.toBeNull();
   expect(box!.width).toBeGreaterThan(box!.height * 1.5);
   await expect(heading).toHaveCSS("writing-mode", "horizontal-tb");
+}
+
+async function expectReadableHero(page: Page, viewportWidth: number) {
+  const metrics = await page.locator(".home-hero").evaluate((hero) => {
+    const copy = hero.querySelector<HTMLElement>(".home-hero-copy")!;
+    const title = hero.querySelector<HTMLElement>("h1")!;
+    const subtitle = hero.querySelector<HTMLElement>("h2")!;
+    const copyRect = copy.getBoundingClientRect();
+    const titleRect = title.getBoundingClientRect();
+    const subtitleRect = subtitle.getBoundingClientRect();
+    return {
+      copyWidth: copyRect.width,
+      titleHeight: titleRect.height,
+      titleLineHeight: Number.parseFloat(getComputedStyle(title).lineHeight),
+      subtitleHeight: subtitleRect.height,
+      subtitleLineHeight: Number.parseFloat(getComputedStyle(subtitle).lineHeight),
+    };
+  });
+  const expectedCopyWidth = Math.min(420, viewportWidth - 36);
+  expect(metrics.copyWidth, "主视觉文案列被挤压").toBeGreaterThanOrEqual(expectedCopyWidth - 1);
+  expect(metrics.titleHeight, "品牌标题发生多行折叠").toBeLessThanOrEqual(metrics.titleLineHeight * 1.25);
+  expect(metrics.subtitleHeight, "主标语超过预期的两行").toBeLessThanOrEqual(metrics.subtitleLineHeight * 2.25);
+}
+
+async function expectHeroFirstViewport(page: Page, viewport: { width: number; height: number }) {
+  const metrics = await page.evaluate(() => {
+    const rect = (selector: string) => {
+      const bounds = document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+      return { left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom, width: bounds.width, height: bounds.height };
+    };
+    return {
+      primaryAction: rect(".home-hero-actions button"),
+      mascot: rect(".home-hero-visual-stage > img"),
+      nextSectionTitle: rect(".home-value-rail article:first-child strong"),
+    };
+  });
+  const visibleRatio = (bounds: typeof metrics.mascot) => {
+    const visibleWidth = Math.max(0, Math.min(bounds.right, viewport.width) - Math.max(bounds.left, 0));
+    const visibleHeight = Math.max(0, Math.min(bounds.bottom, viewport.height) - Math.max(bounds.top, 0));
+    return (visibleWidth * visibleHeight) / Math.max(1, bounds.width * bounds.height);
+  };
+  expect(visibleRatio(metrics.primaryAction), "主操作未完整进入首屏").toBeGreaterThanOrEqual(0.99);
+  expect(visibleRatio(metrics.mascot), "品牌形象在首屏内的可见面积不足 90%").toBeGreaterThanOrEqual(0.9);
+  expect(metrics.nextSectionTitle.top, "下一段标题没有进入首屏").toBeLessThan(viewport.height);
+  expect(metrics.nextSectionTitle.bottom, "下一段标题在首屏中被截断").toBeLessThanOrEqual(viewport.height);
 }
 
 async function expectBoxesDoNotOverlap(page: Page, selector: string) {
@@ -161,20 +214,30 @@ for (const viewport of viewports) {
     await page.goto("/");
 
     await expectHorizontalHeading(page, "#official-home-title");
+    await expectReadableHero(page, viewport.width);
+    await expectHeroFirstViewport(page, viewport);
     await expect(page.getByRole("figure", { name: "慧鉴AI品牌助手小鉴与鉴伪工具" })).toBeVisible();
     const mascotLoaded = await page.locator('.home-hero-visual-stage > img').evaluate((image) => {
       const element = image as HTMLImageElement;
       return element.complete && element.naturalWidth > 0;
     });
     expect(mascotLoaded).toBeTruthy();
-    if (viewport.name === "mobile") {
-      const valueRail = await page.locator(".home-value-rail").boundingBox();
-      expect(valueRail).not.toBeNull();
-      expect(valueRail!.y).toBeLessThan(viewport.height);
-    }
     await expectNoHorizontalOverflow(page);
   });
 }
+
+test("官网主视觉在响应式临界宽度不会收缩成单字列", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 900 });
+  await installBaseMocks(page);
+  await page.goto("/");
+
+  for (const width of [320, 360, 420, 700, 820, 960, 961, 1080, 1180, 1181, 1440, 1990]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await expectHorizontalHeading(page, "#official-home-title");
+    await expectReadableHero(page, width);
+    await expectNoHorizontalOverflow(page);
+  }
+});
 
 test("移动官网导航支持键盘关闭并恢复焦点", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
