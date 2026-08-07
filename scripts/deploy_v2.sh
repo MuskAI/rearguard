@@ -80,12 +80,19 @@ log_step 2 "Build V2 frontend"
   run_local npm run build
 )
 
-log_step 3 "Package V2 backend"
+log_step 3 "Run V2 responsive layout regression"
+(
+  cd "$FRONTEND_DIR"
+  run_local npm run test:layout:install
+  run_local npm run test:layout:built
+)
+
+log_step 4 "Package V2 backend"
 run_tar_create "$BACKEND_DIR" "$ARCHIVE_PATH" app pyproject.toml uv.lock requirements.lock
 run_tar_create "$FRONTEND_DIR/dist" "$FRONTEND_ARCHIVE_PATH" .
 write_commit_marker "$MARKER_PATH" "$COMMIT_SHA"
 
-log_step 4 "Upload V2 release into an isolated remote staging directory"
+log_step 5 "Upload V2 release into an isolated remote staging directory"
 if [[ "$DRY_RUN" == "1" ]]; then
   REMOTE_STAGE="/tmp/jianzhen-v2-${COMMIT_SHA}.dry-run-$$"
   run_remote "umask 077; mkdir -m 700 -- '$REMOTE_STAGE'"
@@ -104,10 +111,10 @@ run_scp "$SERVICE_UNIT" "$REMOTE:$REMOTE_STAGE/jianzhen-v2-backend.service"
 run_scp "$ACTIVATE_SCRIPT" "$REMOTE:$REMOTE_STAGE/jianzhen-activate-v2.sh"
 run_scp "$FRONTEND_VERSION_SCRIPT" "$REMOTE:$REMOTE_STAGE/huijian-frontend-version"
 
-log_step 5 "Create and verify a pre-migration backup"
+log_step 6 "Create and verify a pre-migration backup"
 run_remote "sudo bash -lc 'set -euo pipefail; test -x /usr/local/sbin/realguard-backup; set -a; for env_file in /etc/realguard/session.env /etc/realguard/realguard-backend.env /etc/realguard/detector-db.env /etc/realguard/jianzhen-v2.env /etc/realguard/backup.env; do [ ! -f \"\$env_file\" ] || . \"\$env_file\"; done; set +a; backup_output=\$(/usr/local/sbin/realguard-backup 2>&1); printf \"%s\\n\" \"\$backup_output\"; backup_dir=\$(printf \"%s\\n\" \"\$backup_output\" | sed -n \"s/^RealGuard backup completed: //p\" | tail -n 1); test -n \"\$backup_dir\"; test -d \"\$backup_dir\"; cd \"\$backup_dir\"; sha256sum -c SHA256SUMS'"
 
-log_step 6 "Promote and activate the staged V2 release under a release lock"
+log_step 7 "Promote and activate the staged V2 release under a release lock"
 remote_activation="$(cat <<EOF
 set -euo pipefail
 stage='$REMOTE_STAGE'

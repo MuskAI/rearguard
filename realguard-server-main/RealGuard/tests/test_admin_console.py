@@ -241,8 +241,15 @@ def test_admin_screen_renders_interactive_operations_controls(client, monkeypatc
     assert 'data-distribution-mode="feedback"' in html
     assert 'data-primary-view="traffic"' in html
     assert 'id="trafficMap"' in html
+    assert 'id="trafficSelectionStatus" aria-live="polite"' in html
+    assert "ui.trafficItems.map((item,index)" in html
+    assert "ui.trafficItems.slice(0,10)" not in html
+    assert "cumulativeButton.disabled=!cumulativeReady" in html
     assert html.index('class="grid"') < html.index('id="runtime"')
     assert "算法服务器 · GPU 推理" in html
+    assert "algorithm?.transportStatus" in html
+    assert "algorithm?.inferenceStatus" in html
+    assert "algorithm?.verdictStatus" in html
     assert "/static/js/echarts-6.1.0.min.js" in html
     assert 'id="inspector"' in html
     assert "['trend','routes','distribution'].forEach(setupCanvas)" in html
@@ -306,6 +313,10 @@ def test_admin_login_hides_account_inventory_and_sets_security_headers(client, m
     assert "private" in response.headers["Cache-Control"]
     assert response.headers["X-Frame-Options"] == "DENY"
     assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert '<div class="panel-brand">' in html
+    assert '<span class="mark">慧</span>' in html
+    assert 'href="/">返回官网</a>' in html
+    assert ".panel-wrap{order:-1;min-height:100dvh" in html
 
 
 def test_admin_logout_requires_csrf_post_and_clears_session(client, monkeypatch):

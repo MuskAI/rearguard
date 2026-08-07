@@ -107,8 +107,11 @@ uv run --with pytest pytest tests
 cd v2-agent/frontend
 npm ci
 npm run lint
-npm run build
+npm run test:layout:install  # 首次运行
+npm run test:layout
 ```
+
+布局门禁使用生产构建和真实 Chromium 覆盖手机、桌面与超宽屏；`deploy_v2.sh` 会在打包前自动执行同一组测试。
 
 旧前端只用于兼容和回滚，但改动相关代码时也要执行：
 

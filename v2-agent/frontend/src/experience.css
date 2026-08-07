@@ -3358,9 +3358,17 @@
   .home-v3 .home-header .account-menu:not(.is-compact) .account-menu-trigger > svg { display: none; }
   .home-v3 .home-hero h1 { font-size: 54px; }
   .home-v3 .home-hero h2 { font-size: 31px; }
-  .home-v3 .home-hero-visual { min-height: 390px; }
-  .home-hero-visual-stage { height: 390px; }
+  .home-v3 .home-hero-visual { min-height: 200px; }
+  .home-hero-visual-stage { height: 200px; }
+  .home-v3 .home-hero-visual-stage > img { right: 12%; width: min(42%, 160px); }
+  .orbit-one { top: 4px; right: 10%; width: 190px; height: 190px; }
+  .orbit-two { top: 28px; right: 22%; width: 145px; height: 145px; }
+  .hero-art-token { gap: 3px; padding: 3px 6px 3px 3px; }
+  .hero-art-token .brand-art-icon { width: 36px; height: 36px; }
+  .token-fast { top: 6px; left: 4%; }
+  .token-swarm { top: 116px; right: 4%; }
   .token-report { display: none; }
+  .home-value-rail[data-reveal] { opacity: 1; transform: none; }
   .compact-capability-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .compact-capability-strip > div,
   .compact-capability-strip > div:nth-child(2),

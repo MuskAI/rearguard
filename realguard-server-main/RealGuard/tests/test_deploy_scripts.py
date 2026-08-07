@@ -218,6 +218,15 @@ def test_v2_deployment_status_tracks_frontend_version_manager():
     assert '"scripts/remote/manage_v2_frontend.sh"' in v2_block
 
 
+def test_v2_deployment_runs_browser_layout_gate_before_packaging():
+    deploy = (ROOT / "scripts" / "deploy_v2.sh").read_text(encoding="utf-8")
+
+    install_index = deploy.index("npm run test:layout:install")
+    test_index = deploy.index("npm run test:layout:built")
+    package_index = deploy.index('run_tar_create "$BACKEND_DIR"')
+    assert install_index < test_index < package_index
+
+
 def test_v1_activation_probes_backend_without_default_nginx_host():
     activate = (ROOT / "scripts" / "remote" / "activate_v1.sh").read_text(
         encoding="utf-8"
