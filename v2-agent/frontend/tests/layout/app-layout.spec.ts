@@ -792,7 +792,7 @@ test("模型选择器完整加载 GPT Image 模式图标", async ({ page }) => {
   await expect(picker.locator(".brand-art-icon")).toHaveCount(0);
 });
 
-test("工作台账户与开发者入口使用统一的 GPT Image 图标", async ({ page }) => {
+test("工作台账户使用明确的用户图标并与开发者入口保持统一风格", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await installBaseMocks(page, true);
   await page.goto("/?workspace=1");
@@ -809,7 +809,7 @@ test("工作台账户与开发者入口使用统一的 GPT Image 图标", async 
   await expect(accountButton.locator("svg")).toHaveCount(0);
   await expect(developerButton.locator(".brand-art-icon")).toHaveCount(0);
   await expect(developerButton).toContainText("开发者");
-  await expect(page.locator(".sidebar-account .brand-user-avatar")).toHaveAttribute("src", "/brand/huijian-account-gpt.webp");
+  await expect(page.locator(".sidebar-account .brand-user-avatar")).toHaveAttribute("src", "/brand/huijian-account-user-gpt.webp");
   await expectNoHorizontalOverflow(page);
 });
 

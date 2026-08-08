@@ -209,7 +209,7 @@ export function UserAvatar({ displayName, size = 40, className = "", label }: Us
   return (
     <img
       className={`brand-avatar brand-user-avatar ${className}`.trim()}
-      src="/brand/huijian-account-gpt.webp"
+      src="/brand/huijian-account-user-gpt.webp"
       width={size}
       height={size}
       alt={label || `${name}的账户图标`}
