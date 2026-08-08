@@ -685,13 +685,18 @@ test("登录用户可以隐藏并恢复最近任务侧栏", async ({ page }) => 
   await page.goto("/?workspace=1");
 
   const sidebar = page.locator(".sidebar-desktop");
+  const topbarBrand = page.locator(".agent-topbar .brand-home-button");
   await expect(sidebar).toBeVisible();
+  await expect(sidebar.getByRole("button", { name: "返回慧鉴AI官网首页" })).toBeVisible();
+  await expect(topbarBrand).toBeHidden();
   await page.getByRole("button", { name: "隐藏最近任务" }).click();
   await expect(sidebar).toBeHidden();
+  await expect(topbarBrand).toBeVisible();
   const restore = page.getByRole("button", { name: "显示最近任务" });
   await expect(restore).toBeVisible();
   await restore.click();
   await expect(sidebar).toBeVisible();
+  await expect(topbarBrand).toBeHidden();
   await expectNoHorizontalOverflow(page);
 });
 

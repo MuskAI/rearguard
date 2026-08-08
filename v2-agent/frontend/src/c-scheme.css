@@ -468,6 +468,12 @@
   font-size: var(--brand-c-font-body);
 }
 
+@media (min-width: 821px) {
+  .agent-app:not(.history-collapsed):not(.history-unavailable) .agent-topbar .brand-home-button.brand-system-c {
+    display: none;
+  }
+}
+
 .official-site.home-v3 .home-header,
 .agent-app .agent-topbar,
 .developer-shell .developer-topbar {
