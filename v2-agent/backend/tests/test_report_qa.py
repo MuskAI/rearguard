@@ -91,13 +91,54 @@ def test_report_answer_is_grounded_and_filters_unknown_references(monkeypatch):
     )
 
     assert response["grounded"] is True
-    assert response["evidenceRefs"] == ["频域特征"]
+    assert response["evidenceRefs"] == ["图像纹理和细节规律"]
     assert response["suggestedQuestions"] == ["这项证据有何局限？"]
     assert response["usage"]["totalTokens"] == 73
     prompt = completions.calls[0]["messages"]
     assert "唯一事实来源" in prompt[0]["content"]
     assert "没有定位证据" in prompt[0]["content"]
     assert "CURRENT_QUESTION" in prompt[1]["content"]
+
+
+def test_report_answer_translates_model_jargon_for_non_technical_users(monkeypatch):
+    client, completions = fake_client(json.dumps({
+        "answer": "线性探针根据频域特征输出 logits，经校准后得到 0.91 的后验概率，置信度较高。",
+        "evidenceRefs": ["线性探针"],
+        "suggestedQuestions": ["这个后验概率和 logits 应该怎么理解？"],
+    }, ensure_ascii=False))
+    monkeypatch.setattr(report_qa.detector, "_get_client", lambda: client)
+
+    response = report_qa.answer(
+        {
+            "verdict": "suspected_fake",
+            "explanation": "模型分数偏高",
+            "dimensions": [{"label": "线性探针", "result": "频域特征异常", "score": 0.91}],
+        },
+        "为什么说这张图可能是假的？",
+    )
+
+    assert response["answer"] == (
+        "图像检测模型根据图像纹理和细节规律输出模型最初给出的分数，根据测试数据调整后得到 0.91 的综合风险分，判断把握程度较高。"
+    )
+    assert response["evidenceRefs"] == ["图像检测模型"]
+    assert response["suggestedQuestions"] == ["这个综合风险分和模型最初给出的分数应该怎么理解？"]
+    prompt = completions.calls[0]["messages"][0]["content"]
+    assert "没有人工智能、计算机视觉或数字取证背景" in prompt
+    assert "默认禁止出现：线性探针" in prompt
+    assert "不等于有 91% 的绝对正确率" in prompt
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("logits较高，confidence较高", "模型最初给出的分数较高，判断把握程度较高"),
+        ("OCR发现文字，C2PA凭证有效", "文字识别发现文字，内容来源凭证有效"),
+        ("EXIF元数据包含手机型号", "拍摄信息包含手机型号"),
+        ("bbox位于右下角，pipeline已完成", "标注框位于右下角，分析流程已完成"),
+    ],
+)
+def test_plain_language_guard_handles_terms_next_to_chinese(raw, expected):
+    assert report_qa._plain_language(raw) == expected
 
 
 @pytest.mark.parametrize("question", ["", "   ", "问" * (report_qa.REPORT_QA_MAX_QUESTION_CHARS + 1)])
