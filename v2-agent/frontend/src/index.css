@@ -4,31 +4,31 @@
 
 :root {
   color-scheme: light;
-  --bg: #eef4f5;
+  --bg: #f2f4f5;
   --surface: #ffffff;
-  --surface-subtle: #f6f9f9;
-  --surface-strong: #e7f0f1;
-  --sidebar: #f8fbfb;
-  --ink: #173140;
-  --ink-strong: #0d2533;
-  --muted: #667a83;
-  --muted-strong: #50656f;
-  --border: #d5e1e3;
-  --border-strong: #bfcfd2;
-  --primary: #147d7c;
-  --primary-strong: #0e6668;
-  --primary-soft: #def1ee;
-  --blue: #2b6fa8;
-  --blue-soft: #e8f1fa;
-  --coral: #dc654f;
-  --coral-soft: #fcebe7;
+  --surface-subtle: #f7f8f9;
+  --surface-strong: #e9eef0;
+  --sidebar: #f8fafb;
+  --ink: #263640;
+  --ink-strong: #16242b;
+  --muted: #667780;
+  --muted-strong: #4e626c;
+  --border: #d9e0e3;
+  --border-strong: #bcc8cd;
+  --primary: #007d88;
+  --primary-strong: #00636c;
+  --primary-soft: #dff3f4;
+  --blue: #176b87;
+  --blue-soft: #e3f2f6;
+  --coral: #d9574d;
+  --coral-soft: #fbe9e7;
   --amber: #b7791f;
   --amber-soft: #fff4dc;
   --green: #16805c;
   --green-soft: #e3f3eb;
-  --shadow-sm: 0 1px 2px rgba(17, 45, 57, 0.06), 0 8px 24px rgba(17, 45, 57, 0.04);
-  --shadow-lg: 0 24px 70px rgba(14, 43, 55, 0.22);
-  --focus: rgba(43, 111, 168, 0.34);
+  --shadow-sm: 0 1px 2px rgba(22, 36, 43, 0.05), 0 10px 28px rgba(22, 36, 43, 0.05);
+  --shadow-lg: 0 26px 74px rgba(22, 36, 43, 0.2);
+  --focus: rgba(0, 167, 181, 0.34);
 }
 
 * {
@@ -47,7 +47,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-family: "Avenir Next", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   font-size: 16px;
   line-height: 1.5;
   letter-spacing: 0;

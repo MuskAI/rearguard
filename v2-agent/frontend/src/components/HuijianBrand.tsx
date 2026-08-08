@@ -1,5 +1,3 @@
-import BrandArtIcon from "./BrandArtIcon";
-
 interface Props {
   compact?: boolean;
   onClick?: () => void;
@@ -9,7 +7,7 @@ export default function HuijianBrand({ compact = false, onClick }: Props) {
   const content = (
     <>
       <span className="brand-mark" aria-hidden="true">
-        <BrandArtIcon name="fast" />
+        <img className="brand-symbol" src="/brand/huijian-mark-v3.webp" alt="" width="512" height="512" />
       </span>
       <span className="brand-copy">
         <strong>慧鉴<em>AI</em></strong>

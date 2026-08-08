@@ -144,6 +144,36 @@ async function expectNoHorizontalOverflow(page: Page) {
   }
 }
 
+async function readableTextOffenders(page: Page, rootSelector: string, minimumPx = 12) {
+  return page.locator(rootSelector).evaluate((root, minimum) => {
+    const selectors = "p,span,small,strong,b,button,a,label,summary,dt,dd,li,h1,h2,h3,h4";
+    return Array.from(root.querySelectorAll<HTMLElement>(selectors)).flatMap((element) => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      const ownText = Array.from(element.childNodes)
+        .filter((node) => node.nodeType === Node.TEXT_NODE)
+        .map((node) => node.textContent || "")
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (!ownText || style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0 || rect.width < 1 || rect.height < 1) return [];
+      const size = Number.parseFloat(style.fontSize);
+      return size + 0.01 < minimum ? [{
+        tag: element.tagName,
+        className: element.className,
+        parentClassName: element.parentElement?.className || "",
+        ancestry: Array.from({ length: 4 }, (_, index) => {
+          let parent: HTMLElement | null = element;
+          for (let step = 0; step <= index; step += 1) parent = parent?.parentElement || null;
+          return parent ? `${parent.tagName}.${parent.className}` : "";
+        }),
+        text: ownText.slice(0, 42),
+        size,
+      }] : [];
+    });
+  }, minimumPx);
+}
+
 async function expectHorizontalHeading(page: Page, selector: string) {
   const heading = page.locator(selector);
   await expect(heading).toBeVisible();
@@ -214,6 +244,18 @@ async function expectBoxesDoNotOverlap(page: Page, selector: string) {
   }
 }
 
+async function expectCapabilityContentDoesNotOverlap(page: Page) {
+  const collisions = await page.locator(".compact-capability-strip > div").evaluateAll((items) => items.flatMap((item, index) => {
+    const icon = item.querySelector<HTMLElement>(".brand-art-icon")?.getBoundingClientRect();
+    const copy = item.querySelector<HTMLElement>(":scope > span:not(.brand-art-icon)")?.getBoundingClientRect();
+    if (!icon || !copy) return [`能力项 ${index + 1} 缺少图标或文字`];
+    const overlapWidth = Math.min(icon.right, copy.right) - Math.max(icon.left, copy.left);
+    const overlapHeight = Math.min(icon.bottom, copy.bottom) - Math.max(icon.top, copy.top);
+    return overlapWidth > 1 && overlapHeight > 1 ? [`能力项 ${index + 1} 的图标与文字重叠`] : [];
+  }));
+  expect(collisions).toEqual([]);
+}
+
 for (const viewport of viewports) {
   test(`官网首页在 ${viewport.name} 视口保持横向主视觉`, async ({ page }) => {
     await page.setViewportSize(viewport);
@@ -223,7 +265,7 @@ for (const viewport of viewports) {
     await expectHorizontalHeading(page, "#official-home-title");
     await expectReadableHero(page, viewport.width);
     await expectHeroFirstViewport(page, viewport);
-    await expect(page.getByRole("figure", { name: "慧鉴AI品牌助手小鉴与鉴伪工具" })).toBeVisible();
+    await expect(page.getByRole("figure", { name: "慧鉴AI光学取证扫描仪" })).toBeVisible();
     const mascotLoaded = await page.locator('.home-hero-visual-stage > img').evaluate((image) => {
       const element = image as HTMLImageElement;
       return element.complete && element.naturalWidth > 0;
@@ -264,6 +306,85 @@ test("移动官网导航支持键盘关闭并恢复焦点", async ({ page }) => 
   await expect(trigger).toBeFocused();
 });
 
+test("官网与统一鉴伪入口不存在低于 12px 的可见文字", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await installBaseMocks(page);
+  await page.goto("/");
+  await expect(page.locator(".home-v3")).toBeVisible();
+  expect(await readableTextOffenders(page, ".home-v3")).toEqual([]);
+
+  await page.goto("/?workspace=1");
+  await expect(page.locator(".agent-app")).toBeVisible();
+  expect(await readableTextOffenders(page, ".agent-app")).toEqual([]);
+});
+
+test("结果页完整依据入口使用正文级字号", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await installBaseMocks(page);
+  await page.route("**/image_upload/detect_async", (route) => route.fulfill({
+    json: {
+      status: "success",
+      job: {
+        id: "layout-result-job",
+        version: "1",
+        status: "success",
+        result: {
+          status: "success",
+          result: {
+            itemid: 901,
+            final_label: "AI生成图像",
+            probability: 0.87,
+            detector_probability: 0.84,
+            confidence: "高",
+            decisionStatus: "verdict",
+            decisionAuthority: "calibrated_model",
+            reviewRequired: false,
+            modelDecisionReady: true,
+            explanation: "真实性分析与证据链已经完成。",
+            image_url: "/brand/huijian-forensic-scanner-v3.webp",
+            filename: "typography-review.png",
+            file_size: "1 KB",
+            resolution: "512×512",
+            img_format: "PNG",
+            visual_issues: ["局部纹理连续性异常"],
+            all_metadata: { Software: "Layout review" },
+            llm_used: true,
+            visibleWatermark: {
+              enabled: true,
+              supported: true,
+              detected: false,
+              provider: null,
+              confidence: 0,
+              evidenceLevel: "none",
+              hits: [],
+              temporal: { sampledFrames: 1, positiveFrames: 0, moving: false },
+              note: "未检出显式 AI 水印。",
+            },
+          },
+        },
+      },
+    },
+  }));
+  await page.goto("/?workspace=1");
+  await page.locator(".guest-upload-consent input").check();
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "typography-review.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"),
+  });
+
+  await expect(page.locator("#detection-result-title")).toBeVisible();
+  const disclosure = page.locator(".rationale-disclosure").first();
+  await expect(disclosure).toBeVisible();
+  const sizes = await disclosure.locator("summary").evaluate((summary) => ({
+    summary: Number.parseFloat(getComputedStyle(summary).fontSize),
+    count: Number.parseFloat(getComputedStyle(summary.querySelector("span")!).fontSize),
+  }));
+  expect(sizes.summary).toBeGreaterThanOrEqual(17);
+  expect(sizes.count).toBeGreaterThanOrEqual(14);
+  expect(await readableTextOffenders(page, ".agent-result")).toEqual([]);
+});
+
 for (const viewport of viewports.slice(0, 2)) {
   test(`鉴伪入口在 ${viewport.name} 视口居中且控件不重叠`, async ({ page }) => {
     await page.setViewportSize(viewport);
@@ -272,6 +393,7 @@ for (const viewport of viewports.slice(0, 2)) {
 
     await expectHorizontalHeading(page, ".upload-stage h3");
     await expectBoxesDoNotOverlap(page, ".compact-capability-strip > div");
+    await expectCapabilityContentDoesNotOverlap(page);
     const workspace = await page.locator(".agent-workspace").boundingBox();
     const upload = await page.locator(".upload-stage").boundingBox();
     expect(workspace).not.toBeNull();

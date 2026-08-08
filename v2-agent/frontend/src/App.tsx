@@ -1249,7 +1249,7 @@ function GuestLimitGate({ fileName, onLogin }: { fileName?: string; onLogin: () 
   return (
     <section className="guest-limit-gate" aria-labelledby="guest-limit-title">
       <div className="guest-limit-visual" aria-hidden="true">
-        <img src="/brand/huijian-mascot.webp" alt="" />
+        <img src="/brand/huijian-mark-v3.webp" alt="" />
         <span><ShieldCheck size={18} /></span>
       </div>
       <p>访客体验已完成</p>
@@ -1344,7 +1344,7 @@ function AgentProgressPanel({ progress, onStopWaiting }: { progress: AgentProgre
   const stageIndex = current.stage === "report" ? 2 : current.stage === "evidence" ? 1 : 0;
   return (
     <div className="agent-progress-message" role="status" aria-live="polite">
-      <div className="agent-avatar"><img src="/brand/huijian-mascot.webp" alt="" /></div>
+      <div className="agent-avatar"><img src="/brand/huijian-mark-v3.webp" alt="" /></div>
       <div className="progress-panel">
         <div className="progress-heading"><span><LoaderCircle size={17} className={current.percent < 100 ? "spin" : ""} /></span><div><strong>{current.title}</strong><p>{current.detail}</p></div><b>{Math.round(current.percent)}%</b></div>
         <div className="progress-track" role="progressbar" aria-label={current.title} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(current.percent)}><i style={{ width: `${current.percent}%` }} /></div>

@@ -246,11 +246,11 @@ export default function OfficialHome({
             </div>
           </div>
 
-          <figure className="home-hero-visual" aria-label="慧鉴AI品牌助手小鉴与鉴伪工具" onPointerMove={moveHero} onPointerLeave={resetHero} data-reveal>
+          <figure className="home-hero-visual" aria-label="慧鉴AI光学取证扫描仪" onPointerMove={moveHero} onPointerLeave={resetHero} data-reveal>
             <div className="home-hero-visual-stage">
               <span className="hero-orbit orbit-one" aria-hidden="true" />
               <span className="hero-orbit orbit-two" aria-hidden="true" />
-              <img src="/brand/huijian-mascot.webp" alt="慧鉴AI品牌助手小鉴" width="594" height="800" />
+              <img src="/brand/huijian-forensic-scanner-v3.webp" alt="慧鉴AI光学取证扫描仪" width="900" height="1112" />
               <span className="hero-art-token token-fast"><BrandArtIcon name="fast" /><b>快速检测</b></span>
               <span className="hero-art-token token-swarm"><BrandArtIcon name="swarm" /><b>Swarm</b></span>
               <span className="hero-art-token token-report"><BrandArtIcon name="report" /><b>证据报告</b></span>
