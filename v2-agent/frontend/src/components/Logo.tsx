@@ -1,3 +1,5 @@
+import { BrandLogoMark } from "./BrandSystem";
+
 interface Props {
   size?: number;
   idSuffix?: string;
@@ -6,13 +8,10 @@ interface Props {
 
 export default function Logo({ size = 40, idSuffix = "0", className }: Props) {
   return (
-    <img
-      src="/brand/huijian-mark-v3.webp"
-      width={size}
-      height={size}
-      className={className}
-      alt="慧鉴AI"
-      title={`慧鉴AI ${idSuffix}`}
+    <BrandLogoMark
+      size={size}
+      className={`brand-system-c-logo ${className || ""}`.trim()}
+      label={`慧鉴AI 标志 ${idSuffix}`}
     />
   );
 }

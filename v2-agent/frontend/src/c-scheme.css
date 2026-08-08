@@ -1,0 +1,443 @@
+:root {
+  --brand-c-blue: #315fa9;
+  --brand-c-blue-strong: #244b89;
+  --brand-c-blue-soft: #e8eef9;
+  --brand-c-green: #087267;
+  --brand-c-green-soft: #e3f2ef;
+  --brand-c-ink: #17212b;
+  --brand-c-muted: #5f6d78;
+  --brand-c-mist: #f5f7f8;
+  --brand-c-line: #d8e0e6;
+  --brand-c-warning: #a66708;
+  --brand-c-danger: #b63e48;
+  --brand-c-font-body: 16px;
+  --brand-c-font-control: 14px;
+  --brand-c-font-small: 13px;
+  --brand-c-radius-control: 6px;
+  --brand-c-radius-card: 8px;
+  --brand-c-ease: cubic-bezier(.22, 1, .36, 1);
+}
+
+.brand-lockup.brand-system-c {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  color: var(--brand-c-ink);
+  font-size: var(--brand-c-font-body);
+  line-height: 1.35;
+  letter-spacing: 0;
+}
+
+.brand-home-button.brand-system-c {
+  appearance: none;
+  margin: 0;
+  padding: 3px;
+  border: 0;
+  border-radius: var(--brand-c-radius-card);
+  color: inherit;
+  background: transparent;
+  box-shadow: none;
+  text-align: left;
+  transition: background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.brand-home-button.brand-system-c:hover {
+  background: var(--brand-c-mist);
+}
+
+.brand-home-button.brand-system-c:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--brand-c-blue) 32%, transparent);
+  outline-offset: 2px;
+}
+
+.brand-system-c.brand-lockup .brand-mark {
+  position: relative;
+  display: inline-grid;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  flex: 0 0 44px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--brand-c-line);
+  border-radius: var(--brand-c-radius-card);
+  background: var(--brand-c-mist);
+  box-shadow: none;
+  transform: none;
+  transition: border-color 180ms ease, background-color 180ms ease, transform 180ms var(--brand-c-ease);
+}
+
+.brand-system-c.brand-lockup .brand-symbol {
+  display: block;
+  width: 36px;
+  height: 36px;
+  max-width: 36px;
+  object-fit: initial;
+  filter: none;
+  transform: none;
+  transition: transform 220ms var(--brand-c-ease);
+}
+
+.brand-home-button.brand-system-c:hover .brand-mark,
+.home-brand-link:hover .brand-system-c .brand-mark,
+.developer-brand:hover .brand-system-c .brand-mark {
+  border-color: #aabbd2;
+  background: var(--brand-c-blue-soft);
+  box-shadow: none;
+  transform: translateY(-1px);
+}
+
+.brand-home-button.brand-system-c:hover .brand-symbol,
+.home-brand-link:hover .brand-system-c .brand-symbol,
+.developer-brand:hover .brand-system-c .brand-symbol {
+  transform: translateY(-1px);
+}
+
+.brand-system-c.brand-lockup .brand-copy {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+  font-size: var(--brand-c-font-body);
+  line-height: 1.3;
+  letter-spacing: 0;
+}
+
+.brand-system-c.brand-lockup .brand-copy strong {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  color: var(--brand-c-ink);
+  font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 18px;
+  font-weight: 750;
+  line-height: 1.15;
+  letter-spacing: 0;
+}
+
+.brand-system-c.brand-lockup .brand-copy strong em {
+  color: var(--brand-c-blue);
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: var(--brand-c-font-small);
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.brand-system-c.brand-lockup .brand-copy small {
+  display: block;
+  overflow: hidden;
+  color: var(--brand-c-muted);
+  font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: var(--brand-c-font-small);
+  font-weight: 500;
+  line-height: 1.35;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.brand-logo-mark {
+  color: var(--brand-c-ink);
+  overflow: visible;
+}
+
+.brand-logo-page-left {
+  fill: var(--brand-c-blue);
+}
+
+.brand-logo-page-right {
+  fill: var(--brand-c-ink);
+}
+
+.brand-logo-focus {
+  fill: var(--brand-c-green);
+}
+
+.brand-logo-focus-line {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 1.75px;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.brand-art-icon.brand-system-c-icon {
+  display: inline-grid;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
+  place-items: center;
+  overflow: visible;
+  border: 0;
+  border-radius: var(--brand-c-radius-control);
+  color: var(--brand-c-blue);
+  background: none !important;
+  background-image: none !important;
+  box-shadow: none;
+  filter: none !important;
+  transform: none;
+  transition: color 160ms ease, background-color 160ms ease, transform 180ms var(--brand-c-ease);
+}
+
+.brand-art-icon.brand-system-c-icon > .brand-glyph {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.brand-glyph {
+  display: inline-block;
+  overflow: visible;
+  color: currentColor;
+  vertical-align: middle;
+}
+
+.brand-glyph * {
+  vector-effect: non-scaling-stroke;
+}
+
+.brand-glyph-accent {
+  color: var(--brand-c-green);
+  stroke: var(--brand-c-green);
+}
+
+.brand-art-icon.brand-system-c-icon:hover {
+  color: var(--brand-c-blue-strong);
+  transform: translateY(-2px);
+}
+
+.home-scenario-grid article:hover .brand-art-icon.brand-system-c-icon,
+.home-workflow li:hover .brand-art-icon.brand-system-c-icon,
+.compact-capability-strip > div:hover .brand-art-icon.brand-system-c-icon {
+  transform: translateY(-2px);
+}
+
+.brand-status-icon {
+  color: var(--brand-c-blue);
+}
+
+.brand-glyph-status-real,
+.brand-glyph-status-real .brand-glyph-accent {
+  color: var(--brand-c-green);
+  stroke: var(--brand-c-green);
+}
+
+.brand-glyph-status-fake,
+.brand-glyph-status-error,
+.brand-glyph-status-fake .brand-glyph-accent,
+.brand-glyph-status-error .brand-glyph-accent {
+  color: var(--brand-c-danger);
+  stroke: var(--brand-c-danger);
+}
+
+.brand-glyph-status-warning,
+.brand-glyph-status-partial,
+.brand-glyph-status-warning .brand-glyph-accent,
+.brand-glyph-status-partial .brand-glyph-accent {
+  color: var(--brand-c-warning);
+  stroke: var(--brand-c-warning);
+}
+
+.brand-glyph-status-offline {
+  color: var(--brand-c-muted);
+}
+
+.brand-status-track {
+  opacity: .28;
+}
+
+.brand-status-spinner {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: brand-c-spin 1s linear infinite;
+}
+
+.brand-avatar {
+  display: inline-block;
+  flex: 0 0 auto;
+  overflow: visible;
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--brand-c-ink) 12%, transparent);
+  vertical-align: middle;
+}
+
+.brand-user-avatar text {
+  font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 17px;
+  font-weight: 750;
+  letter-spacing: 0;
+}
+
+.brand-avatar-corner {
+  fill: none;
+  stroke: rgba(255, 255, 255, .74);
+  stroke-width: 1.75px;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.brand-avatar-presence {
+  stroke: #fff;
+  stroke-width: 2px;
+  vector-effect: non-scaling-stroke;
+}
+
+.brand-avatar-presence-online {
+  fill: #29a66f;
+}
+
+.brand-avatar-presence-offline {
+  fill: #89949d;
+}
+
+.brand-agent-avatar {
+  color: var(--brand-c-blue);
+}
+
+.brand-agent-shell {
+  fill: var(--brand-c-mist);
+  stroke: var(--brand-c-line);
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
+}
+
+.brand-agent-rail,
+.brand-agent-state-glyph {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.brand-agent-lens-outer {
+  fill: var(--brand-c-blue-soft);
+  stroke: currentColor;
+  stroke-width: 1.75px;
+  vector-effect: non-scaling-stroke;
+}
+
+.brand-agent-lens-inner {
+  fill: #fff;
+  stroke: var(--brand-c-green);
+  stroke-width: 1.75px;
+  vector-effect: non-scaling-stroke;
+}
+
+.brand-agent-aperture {
+  fill: var(--brand-c-blue);
+}
+
+.brand-agent-state-light {
+  fill: var(--brand-c-green);
+  stroke: #fff;
+  stroke-width: 1.25px;
+  vector-effect: non-scaling-stroke;
+}
+
+.brand-agent-avatar-receiving .brand-agent-state-light,
+.brand-agent-avatar-processing .brand-agent-state-light {
+  fill: var(--brand-c-blue);
+}
+
+.brand-agent-avatar-error,
+.brand-agent-avatar-error .brand-agent-state-glyph {
+  color: var(--brand-c-danger);
+}
+
+.brand-agent-avatar-error .brand-agent-state-light {
+  fill: var(--brand-c-danger);
+}
+
+.brand-agent-processing-ring {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-dasharray: 16 8;
+  transform-origin: center;
+  vector-effect: non-scaling-stroke;
+  animation: brand-c-spin 1.4s linear infinite;
+}
+
+.brand-identity-avatar {
+  color: var(--brand-c-blue);
+}
+
+.brand-identity-surface {
+  fill: var(--brand-c-blue-soft);
+  stroke: color-mix(in srgb, currentColor 25%, transparent);
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
+}
+
+.brand-identity-glyph {
+  stroke: currentColor;
+}
+
+.brand-identity-green {
+  color: var(--brand-c-green);
+}
+
+.brand-identity-green .brand-identity-surface {
+  fill: var(--brand-c-green-soft);
+}
+
+.brand-identity-violet {
+  color: #6554a5;
+}
+
+.brand-identity-violet .brand-identity-surface {
+  fill: #efecf8;
+}
+
+@keyframes brand-c-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 720px) {
+  .brand-system-c.brand-lockup {
+    gap: 8px;
+  }
+
+  .brand-system-c.brand-lockup .brand-mark {
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    flex-basis: 40px;
+  }
+
+  .brand-system-c.brand-lockup .brand-symbol {
+    width: 33px;
+    height: 33px;
+    max-width: 33px;
+  }
+
+  .brand-system-c.brand-lockup .brand-copy strong {
+    font-size: 16px;
+  }
+
+  .brand-system-c.brand-lockup .brand-copy small {
+    font-size: var(--brand-c-font-small);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brand-system-c *,
+  .brand-system-c-icon,
+  .brand-avatar,
+  .brand-status-spinner,
+  .brand-agent-processing-ring {
+    animation: none !important;
+    scroll-behavior: auto !important;
+    transition-duration: .01ms !important;
+  }
+
+  .brand-home-button.brand-system-c:hover .brand-mark,
+  .brand-home-button.brand-system-c:hover .brand-symbol,
+  .brand-art-icon.brand-system-c-icon:hover {
+    transform: none;
+  }
+}
