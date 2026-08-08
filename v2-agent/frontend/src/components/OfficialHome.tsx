@@ -5,11 +5,12 @@ import {
   Menu,
   X,
 } from "lucide-react";
-import { PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AccountUser } from "../api";
 import AccountMenu from "./AccountMenu";
 import BrandArtIcon, { BrandArtIconName } from "./BrandArtIcon";
 import HuijianBrand from "./HuijianBrand";
+import Presence from "./Presence";
 
 export type DeveloperEntry = "overview" | "tester" | "docs";
 
@@ -136,9 +137,6 @@ export default function OfficialHome({
 
   useEffect(() => {
     if (!mobileNavOpen) return;
-    const focusFrame = window.requestAnimationFrame(() => {
-      mobileNavRef.current?.querySelector<HTMLElement>("a[href], button:not([disabled])")?.focus();
-    });
     const closeOutside = (event: PointerEvent) => {
       const target = event.target as Node;
       if (!mobileNavRef.current?.contains(target) && !mobileNavTriggerRef.current?.contains(target)) {
@@ -153,7 +151,6 @@ export default function OfficialHome({
     document.addEventListener("pointerdown", closeOutside);
     document.addEventListener("keydown", closeOnEscape);
     return () => {
-      window.cancelAnimationFrame(focusFrame);
       document.removeEventListener("pointerdown", closeOutside);
       document.removeEventListener("keydown", closeOnEscape);
     };
@@ -163,24 +160,6 @@ export default function OfficialHome({
     setDeveloperOpen(false);
     setMobileNavOpen(false);
     onDeveloper(entry);
-  }
-
-  function moveHero(event: ReactPointerEvent<HTMLElement>) {
-    if (event.pointerType !== "mouse" || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    const x = (event.clientX - rect.left) / rect.width - 0.5;
-    const y = (event.clientY - rect.top) / rect.height - 0.5;
-    event.currentTarget.style.setProperty("--hero-rx", `${(-y * 5).toFixed(2)}deg`);
-    event.currentTarget.style.setProperty("--hero-ry", `${(x * 7).toFixed(2)}deg`);
-    event.currentTarget.style.setProperty("--hero-tx", `${(x * 12).toFixed(1)}px`);
-    event.currentTarget.style.setProperty("--hero-ty", `${(y * 10).toFixed(1)}px`);
-  }
-
-  function resetHero(event: ReactPointerEvent<HTMLElement>) {
-    event.currentTarget.style.setProperty("--hero-rx", "0deg");
-    event.currentTarget.style.setProperty("--hero-ry", "0deg");
-    event.currentTarget.style.setProperty("--hero-tx", "0px");
-    event.currentTarget.style.setProperty("--hero-ty", "0px");
   }
 
   return (
@@ -196,16 +175,18 @@ export default function OfficialHome({
             onPointerEnter={() => setDeveloperOpen(true)}
             onPointerLeave={(event) => { if (event.pointerType === "mouse") setDeveloperOpen(false); }}
           >
-            <button ref={developerTriggerRef} type="button" aria-haspopup="menu" aria-expanded={developerOpen} onClick={() => setDeveloperOpen((value) => !value)}>
+            <button ref={developerTriggerRef} type="button" aria-haspopup="menu" aria-expanded={developerOpen} aria-controls="home-developer-navigation" onClick={() => setDeveloperOpen((value) => !value)}>
               <span>开发者平台</span><ChevronDown size={14} />
             </button>
-            {developerOpen && (
-              <div className="home-developer-popover" role="menu" aria-label="开发者平台入口">
-                <button type="button" role="menuitem" onClick={() => openDeveloper("overview")}><BrandArtIcon name="developer" /><div><strong>平台概览</strong><small>API Key、额度与调用</small></div><ArrowRight size={15} /></button>
-                <button type="button" role="menuitem" onClick={() => openDeveloper("tester")}><BrandArtIcon name="fast" /><div><strong>在线调试</strong><small>发送真实检测请求</small></div><ArrowRight size={15} /></button>
-                <button type="button" role="menuitem" onClick={() => openDeveloper("docs")}><BrandArtIcon name="report" /><div><strong>接入文档</strong><small>多语言示例与错误码</small></div><ArrowRight size={15} /></button>
-              </div>
-            )}
+            <Presence present={developerOpen}>
+              {(phase) => (
+                <div id="home-developer-navigation" className="home-developer-popover" role="menu" aria-label="开发者平台入口" aria-hidden={!developerOpen} data-presence={phase}>
+                  <button type="button" role="menuitem" tabIndex={developerOpen ? 0 : -1} onClick={() => openDeveloper("overview")}><BrandArtIcon name="developer" /><div><strong>平台概览</strong><small>API Key、额度与调用</small></div><ArrowRight size={15} /></button>
+                  <button type="button" role="menuitem" tabIndex={developerOpen ? 0 : -1} onClick={() => openDeveloper("tester")}><BrandArtIcon name="fast" /><div><strong>在线调试</strong><small>发送真实检测请求</small></div><ArrowRight size={15} /></button>
+                  <button type="button" role="menuitem" tabIndex={developerOpen ? 0 : -1} onClick={() => openDeveloper("docs")}><BrandArtIcon name="report" /><div><strong>接入文档</strong><small>多语言示例与错误码</small></div><ArrowRight size={15} /></button>
+                </div>
+              )}
+            </Presence>
           </div>
           <a href="#faq">常见问题</a>
         </nav>
@@ -222,15 +203,22 @@ export default function OfficialHome({
           <button type="button" className="home-workspace-button" onClick={onEnterWorkspace}><span className="home-label-wide">开始鉴伪</span><span className="home-label-compact">鉴伪</span><ArrowRight size={17} /></button>
         </div>
 
-        {mobileNavOpen && (
-          <nav ref={mobileNavRef} id="home-mobile-navigation" className="home-mobile-nav" aria-label="移动端官网导航">
-            {NAV_ITEMS.map((item) => <a key={item.href} href={item.href} onClick={() => setMobileNavOpen(false)}>{item.label}<ArrowRight size={16} /></a>)}
-            <button type="button" onClick={() => openDeveloper("overview")}>开发者概览<ArrowRight size={16} /></button>
-            <button type="button" onClick={() => openDeveloper("tester")}>在线调试<ArrowRight size={16} /></button>
-            <button type="button" onClick={() => openDeveloper("docs")}>接入文档<ArrowRight size={16} /></button>
-            <a href="#faq" onClick={() => setMobileNavOpen(false)}>常见问题<ArrowRight size={16} /></a>
-          </nav>
-        )}
+        <Presence
+          present={mobileNavOpen}
+          onEnterComplete={() => {
+            mobileNavRef.current?.querySelector<HTMLElement>("a[href], button:not([disabled])")?.focus();
+          }}
+        >
+          {(phase) => (
+            <nav ref={mobileNavRef} id="home-mobile-navigation" className="home-mobile-nav" aria-label="移动端官网导航" aria-hidden={!mobileNavOpen} data-presence={phase}>
+              {NAV_ITEMS.map((item) => <a key={item.href} href={item.href} tabIndex={mobileNavOpen ? 0 : -1} onClick={() => setMobileNavOpen(false)}>{item.label}<ArrowRight size={16} /></a>)}
+              <button type="button" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => openDeveloper("overview")}>开发者概览<ArrowRight size={16} /></button>
+              <button type="button" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => openDeveloper("tester")}>在线调试<ArrowRight size={16} /></button>
+              <button type="button" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => openDeveloper("docs")}>接入文档<ArrowRight size={16} /></button>
+              <a href="#faq" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => setMobileNavOpen(false)}>常见问题<ArrowRight size={16} /></a>
+            </nav>
+          )}
+        </Presence>
       </header>
 
       <main>
@@ -246,7 +234,7 @@ export default function OfficialHome({
             </div>
           </div>
 
-          <figure className="home-hero-visual" aria-label="慧鉴AI光学取证扫描仪" onPointerMove={moveHero} onPointerLeave={resetHero} data-reveal>
+          <figure className="home-hero-visual" aria-label="慧鉴AI光学取证扫描仪" data-reveal>
             <div className="home-hero-visual-stage">
               <span className="hero-orbit orbit-one" aria-hidden="true" />
               <span className="hero-orbit orbit-two" aria-hidden="true" />

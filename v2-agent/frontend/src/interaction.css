@@ -1,3 +1,13 @@
+:root {
+  --motion-press: 90ms;
+  --motion-hover: 140ms;
+  --motion-menu-enter: 180ms;
+  --motion-menu-exit: 130ms;
+  --motion-panel: 240ms;
+  --motion-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-ease-in: cubic-bezier(0.4, 0, 1, 1);
+}
+
 .analysis-model-picker {
   position: relative;
   z-index: 20;
@@ -464,6 +474,140 @@
 
 @media (prefers-reduced-motion: reduce) {
   .swarm-upgrade {
+    animation: none;
+  }
+}
+
+/* Companion motion: one shared enter/exit language for transient surfaces. */
+.account-menu .account-menu-trigger,
+.analysis-model-picker .analysis-model-trigger,
+.account-menu .account-menu-popover button,
+.analysis-model-picker .analysis-model-menu button,
+.official-site.home-v3 .home-developer-menu > button,
+.official-site.home-v3 .home-developer-popover button,
+.official-site.home-v3 .home-mobile-nav a,
+.official-site.home-v3 .home-mobile-nav button {
+  transition-property: transform, opacity;
+  transition-duration: var(--motion-hover);
+  transition-timing-function: var(--motion-ease-out);
+}
+
+.account-menu .account-menu-trigger:active:not(:disabled),
+.analysis-model-picker .analysis-model-trigger:active:not(:disabled),
+.official-site.home-v3 .home-developer-menu > button:active:not(:disabled),
+.official-site.home-v3 .home-developer-popover button:active:not(:disabled),
+.official-site.home-v3 .home-mobile-nav a:active,
+.official-site.home-v3 .home-mobile-nav button:active:not(:disabled) {
+  transform: scale(0.98);
+  transition-duration: var(--motion-press);
+}
+
+.account-menu .account-menu-popover[data-presence],
+.analysis-model-picker .analysis-model-menu[data-presence],
+.official-site.home-v3 .home-mobile-nav[data-presence] {
+  animation: none;
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  transform-origin: top center;
+  transition: transform var(--motion-menu-enter) var(--motion-ease-out), opacity var(--motion-menu-enter) var(--motion-ease-out);
+  will-change: transform, opacity;
+}
+
+.official-site.home-v3 .home-developer-popover[data-presence] {
+  animation: none;
+  opacity: 1;
+  transform: translateX(-50%) translateY(0) scale(1);
+  transform-origin: top center;
+  transition: transform var(--motion-menu-enter) var(--motion-ease-out), opacity var(--motion-menu-enter) var(--motion-ease-out);
+  will-change: transform, opacity;
+}
+
+.account-menu .account-menu-popover[data-presence="entering"],
+.analysis-model-picker .analysis-model-menu[data-presence="entering"],
+.official-site.home-v3 .home-mobile-nav[data-presence="entering"] {
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-5px) scale(0.985);
+}
+
+.official-site.home-v3 .home-developer-popover[data-presence="entering"] {
+  pointer-events: none;
+  opacity: 0;
+  transform: translateX(-50%) translateY(-5px) scale(0.985);
+}
+
+.account-menu .account-menu-popover[data-presence="exiting"],
+.analysis-model-picker .analysis-model-menu[data-presence="exiting"],
+.official-site.home-v3 .home-mobile-nav[data-presence="exiting"] {
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-3px) scale(0.99);
+  transition-duration: var(--motion-menu-exit);
+  transition-timing-function: var(--motion-ease-in);
+}
+
+.official-site.home-v3 .home-developer-popover[data-presence="exiting"] {
+  pointer-events: none;
+  opacity: 0;
+  transform: translateX(-50%) translateY(-3px) scale(0.99);
+  transition-duration: var(--motion-menu-exit);
+  transition-timing-function: var(--motion-ease-in);
+}
+
+.official-site.home-v3 [data-reveal] {
+  transition: transform var(--motion-panel) var(--motion-ease-out), opacity var(--motion-panel) var(--motion-ease-out);
+}
+
+.official-site.home-v3 .home-hero-visual-stage {
+  transition: none;
+}
+
+.official-site.home-v3 .home-hero-visual-stage > img,
+.official-site.home-v3 .hero-orbit,
+.official-site.home-v3 .hero-art-token {
+  animation: none;
+}
+
+.analysis-model-picker .analysis-model-trigger:hover .analysis-model-trigger-icon::after {
+  animation: none;
+  opacity: 0;
+}
+
+@media (max-width: 820px) {
+  .official-site.home-v3 .home-developer-popover[data-presence] {
+    transform: translateY(0) scale(1);
+  }
+
+  .official-site.home-v3 .home-developer-popover[data-presence="entering"] {
+    transform: translateY(-5px) scale(0.985);
+  }
+
+  .official-site.home-v3 .home-developer-popover[data-presence="exiting"] {
+    transform: translateY(-3px) scale(0.99);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-press: 1ms;
+    --motion-hover: 1ms;
+    --motion-menu-enter: 1ms;
+    --motion-menu-exit: 1ms;
+    --motion-panel: 1ms;
+  }
+
+  .account-menu .account-menu-popover[data-presence],
+  .analysis-model-picker .analysis-model-menu[data-presence],
+  .official-site.home-v3 .home-developer-popover[data-presence],
+  .official-site.home-v3 .home-mobile-nav[data-presence] {
+    animation: none;
+    transform: none;
+    transition-duration: 1ms;
+  }
+
+  .official-site.home-v3 .home-hero-visual-stage > img,
+  .official-site.home-v3 .hero-orbit,
+  .official-site.home-v3 .hero-art-token {
     animation: none;
   }
 }

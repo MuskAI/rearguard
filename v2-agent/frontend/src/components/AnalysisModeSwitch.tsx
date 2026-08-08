@@ -1,7 +1,8 @@
 import { Check, ChevronDown } from "lucide-react";
-import { KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
+import { KeyboardEvent as ReactKeyboardEvent, useEffect, useId, useRef, useState } from "react";
 import type { ImageAnalysisMode } from "../agentTypes";
 import BrandArtIcon, { BrandArtIconName } from "./BrandArtIcon";
+import Presence from "./Presence";
 
 interface Props {
   mode: ImageAnalysisMode;
@@ -26,13 +27,11 @@ export default function AnalysisModeSwitch({ mode, disabled = false, onChange }:
   const triggerRef = useRef<HTMLButtonElement>(null);
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const pendingFocusRef = useRef<number | null>(null);
+  const menuId = useId();
   const selected = OPTIONS.find((option) => option.mode === mode) || OPTIONS[0];
 
   useEffect(() => {
     if (!open) return;
-    const focusIndex = pendingFocusRef.current ?? Math.max(0, OPTIONS.findIndex((option) => option.mode === mode));
-    pendingFocusRef.current = null;
-    window.requestAnimationFrame(() => optionRefs.current[focusIndex]?.focus());
     const closeOutside = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     };
@@ -49,7 +48,15 @@ export default function AnalysisModeSwitch({ mode, disabled = false, onChange }:
     };
   }, [mode, open]);
 
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
+
   function openWithFocus(index: number) {
+    if (open) {
+      optionRefs.current[index]?.focus();
+      return;
+    }
     pendingFocusRef.current = index;
     setOpen(true);
   }
@@ -66,7 +73,13 @@ export default function AnalysisModeSwitch({ mode, disabled = false, onChange }:
   }
 
   return (
-    <div ref={rootRef} className={`analysis-model-picker ${open ? "is-open" : ""}`}>
+    <div
+      ref={rootRef}
+      className={`analysis-model-picker ${open ? "is-open" : ""}`}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false);
+      }}
+    >
       <button
         ref={triggerRef}
         type="button"
@@ -74,6 +87,7 @@ export default function AnalysisModeSwitch({ mode, disabled = false, onChange }:
         disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-controls={menuId}
         aria-label="选择图片检测模型"
         onClick={() => setOpen((value) => !value)}
         onKeyDown={(event) => {
@@ -89,35 +103,44 @@ export default function AnalysisModeSwitch({ mode, disabled = false, onChange }:
         </span>
         <ChevronDown size={15} className="analysis-model-chevron" aria-hidden="true" />
       </button>
-      {open && (
-        <div className="analysis-model-menu" role="listbox" aria-label="图片检测模型">
-          <div className="analysis-model-menu-heading"><strong>选择分析方式</strong><small>仅对图片任务生效</small></div>
-          {OPTIONS.map((option) => {
-            const active = option.mode === mode;
-            return (
-              <button
-                ref={(element) => { optionRefs.current[OPTIONS.indexOf(option)] = element; }}
-                key={option.mode}
-                type="button"
-                role="option"
-                aria-selected={active}
-                tabIndex={-1}
-                className={active ? "is-selected" : ""}
-                onKeyDown={(event) => handleOptionKeyDown(event, OPTIONS.indexOf(option))}
-                onClick={() => {
-                  onChange(option.mode);
-                  setOpen(false);
-                  triggerRef.current?.focus();
-                }}
-              >
-                <span className="analysis-model-option-icon"><BrandArtIcon name={option.icon} /></span>
-                <span><strong>{option.label}</strong><small>{option.detail}</small><em>{option.note}</em></span>
-                <span className="analysis-model-check">{active && <Check size={16} />}</span>
-              </button>
-            );
-          })}
-        </div>
-      )}
+      <Presence
+        present={open}
+        onEnterComplete={() => {
+          const focusIndex = pendingFocusRef.current ?? Math.max(0, OPTIONS.findIndex((option) => option.mode === mode));
+          pendingFocusRef.current = null;
+          optionRefs.current[focusIndex]?.focus();
+        }}
+      >
+        {(phase) => (
+          <div id={menuId} className="analysis-model-menu" role="listbox" aria-label="图片检测模型" aria-hidden={!open} data-presence={phase}>
+            <div className="analysis-model-menu-heading"><strong>选择分析方式</strong><small>仅对图片任务生效</small></div>
+            {OPTIONS.map((option) => {
+              const active = option.mode === mode;
+              return (
+                <button
+                  ref={(element) => { optionRefs.current[OPTIONS.indexOf(option)] = element; }}
+                  key={option.mode}
+                  type="button"
+                  role="option"
+                  aria-selected={active}
+                  tabIndex={-1}
+                  className={active ? "is-selected" : ""}
+                  onKeyDown={(event) => handleOptionKeyDown(event, OPTIONS.indexOf(option))}
+                  onClick={() => {
+                    onChange(option.mode);
+                    setOpen(false);
+                    triggerRef.current?.focus();
+                  }}
+                >
+                  <span className="analysis-model-option-icon"><BrandArtIcon name={option.icon} /></span>
+                  <span><strong>{option.label}</strong><small>{option.detail}</small><em>{option.note}</em></span>
+                  <span className="analysis-model-check">{active && <Check size={16} />}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </Presence>
     </div>
   );
 }

@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { KeyboardEvent as ReactKeyboardEvent, useEffect, useId, useRef, useState } from "react";
 import type { AccountUser } from "../api";
+import Presence from "./Presence";
 
 interface Props {
   user: AccountUser;
@@ -27,20 +28,22 @@ export default function AccountMenu({ user, onWorkspace, onDeveloper, onLogout, 
   const triggerRef = useRef<HTMLButtonElement>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const pendingFocusRef = useRef<number | null>(null);
+  const pendingActionRef = useRef<(() => void) | null>(null);
   const menuId = useId();
   const displayName = user.username || "慧鉴用户";
   const initial = displayName.trim().slice(0, 1) || "慧";
 
   useEffect(() => {
     if (!open) return;
-    const focusIndex = pendingFocusRef.current ?? 0;
-    pendingFocusRef.current = null;
-    window.requestAnimationFrame(() => itemRefs.current[focusIndex]?.focus());
     const closeOutside = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+      if (!rootRef.current?.contains(event.target as Node)) {
+        pendingActionRef.current = null;
+        setOpen(false);
+      }
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      pendingActionRef.current = null;
       setOpen(false);
       triggerRef.current?.focus();
     };
@@ -53,6 +56,11 @@ export default function AccountMenu({ user, onWorkspace, onDeveloper, onLogout, 
   }, [open]);
 
   function openWithFocus(index: number) {
+    pendingActionRef.current = null;
+    if (open) {
+      itemRefs.current[index]?.focus();
+      return;
+    }
     pendingFocusRef.current = index;
     setOpen(true);
   }
@@ -69,12 +77,21 @@ export default function AccountMenu({ user, onWorkspace, onDeveloper, onLogout, 
   }
 
   function run(action: () => void) {
+    pendingActionRef.current = action;
     setOpen(false);
-    action();
+    triggerRef.current?.focus();
   }
 
   return (
-    <div ref={rootRef} className={`account-menu ${compact ? "is-compact" : ""} ${open ? "is-open" : ""} ${className}`.trim()}>
+    <div
+      ref={rootRef}
+      className={`account-menu ${compact ? "is-compact" : ""} ${open ? "is-open" : ""} ${className}`.trim()}
+      onBlur={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+        pendingActionRef.current = null;
+        setOpen(false);
+      }}
+    >
       <button
         ref={triggerRef}
         type="button"
@@ -83,7 +100,10 @@ export default function AccountMenu({ user, onWorkspace, onDeveloper, onLogout, 
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={menuId}
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => {
+          pendingActionRef.current = null;
+          setOpen((value) => !value);
+        }}
         onKeyDown={(event) => {
           if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
           event.preventDefault();
@@ -94,20 +114,34 @@ export default function AccountMenu({ user, onWorkspace, onDeveloper, onLogout, 
         {!compact && <span>{displayName}</span>}
         <ChevronDown size={14} aria-hidden="true" />
       </button>
-      {open && (
-        <div id={menuId} className="account-menu-popover" role="menu" aria-label="账户信息与操作">
-          <div className="account-menu-profile">
-            <span className="account-menu-profile-avatar" aria-hidden="true">{initial}</span>
-            <div><strong>{displayName}</strong><small>{maskPhone(user.phone || "手机号未绑定")}</small></div>
-            <span className="account-verified"><ShieldCheck size={13} /> 已登录</span>
+      <Presence
+        present={open}
+        onEnterComplete={() => {
+          const focusIndex = pendingFocusRef.current ?? 0;
+          pendingFocusRef.current = null;
+          itemRefs.current[focusIndex]?.focus();
+        }}
+        onExitComplete={() => {
+          const action = pendingActionRef.current;
+          pendingActionRef.current = null;
+          action?.();
+        }}
+      >
+        {(phase) => (
+          <div id={menuId} className="account-menu-popover" role="menu" aria-label="账户信息与操作" aria-hidden={!open} data-presence={phase}>
+            <div className="account-menu-profile">
+              <span className="account-menu-profile-avatar" aria-hidden="true">{initial}</span>
+              <div><strong>{displayName}</strong><small>{maskPhone(user.phone || "手机号未绑定")}</small></div>
+              <span className="account-verified"><ShieldCheck size={13} /> 已登录</span>
+            </div>
+            <div className="account-menu-actions">
+              <button ref={(element) => { itemRefs.current[0] = element; }} type="button" role="menuitem" tabIndex={-1} onKeyDown={(event) => handleItemKeyDown(event, 0)} onClick={() => run(onWorkspace)}><History size={16} /><span><strong>我的鉴伪任务</strong><small>历史记录与报告</small></span></button>
+              <button ref={(element) => { itemRefs.current[1] = element; }} type="button" role="menuitem" tabIndex={-1} onKeyDown={(event) => handleItemKeyDown(event, 1)} onClick={() => run(onDeveloper)}><Code2 size={16} /><span><strong>开发者平台</strong><small>API Key 与调用用量</small></span></button>
+            </div>
+            <button ref={(element) => { itemRefs.current[2] = element; }} type="button" role="menuitem" tabIndex={-1} className="account-menu-logout" onKeyDown={(event) => handleItemKeyDown(event, 2)} onClick={() => run(onLogout)}><LogOut size={16} /> 退出登录</button>
           </div>
-          <div className="account-menu-actions">
-            <button ref={(element) => { itemRefs.current[0] = element; }} type="button" role="menuitem" tabIndex={-1} onKeyDown={(event) => handleItemKeyDown(event, 0)} onClick={() => run(onWorkspace)}><History size={16} /><span><strong>我的鉴伪任务</strong><small>历史记录与报告</small></span></button>
-            <button ref={(element) => { itemRefs.current[1] = element; }} type="button" role="menuitem" tabIndex={-1} onKeyDown={(event) => handleItemKeyDown(event, 1)} onClick={() => run(onDeveloper)}><Code2 size={16} /><span><strong>开发者平台</strong><small>API Key 与调用用量</small></span></button>
-          </div>
-          <button ref={(element) => { itemRefs.current[2] = element; }} type="button" role="menuitem" tabIndex={-1} className="account-menu-logout" onKeyDown={(event) => handleItemKeyDown(event, 2)} onClick={() => run(onLogout)}><LogOut size={16} /> 退出登录</button>
-        </div>
-      )}
+        )}
+      </Presence>
     </div>
   );
 }
