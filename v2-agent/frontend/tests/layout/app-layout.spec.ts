@@ -700,6 +700,22 @@ test("登录用户可以隐藏并恢复最近任务侧栏", async ({ page }) => 
   await expectNoHorizontalOverflow(page);
 });
 
+test("模型选择器完整加载 GPT Image 模式图标", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await installBaseMocks(page, true);
+  await page.goto("/?workspace=1");
+
+  const picker = page.locator(".analysis-model-picker");
+  const triggerArtwork = picker.locator(".analysis-model-trigger .analysis-model-artwork");
+  await expect(triggerArtwork).toBeVisible();
+  expect(await triggerArtwork.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth === 256 && image.naturalHeight === 256)).toBeTruthy();
+  await page.getByRole("button", { name: "选择图片检测模型" }).click();
+  const menuArtwork = picker.locator(".analysis-model-menu .analysis-model-artwork");
+  await expect(menuArtwork).toHaveCount(2);
+  expect(await menuArtwork.evaluateAll((images: HTMLImageElement[]) => images.every((image) => image.complete && image.naturalWidth === 256 && image.naturalHeight === 256))).toBeTruthy();
+  await expect(picker.locator(".brand-art-icon")).toHaveCount(0);
+});
+
 test("开发者平台移动布局与 API Key 弹窗满足键盘交互", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await installBaseMocks(page, true);

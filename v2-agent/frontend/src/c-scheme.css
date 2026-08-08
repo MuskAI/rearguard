@@ -751,6 +751,35 @@
   background: var(--brand-c-blue-soft);
 }
 
+.agent-app .analysis-model-trigger-icon,
+.agent-app .analysis-model-option-icon {
+  overflow: hidden;
+  border: 1px solid #cbd7e0;
+  border-radius: var(--brand-c-radius-card);
+  background: #fff;
+  box-shadow: none;
+}
+
+.agent-app .analysis-model-artwork {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scale(1.08);
+  transition: transform 180ms var(--brand-c-ease);
+  user-select: none;
+}
+
+.agent-app .analysis-model-option:hover .analysis-model-option-icon {
+  color: inherit;
+  background: #fff;
+  transform: none;
+}
+
+.agent-app .analysis-model-option:hover .analysis-model-artwork {
+  transform: scale(1.12);
+}
+
 .agent-app .progress-track > i {
   background: var(--brand-c-blue);
 }
