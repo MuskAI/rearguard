@@ -91,7 +91,7 @@ def test_report_answer_is_grounded_and_filters_unknown_references(monkeypatch):
     )
 
     assert response["grounded"] is True
-    assert response["evidenceRefs"] == ["图像纹理和细节规律"]
+    assert response["evidenceRefs"] == ["纹理和细节规律"]
     assert response["suggestedQuestions"] == ["这项证据有何局限？"]
     assert response["usage"]["totalTokens"] == 73
     prompt = completions.calls[0]["messages"]
@@ -118,8 +118,8 @@ def test_report_answer_translates_model_jargon_for_non_technical_users(monkeypat
     )
 
     assert response["answer"] == (
-        "图像检测模型根据图像纹理和细节规律输出模型最初给出的分数，根据测试数据调整后得到综合风险分为91%，判断把握程度较高。"
-        "这个分数表示系统更偏向AI生成图像，并不代表绝对正确率。"
+        "图像检测模型根据纹理和细节规律输出模型最初给出的分数，根据测试数据调整后得到综合风险分为91%，判断把握程度较高。"
+        "这个分数越高，表示系统越偏向AI生成；它并不代表绝对正确率。"
     )
     assert response["evidenceRefs"] == ["图像检测模型"]
     assert response["suggestedQuestions"] == ["这个综合风险分和模型最初给出的分数应该怎么理解？"]
@@ -160,11 +160,9 @@ def test_report_answer_rewrites_unhelpful_score_suggestion(monkeypatch):
 
 
 def test_risk_score_is_converted_to_percent_and_explained():
-    report = {"verdict": "authentic", "verdictLabel": "真实图像"}
+    answer = report_qa._explain_risk_score("综合风险分为 0.18。")
 
-    answer = report_qa._explain_risk_score("综合风险分为 0.18。", report)
-
-    assert answer == "综合风险分为 18%。这个分数表示系统更偏向真实图像，并不代表绝对正确率。"
+    assert answer == "综合风险分为 18%。这个分数越高，表示系统越偏向AI生成；它并不代表绝对正确率。"
 
 
 @pytest.mark.parametrize("question", ["", "   ", "问" * (report_qa.REPORT_QA_MAX_QUESTION_CHARS + 1)])

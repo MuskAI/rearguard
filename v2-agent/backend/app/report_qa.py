@@ -66,7 +66,7 @@ PLAIN_LANGUAGE_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?<![A-Za-z0-9_])logits?(?![A-Za-z0-9_])", re.IGNORECASE), "模型最初给出的分数"),
     (re.compile(r"后验概率|(?<![A-Za-z0-9_])posterior(?![A-Za-z0-9_])", re.IGNORECASE), "综合风险分"),
     (re.compile(r"似然比|likelihood ratio", re.IGNORECASE), "证据影响程度"),
-    (re.compile(r"频域(?:特征|分析|分布)?"), "图像纹理和细节规律"),
+    (re.compile(r"频域(?:特征|分析|分布)?"), "纹理和细节规律"),
     (re.compile(r"特征(?:向量|嵌入)|(?<![A-Za-z0-9_])embedding(?:s)?(?![A-Za-z0-9_])", re.IGNORECASE), "图像特征"),
     (re.compile(r"决策边界"), "判定标准"),
     (re.compile(r"校准门禁"), "测试数据验证"),
@@ -109,7 +109,7 @@ def _plain_language(value: Any, limit: int = 4_000) -> str:
     return re.sub(r"\s+([，。！？；：])", r"\1", text).strip()[:limit]
 
 
-def _explain_risk_score(answer: str, report: dict[str, Any], limit: int = 4_000) -> str:
+def _explain_risk_score(answer: str, limit: int = 4_000) -> str:
     """Keep a displayed risk score from being mistaken for model accuracy."""
     text = re.sub(
         r"(0?\.\d+)\s*的\s*((?:综合)?风险分)",
@@ -127,15 +127,8 @@ def _explain_risk_score(answer: str, report: dict[str, Any], limit: int = 4_000)
     if re.search(r"(?:不等于|不代表|并非|不是).{0,12}(?:绝对|准确率|正确率)", text):
         return text[:limit]
 
-    verdict = f"{report.get('verdict', '')} {report.get('verdictLabel', '')}".lower()
-    if any(token in verdict for token in ("fake", "suspected", "ai生成", "伪造", "合成")):
-        direction = "AI生成图像"
-    elif any(token in verdict for token in ("real", "真实", "实拍")):
-        direction = "真实图像"
-    else:
-        direction = "当前结论"
     separator = "" if text.endswith(("。", "！", "？")) else "。"
-    return f"{text}{separator}这个分数表示系统更偏向{direction}，并不代表绝对正确率。"[:limit]
+    return f"{text}{separator}这个分数越高，表示系统越偏向AI生成；它并不代表绝对正确率。"[:limit]
 
 
 def _text(value: Any, limit: int = 600) -> str:
@@ -530,7 +523,7 @@ def answer(report_value: Any, question_value: Any, history_value: Any = None) ->
         raise ReportQaUnavailableError("报告解释服务返回了无效结果")
     raw_answer_text = _text(parsed.get("answer"), 4_000)
     answer_text = _plain_language(raw_answer_text, 4_000)
-    answer_text = _explain_risk_score(answer_text, report, 4_000)
+    answer_text = _explain_risk_score(answer_text, 4_000)
     if not answer_text:
         raise ReportQaUnavailableError("报告解释服务没有形成有效回答")
 
