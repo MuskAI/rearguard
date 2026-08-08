@@ -111,9 +111,9 @@ export default function AccountMenu({ user, onWorkspace, onDeveloper, onLogout, 
           openWithFocus(event.key === "ArrowDown" ? 0 : 2);
         }}
       >
-        <span className="account-menu-avatar"><UserAvatar seed={avatarSeed} displayName={displayName} size={32} status="online" /></span>
+        <span className="account-menu-avatar"><UserAvatar seed={avatarSeed} displayName={displayName} size={32} className={compact ? "account-control-artwork" : ""} status="online" /></span>
         {!compact && <span>{displayName}</span>}
-        <ChevronDown size={14} aria-hidden="true" />
+        {!compact && <ChevronDown size={14} aria-hidden="true" />}
       </button>
       <Presence
         present={open}

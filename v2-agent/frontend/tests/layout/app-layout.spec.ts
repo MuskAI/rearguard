@@ -716,6 +716,27 @@ test("模型选择器完整加载 GPT Image 模式图标", async ({ page }) => {
   await expect(picker.locator(".brand-art-icon")).toHaveCount(0);
 });
 
+test("工作台账户与开发者入口使用统一的 GPT Image 图标", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await installBaseMocks(page, true);
+  await page.goto("/?workspace=1");
+
+  const accountButton = page.locator(".workspace-account-menu .account-menu-trigger");
+  const accountArtwork = accountButton.locator(".account-control-artwork");
+  const developerButton = page.locator(".workspace-developer-button");
+  const developerArtwork = developerButton.locator(".workspace-developer-artwork");
+
+  await expect(accountArtwork).toBeVisible();
+  await expect(developerArtwork).toBeVisible();
+  expect(await accountArtwork.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth === 256 && image.naturalHeight === 256)).toBeTruthy();
+  expect(await developerArtwork.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth === 256 && image.naturalHeight === 256)).toBeTruthy();
+  await expect(accountButton.locator("svg")).toHaveCount(0);
+  await expect(developerButton.locator(".brand-art-icon")).toHaveCount(0);
+  await expect(developerButton).toContainText("开发者");
+  await expect(page.locator(".sidebar-account .brand-user-avatar")).toHaveAttribute("src", "/brand/huijian-account-gpt.webp");
+  await expectNoHorizontalOverflow(page);
+});
+
 test("开发者平台移动布局与 API Key 弹窗满足键盘交互", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await installBaseMocks(page, true);

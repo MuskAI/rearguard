@@ -279,33 +279,8 @@
   vertical-align: middle;
 }
 
-.brand-user-avatar text {
-  font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
-  font-size: 17px;
-  font-weight: 750;
-  letter-spacing: 0;
-}
-
-.brand-avatar-corner {
-  fill: none;
-  stroke: rgba(255, 255, 255, .74);
-  stroke-width: 1.75px;
-  stroke-linecap: round;
-  vector-effect: non-scaling-stroke;
-}
-
-.brand-avatar-presence {
-  stroke: #fff;
-  stroke-width: 2px;
-  vector-effect: non-scaling-stroke;
-}
-
-.brand-avatar-presence-online {
-  fill: #29a66f;
-}
-
-.brand-avatar-presence-offline {
-  fill: #89949d;
+.brand-user-avatar {
+  object-fit: cover;
 }
 
 .brand-agent-avatar {

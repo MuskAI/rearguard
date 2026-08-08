@@ -145,21 +145,34 @@
 .account-menu.is-compact .account-menu-trigger {
   width: 42px;
   min-width: 42px;
+  min-height: 42px;
   padding: 4px;
   gap: 0;
+  background: #fff;
+  border-color: #cbd8dd;
+  box-shadow: none;
 }
 
-.account-menu.is-compact .account-menu-trigger > svg {
-  position: absolute;
-  right: -3px;
-  bottom: -3px;
-  width: 14px;
-  height: 14px;
-  padding: 2px;
-  color: #fff;
-  background: #17343c;
-  border: 2px solid #fff;
-  border-radius: 50%;
+.account-menu.is-compact .account-menu-trigger:hover,
+.account-menu.is-compact.is-open .account-menu-trigger {
+  border-color: #7ea5ad;
+  box-shadow: 0 5px 14px rgba(20, 55, 64, 0.1);
+  transform: none;
+}
+
+.account-menu.is-compact .account-menu-avatar {
+  width: 32px;
+  height: 32px;
+  overflow: hidden;
+  background: #f7fafb;
+  border-radius: 6px;
+}
+
+.account-control-artwork {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .account-menu-popover {
@@ -2955,10 +2968,33 @@
   backdrop-filter: blur(18px) saturate(130%);
 }
 
-.workspace-developer-button > .brand-art-icon {
-  width: 25px;
-  height: 25px;
-  filter: none;
+.workspace-developer-button {
+  min-height: 42px;
+  gap: 7px;
+  padding: 4px 11px 4px 5px;
+  color: #24404a;
+  background: #fff;
+  border-color: #cbd8dd;
+  border-radius: 7px;
+  font-size: 13px;
+  box-shadow: none;
+  transition: color 160ms ease, background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.workspace-developer-button:hover {
+  color: #244f91;
+  background: #f7fafb;
+  border-color: #7ea5ad;
+  box-shadow: 0 5px 14px rgba(20, 55, 64, 0.1);
+}
+
+.workspace-developer-artwork {
+  display: block;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  object-fit: cover;
+  border-radius: 6px;
 }
 
 .agent-workspace {
@@ -3296,11 +3332,16 @@
   }
   .analysis-model-trigger-copy small { display: none; }
   .analysis-model-trigger-copy strong { font-size: 12px; }
-  .workspace-developer-button > span:not(.brand-art-icon) { display: none; }
-  .workspace-developer-button > .brand-art-icon {
-    width: 27px;
-    height: 27px;
-    display: inline-block;
+  .workspace-developer-button > span { display: none; }
+  .workspace-developer-button {
+    width: 42px;
+    min-width: 42px;
+    padding: 4px;
+  }
+  .workspace-developer-artwork {
+    width: 32px;
+    height: 32px;
+    flex-basis: 32px;
   }
   .home-v3 .home-header { min-height: 66px; gap: 8px; padding: 0 12px; }
   .home-v3 .brand-mark { width: 40px; height: 40px; flex-basis: 40px; box-shadow: 3px 3px 0 #dce8e6; }

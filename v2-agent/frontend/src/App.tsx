@@ -1306,7 +1306,10 @@ export default function App() {
             ) : (
               <button type="button" className="secondary-button topbar-login" onClick={() => setAuthOpen(true)}><LogIn size={16} /> 登录</button>
             ))}
-            <button type="button" className="workspace-developer-button" onClick={() => navigateToDeveloper("overview")} title="开发者平台"><BrandArtIcon name="developer" /><span>开发者</span></button>
+            <button type="button" className="workspace-developer-button" onClick={() => navigateToDeveloper("overview")} title="开发者平台">
+              <img className="workspace-developer-artwork" src="/brand/huijian-developer-gpt.webp" width={256} height={256} alt="" aria-hidden="true" draggable={false} />
+              <span>开发者</span>
+            </button>
           </div>
         </header>
 

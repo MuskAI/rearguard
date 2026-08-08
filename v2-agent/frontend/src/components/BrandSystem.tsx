@@ -194,38 +194,6 @@ export function StatusIcon({ name, size = 24, className = "", label }: SvgProps 
   return <GlyphFrame name={`status-${name}`} size={size} className={`brand-status-icon ${className}`.trim()} label={label}>{glyph}</GlyphFrame>;
 }
 
-const AVATAR_PALETTES = [
-  { background: "#315fa9", pattern: "#a9c5ff", foreground: "#ffffff" },
-  { background: "#087267", pattern: "#8ed9cf", foreground: "#ffffff" },
-  { background: "#7a4e00", pattern: "#e6bf6a", foreground: "#ffffff" },
-  { background: "#8d3a4a", pattern: "#f1a7b5", foreground: "#ffffff" },
-  { background: "#4d4c8a", pattern: "#b9b8ed", foreground: "#ffffff" },
-  { background: "#225d47", pattern: "#90c9b3", foreground: "#ffffff" },
-  { background: "#6c3b74", pattern: "#d4a8db", foreground: "#ffffff" },
-  { background: "#674024", pattern: "#d2aa86", foreground: "#ffffff" },
-] as const;
-
-function stableHash(value: string) {
-  let hash = 2166136261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-
-function avatarInitial(value: string) {
-  const first = Array.from(value.trim())[0] || "慧";
-  return /^[a-z]$/i.test(first) ? first.toUpperCase() : first;
-}
-
-function AvatarPattern({ variant, color }: { variant: number; color: string }) {
-  if (variant === 0) return <circle cx="36" cy="5" r="17" fill={color} opacity=".32" />;
-  if (variant === 1) return <path d="M-5 35 23 7l11 11L6 46Z" fill={color} opacity=".26" />;
-  if (variant === 2) return <><path d="M0 12h40M0 28h40" stroke={color} strokeWidth="4" opacity=".22" /><path d="M12 0v40M28 0v40" stroke={color} strokeWidth="2" opacity=".16" /></>;
-  return <><rect x="-3" y="7" width="25" height="7" rx="3.5" fill={color} opacity=".28" /><rect x="18" y="26" width="26" height="7" rx="3.5" fill={color} opacity=".24" /></>;
-}
-
 export interface UserAvatarProps {
   seed: string;
   displayName?: string;
@@ -235,28 +203,18 @@ export interface UserAvatarProps {
   label?: string;
 }
 
-export function UserAvatar({ seed, displayName, size = 40, className = "", status, label }: UserAvatarProps) {
-  const hash = stableHash(seed || displayName || "huijian-user");
-  const palette = AVATAR_PALETTES[hash % AVATAR_PALETTES.length];
-  const pattern = (hash >>> 8) % 4;
+export function UserAvatar({ displayName, size = 40, className = "", label }: UserAvatarProps) {
   const name = displayName?.trim() || "用户";
 
   return (
-    <svg
+    <img
       className={`brand-avatar brand-user-avatar ${className}`.trim()}
-      viewBox="0 0 40 40"
+      src="/brand/huijian-account-gpt.webp"
       width={size}
       height={size}
-      role="img"
-      aria-label={label || `${name}的头像`}
-      focusable="false"
-    >
-      <rect width="40" height="40" rx="10" fill={palette.background} />
-      <AvatarPattern variant={pattern} color={palette.pattern} />
-      <path className="brand-avatar-corner" d="M4 9V6a2 2 0 0 1 2-2h3" />
-      <text x="20" y="25.5" textAnchor="middle" fill={palette.foreground}>{avatarInitial(name)}</text>
-      {status && <circle className={`brand-avatar-presence brand-avatar-presence-${status}`} cx="34" cy="34" r="4" />}
-    </svg>
+      alt={label || `${name}的账户图标`}
+      draggable={false}
+    />
   );
 }
 
