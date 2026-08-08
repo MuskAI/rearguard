@@ -260,6 +260,26 @@ def test_v1_activation_preserves_v2_secret_directory_traversal():
     assert "sudo chmod 711 /etc/realguard" in activate
 
 
+def test_web_and_worker_share_persistent_model_registry():
+    backend = (ROOT / "deploy" / "systemd" / "realguard-backend.service").read_text(
+        encoding="utf-8"
+    )
+    worker = (
+        ROOT / "deploy" / "systemd" / "realguard-developer-worker.service"
+    ).read_text(encoding="utf-8")
+    activate = (ROOT / "scripts" / "remote" / "activate_v1.sh").read_text(
+        encoding="utf-8"
+    )
+    registry = "REALGUARD_MODEL_REGISTRY_PATH=/opt/realguard-data/admin/model_registry.json"
+
+    assert registry in backend
+    assert registry in worker
+    assert (
+        "sudo install -d -m 700 -o ubuntu -g ubuntu /opt/realguard-data/admin"
+        in activate
+    )
+
+
 def test_v1_activation_probes_backend_without_default_nginx_host():
     activate = (ROOT / "scripts" / "remote" / "activate_v1.sh").read_text(
         encoding="utf-8"

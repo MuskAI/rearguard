@@ -197,6 +197,7 @@ trap rollback ERR
 sudo systemctl stop realguard-developer-worker.service 2>/dev/null || true
 sudo systemctl stop realguard-backend.service 2>/dev/null || true
 sudo install -d -m 755 -o ubuntu -g ubuntu /opt/realguard-data
+sudo install -d -m 700 -o ubuntu -g ubuntu /opt/realguard-data/admin
 sudo install -d -m 700 -o ubuntu -g ubuntu /opt/realguard-data/developer-spool
 sudo install -d -m 700 -o ubuntu -g ubuntu /opt/realguard-data/web-spool
 sudo install -d -m 700 -o ubuntu -g ubuntu /opt/realguard-data/privacy-erasure
