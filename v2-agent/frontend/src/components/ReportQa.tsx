@@ -1,14 +1,15 @@
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
-  FileSearch,
   LoaderCircle,
   LogIn,
   MessageCircleQuestion,
+  Paperclip,
   Send,
   ShieldCheck,
   UserRound,
 } from "lucide-react";
+import { createPortal } from "react-dom";
 import type { AgentOutcome } from "../agentTypes";
 import {
   ApiRequestError,
@@ -26,6 +27,8 @@ import { AgentAvatar } from "./BrandSystem";
 interface Props {
   outcome: AgentOutcome;
   requiresLogin: boolean;
+  composerHost: HTMLDivElement | null;
+  onAttach: () => void;
   onLogin: () => void;
 }
 
@@ -258,7 +261,7 @@ function messageId(role: "user" | "assistant") {
   return `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-export default function ReportQa({ outcome, requiresLogin, onLogin }: Props) {
+export default function ReportQa({ outcome, requiresLogin, composerHost, onAttach, onLogin }: Props) {
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
@@ -334,76 +337,91 @@ export default function ReportQa({ outcome, requiresLogin, onLogin }: Props) {
     void submit(question);
   }
 
-  return (
-    <section className="report-qa" aria-labelledby="report-qa-title">
-      <header className="report-qa-header">
-        <span className="report-qa-mark"><MessageCircleQuestion size={20} /></span>
-        <div>
-          <h3 id="report-qa-title">继续问小鉴</h3>
-          <p><ShieldCheck size={13} /> 只依据本次检测报告回答</p>
-        </div>
-      </header>
-
-      {requiresLogin ? (
-        <div className="report-qa-login">
-          <div><FileSearch size={20} /><span><strong>登录后继续追问</strong><small>问答不会重新检测，也不会读取其他账号的记录。</small></span></div>
-          <button type="button" className="secondary-button" onClick={onLogin}><LogIn size={16} /> 登录</button>
-        </div>
-      ) : (
-        <>
-          {messages.length > 0 && (
-            <div className="report-qa-messages" aria-live="polite" aria-label="报告问答记录">
-              {messages.map((message) => (
-                <div className={`report-qa-message is-${message.role}`} key={message.id}>
-                  <span className="report-qa-speaker" aria-hidden="true">
-                    {message.role === "assistant" ? <AgentAvatar size={30} state="complete" /> : <UserRound size={16} />}
-                  </span>
-                  <div>
-                    <p>{message.content}</p>
-                    {message.evidenceRefs && message.evidenceRefs.length > 0 && (
-                      <ul className="report-qa-references" aria-label="引用的报告证据">
-                        {message.evidenceRefs.map((reference) => <li key={reference}>{reference}</li>)}
-                      </ul>
-                    )}
-                  </div>
-                </div>
-              ))}
-              {busy && (
-                <div className="report-qa-message is-assistant is-loading" role="status">
-                  <span className="report-qa-speaker" aria-hidden="true"><AgentAvatar size={30} state="processing" /></span>
-                  <div><p><LoaderCircle size={15} className="spin" /> 正在核对报告证据</p></div>
-                </div>
-              )}
-              <div ref={endRef} />
-            </div>
-          )}
-
-          <div className="report-qa-suggestions" aria-label="常见问题">
-            {suggestions.slice(0, 3).map((item) => (
-              <button type="button" key={item} disabled={busy} onClick={() => void submit(item)}>
-                {item}<ArrowRight size={14} />
-              </button>
-            ))}
-          </div>
-
-          <form className="report-qa-composer" onSubmit={onSubmit}>
-            <textarea
-              value={question}
-              rows={1}
-              maxLength={MAX_QUESTION_LENGTH}
-              placeholder="围绕本次结果提问"
-              aria-label="向小鉴询问本次检测报告"
-              disabled={busy}
-              onChange={(event) => setQuestion(event.target.value)}
-              onKeyDown={onKeyDown}
-            />
-            <button type="submit" disabled={busy || !question.trim()} aria-label="发送问题" title="发送问题">
-              {busy ? <LoaderCircle size={18} className="spin" /> : <Send size={18} />}
+  const dock = composerHost ? createPortal(
+    <div className="report-qa-dock-content">
+      {!requiresLogin && (
+        <div className="report-qa-suggestions" aria-label="常见问题">
+          {suggestions.slice(0, 3).map((item) => (
+            <button type="button" key={item} disabled={busy} onClick={() => void submit(item)}>
+              {item}<ArrowRight size={14} />
             </button>
-          </form>
-          {error && <p className="report-qa-error" role="alert">{error}</p>}
-        </>
+          ))}
+        </div>
       )}
-    </section>
+      <form className={`report-qa-composer${requiresLogin ? " requires-login" : ""}`} onSubmit={onSubmit}>
+        <button type="button" className="report-qa-attach" onClick={onAttach} disabled={busy} aria-label="上传新的内容" title="上传新的内容">
+          <Paperclip size={19} />
+        </button>
+        {requiresLogin ? (
+          <button type="button" className="report-qa-login-field" onClick={onLogin}>
+            <span><strong>登录后询问当前报告</strong><small>对话只使用本次检测证据</small></span>
+          </button>
+        ) : (
+          <textarea
+            value={question}
+            rows={1}
+            maxLength={MAX_QUESTION_LENGTH}
+            placeholder="询问当前检测报告…"
+            aria-label="向小鉴询问本次检测报告"
+            disabled={busy}
+            onChange={(event) => setQuestion(event.target.value)}
+            onKeyDown={onKeyDown}
+          />
+        )}
+        <button
+          type={requiresLogin ? "button" : "submit"}
+          className="report-qa-send"
+          disabled={!requiresLogin && (busy || !question.trim())}
+          onClick={requiresLogin ? onLogin : undefined}
+          aria-label={requiresLogin ? "登录后提问" : "发送问题"}
+          title={requiresLogin ? "登录后提问" : "发送问题"}
+        >
+          {requiresLogin ? <LogIn size={18} /> : busy ? <LoaderCircle size={18} className="spin" /> : <Send size={18} />}
+        </button>
+      </form>
+      {error && <p className="report-qa-error" role="alert">{error}</p>}
+    </div>,
+    composerHost,
+  ) : null;
+
+  return (
+    <>
+      {(messages.length > 0 || busy) && (
+        <section className="report-qa" aria-labelledby="report-qa-title">
+          <header className="report-qa-header">
+            <span className="report-qa-mark"><MessageCircleQuestion size={18} /></span>
+            <div>
+              <h3 id="report-qa-title">报告问答</h3>
+              <p><ShieldCheck size={13} /> 只依据当前报告</p>
+            </div>
+          </header>
+          <div className="report-qa-messages" aria-live="polite" aria-label="报告问答记录">
+            {messages.map((message) => (
+              <div className={`report-qa-message is-${message.role}`} key={message.id}>
+                <span className="report-qa-speaker" aria-hidden="true">
+                  {message.role === "assistant" ? <AgentAvatar size={30} state="complete" /> : <UserRound size={16} />}
+                </span>
+                <div>
+                  <p>{message.content}</p>
+                  {message.evidenceRefs && message.evidenceRefs.length > 0 && (
+                    <ul className="report-qa-references" aria-label="引用的报告证据">
+                      {message.evidenceRefs.map((reference) => <li key={reference}>{reference}</li>)}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            ))}
+            {busy && (
+              <div className="report-qa-message is-assistant is-loading" role="status">
+                <span className="report-qa-speaker" aria-hidden="true"><AgentAvatar size={30} state="processing" /></span>
+                <div><p><LoaderCircle size={15} className="spin" /> 正在核对报告证据</p></div>
+              </div>
+            )}
+            <div ref={endRef} />
+          </div>
+        </section>
+      )}
+      {dock}
+    </>
   );
 }

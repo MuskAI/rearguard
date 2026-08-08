@@ -792,9 +792,18 @@ test("登录用户可以围绕当前检测报告连续提问", async ({ page }) 
     buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"),
   });
 
+  const dock = page.locator(".composer-dock.is-report-chat");
+  const composer = dock.getByRole("textbox", { name: "向小鉴询问本次检测报告" });
+  await expect(composer).toBeVisible();
+  await expect(dock.getByRole("button", { name: "上传新的内容" })).toBeVisible();
+  const dockBox = await dock.boundingBox();
+  expect(dockBox).not.toBeNull();
+  expect(dockBox!.y + dockBox!.height).toBeLessThanOrEqual(845);
+  expect(dockBox!.y).toBeGreaterThan(640);
+
+  await dock.getByRole("button", { name: "为什么判断为 AI 生成？" }).click();
   const qa = page.locator(".report-qa");
-  await expect(qa.getByRole("heading", { name: "继续问小鉴" })).toBeVisible();
-  await qa.getByRole("button", { name: "为什么判断为 AI 生成？" }).click();
+  await expect(qa.getByRole("heading", { name: "报告问答" })).toBeVisible();
   await expect(qa.getByText("报告在右下角定位到平台水印，并与生成痕迹相互印证。")).toBeVisible();
   await expect(qa.getByText("平台水印", { exact: true })).toBeVisible();
   expect(requests).toHaveLength(1);
@@ -803,7 +812,6 @@ test("登录用户可以围绕当前检测报告连续提问", async ({ page }) 
   expect(JSON.stringify(firstReport)).not.toContain("image_url");
   expect(JSON.stringify(firstReport)).not.toContain("data:image");
 
-  const composer = qa.getByRole("textbox", { name: "向小鉴询问本次检测报告" });
   await composer.fill("这个风险分应该怎么理解？");
   await composer.press("Enter");
   await expect(qa.getByText("这里的 91% 是本次报告的风险分，不代表绝对事实。")).toBeVisible();
@@ -813,6 +821,17 @@ test("登录用户可以围绕当前检测报告连续提问", async ({ page }) 
     { role: "assistant", content: "报告在右下角定位到平台水印，并与生成痕迹相互印证。" },
   ]);
   expect(await readableTextOffenders(page, ".report-qa")).toEqual([]);
+  expect(await readableTextOffenders(page, ".composer-dock")).toEqual([]);
+  await expectNoHorizontalOverflow(page);
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const desktopDockBox = await dock.boundingBox();
+  const desktopComposerBox = await dock.locator(".report-qa-composer").boundingBox();
+  expect(desktopDockBox).not.toBeNull();
+  expect(desktopComposerBox).not.toBeNull();
+  expect(desktopDockBox!.y + desktopDockBox!.height).toBeLessThanOrEqual(901);
+  expect(desktopDockBox!.y).toBeGreaterThan(730);
+  expect(desktopComposerBox!.width).toBeLessThanOrEqual(902);
   await expectNoHorizontalOverflow(page);
 });
 

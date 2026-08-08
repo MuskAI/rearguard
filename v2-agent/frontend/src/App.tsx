@@ -298,6 +298,7 @@ export default function App() {
   const [consentWarning, setConsentWarning] = useState(false);
   const [guestLimitReached, setGuestLimitReached] = useState(false);
   const [analyticsEnabled, setAnalyticsEnabled] = useState(() => analyticsConsent() !== "denied");
+  const [reportQaComposerHost, setReportQaComposerHost] = useState<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const resultRef = useRef<HTMLDivElement>(null);
@@ -1431,6 +1432,8 @@ export default function App() {
                   <ReportQa
                     outcome={outcome}
                     requiresLogin={!user}
+                    composerHost={reportQaComposerHost}
+                    onAttach={requestFileSelection}
                     onLogin={() => setAuthOpen(true)}
                   />
                   <ResultFeedback
@@ -1454,12 +1457,16 @@ export default function App() {
         </div>
 
         {(pendingFile || outcome || documentTask) && (
-          <div className="composer-dock">
-            <button type="button" className="composer-compact" disabled={busy} onClick={() => fileInputRef.current?.click()}>
-              <span className="composer-attach"><Paperclip size={18} /></span>
-              <span><strong>{busy ? "小鉴正在分析，请稍候" : "继续上传新的内容"}</strong><small>图片使用{imageAnalysisMode === "swarm" ? " Swarm 模式" : "快速检测"}，视频与文档自动分流</small></span>
-              <span className="composer-send"><Send size={17} /></span>
-            </button>
+          <div className={`composer-dock${outcome ? " is-report-chat" : ""}`}>
+            {outcome ? (
+              <div className="report-qa-dock-slot" ref={setReportQaComposerHost} />
+            ) : (
+              <button type="button" className="composer-compact" disabled={busy} onClick={() => fileInputRef.current?.click()}>
+                <span className="composer-attach"><Paperclip size={18} /></span>
+                <span><strong>{busy ? "小鉴正在分析，请稍候" : "继续上传新的内容"}</strong><small>图片使用{imageAnalysisMode === "swarm" ? " Swarm 模式" : "快速检测"}，视频与文档自动分流</small></span>
+                <span className="composer-send"><Send size={17} /></span>
+              </button>
+            )}
             <p>检测结果仅作辅助判断，高风险场景请结合原始来源和人工复核。</p>
           </div>
         )}
