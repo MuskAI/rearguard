@@ -40,10 +40,10 @@ SYSTEM_PROMPT = """你是「慧鉴 AI」检测报告解释助手。你的读者�
    - 频域特征 -> 图像纹理和细节中的规律；
    - OCR -> 文字识别；C2PA -> 内容来源凭证；EXIF、元数据 -> 文件中的拍摄和来源信息；bbox -> 图中的标注框；pipeline -> 分析流程；
    - calibrated、校准 -> 已用测试数据验证或调整；置信度 -> 判断把握程度。
-9. 解释数字时必须说明数字的实际含义。例如“风险分 91%”表示本次系统更偏向 AI 生成，不等于有 91% 的绝对正确率。
+9. 解释数字时必须说明数字的实际含义。例如“风险分 91%”表示本次系统更偏向 AI 生成，不等于有 91% 的绝对正确率。语气保持中性，使用“为 91%”，不要使用“高达 91%”等夸张表达。
 10. 用户主动询问技术名词时，用“一个日常比喻 + 一句实际含义”解释，不要继续引入更多术语。例如：它像最后一名投票员，根据前面整理好的画面信息，给出更偏真还是更偏假的判断。
-11. 只保留与当前问题最相关的证据。强水印、可信内容凭证等直接证据优先于抽象模型分数；没有区域定位时，不得把整体分数说成某个局部造假。
-12. suggestedQuestions 必须使用普通用户会说的话，且能继续用当前报告回答；不得建议删除、擦除、修改或去除水印及其他证据。
+11. 只保留与当前问题最相关的证据。强水印、可信内容凭证等直接证据优先于抽象模型分数；没有区域定位时，不得把整体分数说成某个局部造假。只有报告明确标记 decisive 或 strong 的项目才能称为“关键证据”；分数较高但没有该标记的项目只能称为“辅助判断”或“主要依据”。
+12. suggestedQuestions 必须使用普通用户会说的话，且能继续用当前报告回答；不得建议删除、擦除、修改、去掉或隐藏水印及其他证据。报告没有计算公式时，不要推荐“分数怎么算出来”之类的问题，应改成“这个风险分代表什么”。
 
 写作示例：
 - 不要说：“线性探针根据频域特征输出 logits，经校准后得到 0.91 的后验概率。”
@@ -90,6 +90,10 @@ PLAIN_LANGUAGE_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?<![A-Za-z0-9_])softmax(?![A-Za-z0-9_])", re.IGNORECASE), "分数换算"),
     (re.compile(r"(?<![A-Za-z0-9_])(?:DINOv?\d*|ViT(?:-[A-Za-z0-9]+)?)(?![A-Za-z0-9_])", re.IGNORECASE), "图像检测模型"),
     (re.compile(r"(?<![A-Za-z0-9_])(?:ONNX|FP16|FP32|INT8|CUDAExecutionProvider|CPUExecutionProvider)(?![A-Za-z0-9_])", re.IGNORECASE), "模型运行方式"),
+    (re.compile(r"(?:[一二三四五六七八九十两\d]+)\s*个?强证据"), "主要依据"),
+    (re.compile(r"高达"), "为"),
+    (re.compile(r"可信度\s*(?:为|[:：])?\s*(\d+(?:\.\d+)?%)"), r"识别把握约为\1"),
+    (re.compile(r"可信度"), "识别把握"),
     (re.compile(r"高置信度"), "较有把握"),
     (re.compile(r"低置信度"), "把握较低"),
     (re.compile(r"置信度"), "判断把握程度"),
@@ -511,8 +515,10 @@ def answer(report_value: Any, question_value: Any, history_value: Any = None) ->
     suggestions = []
     for value in _sequence(parsed.get("suggestedQuestions"))[:6]:
         suggestion = _plain_language(value, 80)
-        if not suggestion or re.search(r"(?:去除|移除|删除|擦除|抹除|修改).{0,8}(?:水印|标记|证据)", suggestion):
+        if not suggestion or re.search(r"(?:去除|去掉|移除|删除|擦除|抹除|抹掉|消除|隐藏|修改).{0,8}(?:水印|标记|证据)", suggestion):
             continue
+        if re.search(r"(?:风险分|概率|分数).{0,12}(?:怎么算|如何计算|计算公式|计算过程)", suggestion):
+            suggestion = "这个风险分代表什么？"
         if suggestion not in suggestions:
             suggestions.append(suggestion)
         if len(suggestions) >= 3:

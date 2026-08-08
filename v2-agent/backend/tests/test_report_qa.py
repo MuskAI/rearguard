@@ -75,7 +75,7 @@ def test_report_answer_is_grounded_and_filters_unknown_references(monkeypatch):
     client, completions = fake_client(json.dumps({
         "answer": "报告把频域特征列为主要依据，但没有给出可定位区域。",
         "evidenceRefs": ["报告中不存在的证据"],
-        "suggestedQuestions": ["去除水印后能否重新判断？", "这项证据有何局限？"],
+        "suggestedQuestions": ["去除水印后能否重新判断？", "去掉水印还能判断吗？", "这项证据有何局限？"],
     }, ensure_ascii=False))
     monkeypatch.setattr(report_qa.detector, "_get_client", lambda: client)
 
@@ -135,10 +135,27 @@ def test_report_answer_translates_model_jargon_for_non_technical_users(monkeypat
         ("OCR发现文字，C2PA凭证有效", "文字识别发现文字，内容来源凭证有效"),
         ("EXIF元数据包含手机型号", "拍摄信息包含手机型号"),
         ("bbox位于右下角，pipeline已完成", "标注框位于右下角，分析流程已完成"),
+        ("两个强证据，可信度96%，风险高达91%", "主要依据，识别把握约为96%，风险为91%"),
     ],
 )
 def test_plain_language_guard_handles_terms_next_to_chinese(raw, expected):
     assert report_qa._plain_language(raw) == expected
+
+
+def test_report_answer_rewrites_unhelpful_score_suggestion(monkeypatch):
+    client, _ = fake_client(json.dumps({
+        "answer": "综合风险分为 91%，表示结果更偏向 AI 生成。",
+        "evidenceRefs": [],
+        "suggestedQuestions": ["91%的风险分具体怎么算出来的？"],
+    }, ensure_ascii=False))
+    monkeypatch.setattr(report_qa.detector, "_get_client", lambda: client)
+
+    response = report_qa.answer(
+        {"verdict": "suspected_fake", "riskScore": 0.91, "explanation": "模型分数偏高"},
+        "这个分数是什么意思？",
+    )
+
+    assert response["suggestedQuestions"] == ["这个风险分代表什么？"]
 
 
 @pytest.mark.parametrize("question", ["", "   ", "问" * (report_qa.REPORT_QA_MAX_QUESTION_CHARS + 1)])
