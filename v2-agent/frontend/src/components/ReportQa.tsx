@@ -13,7 +13,7 @@ import { createPortal } from "react-dom";
 import type { AgentOutcome } from "../agentTypes";
 import {
   ApiRequestError,
-  askReportQuestion,
+  streamReportQuestion,
   type ImageAgentReview,
   type ProbabilityModel,
   type ProvenanceReport,
@@ -265,6 +265,7 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
+  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [suggestions, setSuggestions] = useState<string[]>(() => initialQuestions(outcome));
   const abortRef = useRef<AbortController | null>(null);
@@ -279,6 +280,7 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
     setMessages([]);
     setQuestion("");
     setBusy(false);
+    setStreamingMessageId(null);
     setError("");
     setSuggestions(initialQuestions(outcomeRef.current));
   }, [outcome.id]);
@@ -294,6 +296,9 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
     if (!value || busy || requiresLogin) return;
     const history = messages.slice(-8).map(({ role, content }) => ({ role, content }));
     const userMessage: ConversationMessage = { id: messageId("user"), role: "user", content: value };
+    const assistantId = messageId("assistant");
+    let assistantAdded = false;
+    let streamedAnswer = "";
     setMessages((current) => [...current, userMessage]);
     setQuestion("");
     setError("");
@@ -302,17 +307,43 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
     abortRef.current?.abort();
     abortRef.current = controller;
     try {
-      const response = await askReportQuestion({ ...request, question: value, history }, controller.signal);
-      setMessages((current) => [...current, {
-        id: messageId("assistant"),
-        role: "assistant",
-        content: response.answer,
-        evidenceRefs: response.evidenceRefs,
-      }]);
+      const response = await streamReportQuestion(
+        { ...request, question: value, history },
+        {
+          onDelta: (delta) => {
+            streamedAnswer += delta;
+            if (!assistantAdded) {
+              assistantAdded = true;
+              setStreamingMessageId(assistantId);
+              setMessages((current) => [...current, {
+                id: assistantId,
+                role: "assistant",
+                content: streamedAnswer,
+              }]);
+              return;
+            }
+            setMessages((current) => current.map((message) => (
+              message.id === assistantId ? { ...message, content: streamedAnswer } : message
+            )));
+          },
+        },
+        controller.signal,
+      );
+      setMessages((current) => {
+        const finalMessage: ConversationMessage = {
+          id: assistantId,
+          role: "assistant",
+          content: response.answer,
+          evidenceRefs: response.evidenceRefs,
+        };
+        return assistantAdded
+          ? current.map((message) => message.id === assistantId ? finalMessage : message)
+          : [...current, finalMessage];
+      });
       if (response.suggestedQuestions.length > 0) setSuggestions(response.suggestedQuestions);
     } catch (requestError) {
       if (controller.signal.aborted) return;
-      setMessages((current) => current.filter((message) => message.id !== userMessage.id));
+      setMessages((current) => current.filter((message) => ![userMessage.id, assistantId].includes(message.id)));
       setQuestion(value);
       const message = requestError instanceof ApiRequestError && requestError.status === 401
         ? "登录状态已失效，请重新登录后继续提问。"
@@ -322,7 +353,10 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
       setError(message);
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
-      if (!controller.signal.aborted) setBusy(false);
+      if (!controller.signal.aborted) {
+        setStreamingMessageId(null);
+        setBusy(false);
+      }
     }
   }
 
@@ -402,7 +436,10 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
                   {message.role === "assistant" ? <AgentAvatar size={30} state="complete" /> : <UserRound size={16} />}
                 </span>
                 <div>
-                  <p>{message.content}</p>
+                  <p>
+                    {message.content}
+                    {streamingMessageId === message.id && <span className="report-qa-stream-cursor" aria-hidden="true" />}
+                  </p>
                   {message.evidenceRefs && message.evidenceRefs.length > 0 && (
                     <ul className="report-qa-references" aria-label="引用的报告证据">
                       {message.evidenceRefs.map((reference) => <li key={reference}>{reference}</li>)}
@@ -411,7 +448,7 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
                 </div>
               </div>
             ))}
-            {busy && (
+            {busy && !streamingMessageId && (
               <div className="report-qa-message is-assistant is-loading" role="status">
                 <span className="report-qa-speaker" aria-hidden="true"><AgentAvatar size={30} state="processing" /></span>
                 <div><p><LoaderCircle size={15} className="spin" /> 正在核对报告证据</p></div>

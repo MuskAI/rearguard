@@ -20,6 +20,7 @@ import zipfile
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from urllib import error as urlerror
 from urllib.parse import quote
 from urllib import request as urlrequest
@@ -27,7 +28,8 @@ from urllib import request as urlrequest
 from fastapi import Body, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.responses import JSONResponse, Response
+from starlette.concurrency import iterate_in_threadpool
+from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from . import (
     detector,
@@ -176,6 +178,7 @@ PROTECTED_ENDPOINTS = [
     "/api/report/{report_id}/share",
     "/api/report/{report_id}/share/{share_id}",
     "/api/report-qa",
+    "/api/report-qa/stream",
     "/api/metrics",
 ]
 DEVELOPER_PROTECTED_ENDPOINTS = [
@@ -1231,8 +1234,7 @@ async def _enforce_report_qa_rate_limit(actor: dict, request: Request) -> None:
         _REPORT_QA_REQUESTS[key] = recent
 
 
-@app.post("/api/report-qa")
-async def ask_report_question(request: Request, payload: dict = Body(...)) -> dict:
+async def _resolve_report_qa_context(request: Request, payload: dict) -> Any:
     actor = await run_in_threadpool(_require_protected_access, request)
     _require_actor_scope(actor, "reports")
     _require_session_csrf(request, actor)
@@ -1252,7 +1254,10 @@ async def ask_report_question(request: Request, payload: dict = Body(...)) -> di
             item,
             public=actor.get("mode") != "admin",
         )
+    return report_context
 
+
+async def _acquire_report_qa_slot() -> None:
     try:
         await asyncio.wait_for(
             _REPORT_QA_SEMAPHORE.acquire(),
@@ -1264,6 +1269,20 @@ async def ask_report_question(request: Request, payload: dict = Body(...)) -> di
             detail="报告解释任务较多，请稍后再试",
             headers={"Retry-After": str(max(1, math.ceil(REPORT_QA_QUEUE_TIMEOUT_SECONDS)))},
         ) from exc
+
+
+def _report_qa_sse_event(event: dict[str, Any]) -> str:
+    event_type = str(event.get("type") or "message")
+    if event_type not in {"start", "delta", "done", "error"}:
+        event_type = "message"
+    data = {key: value for key, value in event.items() if key != "type"}
+    return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}\n\n"
+
+
+@app.post("/api/report-qa")
+async def ask_report_question(request: Request, payload: dict = Body(...)) -> dict:
+    report_context = await _resolve_report_qa_context(request, payload)
+    await _acquire_report_qa_slot()
 
     try:
         return await run_in_threadpool(
@@ -1279,6 +1298,60 @@ async def ask_report_question(request: Request, payload: dict = Body(...)) -> di
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     finally:
         _REPORT_QA_SEMAPHORE.release()
+
+
+@app.post("/api/report-qa/stream")
+async def stream_report_question(request: Request, payload: dict = Body(...)) -> StreamingResponse:
+    report_context = await _resolve_report_qa_context(request, payload)
+    await _acquire_report_qa_slot()
+    try:
+        iterator = await run_in_threadpool(
+            report_qa_service.stream_answer,
+            report_context,
+            payload.get("question"),
+            payload.get("history"),
+        )
+    except report_qa_service.ReportQaValidationError as exc:
+        _REPORT_QA_SEMAPHORE.release()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except report_qa_service.ReportQaUnavailableError as exc:
+        _REPORT_QA_SEMAPHORE.release()
+        logger.warning("report QA stream unavailable: %s", type(exc.__cause__ or exc).__name__)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        _REPORT_QA_SEMAPHORE.release()
+        logger.exception("report QA stream setup failed")
+        raise HTTPException(status_code=503, detail="报告解释服务暂不可用") from exc
+
+    async def event_stream():
+        try:
+            yield _report_qa_sse_event({"type": "start", "grounded": True})
+            async for event in iterate_in_threadpool(iterator):
+                if await request.is_disconnected():
+                    break
+                yield _report_qa_sse_event(event)
+        except report_qa_service.ReportQaUnavailableError as exc:
+            logger.warning("report QA stream interrupted: %s", type(exc.__cause__ or exc).__name__)
+            yield _report_qa_sse_event({"type": "error", "message": str(exc)})
+        except Exception as exc:
+            logger.warning("report QA stream failed: %s", type(exc).__name__)
+            yield _report_qa_sse_event({"type": "error", "message": "报告解释服务暂不可用"})
+        finally:
+            try:
+                close = getattr(iterator, "close", None)
+                if callable(close):
+                    await run_in_threadpool(close)
+            finally:
+                _REPORT_QA_SEMAPHORE.release()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/api/ready")

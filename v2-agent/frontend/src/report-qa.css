@@ -102,6 +102,22 @@
   overflow-wrap: anywhere;
 }
 
+.report-qa-stream-cursor {
+  width: 2px;
+  height: 1.05em;
+  display: inline-block;
+  margin-left: 3px;
+  vertical-align: -0.14em;
+  background: var(--primary);
+  animation: report-qa-cursor 850ms steps(1, end) infinite;
+}
+
+@keyframes report-qa-cursor {
+  50% {
+    opacity: 0;
+  }
+}
+
 .report-qa-message.is-loading p {
   display: inline-flex;
   align-items: center;
@@ -335,6 +351,10 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .report-qa-stream-cursor {
+    animation: none;
+  }
+
   .report-qa-composer,
   .report-qa-suggestions button {
     transition: none;

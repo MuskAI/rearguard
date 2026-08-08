@@ -768,21 +768,64 @@ test("登录用户可以围绕当前检测报告连续提问", async ({ page }) 
       },
     },
   }));
-  const requests: Array<Record<string, unknown>> = [];
-  await page.route("**/v2-api/report-qa", async (route) => {
-    const payload = route.request().postDataJSON() as Record<string, unknown>;
-    requests.push(payload);
-    await route.fulfill({
-      json: {
-        answer: requests.length === 1
-          ? "报告在右下角定位到平台水印，并与生成痕迹相互印证。"
-          : "这里的 91% 是本次报告的风险分，不代表绝对事实。",
-        evidenceRefs: requests.length === 1 ? ["平台水印"] : ["视觉线索 1"],
-        suggestedQuestions: ["这个风险分应该怎么理解？"],
-        grounded: true,
-        usage: { totalTokens: 80 },
-      },
-    });
+  await page.addInitScript(() => {
+    const state = window as typeof window & { __reportQaStreamRequests?: Array<Record<string, unknown>> };
+    state.__reportQaStreamRequests = [];
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+      if (!url.includes("/v2-api/report-qa/stream")) return originalFetch(input, init);
+
+      const payload = typeof init?.body === "string"
+        ? JSON.parse(init.body) as Record<string, unknown>
+        : {};
+      state.__reportQaStreamRequests!.push(payload);
+      const firstRequest = state.__reportQaStreamRequests!.length === 1;
+      const answer = firstRequest
+        ? "报告在右下角定位到平台水印，并与生成痕迹相互印证。"
+        : "这里的 91% 是本次报告的风险分，不代表绝对事实。";
+      const firstDelta = firstRequest ? "报告在右下角定位到" : "这里的 91% 是本次报告的";
+      const secondDelta = answer.slice(firstDelta.length);
+      const evidenceRefs = firstRequest ? ["平台水印"] : ["视觉线索 1"];
+      const encoder = new TextEncoder();
+      const event = (name: string, data: Record<string, unknown>) => (
+        `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`
+      );
+      const timers: number[] = [];
+
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(event("start", { grounded: true })));
+          timers.push(window.setTimeout(() => {
+            controller.enqueue(encoder.encode(event("delta", { text: firstDelta })));
+          }, 50));
+          timers.push(window.setTimeout(() => {
+            controller.enqueue(encoder.encode(event("delta", { text: secondDelta })));
+          }, 750));
+          timers.push(window.setTimeout(() => {
+            controller.enqueue(encoder.encode(event("done", {
+              answer,
+              evidenceRefs,
+              suggestedQuestions: ["这个风险分应该怎么理解？"],
+              grounded: true,
+              usage: { totalTokens: 80 },
+            })));
+            controller.close();
+          }, 900));
+        },
+        cancel() {
+          timers.forEach((timer) => window.clearTimeout(timer));
+        },
+      });
+      return new Response(body, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream; charset=utf-8" },
+      });
+    };
   });
 
   await page.goto("/?workspace=1");
@@ -804,8 +847,16 @@ test("登录用户可以围绕当前检测报告连续提问", async ({ page }) 
   await dock.getByRole("button", { name: "为什么判断为 AI 生成？" }).click();
   const qa = page.locator(".report-qa");
   await expect(qa.getByRole("heading", { name: "报告问答" })).toBeVisible();
+  await expect(qa.getByText("报告在右下角定位到", { exact: true })).toBeVisible();
+  await expect(qa.locator(".report-qa-stream-cursor")).toBeVisible();
+  await expect(qa.getByText("报告在右下角定位到平台水印，并与生成痕迹相互印证。")).toHaveCount(0);
   await expect(qa.getByText("报告在右下角定位到平台水印，并与生成痕迹相互印证。")).toBeVisible();
+  await expect(qa.locator(".report-qa-stream-cursor")).toHaveCount(0);
   await expect(qa.getByText("平台水印", { exact: true })).toBeVisible();
+  const requests = await page.evaluate(() => (
+    (window as typeof window & { __reportQaStreamRequests?: Array<Record<string, unknown>> })
+      .__reportQaStreamRequests || []
+  ));
   expect(requests).toHaveLength(1);
   const firstReport = requests[0].report as Record<string, unknown>;
   expect(JSON.stringify(firstReport)).not.toContain("should-not-leave-browser");
@@ -815,8 +866,12 @@ test("登录用户可以围绕当前检测报告连续提问", async ({ page }) 
   await composer.fill("这个风险分应该怎么理解？");
   await composer.press("Enter");
   await expect(qa.getByText("这里的 91% 是本次报告的风险分，不代表绝对事实。")).toBeVisible();
-  expect(requests).toHaveLength(2);
-  expect(requests[1].history).toEqual([
+  const followUpRequests = await page.evaluate(() => (
+    (window as typeof window & { __reportQaStreamRequests?: Array<Record<string, unknown>> })
+      .__reportQaStreamRequests || []
+  ));
+  expect(followUpRequests).toHaveLength(2);
+  expect(followUpRequests[1].history).toEqual([
     { role: "user", content: "为什么判断为 AI 生成？" },
     { role: "assistant", content: "报告在右下角定位到平台水印，并与生成痕迹相互印证。" },
   ]);

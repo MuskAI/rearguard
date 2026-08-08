@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import Any
+from typing import Any, Iterator
 
 from . import detector
 
@@ -109,8 +109,7 @@ def _plain_language(value: Any, limit: int = 4_000) -> str:
     return re.sub(r"\s+([，。！？；：])", r"\1", text).strip()[:limit]
 
 
-def _explain_risk_score(answer: str, limit: int = 4_000) -> str:
-    """Keep a displayed risk score from being mistaken for model accuracy."""
+def _normalize_risk_scores(answer: str) -> str:
     text = re.sub(
         r"(0?\.\d+)\s*的\s*((?:综合)?风险分)",
         lambda match: f"{match.group(2)}为{float(match.group(1)) * 100:g}%",
@@ -121,7 +120,12 @@ def _explain_risk_score(answer: str, limit: int = 4_000) -> str:
         lambda match: f"{match.group(1)}{float(match.group(2)) * 100:g}%",
         text,
     )
-    text = re.sub(r"(?<=[\u3400-\u9fff])\s+(?=[\u3400-\u9fff])", "", text)
+    return re.sub(r"(?<=[\u3400-\u9fff])\s+(?=[\u3400-\u9fff])", "", text)
+
+
+def _explain_risk_score(answer: str, limit: int = 4_000) -> str:
+    """Keep a displayed risk score from being mistaken for model accuracy."""
+    text = _normalize_risk_scores(answer)
     if not re.search(r"(?:综合)?风险分.{0,12}\d+(?:\.\d+)?%", text):
         return text[:limit]
     if re.search(r"(?:不等于|不代表|并非|不是).{0,12}(?:绝对|准确率|正确率)", text):
@@ -474,6 +478,58 @@ def _extract_json(value: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _partial_json_answer(value: str) -> tuple[str, bool]:
+    """Decode the currently available portion of the JSON answer string."""
+    match = re.search(r'"answer"\s*:\s*"', value)
+    if not match:
+        return "", False
+    encoded = value[match.end():]
+    output: list[str] = []
+    index = 0
+    escapes = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}
+    while index < len(encoded):
+        char = encoded[index]
+        if char == '"':
+            return "".join(output), True
+        if char != "\\":
+            output.append(char)
+            index += 1
+            continue
+        if index + 1 >= len(encoded):
+            break
+        escaped = encoded[index + 1]
+        if escaped != "u":
+            replacement = escapes.get(escaped)
+            if replacement is None:
+                break
+            output.append(replacement)
+            index += 2
+            continue
+        if index + 6 > len(encoded):
+            break
+        digits = encoded[index + 2:index + 6]
+        if not re.fullmatch(r"[0-9a-fA-F]{4}", digits):
+            break
+        codepoint = int(digits, 16)
+        index += 6
+        if 0xD800 <= codepoint <= 0xDBFF and encoded[index:index + 2] == "\\u" and index + 6 <= len(encoded):
+            low_digits = encoded[index + 2:index + 6]
+            if re.fullmatch(r"[0-9a-fA-F]{4}", low_digits):
+                low = int(low_digits, 16)
+                if 0xDC00 <= low <= 0xDFFF:
+                    codepoint = 0x10000 + ((codepoint - 0xD800) << 10) + (low - 0xDC00)
+                    index += 6
+        output.append(chr(codepoint))
+    return "".join(output), False
+
+
+def _streamable_prefix(value: str, complete: bool) -> str:
+    if complete:
+        return value
+    boundary = max((value.rfind(mark) for mark in "，。！？；\n"), default=-1)
+    return value[:boundary + 1] if boundary >= 0 else ""
+
+
 def _reference_labels(report: dict[str, Any]) -> list[str]:
     labels = [_text(item.get("label"), 100) for item in report.get("keyEvidence") or []]
     labels.extend(_text(item.get("label"), 100) for item in report.get("localizedRegions") or [])
@@ -491,36 +547,37 @@ def _reference_labels(report: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(label for label in labels if label))
 
 
-def answer(report_value: Any, question_value: Any, history_value: Any = None) -> dict[str, Any]:
+def _prepare_answer_inputs(
+    report_value: Any,
+    question_value: Any,
+    history_value: Any,
+) -> tuple[dict[str, Any], str, list[dict[str, str]], Any]:
     report = compact_report(report_value)
     question = validate_question(question_value)
     history = compact_history(history_value)
     client = detector._get_client()
     if client is None:
         raise ReportQaUnavailableError("报告解释服务尚未配置")
+    return report, question, history, client
 
+
+def _completion_messages(
+    report: dict[str, Any],
+    question: str,
+    history: list[dict[str, str]],
+) -> list[dict[str, str]]:
     payload = {
         "REPORT_JSON": report,
         "CONVERSATION_HISTORY": history,
         "CURRENT_QUESTION": question,
     }
-    try:
-        response = client.chat.completions.create(
-            model=REPORT_QA_MODEL,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))},
-            ],
-            temperature=0.15,
-            max_tokens=900,
-        )
-        content = response.choices[0].message.content or ""
-    except Exception as exc:
-        raise ReportQaUnavailableError("报告解释服务暂不可用") from exc
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))},
+    ]
 
-    parsed = _extract_json(str(content))
-    if not parsed:
-        raise ReportQaUnavailableError("报告解释服务返回了无效结果")
+
+def _finalize_answer(report: dict[str, Any], parsed: dict[str, Any], total_tokens: int = 0) -> dict[str, Any]:
     raw_answer_text = _text(parsed.get("answer"), 4_000)
     answer_text = _plain_language(raw_answer_text, 4_000)
     answer_text = _explain_risk_score(answer_text, 4_000)
@@ -546,12 +603,98 @@ def answer(report_value: Any, question_value: Any, history_value: Any = None) ->
             suggestions.append(suggestion)
         if len(suggestions) >= 3:
             break
-    usage = getattr(response, "usage", None)
-    total_tokens = int(getattr(usage, "total_tokens", 0) or 0)
     return {
         "answer": answer_text,
         "evidenceRefs": references,
         "suggestedQuestions": suggestions,
         "grounded": True,
-        "usage": {"totalTokens": total_tokens},
+        "usage": {"totalTokens": max(int(total_tokens or 0), 0)},
     }
+
+
+def _stream_chunk_text(chunk: Any) -> str:
+    choices = getattr(chunk, "choices", None) or []
+    if not choices:
+        return ""
+    content = getattr(getattr(choices[0], "delta", None), "content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            text = item.get("text") if isinstance(item, dict) else getattr(item, "text", "")
+            if isinstance(text, str):
+                parts.append(text)
+        return "".join(parts)
+    return ""
+
+
+def _iter_stream_events(stream: Any, report: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    raw_content = ""
+    emitted = ""
+    total_tokens = 0
+    try:
+        for chunk in stream:
+            usage = getattr(chunk, "usage", None)
+            total_tokens = max(total_tokens, int(getattr(usage, "total_tokens", 0) or 0))
+            raw_content += _stream_chunk_text(chunk)
+            partial, complete = _partial_json_answer(raw_content)
+            prefix = _streamable_prefix(partial, complete)
+            friendly = _normalize_risk_scores(_plain_language(prefix, 4_000))
+            if friendly.startswith(emitted) and len(friendly) > len(emitted):
+                delta = friendly[len(emitted):]
+                emitted = friendly
+                yield {"type": "delta", "text": delta}
+
+        parsed = _extract_json(raw_content)
+        if not parsed:
+            raise ReportQaUnavailableError("报告解释服务返回了无效结果")
+        result = _finalize_answer(report, parsed, total_tokens)
+        final_answer = result["answer"]
+        if final_answer.startswith(emitted) and len(final_answer) > len(emitted):
+            yield {"type": "delta", "text": final_answer[len(emitted):]}
+        yield {"type": "done", **result}
+    except ReportQaUnavailableError:
+        raise
+    except Exception as exc:
+        raise ReportQaUnavailableError("报告解释服务暂不可用") from exc
+    finally:
+        close = getattr(stream, "close", None)
+        if callable(close):
+            close()
+
+
+def stream_answer(report_value: Any, question_value: Any, history_value: Any = None) -> Iterator[dict[str, Any]]:
+    report, question, history, client = _prepare_answer_inputs(report_value, question_value, history_value)
+    try:
+        stream = client.chat.completions.create(
+            model=REPORT_QA_MODEL,
+            messages=_completion_messages(report, question, history),
+            temperature=0.15,
+            max_tokens=900,
+            stream=True,
+        )
+    except Exception as exc:
+        raise ReportQaUnavailableError("报告解释服务暂不可用") from exc
+    return _iter_stream_events(stream, report)
+
+
+def answer(report_value: Any, question_value: Any, history_value: Any = None) -> dict[str, Any]:
+    report, question, history, client = _prepare_answer_inputs(report_value, question_value, history_value)
+    try:
+        response = client.chat.completions.create(
+            model=REPORT_QA_MODEL,
+            messages=_completion_messages(report, question, history),
+            temperature=0.15,
+            max_tokens=900,
+        )
+        content = response.choices[0].message.content or ""
+    except Exception as exc:
+        raise ReportQaUnavailableError("报告解释服务暂不可用") from exc
+
+    parsed = _extract_json(str(content))
+    if not parsed:
+        raise ReportQaUnavailableError("报告解释服务返回了无效结果")
+    usage = getattr(response, "usage", None)
+    total_tokens = int(getattr(usage, "total_tokens", 0) or 0)
+    return _finalize_answer(report, parsed, total_tokens)

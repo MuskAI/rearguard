@@ -1615,6 +1615,11 @@ export interface ReportQaAnswer {
   usage?: { totalTokens?: number };
 }
 
+export interface ReportQaStreamHandlers {
+  onStart?: () => void;
+  onDelta: (text: string) => void;
+}
+
 export async function askReportQuestion(payload: ReportQaRequest, signal?: AbortSignal): Promise<ReportQaAnswer> {
   await ensureSessionCsrf();
   const res = await fetch("/v2-api/report-qa", withSession({
@@ -1624,6 +1629,105 @@ export async function askReportQuestion(payload: ReportQaRequest, signal?: Abort
     body: JSON.stringify(payload),
   }));
   return parseJson(res, "报告解释暂不可用");
+}
+
+function parseReportQaAnswer(value: unknown): ReportQaAnswer {
+  const record = errorRecord(value);
+  const answer = errorText(record.answer);
+  if (!answer) throw new Error("报告解释服务没有形成完整回答");
+  const stringList = (item: unknown): string[] => Array.isArray(item)
+    ? item.filter((entry): entry is string => typeof entry === "string" && Boolean(entry.trim()))
+    : [];
+  const usage = errorRecord(record.usage);
+  const totalTokens = Number(usage.totalTokens);
+  return {
+    answer,
+    evidenceRefs: stringList(record.evidenceRefs),
+    suggestedQuestions: stringList(record.suggestedQuestions),
+    grounded: record.grounded !== false,
+    usage: Number.isFinite(totalTokens) ? { totalTokens } : undefined,
+  };
+}
+
+function parseSseBlock(block: string): { event: string; data: unknown } | null {
+  let event = "message";
+  const data: string[] = [];
+  for (const line of block.split(/\r?\n/)) {
+    if (line.startsWith("event:")) event = line.slice(6).trim();
+    if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+  }
+  if (data.length === 0) return null;
+  try {
+    return { event, data: JSON.parse(data.join("\n")) as unknown };
+  } catch {
+    throw new Error("报告解释流返回了无效内容");
+  }
+}
+
+export async function streamReportQuestion(
+  payload: ReportQaRequest,
+  handlers: ReportQaStreamHandlers,
+  signal?: AbortSignal,
+): Promise<ReportQaAnswer> {
+  await ensureSessionCsrf();
+  const response = await fetch("/v2-api/report-qa/stream", withSession({
+    method: "POST",
+    signal,
+    headers: {
+      Accept: "text/event-stream",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  }));
+  if (!response.ok) {
+    if (response.status === 401) notifySessionExpired();
+    throw await apiRequestErrorFromResponse(response, "报告解释暂不可用");
+  }
+  if (!response.body) throw new Error("当前浏览器无法接收流式回答");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let completed: ReportQaAnswer | null = null;
+
+  function consume(block: string) {
+    const message = parseSseBlock(block);
+    if (!message) return;
+    const record = errorRecord(message.data);
+    if (message.event === "start") {
+      handlers.onStart?.();
+      return;
+    }
+    if (message.event === "delta") {
+      const delta = errorText(record.text);
+      if (delta) handlers.onDelta(delta);
+      return;
+    }
+    if (message.event === "done") {
+      completed = parseReportQaAnswer(record);
+      return;
+    }
+    if (message.event === "error") {
+      throw new Error(errorText(record.message) || "报告解释流意外中断");
+    }
+  }
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const blocks = buffer.split(/\r?\n\r?\n/);
+      buffer = blocks.pop() || "";
+      for (const block of blocks) consume(block);
+      if (done) break;
+    }
+    if (buffer.trim()) consume(buffer);
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (!completed) throw new Error("报告解释流未正常完成");
+  return completed;
 }
 
 export interface ReportShareLink {

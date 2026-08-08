@@ -2561,6 +2561,115 @@ def test_report_qa_requires_login_before_calling_model(client, monkeypatch):
     assert response.status_code == 401
 
 
+def test_report_qa_stream_requires_login_before_calling_model(client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    monkeypatch.setattr(
+        main.report_qa_service,
+        "stream_answer",
+        lambda *_args, **_kwargs: pytest.fail("unauthenticated request reached report QA stream"),
+    )
+
+    response = client.post(
+        "/api/report-qa/stream",
+        json={
+            "question": "为什么这样判断？",
+            "report": {"verdict": "real", "explanation": "未见明显异常"},
+        },
+    )
+
+    assert response.status_code == 401
+
+
+def test_report_qa_stream_returns_sse_deltas_and_final_metadata(client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    monkeypatch.setattr(
+        main,
+        "_verify_session_user_sync",
+        lambda _request: {
+            "mode": "session",
+            "userId": 503,
+            "accountUuid": "53535353-5353-4353-8353-535353535353",
+        },
+    )
+    captured = {}
+
+    def fake_stream_answer(report, question, history):
+        captured.update({"report": report, "question": question, "history": history})
+        yield {"type": "delta", "text": "水印是"}
+        yield {"type": "delta", "text": "主要依据。"}
+        yield {
+            "type": "done",
+            "answer": "水印是主要依据。",
+            "evidenceRefs": ["可见水印"],
+            "suggestedQuestions": ["水印位于哪里？"],
+            "grounded": True,
+            "usage": {"totalTokens": 12},
+        }
+
+    monkeypatch.setattr(main.report_qa_service, "stream_answer", fake_stream_answer)
+    client.cookies.set("session", "qa-stream-user")
+    response = client.post(
+        "/api/report-qa/stream",
+        headers={"Accept": "text/event-stream"},
+        json={
+            "question": "为什么判断为假？",
+            "history": [{"role": "user", "content": "先解释水印"}],
+            "report": {
+                "kind": "image",
+                "verdict": "highly_suspected_fake",
+                "explanation": "检测到平台水印",
+                "visibleWatermark": {"detected": True, "provider": "示例平台"},
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.headers["x-accel-buffering"] == "no"
+    assert "event: start" in response.text
+    assert response.text.count("event: delta") == 2
+    assert 'data: {"text":"水印是"}' in response.text
+    assert "event: done" in response.text
+    assert '"answer":"水印是主要依据。"' in response.text
+    assert captured["question"] == "为什么判断为假？"
+    assert captured["report"]["verdict"] == "highly_suspected_fake"
+
+
+def test_report_qa_stream_reports_generation_failure_as_sse_event(client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    monkeypatch.setattr(
+        main,
+        "_verify_session_user_sync",
+        lambda _request: {
+            "mode": "session",
+            "userId": 504,
+            "accountUuid": "54545454-5454-4454-8454-545454545454",
+        },
+    )
+
+    def failing_stream(*_args, **_kwargs):
+        yield {"type": "delta", "text": "正在解释"}
+        raise main.report_qa_service.ReportQaUnavailableError("报告解释连接中断")
+
+    monkeypatch.setattr(main.report_qa_service, "stream_answer", failing_stream)
+    client.cookies.set("session", "qa-stream-failure")
+    response = client.post(
+        "/api/report-qa/stream",
+        json={
+            "question": "为什么这样判断？",
+            "report": {"verdict": "real", "explanation": "未见明显异常"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert "event: delta" in response.text
+    assert "event: error" in response.text
+    assert "报告解释连接中断" in response.text
+
+
 def test_report_qa_accepts_bounded_current_page_context_for_logged_in_user(client, monkeypatch):
     import app.main as main  # noqa: WPS433
 

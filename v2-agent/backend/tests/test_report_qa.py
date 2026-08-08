@@ -31,6 +31,39 @@ def fake_client(content: str):
     return SimpleNamespace(chat=SimpleNamespace(completions=completions)), completions
 
 
+class FakeStream:
+    def __init__(self, parts: list[str]):
+        self.parts = parts
+        self.closed = False
+
+    def __iter__(self):
+        for index, part in enumerate(self.parts):
+            usage = SimpleNamespace(total_tokens=91) if index == len(self.parts) - 1 else None
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content=part))],
+                usage=usage,
+            )
+
+    def close(self):
+        self.closed = True
+
+
+class FakeStreamingCompletions:
+    def __init__(self, parts: list[str]):
+        self.stream = FakeStream(parts)
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.stream
+
+
+def fake_stream_client(content: str, chunk_size: int = 9):
+    parts = [content[index:index + chunk_size] for index in range(0, len(content), chunk_size)]
+    completions = FakeStreamingCompletions(parts)
+    return SimpleNamespace(chat=SimpleNamespace(completions=completions)), completions
+
+
 def test_report_context_excludes_images_urls_and_raw_metadata():
     compact = report_qa.compact_report({
         "verdict": "highly_suspected_fake",
@@ -127,6 +160,60 @@ def test_report_answer_translates_model_jargon_for_non_technical_users(monkeypat
     assert "没有人工智能、计算机视觉或数字取证背景" in prompt
     assert "默认禁止出现：线性探针" in prompt
     assert "不等于有 91% 的绝对正确率" in prompt
+
+
+def test_report_answer_streams_plain_language_before_final_metadata(monkeypatch):
+    model_payload = json.dumps({
+        "answer": "线性探针发现频域特征异常，综合风险分为0.91。",
+        "evidenceRefs": ["线性探针"],
+        "suggestedQuestions": ["这个风险分是什么意思？"],
+    }, ensure_ascii=False)
+    client, completions = fake_stream_client(model_payload)
+    monkeypatch.setattr(report_qa.detector, "_get_client", lambda: client)
+
+    events = list(report_qa.stream_answer(
+        {
+            "verdict": "suspected_fake",
+            "explanation": "模型分数偏高",
+            "dimensions": [{"label": "线性探针", "result": "频域特征异常", "score": 0.91}],
+        },
+        "为什么判断为假？",
+    ))
+
+    deltas = [event["text"] for event in events if event["type"] == "delta"]
+    done = events[-1]
+    assert len(deltas) >= 2
+    assert "".join(deltas) == done["answer"]
+    assert "线性探针" not in done["answer"]
+    assert "频域" not in done["answer"]
+    assert done["answer"].endswith("它并不代表绝对正确率。")
+    assert done["evidenceRefs"] == ["图像检测模型"]
+    assert done["usage"] == {"totalTokens": 91}
+    assert completions.calls[0]["stream"] is True
+    assert completions.stream.closed is True
+
+
+def test_report_answer_stream_rejects_invalid_final_json(monkeypatch):
+    client, completions = fake_stream_client('{"answer":"尚未完成"')
+    monkeypatch.setattr(report_qa.detector, "_get_client", lambda: client)
+
+    with pytest.raises(report_qa.ReportQaUnavailableError, match="无效结果"):
+        list(report_qa.stream_answer(
+            {"verdict": "real", "explanation": "未见明显异常"},
+            "为什么判断为真？",
+        ))
+
+    assert completions.stream.closed is True
+
+
+def test_partial_json_answer_waits_for_complete_escape_sequence():
+    partial, complete = report_qa._partial_json_answer('{"answer":"第一句\\n第二句\\u4f')
+    assert partial == "第一句\n第二句"
+    assert complete is False
+
+    final, complete = report_qa._partial_json_answer('{"answer":"第一句\\n第二句\\u4f60。"}')
+    assert final == "第一句\n第二句你。"
+    assert complete is True
 
 
 @pytest.mark.parametrize(
