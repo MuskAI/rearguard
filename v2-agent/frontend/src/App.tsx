@@ -1538,13 +1538,13 @@ function AgentProgressPanel({ progress, onStopWaiting }: { progress: AgentProgre
     <div className="agent-progress-message" role="status" aria-live="polite">
       <div className="agent-avatar"><AgentAvatar size={40} state={current.percent >= 100 ? "complete" : current.stage === "validate" ? "receiving" : "processing"} /></div>
       <div className="progress-panel">
-        <div className="progress-heading"><span><LoaderCircle size={17} className={current.percent < 100 ? "spin" : ""} /></span><div><strong>{current.title}</strong><p>{current.detail}</p></div><b>{Math.round(current.percent)}%</b></div>
+        <div className="progress-heading"><span><LoaderCircle size={19} className={current.percent < 100 ? "spin" : ""} /></span><div><strong>{current.title}</strong><p>{current.detail}</p></div><b>{Math.round(current.percent)}%</b></div>
         <div className="progress-track" role="progressbar" aria-label={current.title} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(current.percent)}><i style={{ width: `${current.percent}%` }} /></div>
         <div className="progress-stages progress-system">
           {stages.map((stage, index) => {
             return (
               <span key={stage.key} className={index < stageIndex ? "done" : index === stageIndex ? "active" : ""}>
-                <i>{index < stageIndex ? <Check size={13} /> : <BrandArtIcon name={stage.icon} />}</i>
+                <i>{index < stageIndex ? <Check size={16} /> : <BrandArtIcon name={stage.icon} />}</i>
                 <b>{stage.label}</b>
                 <small>{stage.note}</small>
               </span>

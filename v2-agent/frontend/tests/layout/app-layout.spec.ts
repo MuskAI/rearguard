@@ -598,6 +598,75 @@ test("结果页完整依据入口使用正文级字号", async ({ page }) => {
   expect(await readableTextOffenders(page, ".agent-result")).toEqual([]);
 });
 
+test("检测进度卡使用清晰的正文级字号", async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 700 });
+  await installBaseMocks(page);
+  const runningJob = {
+    id: "layout-progress-job",
+    version: "1",
+    status: "running",
+    progress: 38,
+    publicStage: "authenticity_analysis",
+    result: null,
+  };
+  await page.route("**/image_upload/detect_async", (route) => route.fulfill({ json: { status: "success", job: runningJob } }));
+  await page.route("**/image_upload/jobs/layout-progress-job**", (route) => route.fulfill({
+    status: 429,
+    headers: { "Retry-After": "10" },
+    json: { status: "error", error: "rate_limited", message: "请稍候" },
+  }));
+
+  await page.goto("/?workspace=1");
+  await page.locator(".guest-upload-consent input").check();
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "progress-typography.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"),
+  });
+
+  const panel = page.locator(".progress-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel.locator(".progress-heading strong")).toHaveText(/正在核验内容真实性|任务仍在运行/);
+  const sizes = await panel.evaluate((element) => {
+    const size = (selector: string) => Number.parseFloat(getComputedStyle(element.querySelector<HTMLElement>(selector)!).fontSize);
+    return {
+      title: size(".progress-heading strong"),
+      detail: size(".progress-heading p"),
+      percent: size(".progress-heading b"),
+      stage: size(".progress-system b"),
+      stageNote: size(".progress-system small"),
+      stopButton: size(".cancel-analysis-button"),
+      stopNote: size(".stop-waiting-note"),
+    };
+  });
+  expect(sizes.title).toBeGreaterThanOrEqual(15);
+  expect(sizes.detail).toBeGreaterThanOrEqual(13);
+  expect(sizes.percent).toBeGreaterThanOrEqual(14);
+  expect(sizes.stage).toBeGreaterThanOrEqual(12);
+  expect(sizes.stageNote).toBeGreaterThanOrEqual(11);
+  expect(sizes.stopButton).toBeGreaterThanOrEqual(14);
+  expect(sizes.stopNote).toBeGreaterThanOrEqual(12);
+  expect(await readableTextOffenders(page, ".progress-panel")).toEqual([]);
+  await expectNoHorizontalOverflow(page);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileSizes = await panel.evaluate((element) => {
+    const size = (selector: string) => Number.parseFloat(getComputedStyle(element.querySelector<HTMLElement>(selector)!).fontSize);
+    return {
+      title: size(".progress-heading strong"),
+      detail: size(".progress-heading p"),
+      stage: size(".progress-system b"),
+      stageNote: size(".progress-system small"),
+    };
+  });
+  expect(mobileSizes.title).toBeGreaterThanOrEqual(14);
+  expect(mobileSizes.detail).toBeGreaterThanOrEqual(12);
+  expect(mobileSizes.stage).toBeGreaterThanOrEqual(12);
+  expect(mobileSizes.stageNote).toBeGreaterThanOrEqual(11);
+  await expectNoHorizontalOverflow(page);
+  await panel.getByRole("button", { name: "停止等待" }).click();
+});
+
 for (const viewport of viewports.slice(0, 2)) {
   test(`鉴伪入口在 ${viewport.name} 视口居中且控件不重叠`, async ({ page }) => {
     await page.setViewportSize(viewport);
