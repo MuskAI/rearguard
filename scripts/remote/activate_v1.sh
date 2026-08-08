@@ -259,6 +259,9 @@ fi
 sudo install -d -m 000 -o root -g root /opt/realguard-data/internal-testing
 
 sudo install -d -m 700 /etc/realguard
+# V2 keeps its Ed25519 signing key in this root-owned directory. Service
+# users must be able to traverse it, while directory listing stays disabled.
+sudo chmod 711 /etc/realguard
 sudo install -d -m 700 -o root -g root /opt/realguard-audit-checkpoint
 sudo touch /etc/realguard/backup.env
 sudo chmod 600 /etc/realguard/backup.env

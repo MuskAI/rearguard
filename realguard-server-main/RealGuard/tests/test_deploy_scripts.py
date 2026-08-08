@@ -251,6 +251,15 @@ def test_v2_deployment_runs_browser_layout_gate_before_packaging():
     assert install_index < test_index < package_index
 
 
+def test_v1_activation_preserves_v2_secret_directory_traversal():
+    activate = (ROOT / "scripts" / "remote" / "activate_v1.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "sudo install -d -m 700 /etc/realguard" in activate
+    assert "sudo chmod 711 /etc/realguard" in activate
+
+
 def test_v1_activation_probes_backend_without_default_nginx_host():
     activate = (ROOT / "scripts" / "remote" / "activate_v1.sh").read_text(
         encoding="utf-8"
