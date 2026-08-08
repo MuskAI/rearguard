@@ -74,8 +74,8 @@ def test_report_context_excludes_images_urls_and_raw_metadata():
 def test_report_answer_is_grounded_and_filters_unknown_references(monkeypatch):
     client, completions = fake_client(json.dumps({
         "answer": "报告把频域特征列为主要依据，但没有给出可定位区域。",
-        "evidenceRefs": ["频域特征", "报告中不存在的证据"],
-        "suggestedQuestions": ["这项证据有何局限？"],
+        "evidenceRefs": ["报告中不存在的证据"],
+        "suggestedQuestions": ["去除水印后能否重新判断？", "这项证据有何局限？"],
     }, ensure_ascii=False))
     monkeypatch.setattr(report_qa.detector, "_get_client", lambda: client)
 
@@ -92,6 +92,7 @@ def test_report_answer_is_grounded_and_filters_unknown_references(monkeypatch):
 
     assert response["grounded"] is True
     assert response["evidenceRefs"] == ["频域特征"]
+    assert response["suggestedQuestions"] == ["这项证据有何局限？"]
     assert response["usage"]["totalTokens"] == 73
     prompt = completions.calls[0]["messages"]
     assert "唯一事实来源" in prompt[0]["content"]
