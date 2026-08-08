@@ -339,6 +339,78 @@ test("官网与统一鉴伪入口不存在低于 12px 的可见文字", async ({
   expect(await readableTextOffenders(page, ".agent-app")).toEqual([]);
 });
 
+test("官网可以进入独立 Playground", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await installBaseMocks(page);
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "Playground" }).click();
+  await expect(page).toHaveURL(/playground=1/);
+  await expect(page.getByRole("heading", { name: "找出那张 AI 图" })).toBeVisible();
+  await page.goBack();
+  await expect(page.getByRole("heading", { name: "慧鉴AI" })).toBeVisible();
+});
+
+test("Playground 完成六选一、答案解释与键盘连续挑战", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await installBaseMocks(page);
+  await page.goto("/?playground=1");
+
+  await expect(page.getByRole("heading", { name: "找出那张 AI 图" })).toBeVisible();
+  const choices = page.getByRole("button", { name: /选择候选图片/ });
+  await expect(choices).toHaveCount(6);
+  expect(await page.locator(".playground-choice img").evaluateAll((images) => images.map((image) => image.getAttribute("alt")))).toEqual([
+    "候选图片 1",
+    "候选图片 2",
+    "候选图片 3",
+    "候选图片 4",
+    "候选图片 5",
+    "候选图片 6",
+  ]);
+  expect(await page.locator(".playground-choice img").evaluateAll((images) => images.every((image) => /\/playground\/samples\/sample-\d+\.webp$/.test((image as HTMLImageElement).src)))).toBeTruthy();
+
+  await choices.nth(0).click();
+  await expect(choices.nth(0)).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "确认选择" }).click();
+  await expect(page.locator(".playground-feedback")).toBeVisible();
+  await expect(page.locator(".playground-answer-badge.is-ai")).toHaveCount(1);
+  await expect(page.locator(".playground-answer-badge.is-real")).toHaveCount(5);
+  await expect(page.locator(".playground-feedback").getByText(/值得复核的细节/)).toBeVisible();
+
+  await page.getByRole("button", { name: "下一轮" }).click();
+  await page.keyboard.press("2");
+  await expect(page.getByRole("button", { name: "选择候选图片 2" })).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".playground-feedback")).toBeVisible();
+  await expect(page.getByText("这是一场观察练习，不是鉴伪结论。")).toBeVisible();
+  expect(await readableTextOffenders(page, ".playground-page")).toEqual([]);
+  await expectNoHorizontalOverflow(page);
+});
+
+test("Playground 手机端保持双列布局并支持可恢复焦点的放大查看", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installBaseMocks(page);
+  await page.goto("/?playground=1");
+
+  const positions = await page.locator(".playground-candidate").evaluateAll((items) => items.slice(0, 2).map((item) => {
+    const rect = item.getBoundingClientRect();
+    return { left: rect.left, top: rect.top, width: rect.width };
+  }));
+  expect(positions[1].left).toBeGreaterThan(positions[0].left + positions[0].width - 1);
+  expect(Math.abs(positions[1].top - positions[0].top)).toBeLessThanOrEqual(1);
+
+  const zoom = page.getByRole("button", { name: "放大候选图片 1" });
+  await zoom.click();
+  const dialog = page.getByRole("dialog", { name: "放大查看候选图片 1" });
+  await expect(dialog).toBeVisible();
+  await expect(page.getByRole("button", { name: "关闭图片预览" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(zoom).toBeFocused();
+  expect(await readableTextOffenders(page, ".playground-page")).toEqual([]);
+  await expectNoHorizontalOverflow(page);
+});
+
 test("深色工作方式区块的文字、图标与按钮保持可读对比度", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await installBaseMocks(page);

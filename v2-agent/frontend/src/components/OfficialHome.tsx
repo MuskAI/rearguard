@@ -3,6 +3,7 @@ import {
   ChevronDown,
   LogIn,
   Menu,
+  Sparkles,
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -19,6 +20,7 @@ interface Props {
   user: AccountUser | null;
   analyticsEnabled: boolean;
   onEnterWorkspace: () => void;
+  onPlayground: () => void;
   onDeveloper: (entry?: DeveloperEntry) => void;
   onLogin: () => void;
   onLogout: () => void;
@@ -85,6 +87,7 @@ export default function OfficialHome({
   user,
   analyticsEnabled,
   onEnterWorkspace,
+  onPlayground,
   onDeveloper,
   onLogin,
   onLogout,
@@ -171,6 +174,7 @@ export default function OfficialHome({
 
         <nav className="home-nav home-desktop-nav" aria-label="官网导航">
           {NAV_ITEMS.map((item) => <a key={item.href} href={item.href}>{item.label}</a>)}
+          <button type="button" className="home-playground-link" onClick={onPlayground}><Sparkles size={14} /><span>Playground</span></button>
           <div
             ref={developerRootRef}
             className={`home-developer-menu ${developerOpen ? "is-open" : ""}`}
@@ -265,6 +269,7 @@ export default function OfficialHome({
           {(phase) => (
             <nav ref={mobileNavRef} id="home-mobile-navigation" className="home-mobile-nav" aria-label="移动端官网导航" aria-hidden={!mobileNavOpen} data-presence={phase}>
               {NAV_ITEMS.map((item) => <a key={item.href} href={item.href} tabIndex={mobileNavOpen ? 0 : -1} onClick={() => setMobileNavOpen(false)}>{item.label}<ArrowRight size={16} /></a>)}
+              <button type="button" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => { setMobileNavOpen(false); onPlayground(); }}>Playground<ArrowRight size={16} /></button>
               <button type="button" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => openDeveloper("overview")}>开发者概览<ArrowRight size={16} /></button>
               <button type="button" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => openDeveloper("tester")}>在线调试<ArrowRight size={16} /></button>
               <button type="button" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => openDeveloper("docs")}>接入文档<ArrowRight size={16} /></button>

@@ -58,6 +58,7 @@ import DeveloperPlatform from "./components/DeveloperPlatform";
 import DocumentBatchResult from "./components/DocumentBatchResult";
 import HuijianBrand from "./components/HuijianBrand";
 import OfficialHome from "./components/OfficialHome";
+import Playground from "./components/Playground";
 import ResultFeedback from "./components/ResultFeedback";
 import {
   analyticsConsent,
@@ -67,6 +68,7 @@ import {
 import "./interaction.css";
 import "./experience.css";
 import "./c-scheme.css";
+import "./playground.css";
 
 const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 256 * 1024 * 1024;
@@ -76,7 +78,7 @@ const DOCUMENT_TASK_SESSION_KEY = "huijian-active-document-task";
 const ACCEPTED_FILES = "image/jpeg,image/png,image/webp,image/bmp,image/gif,image/heic,image/heif,.heic,.heif,video/mp4,video/quicktime,video/webm,application/pdf,.txt,.md,.csv,.json,.log,.docx,.pdf,.mp4,.mov,.webm";
 
 type UploadKind = "image" | "video" | "audio" | "document" | "unknown";
-type AppView = "home" | "workspace" | "developer";
+type AppView = "home" | "workspace" | "developer" | "playground";
 type FallbackOffer = {
   file: File;
   previewUrl?: string;
@@ -92,6 +94,7 @@ function documentSessionOwner(account: AccountUser | null) {
 
 function initialAppView(): AppView {
   const params = new URLSearchParams(window.location.search);
+  if (params.get("playground") === "1") return "playground";
   if (params.get("developer") === "1") return "developer";
   return params.get("workspace") === "1" ? "workspace" : "home";
 }
@@ -471,16 +474,28 @@ export default function App() {
   }, [authReady, user, view]);
 
   useEffect(() => {
-    document.title = view === "home" ? "慧鉴AI - 数字内容鉴伪" : view === "developer" ? "开发者平台 - 慧鉴AI" : "鉴伪工作台 - 慧鉴AI";
+    document.title = view === "home"
+      ? "慧鉴AI - 数字内容鉴伪"
+      : view === "developer"
+        ? "开发者平台 - 慧鉴AI"
+        : view === "playground"
+          ? "鉴伪 Playground - 慧鉴AI"
+          : "鉴伪工作台 - 慧鉴AI";
     window.requestAnimationFrame(() => {
-      const selector = view === "home" ? "#official-home-title" : view === "developer" ? ".developer-topbar h1" : ".topbar-title h1";
+      const selector = view === "home"
+        ? "#official-home-title"
+        : view === "developer"
+          ? ".developer-topbar h1"
+          : view === "playground"
+            ? "#playground-title"
+            : ".topbar-title h1";
       document.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
     });
   }, [view]);
 
   useEffect(() => {
     if (!analyticsEnabled || !authReady) return;
-    const page = view === "home" ? "home" : view === "developer" ? "developer" : "workspace";
+    const page = view === "home" ? "home" : view === "developer" ? "developer" : view === "playground" ? "playground" : "workspace";
     const trackingKey = `${page}:${user?.Userid ?? "guest"}`;
     if (lastTrackedPageRef.current === trackingKey) return;
     const forceNew = lastTrackedPageRef.current !== null;
@@ -562,11 +577,15 @@ export default function App() {
     url.searchParams.delete("workspace");
     url.searchParams.delete("developer");
     url.searchParams.delete("developerTab");
+    url.searchParams.delete("playground");
     if (nextView === "workspace") {
       url.searchParams.set("workspace", "1");
       url.hash = "";
     } else if (nextView === "developer") {
       url.searchParams.set("developer", "1");
+      url.hash = "";
+    } else if (nextView === "playground") {
+      url.searchParams.set("playground", "1");
       url.hash = "";
     } else {
       url.hash = "home";
@@ -578,6 +597,7 @@ export default function App() {
   const navigateToDeveloper = useCallback((tab: "overview" | "tester" | "docs" = "overview") => {
     const url = new URL(window.location.href);
     url.searchParams.delete("workspace");
+    url.searchParams.delete("playground");
     url.searchParams.set("developer", "1");
     url.searchParams.set("developerTab", tab);
     url.hash = "";
@@ -1237,6 +1257,7 @@ export default function App() {
           user={user}
           analyticsEnabled={analyticsEnabled}
           onEnterWorkspace={() => navigateToView("workspace")}
+          onPlayground={() => navigateToView("playground")}
           onDeveloper={(entry) => {
             navigateToDeveloper(entry);
             if (!user) setAuthOpen(true);
@@ -1258,6 +1279,16 @@ export default function App() {
           onHome={() => navigateToView("home")}
           onWorkspace={() => navigateToView("workspace")}
           onLogout={logout}
+        />
+      ) : view === "playground" ? (
+        <Playground
+          authReady={authReady}
+          user={user}
+          onHome={() => navigateToView("home")}
+          onWorkspace={() => navigateToView("workspace")}
+          onDeveloper={() => navigateToDeveloper("overview")}
+          onLogin={() => setAuthOpen(true)}
+          onLogout={() => void logout()}
         />
       ) : (
       <div className={`agent-app ${historyLayoutClass}`}>
