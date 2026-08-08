@@ -346,7 +346,7 @@ export default function OfficialHome({
         <section className="home-workflow" id="workflow" aria-labelledby="home-workflow-title">
           <div className="home-workflow-heading" data-reveal>
             <p>工作方式</p>
-            <h2 id="home-workflow-title">三步完成一次可复核判断。</h2>
+            <h2 id="home-workflow-title">三步完成一次<br />可复核判断。</h2>
             <button type="button" onClick={onEnterWorkspace}>进入统一工作台 <ArrowRight size={18} /></button>
           </div>
           <ol>

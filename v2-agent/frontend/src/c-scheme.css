@@ -614,6 +614,71 @@
   color: var(--brand-c-blue);
 }
 
+/* The workflow is the only inverse section on the public site. Keep its
+   palette self-contained so light-surface typography rules cannot leak in. */
+.official-site.home-v3 .home-workflow {
+  --workflow-bg: #16242b;
+  --workflow-heading: #f7fafb;
+  --workflow-copy: #c7d3d8;
+  --workflow-number: #91bcc4;
+  --workflow-blue: #84aef2;
+  --workflow-green: #45bbae;
+  color: var(--workflow-heading);
+  background: var(--workflow-bg);
+}
+
+.official-site.home-v3 .home-workflow-heading > p {
+  color: var(--workflow-green);
+}
+
+.official-site.home-v3 .home-workflow-heading h2,
+.official-site.home-v3 .home-workflow li strong {
+  color: var(--workflow-heading);
+}
+
+.official-site.home-v3 .home-workflow li p {
+  color: var(--workflow-copy);
+}
+
+.official-site.home-v3 .home-workflow ol {
+  border-top-color: rgba(199, 211, 216, .3);
+}
+
+.official-site.home-v3 .home-workflow li {
+  border-bottom-color: rgba(199, 211, 216, .3);
+}
+
+.official-site.home-v3 .home-workflow li > span {
+  color: var(--workflow-number);
+}
+
+.official-site.home-v3 .home-workflow .brand-art-icon.brand-system-c-icon {
+  color: var(--workflow-blue);
+}
+
+.official-site.home-v3 .home-workflow .brand-glyph-accent {
+  color: var(--workflow-green);
+  stroke: var(--workflow-green);
+}
+
+.official-site.home-v3 .home-workflow-heading button {
+  border-color: var(--brand-c-blue);
+  color: #fff;
+  background: var(--brand-c-blue);
+  box-shadow: 0 8px 22px rgba(5, 13, 20, .24);
+}
+
+.official-site.home-v3 .home-workflow-heading button:hover {
+  border-color: #6f94d3;
+  color: #fff;
+  background: var(--brand-c-blue-strong);
+  box-shadow: 0 11px 28px rgba(5, 13, 20, .3);
+}
+
+.official-site.home-v3 .home-workflow-heading button:focus-visible {
+  outline-color: rgba(132, 174, 242, .72);
+}
+
 .agent-app .agent-workspace {
   background: var(--brand-c-mist);
 }

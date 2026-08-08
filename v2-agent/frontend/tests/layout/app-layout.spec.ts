@@ -339,6 +339,60 @@ test("官网与统一鉴伪入口不存在低于 12px 的可见文字", async ({
   expect(await readableTextOffenders(page, ".agent-app")).toEqual([]);
 });
 
+test("深色工作方式区块的文字、图标与按钮保持可读对比度", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await installBaseMocks(page);
+  await page.goto("/");
+
+  const workflow = page.locator(".home-workflow");
+  await workflow.scrollIntoViewIfNeeded();
+  await expect(workflow).toBeVisible();
+  const results = await workflow.evaluate((section) => {
+    const parseRgb = (value: string) => (value.match(/[\d.]+/g) || [])
+      .slice(0, 3)
+      .map((channel) => Number(channel) / 255);
+    const luminance = (value: string) => {
+      const [red, green, blue] = parseRgb(value).map((channel) => (
+        channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+      ));
+      return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+    };
+    const ratio = (foreground: string, background: string) => {
+      const lighter = Math.max(luminance(foreground), luminance(background));
+      const darker = Math.min(luminance(foreground), luminance(background));
+      return (lighter + 0.05) / (darker + 0.05);
+    };
+    const sectionBackground = getComputedStyle(section).backgroundColor;
+    const samples = [
+      ["eyebrow", ".home-workflow-heading > p", sectionBackground, 4.5],
+      ["heading", ".home-workflow-heading h2", sectionBackground, 4.5],
+      ["step number", ".home-workflow li > span", sectionBackground, 4.5],
+      ["step title", ".home-workflow li strong", sectionBackground, 4.5],
+      ["step description", ".home-workflow li p", sectionBackground, 4.5],
+      ["step icon", ".home-workflow .brand-art-icon", sectionBackground, 3],
+    ] as const;
+    const measured = samples.map(([name, selector, background, minimum]) => {
+      const element = section.querySelector<HTMLElement>(selector)!;
+      const foreground = getComputedStyle(element).color;
+      return { name, foreground, background, minimum, ratio: ratio(foreground, background) };
+    });
+    const button = section.querySelector<HTMLElement>(".home-workflow-heading button")!;
+    const buttonStyle = getComputedStyle(button);
+    measured.push({
+      name: "workflow button",
+      foreground: buttonStyle.color,
+      background: buttonStyle.backgroundColor,
+      minimum: 4.5,
+      ratio: ratio(buttonStyle.color, buttonStyle.backgroundColor),
+    });
+    return measured;
+  });
+
+  for (const result of results) {
+    expect(result.ratio, `${result.name} 对比度仅 ${result.ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(result.minimum);
+  }
+});
+
 test("PDF 文档会展示逐图检测结果并支持放大复核", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await installBaseMocks(page);
