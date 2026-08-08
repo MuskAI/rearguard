@@ -1703,6 +1703,19 @@
   box-shadow: 0 14px 32px rgba(16, 47, 57, 0.09);
 }
 
+.agent-progress-message > .agent-avatar {
+  overflow: visible;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.agent-progress-message > .agent-avatar .brand-agent-portrait {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .progress-heading {
   grid-template-columns: 34px minmax(0, 1fr) auto;
   gap: 12px;
@@ -1713,6 +1726,57 @@
   height: 34px;
   color: #0b7773;
   background: #e9f4f3;
+}
+
+.progress-scan-artwork {
+  position: relative;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid #cbd8df;
+  border-radius: 7px;
+  box-shadow: 0 3px 8px rgba(23, 33, 43, .08);
+}
+
+.progress-scan-artwork > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.progress-scan-artwork::after {
+  position: absolute;
+  top: 6px;
+  right: 5px;
+  left: 5px;
+  height: 2px;
+  content: "";
+  background: #0b8b7e;
+  border-radius: 2px;
+  box-shadow: 0 0 5px rgba(11, 139, 126, .38);
+}
+
+.progress-scan-artwork.is-active::after {
+  animation: progress-evidence-scan 1.25s cubic-bezier(.45, 0, .25, 1) infinite alternate;
+}
+
+.progress-scan-artwork.is-complete::after {
+  top: 10px;
+  right: auto;
+  left: 11px;
+  width: 9px;
+  height: 5px;
+  background: transparent;
+  border-bottom: 2px solid #087267;
+  border-left: 2px solid #087267;
+  border-radius: 0;
+  box-shadow: none;
+  transform: rotate(-45deg);
+}
+
+@keyframes progress-evidence-scan {
+  from { transform: translateY(2px); }
+  to { transform: translateY(16px); }
 }
 
 .progress-heading strong {
@@ -1827,15 +1891,10 @@
   color: #fff;
   background: #df634d;
   border-color: #df634d;
-  box-shadow: 0 0 0 5px rgba(223, 99, 77, 0.12);
-  animation: progress-stage-pulse 1.8s ease-in-out infinite;
+  box-shadow: 0 0 0 4px rgba(223, 99, 77, 0.1);
 }
 
 .progress-system > span.active > b { color: #b44d3b; }
-
-@keyframes progress-stage-pulse {
-  50% { box-shadow: 0 0 0 9px rgba(223, 99, 77, 0.04); transform: scale(1.04); }
-}
 
 @media (max-width: 760px) {
   .agent-app,

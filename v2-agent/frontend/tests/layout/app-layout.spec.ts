@@ -627,6 +627,13 @@ test("检测进度卡使用清晰的正文级字号", async ({ page }) => {
   const panel = page.locator(".progress-panel");
   await expect(panel).toBeVisible();
   await expect(panel.locator(".progress-heading strong")).toHaveText(/正在核验内容真实性|任务仍在运行/);
+  const agentArtwork = page.locator(".agent-progress-message .brand-agent-portrait");
+  const scanArtwork = panel.locator(".progress-scan-artwork > img");
+  await expect(agentArtwork).toBeVisible();
+  await expect(scanArtwork).toBeVisible();
+  expect(await agentArtwork.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth === 256 && image.naturalHeight === 256)).toBeTruthy();
+  expect(await scanArtwork.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth === 256 && image.naturalHeight === 256)).toBeTruthy();
+  await expect(panel.locator(".progress-heading .spin, .progress-heading svg")).toHaveCount(0);
   const sizes = await panel.evaluate((element) => {
     const size = (selector: string) => Number.parseFloat(getComputedStyle(element.querySelector<HTMLElement>(selector)!).fontSize);
     return {

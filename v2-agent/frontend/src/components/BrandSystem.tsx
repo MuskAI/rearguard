@@ -233,26 +233,15 @@ export function AgentAvatar({ state = "idle", size = 40, className = "", label }
   };
 
   return (
-    <svg
+    <span
       className={`brand-avatar brand-agent-avatar brand-agent-avatar-${state} ${className}`.trim()}
-      viewBox="0 0 40 40"
-      width={size}
-      height={size}
+      style={{ width: size, height: size }}
       role="img"
       aria-label={label || `小鉴，${stateLabels[state]}`}
-      focusable="false"
     >
-      <rect className="brand-agent-shell" x="3" y="3" width="34" height="34" rx="9" />
-      <path className="brand-agent-rail" d="M7 12V8a1 1 0 0 1 1-1h4M33 28v4a1 1 0 0 1-1 1h-4" />
-      <circle className="brand-agent-lens-outer" cx="20" cy="20" r="10" />
-      <circle className="brand-agent-lens-inner" cx="20" cy="20" r="5" />
-      <path className="brand-agent-aperture" d="m20 15 4.3 2.5v5L20 25l-4.3-2.5v-5L20 15Z" />
-      <circle className="brand-agent-state-light" cx="31.5" cy="8.5" r="2.25" />
-      {state === "receiving" && <path className="brand-agent-state-glyph" d="M20 10v5m-2-2 2 2 2-2" />}
-      {state === "processing" && <circle className="brand-agent-processing-ring" cx="20" cy="20" r="13" />}
-      {state === "complete" && <path className="brand-agent-state-glyph" d="m27.5 29 1.6 1.6 3.4-3.7" />}
-      {state === "error" && <path className="brand-agent-state-glyph" d="M29.5 27.5v3m0 2h.01" />}
-    </svg>
+      <img className="brand-agent-portrait" src="/brand/huijian-agent-portrait-gpt.webp" width={256} height={256} alt="" aria-hidden="true" draggable={false} />
+      <i className="brand-agent-state-emblem" aria-hidden="true" />
+    </span>
   );
 }
 

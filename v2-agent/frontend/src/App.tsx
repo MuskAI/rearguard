@@ -1,8 +1,6 @@
 import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from "react";
 import {
-  Bot,
   Check,
-  LoaderCircle,
   LogIn,
   PanelLeftOpen,
   Paperclip,
@@ -1339,7 +1337,7 @@ export default function App() {
 
           {!guestLimitReached && !pendingFile && !outcome && !documentTask && errorMessage && (
             <div className="agent-error-message workspace-error-state" role="alert">
-              <span><Bot size={18} /></span>
+              <span><AgentAvatar size={34} state="error" label="小鉴提示工作台连接异常" /></span>
               <div>
                 <strong>工作台需要重新连接</strong>
                 <p>{errorMessage}</p>
@@ -1382,7 +1380,7 @@ export default function App() {
               )}
               {errorMessage && (
                 <div className="agent-error-message" role="alert">
-                  <span><Bot size={18} /></span>
+                  <span><AgentAvatar size={34} state="error" label="小鉴提示任务异常" /></span>
                   <div><strong>这次任务没有完成</strong><p>{errorMessage}</p><button type="button" className="text-button" onClick={retryCurrentFile}><RefreshCw size={15} /> {retryFileRef.current ? "重试当前文件" : "重新选择文件"}</button></div>
                 </div>
               )}
@@ -1538,7 +1536,13 @@ function AgentProgressPanel({ progress, onStopWaiting }: { progress: AgentProgre
     <div className="agent-progress-message" role="status" aria-live="polite">
       <div className="agent-avatar"><AgentAvatar size={40} state={current.percent >= 100 ? "complete" : current.stage === "validate" ? "receiving" : "processing"} /></div>
       <div className="progress-panel">
-        <div className="progress-heading"><span><LoaderCircle size={19} className={current.percent < 100 ? "spin" : ""} /></span><div><strong>{current.title}</strong><p>{current.detail}</p></div><b>{Math.round(current.percent)}%</b></div>
+        <div className="progress-heading">
+          <span className={`progress-scan-artwork ${current.percent >= 100 ? "is-complete" : "is-active"}`}>
+            <img src="/brand/huijian-progress-scan-gpt.webp" width={256} height={256} alt="" aria-hidden="true" draggable={false} />
+          </span>
+          <div><strong>{current.title}</strong><p>{current.detail}</p></div>
+          <b>{Math.round(current.percent)}%</b>
+        </div>
         <div className="progress-track" role="progressbar" aria-label={current.title} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(current.percent)}><i style={{ width: `${current.percent}%` }} /></div>
         <div className="progress-stages progress-system">
           {stages.map((stage, index) => {
