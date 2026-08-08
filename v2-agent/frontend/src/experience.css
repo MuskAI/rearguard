@@ -2947,6 +2947,11 @@
 }
 
 .home-v3 [data-reveal].is-visible { opacity: 1; transform: translateY(0); }
+.home-v3 .home-value-rail[data-reveal] {
+  opacity: 1;
+  transform: none;
+  transition: none;
+}
 .home-v3 .home-capability-list article:nth-child(2),
 .home-v3 .home-scenario-grid article:nth-child(2),
 .home-v3 .home-workflow li:nth-child(2) { transition-delay: 70ms; }
