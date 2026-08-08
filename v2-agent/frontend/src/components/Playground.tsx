@@ -1,45 +1,27 @@
-import {
-  ArrowRight,
-  Check,
-  Clock3,
-  Code2,
-  Eye,
-  House,
-  LogIn,
-  Maximize2,
-  RefreshCw,
-  Sparkles,
-  Target,
-  X,
-  Zap,
-} from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowRight, Heart, House, LogIn, RefreshCw, Sparkles, Target } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { AccountUser } from "../api";
 import AccountMenu from "./AccountMenu";
 import HuijianBrand from "./HuijianBrand";
 
-type GameMode = "relaxed" | "timed";
+type Screen = "start" | "play" | "finish";
 
-type RealSample = {
-  id: string;
-  src: string;
-};
-
-type AiSample = {
-  id: string;
-  src: string;
-  title: string;
-  clues: [string, string, string];
-};
-
-type Candidate = {
+type Sample = {
   id: string;
   src: string;
   isAi: boolean;
-  aiSample?: AiSample;
+  title: string;
+  clue: string;
 };
 
-interface Props {
+type LeaderboardEntry = {
+  id: string;
+  name: string;
+  score: number;
+  correct: number;
+};
+
+type Props = {
   authReady: boolean;
   user: AccountUser | null;
   onHome: () => void;
@@ -47,59 +29,31 @@ interface Props {
   onDeveloper: () => void;
   onLogin: () => void;
   onLogout: () => void;
-}
+};
 
-const TOTAL_ROUNDS = 5;
-const ROUND_SECONDS = 30;
+const ROUNDS = 8;
+const START_LIVES = 3;
 const BEST_SCORE_KEY = "huijian-playground-best-score";
+const LEADERBOARD_KEY = "huijian-playground-leaderboard";
 
-const REAL_SAMPLES: RealSample[] = [
-  { id: "real-car", src: "/playground/samples/sample-01.webp" },
-  { id: "real-cat", src: "/playground/samples/sample-03.webp" },
-  { id: "real-coffee", src: "/playground/samples/sample-04.webp" },
-  { id: "real-dog", src: "/playground/samples/sample-06.webp" },
-  { id: "real-forest", src: "/playground/samples/sample-07.webp" },
-  { id: "real-fox", src: "/playground/samples/sample-08.webp" },
-  { id: "real-landscape", src: "/playground/samples/sample-10.webp" },
-  { id: "real-meadow", src: "/playground/samples/sample-11.webp" },
-  { id: "real-mountain", src: "/playground/samples/sample-12.webp" },
-  { id: "real-plant", src: "/playground/samples/sample-14.webp" },
-  { id: "real-retriever", src: "/playground/samples/sample-15.webp" },
-  { id: "real-sunset", src: "/playground/samples/sample-17.webp" },
-];
+const REAL_IMAGES = [
+  ["real-car", "sample-01.webp", "街头汽车", "真实照片里的材质和反光并不完美，但彼此关系自然。"],
+  ["real-cat", "sample-03.webp", "窗边的猫", "毛发、眼睛反光和窗框遮挡保留了真实镜头的细碎变化。"],
+  ["real-coffee", "sample-04.webp", "三杯咖啡", "杯沿、手指和液体边界都有真实拍摄留下的轻微不规则。"],
+  ["real-dog", "sample-06.webp", "公园里的狗", "毛发和背景的焦外纹理自然变化，没有大面积复制感。"],
+  ["real-mountain", "sample-12.webp", "山谷晨光", "山脊、云层与树线的层次关系连续，没有明显断裂。"],
+  ["real-fox", "sample-08.webp", "林间的狐狸", "主体边缘和背景的遮挡关系自然，局部细节没有机械粘连。"],
+  ["real-plant", "sample-14.webp", "窗台植物", "叶片纹理和光影变化各不相同，没有模板式重复。"],
+  ["real-sunset", "sample-17.webp", "海边日落", "远近景纹理随距离自然衰减，光线方向保持一致。"],
+] as const;
 
-const AI_SAMPLES: AiSample[] = [
-  {
-    id: "ai-cafe",
-    src: "/playground/samples/sample-02.webp",
-    title: "街角咖啡馆",
-    clues: ["菜单字符看似规整，但笔画结构无法形成可读文字", "玻璃倒影与室内物体的位置关系不一致", "自行车辐条与车架的连接细节不连贯"],
-  },
-  {
-    id: "ai-cyclists",
-    src: "/playground/samples/sample-05.webp",
-    title: "清晨骑行",
-    clues: ["自行车链条与辐条出现不合理的连接", "手部和车把接触处的边界含混", "远处骑行者与背景轮廓局部融合"],
-  },
-  {
-    id: "ai-breakfast",
-    src: "/playground/samples/sample-09.webp",
-    title: "早餐桌面",
-    clues: ["餐具齿数与边缘结构存在异常", "浆果的纹理和排列出现重复模式", "报纸字符具有文字外观，却无法正常阅读"],
-  },
-  {
-    id: "ai-flower-market",
-    src: "/playground/samples/sample-13.webp",
-    title: "花市摊位",
-    clues: ["手指与花茎的交界处发生粘连", "部分花瓣形态呈现机械式重复", "价签字符结构残缺且语义不成立"],
-  },
-  {
-    id: "ai-station",
-    src: "/playground/samples/sample-16.webp",
-    title: "车站候车厅",
-    clues: ["时刻表文字不可读，行列结构也不稳定", "地面反射与人物位置没有完全对应", "行李箱拉杆在局部出现断裂和变形"],
-  },
-];
+const AI_IMAGES = [
+  ["ai-cafe", "sample-02.webp", "街角咖啡馆", "菜单字符无法形成可读文字，玻璃倒影和自行车细节也不连贯。"],
+  ["ai-cyclists", "sample-05.webp", "清晨骑行", "链条与辐条出现异常连接，手部和车把的边界发生粘连。"],
+  ["ai-breakfast", "sample-09.webp", "早餐桌面", "餐具结构和报纸字符不稳定，浆果纹理出现重复模式。"],
+  ["ai-flower-market", "sample-13.webp", "花市摊位", "手指与花茎交界处粘连，价签字符结构残缺。"],
+  ["ai-station", "sample-16.webp", "车站候车厅", "时刻表文字不可读，行李箱拉杆局部断裂变形。"],
+] as const;
 
 function randomGenerator(seed: number) {
   let state = seed >>> 0;
@@ -121,22 +75,22 @@ function shuffled<T>(items: T[], random: () => number) {
   return copy;
 }
 
-function buildRounds(seed: number): Candidate[][] {
+function makeSample(entry: readonly [string, string, string, string], isAi: boolean): Sample {
+  return { id: entry[0], src: `/playground/samples/${entry[1]}`, title: entry[2], isAi, clue: entry[3] };
+}
+
+function buildRounds(seed: number) {
   const random = randomGenerator(seed);
-  const aiOrder = shuffled(AI_SAMPLES, random);
-  return aiOrder.slice(0, TOTAL_ROUNDS).map((aiSample) => {
-    const realCandidates = shuffled(REAL_SAMPLES, random).slice(0, 5).map((sample) => ({
-      ...sample,
-      isAi: false,
-    }));
-    return shuffled<Candidate>([
-      ...realCandidates,
-      { ...aiSample, isAi: true, aiSample },
-    ], random);
+  const realPool = REAL_IMAGES.map((entry) => makeSample(entry, false));
+  const aiPool = shuffled(AI_IMAGES.map((entry) => makeSample(entry, true)), random);
+  return Array.from({ length: ROUNDS }, (_, roundIndex) => {
+    const ai = aiPool[roundIndex % aiPool.length];
+    const real = shuffled(realPool, random).slice(0, 5);
+    return shuffled([...real, ai], random);
   });
 }
 
-function storedBestScore() {
+function readBestScore() {
   try {
     return Number(window.localStorage.getItem(BEST_SCORE_KEY) || 0);
   } catch {
@@ -144,41 +98,55 @@ function storedBestScore() {
   }
 }
 
-export default function Playground({
-  authReady,
-  user,
-  onHome,
-  onWorkspace,
-  onDeveloper,
-  onLogin,
-  onLogout,
-}: Props) {
+function readLeaderboard(): LeaderboardEntry[] {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(LEADERBOARD_KEY) || "[]");
+    return Array.isArray(saved)
+      ? saved.filter((entry) => entry && typeof entry.name === "string" && typeof entry.score === "number").sort((a, b) => b.score - a.score || b.correct - a.correct).slice(0, 10)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+export default function Playground({ authReady, user, onHome, onWorkspace, onDeveloper, onLogin, onLogout }: Props) {
   const [seed, setSeed] = useState(() => Date.now());
-  const [mode, setMode] = useState<GameMode>("relaxed");
+  const [screen, setScreen] = useState<Screen>("start");
   const [roundIndex, setRoundIndex] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [revealed, setRevealed] = useState(false);
-  const [timedOut, setTimedOut] = useState(false);
-  const [secondsLeft, setSecondsLeft] = useState(ROUND_SECONDS);
+  const [lastCorrect, setLastCorrect] = useState(false);
   const [score, setScore] = useState(0);
-  const [correctCount, setCorrectCount] = useState(0);
+  const [lives, setLives] = useState(START_LIVES);
   const [streak, setStreak] = useState(0);
-  const [lastEarned, setLastEarned] = useState(0);
-  const [finished, setFinished] = useState(false);
-  const [bestScore, setBestScore] = useState(storedBestScore);
-  const [preview, setPreview] = useState<{ candidate: Candidate; index: number } | null>(null);
-  const roundHeadingRef = useRef<HTMLHeadingElement>(null);
-  const closePreviewRef = useRef<HTMLButtonElement>(null);
-  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const [correctCount, setCorrectCount] = useState(0);
+  const [bestScore, setBestScore] = useState(readBestScore);
+  const [leaderboard, setLeaderboard] = useState(readLeaderboard);
+  const [playerName, setPlayerName] = useState("");
+  const [submittedId, setSubmittedId] = useState<string | null>(null);
 
   const rounds = useMemo(() => buildRounds(seed), [seed]);
-  const round = rounds[roundIndex] || rounds[0];
-  const aiCandidate = round.find((candidate) => candidate.isAi)!;
-  const selectedWasCorrect = Boolean(!timedOut && selectedId && selectedId === aiCandidate.id);
-  const modeLocked = roundIndex > 0 || selectedId !== null || revealed;
+  const round = rounds[roundIndex];
+  const aiIndex = round.findIndex((sample) => sample.isAi);
+  const aiSample = round[aiIndex];
+  const gameIsOver = roundIndex === ROUNDS - 1 || lives === 0;
+
+  const startGame = useCallback(() => {
+    setSeed(Date.now() + Math.floor(Math.random() * 100_000));
+    setScreen("play");
+    setRoundIndex(0);
+    setSelectedId(null);
+    setRevealed(false);
+    setScore(0);
+    setLives(START_LIVES);
+    setStreak(0);
+    setCorrectCount(0);
+    setPlayerName("");
+    setSubmittedId(null);
+  }, []);
 
   const finishGame = useCallback(() => {
-    setFinished(true);
+    setScreen("finish");
     setBestScore((current) => {
       const next = Math.max(current, score);
       try {
@@ -190,265 +158,76 @@ export default function Playground({
     });
   }, [score]);
 
-  const closePreview = useCallback(() => {
-    const previousFocus = previousFocusRef.current;
-    setPreview(null);
-    window.requestAnimationFrame(() => previousFocus?.focus());
-  }, []);
-
-  const nextRound = useCallback(() => {
-    if (roundIndex >= TOTAL_ROUNDS - 1) {
-      finishGame();
-      return;
-    }
-    setRoundIndex((current) => current + 1);
-    setSelectedId(null);
-    setRevealed(false);
-    setTimedOut(false);
-    setSecondsLeft(ROUND_SECONDS);
-    setLastEarned(0);
-    window.requestAnimationFrame(() => roundHeadingRef.current?.focus({ preventScroll: true }));
-  }, [finishGame, roundIndex]);
-
-  const confirmSelection = useCallback(() => {
-    if (!selectedId || revealed || finished) return;
-    const correct = selectedId === aiCandidate.id;
-    const earned = correct ? 100 + (mode === "timed" ? secondsLeft * 2 : 0) : 0;
+  const chooseImage = useCallback((sample: Sample) => {
+    if (revealed || screen !== "play") return;
+    const correct = sample.isAi;
+    setSelectedId(sample.id);
     setRevealed(true);
-    setLastEarned(earned);
-    if (correct) {
-      setScore((current) => current + earned);
-      setCorrectCount((current) => current + 1);
-      setStreak((current) => current + 1);
-    } else {
-      setStreak(0);
-    }
-  }, [aiCandidate.id, finished, mode, revealed, secondsLeft, selectedId]);
-
-  const restart = useCallback((nextMode = mode) => {
-    setSeed(Date.now() + Math.floor(Math.random() * 100_000));
-    setMode(nextMode);
-    setRoundIndex(0);
-    setSelectedId(null);
-    setRevealed(false);
-    setTimedOut(false);
-    setSecondsLeft(ROUND_SECONDS);
-    setScore(0);
-    setCorrectCount(0);
-    setStreak(0);
-    setLastEarned(0);
-    setFinished(false);
-    setPreview(null);
-    window.requestAnimationFrame(() => roundHeadingRef.current?.focus({ preventScroll: true }));
-  }, [mode]);
+    setLastCorrect(correct);
+    setStreak((current) => (correct ? current + 1 : 0));
+    setScore((current) => current + (correct ? 100 + streak * 25 : 0));
+    if (correct) setCorrectCount((current) => current + 1);
+    else setLives((current) => Math.max(0, current - 1));
+  }, [revealed, screen, streak]);
 
   useEffect(() => {
-    if (mode !== "timed" || revealed || finished) return;
-    if (secondsLeft <= 0) {
-      setTimedOut(true);
-      setRevealed(true);
-      setStreak(0);
-      return;
-    }
-    const timer = window.setTimeout(() => setSecondsLeft((current) => current - 1), 1000);
+    if (screen !== "play" || !revealed) return;
+    const timer = window.setTimeout(() => {
+      if (gameIsOver) {
+        finishGame();
+        return;
+      }
+      setRoundIndex((current) => current + 1);
+      setSelectedId(null);
+      setRevealed(false);
+    }, 1050);
     return () => window.clearTimeout(timer);
-  }, [finished, mode, revealed, secondsLeft]);
+  }, [finishGame, gameIsOver, revealed, screen]);
 
   useEffect(() => {
-    const handleKeyboard = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && preview) {
-        event.preventDefault();
-        closePreview();
-        return;
-      }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (screen !== "play" || revealed) return;
       const target = event.target as HTMLElement | null;
-      if (target?.closest("button, a, input, textarea, select, [contenteditable='true']")) return;
-      if (preview || finished) return;
-      const candidateIndex = Number(event.key) - 1;
-      if (!revealed && candidateIndex >= 0 && candidateIndex < round.length) {
-        event.preventDefault();
-        setSelectedId(round[candidateIndex].id);
-        return;
-      }
-      if (event.key !== "Enter") return;
-      event.preventDefault();
-      if (revealed) nextRound();
-      else confirmSelection();
+      if (target?.closest("button, a, input, textarea, select")) return;
+      const index = Number(event.key) - 1;
+      if (index >= 0 && index < round.length) chooseImage(round[index]);
     };
-    window.addEventListener("keydown", handleKeyboard);
-    return () => window.removeEventListener("keydown", handleKeyboard);
-  }, [closePreview, confirmSelection, finished, nextRound, preview, revealed, round]);
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [chooseImage, revealed, round, screen]);
 
-  useEffect(() => {
-    if (!preview) return;
-    closePreviewRef.current?.focus();
-  }, [preview]);
+  const submitScore = useCallback(() => {
+    if (submittedId) return;
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const entry: LeaderboardEntry = { id, name: playerName.trim().slice(0, 12) || "匿名玩家", score, correct: correctCount };
+    const next = [...leaderboard, entry].sort((a, b) => b.score - a.score || b.correct - a.correct).slice(0, 10);
+    setLeaderboard(next);
+    setSubmittedId(id);
+    try {
+      window.localStorage.setItem(LEADERBOARD_KEY, JSON.stringify(next));
+    } catch {
+      // The local leaderboard still works for this session.
+    }
+  }, [correctCount, leaderboard, playerName, score, submittedId]);
 
-  function openPreview(candidate: Candidate, index: number, trigger: HTMLElement) {
-    previousFocusRef.current = trigger;
-    setPreview({ candidate, index });
-  }
-
-  function candidateState(candidate: Candidate) {
-    if (!revealed) return selectedId === candidate.id ? "selected" : "idle";
-    if (candidate.isAi) return "answer";
-    if (selectedId === candidate.id) return "wrong";
-    return "real";
-  }
+  const playerRank = submittedId ? leaderboard.findIndex((entry) => entry.id === submittedId) + 1 : 0;
 
   return (
     <div className="playground-page">
       <header className="playground-header">
         <HuijianBrand onClick={onHome} />
-        <nav className="playground-nav" aria-label="Playground 页面导航">
-          <button type="button" onClick={onHome}><House size={17} />官网首页</button>
-          <button type="button" className="is-active" aria-current="page"><Sparkles size={17} />Playground</button>
-          <button type="button" onClick={onDeveloper}><Code2 size={17} />开发者平台</button>
-        </nav>
-        <div className="playground-header-actions">
-          {authReady && (user ? (
-            <AccountMenu compact user={user} onWorkspace={onWorkspace} onDeveloper={onDeveloper} onLogout={onLogout} />
-          ) : (
-            <button type="button" className="playground-login" aria-label="登录账号" onClick={onLogin}><LogIn size={17} /><span>登录</span></button>
-          ))}
-          <button type="button" className="playground-workspace" onClick={onWorkspace}>开始鉴伪<ArrowRight size={17} /></button>
-        </div>
+        <nav className="playground-nav" aria-label="Playground 页面导航"><button type="button" onClick={onHome}><House size={16} />官网首页</button><button type="button" className="is-active" aria-current="page"><Sparkles size={16} />小游戏</button><button type="button" onClick={onDeveloper}>开发者平台</button></nav>
+        <div className="playground-header-actions">{authReady && (user ? <AccountMenu compact user={user} onWorkspace={onWorkspace} onDeveloper={onDeveloper} onLogout={onLogout} /> : <button type="button" className="playground-login" aria-label="登录账号" onClick={onLogin}><LogIn size={16} /><span>登录</span></button>)}<button type="button" className="playground-workspace" onClick={onWorkspace}>开始鉴伪<ArrowRight size={16} /></button></div>
       </header>
 
       <main className="playground-main">
-        <section className="playground-intro" aria-labelledby="playground-title">
-          <div>
-            <p className="playground-eyebrow"><Sparkles size={15} /> 慧鉴实验室 · 第一个小游戏</p>
-            <h1 id="playground-title" tabIndex={-1}>找出那张 AI 图</h1>
-            <p>六张图片中只有一张由 AI 生成。先凭观察做出选择，再查看值得复核的细节。</p>
-          </div>
-          <dl className="playground-stats" aria-label="本局统计">
-            <div><dt>轮次</dt><dd>{finished ? TOTAL_ROUNDS : roundIndex + 1}<small> / {TOTAL_ROUNDS}</small></dd></div>
-            <div><dt>得分</dt><dd>{score}</dd></div>
-            <div><dt>连对</dt><dd>{streak}</dd></div>
-            <div><dt>最佳</dt><dd>{bestScore}</dd></div>
-          </dl>
-        </section>
+        {screen === "start" && <section className="simple-start" aria-labelledby="playground-title"><p className="simple-eyebrow"><Sparkles size={15} /> AI IMAGE SPOTTER</p><h1 id="playground-title">找出那张 AI 图</h1><p className="simple-lead">六张图片里，只有一张不是实拍。点一下，看看你能连中几轮。</p><div className="simple-rules"><span><strong>8</strong> 轮</span><span><strong>3</strong> 次机会</span><span><strong>1</strong> 个答案</span></div><button type="button" className="simple-start-button" onClick={startGame}>开始游戏<ArrowRight size={20} /></button><p className="simple-hint">只看图，不看标签。按 1–6 也可以选择。</p></section>}
 
-        {!finished ? (
-          <section className="playground-game" aria-labelledby="playground-round-title">
-            <div className="playground-toolbar">
-              <div className="playground-mode-group">
-                <span>挑战方式</span>
-                <div className="playground-segmented" aria-label="选择挑战方式">
-                  <button type="button" className={mode === "relaxed" ? "is-selected" : ""} aria-pressed={mode === "relaxed"} disabled={modeLocked} onClick={() => restart("relaxed")}><Eye size={16} />轻松</button>
-                  <button type="button" className={mode === "timed" ? "is-selected" : ""} aria-pressed={mode === "timed"} disabled={modeLocked} onClick={() => restart("timed")}><Clock3 size={16} />计时</button>
-                </div>
-                <small>{modeLocked ? "本局模式已锁定" : "首轮选择后锁定"}</small>
-              </div>
+        {screen === "play" && <section className="simple-game" aria-labelledby="round-title"><header className="simple-game-header"><div className="round-count"><span>ROUND</span><strong>{String(roundIndex + 1).padStart(2, "0")}</strong><small>/ {ROUNDS}</small></div><div className="round-progress" aria-label={`第 ${roundIndex + 1} 轮，共 ${ROUNDS} 轮`}>{Array.from({ length: ROUNDS }, (_, index) => <i key={index} className={index < roundIndex ? "is-done" : index === roundIndex ? "is-current" : ""} />)}</div><div className="game-stats"><span className="streak-stat">{streak > 1 ? `连中 ${streak}` : "先赢一轮"}</span><span className="life-stat" aria-label={`剩余 ${lives} 次机会`}>{Array.from({ length: START_LIVES }, (_, index) => <Heart key={index} size={17} fill={index < lives ? "currentColor" : "none"} className={index < lives ? "is-alive" : "is-lost"} />)}</span><strong>{score}</strong></div></header><div className="simple-question"><h2 id="round-title">哪一张是 AI 生成？</h2><p>{revealed ? (lastCorrect ? "找到了。下一轮继续。" : "这次看走眼了，答案已经揭晓。") : "只做一个选择，马上揭晓。"}</p></div><div className="simple-grid">{round.map((sample, index) => { const state = !revealed ? (selectedId === sample.id ? "selected" : "idle") : sample.isAi ? "answer" : selectedId === sample.id ? "wrong" : "muted"; return <button key={sample.id} type="button" className="simple-card" data-state={state} aria-label={`选择图片 ${index + 1}`} aria-pressed={selectedId === sample.id} disabled={revealed} onClick={() => chooseImage(sample)}><img src={sample.src} alt={`候选图片 ${index + 1}`} width={640} height={480} draggable={false} /><span className="card-number">{String(index + 1).padStart(2, "0")}</span>{revealed && <span className={`card-answer ${sample.isAi ? "is-ai" : "is-real"}`}>{sample.isAi ? "AI 生成" : "实拍"}</span>}</button>; })}</div>{revealed && <div className={`simple-feedback ${lastCorrect ? "is-correct" : "is-wrong"}`} aria-live="polite"><div><strong>{lastCorrect ? "找到了！" : "这次看走眼了"}</strong><span>{lastCorrect ? `+${100 + (streak - 1) * 25} 分 · 连中 ${streak}` : `AI 图是第 ${aiIndex + 1} 张 · 还剩 ${lives} 次机会`}</span></div><p>{aiSample.title}：{aiSample.clue}</p><span className="auto-advance-note">{gameIsOver ? "正在生成结果…" : "下一轮马上开始…"}</span></div>}<p className="simple-footer-note">{revealed ? "" : "你的第一眼，值得相信吗？"}</p></section>}
 
-              <div className="playground-round-progress" aria-label={`第 ${roundIndex + 1} 轮，共 ${TOTAL_ROUNDS} 轮`}>
-                {Array.from({ length: TOTAL_ROUNDS }, (_, index) => (
-                  <span key={index} className={index < roundIndex ? "is-complete" : index === roundIndex ? "is-current" : ""} />
-                ))}
-              </div>
-
-              <div className="playground-toolbar-actions">
-                {mode === "timed" ? (
-                  <div className={`playground-timer ${secondsLeft <= 8 ? "is-urgent" : ""}`} aria-live="polite"><Clock3 size={18} /><strong>{secondsLeft}</strong><span>秒</span></div>
-                ) : (
-                  <div className="playground-shortcut"><kbd>1</kbd>–<kbd>6</kbd> 选择 · <kbd>Enter</kbd> 确认</div>
-                )}
-                {!revealed && <button type="button" className="playground-toolbar-confirm" disabled={!selectedId} onClick={confirmSelection}><Zap size={17} />确认选择</button>}
-              </div>
-            </div>
-
-            <div className="playground-round-heading">
-              <h2 id="playground-round-title" ref={roundHeadingRef} tabIndex={-1}>哪一张不是实拍？</h2>
-              <p>{selectedId && !revealed ? "已选中一张。确认后将公布答案。" : revealed ? "答案已公布，看看线索是否与你的观察一致。" : "点击图片选择；放大镜只用于查看细节。"}</p>
-            </div>
-
-            <div className="playground-grid">
-              {round.map((candidate, index) => {
-                const state = candidateState(candidate);
-                return (
-                  <figure key={candidate.id} className="playground-candidate" data-state={state}>
-                    <div className="playground-image-frame">
-                      <button
-                        type="button"
-                        className="playground-choice"
-                        aria-label={`选择候选图片 ${index + 1}`}
-                        aria-pressed={selectedId === candidate.id}
-                        disabled={revealed}
-                        onClick={() => setSelectedId(candidate.id)}
-                      >
-                        <img src={candidate.src} alt={`候选图片 ${index + 1}`} width={640} height={640} draggable={false} />
-                      </button>
-                      <button type="button" className="playground-zoom" aria-label={`放大候选图片 ${index + 1}`} title="放大查看细节" onClick={(event) => openPreview(candidate, index, event.currentTarget)}><Maximize2 size={18} /></button>
-                      <span className="playground-number" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
-                      {revealed && (
-                        <span className={`playground-answer-badge ${candidate.isAi ? "is-ai" : "is-real"}`}>
-                          {candidate.isAi ? <><Sparkles size={14} /> AI 生成</> : <><Check size={14} /> 实拍</>}
-                        </span>
-                      )}
-                    </div>
-                    <figcaption>
-                      <span>{revealed && selectedId === candidate.id ? (candidate.isAi ? "你找到了" : "你的选择") : `候选 ${index + 1}`}</span>
-                      {!revealed && selectedId === candidate.id && <strong><Check size={14} /> 已选择</strong>}
-                    </figcaption>
-                  </figure>
-                );
-              })}
-            </div>
-
-            {revealed && (
-              <section className={`playground-feedback ${selectedWasCorrect ? "is-correct" : "is-wrong"}`} aria-live="polite" aria-label="本轮结果">
-                <div className="playground-feedback-verdict">
-                  <span>{selectedWasCorrect ? <Target size={24} /> : timedOut ? <Clock3 size={24} /> : <Eye size={24} />}</span>
-                  <div>
-                    <p>{selectedWasCorrect ? "判断正确" : timedOut ? "本轮时间到" : "这次没有选中"}</p>
-                    <h3>{selectedWasCorrect ? `+${lastEarned} 分` : `AI 图是候选 ${round.indexOf(aiCandidate) + 1}`}</h3>
-                  </div>
-                </div>
-                <div className="playground-feedback-clues">
-                  <p><Sparkles size={15} /> 这张“{aiCandidate.aiSample?.title}”值得复核的细节</p>
-                  <ul>{aiCandidate.aiSample?.clues.map((clue) => <li key={clue}>{clue}</li>)}</ul>
-                </div>
-                <button type="button" className="playground-next" onClick={nextRound}>{roundIndex === TOTAL_ROUNDS - 1 ? "查看成绩" : "下一轮"}<ArrowRight size={18} /></button>
-              </section>
-            )}
-
-            {!revealed && (
-              <div className="playground-actionbar">
-                <p aria-live="polite">{selectedId ? `已选择候选 ${round.findIndex((candidate) => candidate.id === selectedId) + 1}` : "还没有选择图片"}</p>
-                <button type="button" disabled={!selectedId} onClick={confirmSelection}><Zap size={18} />确认选择</button>
-              </div>
-            )}
-          </section>
-        ) : (
-          <section className="playground-finish" aria-labelledby="playground-finish-title">
-            <div className="playground-finish-mark"><Target size={34} /></div>
-            <p>本局完成</p>
-            <h2 id="playground-finish-title">你找对了 {correctCount} / {TOTAL_ROUNDS} 张</h2>
-            <strong>{score}<small> 分</small></strong>
-            <p>{correctCount === TOTAL_ROUNDS ? "观察力很敏锐。下一步是用多条证据验证直觉。" : correctCount >= 3 ? "已经抓住不少视觉异常，再多观察文字、手部和结构关系。" : "AI 图越来越像实拍，单凭肉眼犯错很正常。"}</p>
-            <div>
-              <button type="button" onClick={() => restart()}><RefreshCw size={18} />再来一局</button>
-              <button type="button" className="is-primary" onClick={onWorkspace}>用慧鉴AI检测内容<ArrowRight size={18} /></button>
-            </div>
-          </section>
-        )}
-
-        <aside className="playground-method-note" aria-label="玩法与样本说明">
-          <strong>这是一场观察练习，不是鉴伪结论。</strong>
-          <span>视觉异常只是启发式线索；正式判断还应结合模型、水印、元数据和可信来源。AI 样本由 GPT Image 为本项目生成，实拍样本来自 Unsplash。</span>
-        </aside>
+        {screen === "finish" && <section className="simple-finish" aria-labelledby="finish-title"><Target size={33} /><p className="simple-eyebrow">GAME OVER · RESULT</p><h1 id="finish-title">你的分数</h1><strong className="final-score">{score}</strong><p className="final-copy">找对了 {correctCount} / {ROUNDS} 张，{streak > 1 ? `最后保持 ${streak} 连中。` : "AI 图越来越像实拍，失误很正常。"}</p><div className="final-actions"><button type="button" onClick={startGame}><RefreshCw size={17} />再玩一次</button><button type="button" className="is-primary" onClick={onWorkspace}>去做真正的鉴伪<ArrowRight size={17} /></button></div><p className="best-score">历史最佳：{bestScore} 分</p><section className="leaderboard-panel" aria-labelledby="leaderboard-title"><div className="leaderboard-heading"><div><p>LOCAL HALL OF FAME</p><h2 id="leaderboard-title">本机榜单</h2></div><span>Top 10</span></div>{!submittedId ? <div className="score-form"><input value={playerName} maxLength={12} placeholder="输入你的名字" aria-label="输入你的名字" onChange={(event) => setPlayerName(event.target.value)} /><button type="button" onClick={submitScore}>登上榜单<ArrowRight size={16} /></button></div> : playerRank > 0 ? <p className="rank-result">已上榜：第 <strong>{playerRank}</strong> 名</p> : <p className="rank-result">本次成绩未进入 Top 10</p>}{leaderboard.length === 0 ? <p className="empty-leaderboard">还没有记录，成为第一个上榜的人。</p> : <ol>{leaderboard.map((entry, index) => <li key={entry.id} className={entry.id === submittedId ? "is-you" : ""}><span>{String(index + 1).padStart(2, "0")}</span><strong>{entry.name}</strong><small>{entry.correct}/{ROUNDS}</small><b>{entry.score}</b></li>)}</ol>}</section></section>}
+        <p className="simple-disclaimer">这是一个观察小游戏，不是鉴伪结论。</p>
       </main>
-
-      {preview && (
-        <div className="playground-lightbox" role="dialog" aria-modal="true" aria-label={`放大查看候选图片 ${preview.index + 1}`} onMouseDown={(event) => { if (event.currentTarget === event.target) closePreview(); }}>
-          <div className="playground-lightbox-panel">
-            <div className="playground-lightbox-header"><span>候选 {preview.index + 1} · 细节查看</span><button ref={closePreviewRef} type="button" aria-label="关闭图片预览" onClick={closePreview}><X size={21} /></button></div>
-            <img src={preview.candidate.src} alt={`候选图片 ${preview.index + 1} 的放大视图`} width={640} height={640} />
-            <p>放大查看不会提交答案。按 Esc 关闭。</p>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

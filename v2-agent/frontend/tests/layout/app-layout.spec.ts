@@ -351,15 +351,19 @@ test("官网可以进入独立 Playground", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "慧鉴AI" })).toBeVisible();
 });
 
-test("Playground 完成六选一、答案解释与键盘连续挑战", async ({ page }) => {
+test("Playground 保持单一六选一玩法并自动进入下一轮", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await installBaseMocks(page);
   await page.goto("/?playground=1");
 
   await expect(page.getByRole("heading", { name: "找出那张 AI 图" })).toBeVisible();
-  const choices = page.getByRole("button", { name: /选择候选图片/ });
+  await expect(page.getByRole("button", { name: "开始游戏" })).toHaveCount(1);
+  await expect(page.getByText("游戏大厅")).toHaveCount(0);
+  await page.getByRole("button", { name: "开始游戏" }).click();
+
+  const choices = page.getByRole("button", { name: /选择图片/ });
   await expect(choices).toHaveCount(6);
-  expect(await page.locator(".playground-choice img").evaluateAll((images) => images.map((image) => image.getAttribute("alt")))).toEqual([
+  expect(await page.locator(".simple-card img").evaluateAll((images) => images.map((image) => image.getAttribute("alt")))).toEqual([
     "候选图片 1",
     "候选图片 2",
     "候选图片 3",
@@ -367,46 +371,72 @@ test("Playground 完成六选一、答案解释与键盘连续挑战", async ({ 
     "候选图片 5",
     "候选图片 6",
   ]);
-  expect(await page.locator(".playground-choice img").evaluateAll((images) => images.every((image) => /\/playground\/samples\/sample-\d+\.webp$/.test((image as HTMLImageElement).src)))).toBeTruthy();
+  expect(await page.locator(".simple-card img").evaluateAll((images) => images.every((image) => /\/playground\/samples\/sample-\d+\.webp$/.test((image as HTMLImageElement).src)))).toBeTruthy();
 
   await choices.nth(0).click();
   await expect(choices.nth(0)).toHaveAttribute("aria-pressed", "true");
-  await page.getByRole("button", { name: "确认选择" }).click();
-  await expect(page.locator(".playground-feedback")).toBeVisible();
-  await expect(page.locator(".playground-answer-badge.is-ai")).toHaveCount(1);
-  await expect(page.locator(".playground-answer-badge.is-real")).toHaveCount(5);
-  await expect(page.locator(".playground-feedback").getByText(/值得复核的细节/)).toBeVisible();
+  await expect(page.locator(".simple-feedback")).toBeVisible();
+  await expect(page.locator(".card-answer.is-ai")).toHaveCount(1);
+  await expect(page.locator(".card-answer.is-real")).toHaveCount(5);
 
-  await page.getByRole("button", { name: "下一轮" }).click();
+  await expect(page.locator(".round-count strong")).toHaveText("02", { timeout: 3_000 });
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.keyboard.press("2");
-  await expect(page.getByRole("button", { name: "选择候选图片 2" })).toHaveAttribute("aria-pressed", "true");
-  await page.keyboard.press("Enter");
-  await expect(page.locator(".playground-feedback")).toBeVisible();
-  await expect(page.getByText("这是一场观察练习，不是鉴伪结论。")).toBeVisible();
+  await expect(page.getByRole("button", { name: "选择图片 2" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".simple-feedback")).toBeVisible();
+  await expect(page.getByText("这是一个观察小游戏，不是鉴伪结论。")).toBeVisible();
   expect(await readableTextOffenders(page, ".playground-page")).toEqual([]);
   await expectNoHorizontalOverflow(page);
 });
 
-test("Playground 手机端保持双列布局并支持可恢复焦点的放大查看", async ({ page }) => {
+test("Playground 完成八轮后记录本机 Top 10 榜单", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await installBaseMocks(page);
+  await page.goto("/?playground=1");
+  await page.getByRole("button", { name: "开始游戏" }).click();
+
+  const aiSamples = new Set(["sample-02.webp", "sample-05.webp", "sample-09.webp", "sample-13.webp", "sample-16.webp"]);
+  for (let round = 0; round < 8; round += 1) {
+    const cards = page.locator(".simple-card");
+    await expect(cards).toHaveCount(6);
+    const sources = await cards.locator("img").evaluateAll((images) => images.map((image) => (image as HTMLImageElement).src.split("/").pop() || ""));
+    const answerIndex = sources.findIndex((source) => aiSamples.has(source));
+    expect(answerIndex).toBeGreaterThanOrEqual(0);
+    await cards.nth(answerIndex).click();
+    await expect(page.locator(".simple-feedback.is-correct")).toBeVisible();
+    if (round < 7) await expect(page.locator(".round-count strong")).toHaveText(String(round + 2).padStart(2, "0"), { timeout: 3_000 });
+  }
+
+  await expect(page.getByRole("heading", { name: "你的分数" })).toBeVisible({ timeout: 3_000 });
+  await expect(page.locator(".final-score")).toHaveText("1500");
+  await expect(page.getByText("找对了 8 / 8 张", { exact: false })).toBeVisible();
+  await page.getByRole("textbox", { name: "输入你的名字" }).fill("测试玩家");
+  await page.getByRole("button", { name: "登上榜单" }).click();
+  await expect(page.locator(".rank-result")).toContainText("第 1 名");
+  await expect(page.locator(".leaderboard-panel li")).toHaveCount(1);
+  await expect(page.locator(".leaderboard-panel li")).toContainText("测试玩家");
+});
+
+test("Playground 手机端保持双列布局并正确扣减机会", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await installBaseMocks(page);
   await page.goto("/?playground=1");
+  await page.getByRole("button", { name: "开始游戏" }).click();
 
-  const positions = await page.locator(".playground-candidate").evaluateAll((items) => items.slice(0, 2).map((item) => {
+  const cards = page.locator(".simple-card");
+  const positions = await cards.evaluateAll((items) => items.slice(0, 2).map((item) => {
     const rect = item.getBoundingClientRect();
     return { left: rect.left, top: rect.top, width: rect.width };
   }));
   expect(positions[1].left).toBeGreaterThan(positions[0].left + positions[0].width - 1);
   expect(Math.abs(positions[1].top - positions[0].top)).toBeLessThanOrEqual(1);
 
-  const zoom = page.getByRole("button", { name: "放大候选图片 1" });
-  await zoom.click();
-  const dialog = page.getByRole("dialog", { name: "放大查看候选图片 1" });
-  await expect(dialog).toBeVisible();
-  await expect(page.getByRole("button", { name: "关闭图片预览" })).toBeFocused();
-  await page.keyboard.press("Escape");
-  await expect(dialog).toBeHidden();
-  await expect(zoom).toBeFocused();
+  const aiSamples = new Set(["sample-02.webp", "sample-05.webp", "sample-09.webp", "sample-13.webp", "sample-16.webp"]);
+  const sources = await cards.locator("img").evaluateAll((images) => images.map((image) => (image as HTMLImageElement).src.split("/").pop() || ""));
+  const realIndex = sources.findIndex((source) => !aiSamples.has(source));
+  await cards.nth(realIndex).click();
+  await expect(page.locator(".life-stat")).toHaveAttribute("aria-label", "剩余 2 次机会");
+  await expect(page.locator(".simple-feedback.is-wrong")).toBeVisible();
   expect(await readableTextOffenders(page, ".playground-page")).toEqual([]);
   await expectNoHorizontalOverflow(page);
 });
