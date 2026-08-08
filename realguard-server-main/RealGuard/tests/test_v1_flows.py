@@ -2470,6 +2470,98 @@ def test_swarm_aggregate_returns_review_state_for_uncalibrated_primary():
     assert result["swarm"]["enabled"] is True
 
 
+def test_swarm_aggregate_handles_missing_primary_scores_from_uncalibrated_model():
+    experts = [
+        {
+            "id": "primary",
+            "status": "success",
+            "score": None,
+            "weight": 0.34,
+            "verdict": "真实图像",
+        },
+        {
+            "id": "metadata",
+            "status": "success",
+            "score": 0.5,
+            "weight": 0.08,
+            "verdict": "缺少元数据",
+        },
+        {
+            "id": "v2",
+            "status": "success",
+            "score": 0.0,
+            "weight": 0.18,
+            "verdict": "倾向真实",
+        },
+        {
+            "id": "aliyun_pro",
+            "status": "failed",
+            "score": None,
+            "weight": 0.16,
+            "verdict": "调用失败",
+        },
+        {
+            "id": "visible_watermark",
+            "status": "success",
+            "score": None,
+            "weight": 0.0,
+            "verdict": "检测到通用水印",
+        },
+    ]
+    primary = {
+        "filename": "uncalibrated.png",
+        "final_label": "真实图像",
+        "probability": None,
+        "detector_probability": None,
+        "modelDecisionReady": False,
+        "reviewRequired": True,
+        "decisionStatus": "review_only",
+    }
+
+    result, error = detection._swarm_aggregate(experts, primary, {})
+
+    assert error == ""
+    assert result["final_label"] == "真实图像"
+    assert result["probability"] == pytest.approx(0.0001)
+    assert result["detector_probability"] == pytest.approx(0.0001)
+    assert result["reviewRequired"] is True
+    assert result["swarm"]["effectiveExperts"] == 2
+    assert detection._clamp01(None, None) == pytest.approx(0.5)
+
+
+def test_swarm_aliyun_expert_skips_unhealthy_sdk(monkeypatch):
+    model = {
+        "id": "aliyun-aigc-pro",
+        "enabled": True,
+        "runtime": "aliyun-green",
+        "endpoint": "internal://aliyun/aigcDetector_pro",
+    }
+    monkeypatch.setattr(detection.model_registry, "get_model", lambda _model_id: model)
+    monkeypatch.setattr(
+        detection.aliyun_green,
+        "health",
+        lambda _model: {
+            "capabilityReady": False,
+            "message": "aliyun green sdk is unavailable: ImportError",
+        },
+    )
+    monkeypatch.setattr(
+        detection.aliyun_green,
+        "detect_image_bytes",
+        lambda *_args, **_kwargs: pytest.fail("unhealthy provider must not be called"),
+    )
+
+    result = detection._swarm_aliyun_expert(
+        {"id": "aliyun_pro", "modelId": "aliyun-aigc-pro"},
+        VALID_PNG_BYTES,
+        "sample.png",
+    )
+
+    assert result["status"] == "skipped"
+    assert result["score"] is None
+    assert "sdk is unavailable" in result["message"]
+
+
 def test_uncalibrated_secondary_models_cannot_publish_swarm_verdict():
     experts = [
         {"id": "primary", "status": "success", "score": None, "weight": 1.0},

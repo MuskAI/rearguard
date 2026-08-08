@@ -228,12 +228,13 @@ def _access_key_secret():
 
 def _sdk_ready():
     try:
-        import alibabacloud_green20220302  # noqa: F401
-        import alibabacloud_tea_openapi  # noqa: F401
-        import alibabacloud_tea_util  # noqa: F401
+        from alibabacloud_green20220302.client import Client  # noqa: F401
+        from alibabacloud_green20220302 import models  # noqa: F401
+        from alibabacloud_tea_openapi import models as open_api_models  # noqa: F401
+        from alibabacloud_tea_util import models as util_models  # noqa: F401
         return True, ""
     except Exception as exc:
-        return False, f"missing aliyun green sdk dependency: {exc}"
+        return False, f"aliyun green sdk is unavailable: {type(exc).__name__}: {exc}"
 
 
 def _client():

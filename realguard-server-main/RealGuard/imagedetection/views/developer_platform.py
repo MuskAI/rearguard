@@ -8,6 +8,7 @@ from pathlib import Path
 import stat
 import threading
 import time
+import traceback
 import uuid
 import warnings
 from datetime import datetime, timedelta
@@ -4518,6 +4519,8 @@ def _run_web_detection_job(task):
         })
     except Exception as exc:
         message = str(exc)[:500]
+        print(f"[WEB DETECTION TASK ERROR] job={job_id} mode={mode} error={type(exc).__name__}: {message}")
+        traceback.print_exc()
         heartbeat_stop.set()
         heartbeat.join(timeout=WEB_TASK_HEARTBEAT_SECONDS + 1)
         try:

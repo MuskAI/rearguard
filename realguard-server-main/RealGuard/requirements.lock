@@ -5,7 +5,7 @@ aiosignal==1.4.0
 alibabacloud-credentials==1.0.9
 alibabacloud-credentials-api==1.0.1
 alibabacloud-gateway-spi==0.0.4
-alibabacloud-green20220302==3.5.1
+alibabacloud-green20220302==3.4.1
 alibabacloud-tea==0.4.0
 alibabacloud-tea-openapi==0.4.4
 alibabacloud-tea-util==0.3.14

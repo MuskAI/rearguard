@@ -2656,7 +2656,10 @@ def _clamp01(value, default=0.5):
     try:
         return max(0.0, min(1.0, float(value)))
     except (TypeError, ValueError):
-        return float(default)
+        try:
+            return max(0.0, min(1.0, float(default)))
+        except (TypeError, ValueError):
+            return 0.5
 
 
 def _first_text_line(value):
@@ -3033,6 +3036,17 @@ def _swarm_aliyun_expert(spec, image_bytes, filename):
             'message': '该模型不是阿里云鉴伪适配器',
             'latencyMs': 0,
         }
+    provider_health = aliyun_green.health(model)
+    if provider_health.get('capabilityReady') is not True:
+        return {
+            'status': 'skipped',
+            'score': None,
+            'verdict': '服务不可用',
+            'confidence': '',
+            'evidence': [],
+            'message': safe_truncate(provider_health.get('message') or '阿里云鉴伪服务暂不可用', 160),
+            'latencyMs': 0,
+        }
     if not aliyun_green.configured():
         return {
             'status': 'skipped',
@@ -3182,9 +3196,12 @@ def _swarm_aggregate(experts, primary_result, fallback_result):
 
     def review_only_result(reason):
         base = dict(primary_result or fallback_result or {})
+        fallback_score = base.get('detector_probability')
+        if fallback_score is None:
+            fallback_score = probability_model.get('pixelBaseline', 0.5)
         binary_score = _clamp01(
             base.get('probability'),
-            base.get('detector_probability', probability_model.get('pixelBaseline', 0.5)),
+            fallback_score,
         )
         binary_label = binary_final_label(base.get('final_label'), binary_score)
         base.update({
