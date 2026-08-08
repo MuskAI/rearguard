@@ -2539,3 +2539,128 @@ def test_history_listing_supports_offset_pagination(client, monkeypatch):
     assert len(page_two.json()["items"]) >= 1
     assert page_one.json()["items"][0]["reportId"] == third.json()["reportId"]
     assert page_two.json()["items"][0]["reportId"] == first.json()["reportId"]
+
+
+def test_report_qa_requires_login_before_calling_model(client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    monkeypatch.setattr(
+        main.report_qa_service,
+        "answer",
+        lambda *_args, **_kwargs: pytest.fail("unauthenticated request reached report QA model"),
+    )
+
+    response = client.post(
+        "/api/report-qa",
+        json={
+            "question": "为什么这样判断？",
+            "report": {"verdict": "real", "explanation": "未见明显异常"},
+        },
+    )
+
+    assert response.status_code == 401
+
+
+def test_report_qa_accepts_bounded_current_page_context_for_logged_in_user(client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    monkeypatch.setattr(
+        main,
+        "_verify_session_user_sync",
+        lambda _request: {
+            "mode": "session",
+            "userId": 501,
+            "accountUuid": "55555555-5555-4555-8555-555555555555",
+        },
+    )
+    captured = {}
+
+    def fake_answer(report, question, history):
+        captured.update({"report": report, "question": question, "history": history})
+        return {
+            "answer": "报告中的可见水印是主要依据。",
+            "evidenceRefs": ["可见水印"],
+            "suggestedQuestions": [],
+            "grounded": True,
+            "usage": {"totalTokens": 10},
+        }
+
+    monkeypatch.setattr(main.report_qa_service, "answer", fake_answer)
+    client.cookies.set("session", "qa-user")
+    response = client.post(
+        "/api/report-qa",
+        json={
+            "question": "为什么判断为假？",
+            "history": [{"role": "user", "content": "先解释水印"}],
+            "report": {
+                "kind": "image",
+                "verdict": "highly_suspected_fake",
+                "explanation": "检测到平台水印",
+                "visibleWatermark": {"detected": True, "provider": "示例平台"},
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["grounded"] is True
+    assert captured["question"] == "为什么判断为假？"
+    assert captured["report"]["verdict"] == "highly_suspected_fake"
+
+
+def test_report_qa_loads_authoritative_owned_report_and_hides_foreign_report(client, monkeypatch):
+    import app.main as main  # noqa: WPS433
+
+    def fake_session_user(request):
+        cookie = request.headers.get("cookie", "")
+        if "session=qa-owner" in cookie:
+            return {
+                "mode": "session",
+                "userId": 601,
+                "accountUuid": "66666666-6666-4666-8666-666666666666",
+            }
+        if "session=qa-other" in cookie:
+            return {
+                "mode": "session",
+                "userId": 602,
+                "accountUuid": "77777777-7777-4777-8777-777777777777",
+            }
+        return None
+
+    monkeypatch.setattr(main, "_verify_session_user_sync", fake_session_user)
+    client.cookies.set("session", "qa-owner")
+    detection = client.post(
+        "/api/detect",
+        files={"file": ("owner-report.txt", b"owner report", "text/plain")},
+    )
+    assert detection.status_code == 200
+    report_id = detection.json()["reportId"]
+
+    captured = {}
+
+    def fake_answer(report, question, history):
+        captured["report"] = report
+        return {
+            "answer": "这是当前账号报告的解释。",
+            "evidenceRefs": [],
+            "suggestedQuestions": [],
+            "grounded": True,
+            "usage": {"totalTokens": 8},
+        }
+
+    monkeypatch.setattr(main.report_qa_service, "answer", fake_answer)
+    client.cookies.set("session", "qa-other")
+    foreign = client.post(
+        "/api/report-qa",
+        json={"reportId": report_id, "question": "解释报告", "report": {"explanation": "伪造内容"}},
+    )
+    assert foreign.status_code == 404
+
+    client.cookies.set("session", "qa-owner")
+    owner = client.post(
+        "/api/report-qa",
+        json={"reportId": report_id, "question": "解释报告", "report": {"explanation": "伪造内容"}},
+    )
+
+    assert owner.status_code == 200
+    assert captured["report"]["reportId"] == report_id
+    assert captured["report"]["explanation"] != "伪造内容"

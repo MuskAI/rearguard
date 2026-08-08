@@ -59,6 +59,7 @@ import DocumentBatchResult from "./components/DocumentBatchResult";
 import HuijianBrand from "./components/HuijianBrand";
 import OfficialHome from "./components/OfficialHome";
 import Playground from "./components/Playground";
+import ReportQa from "./components/ReportQa";
 import ResultFeedback from "./components/ResultFeedback";
 import {
   analyticsConsent,
@@ -69,6 +70,7 @@ import "./interaction.css";
 import "./experience.css";
 import "./c-scheme.css";
 import "./playground.css";
+import "./report-qa.css";
 
 const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 256 * 1024 * 1024;
@@ -1425,6 +1427,11 @@ export default function App() {
                     onRetryAction={failedAction ? retryFailedAction : undefined}
                     onProvenance={() => void verifyProvenance()}
                     onDownload={() => void downloadOutcome()}
+                  />
+                  <ReportQa
+                    outcome={outcome}
+                    requiresLogin={!user}
+                    onLogin={() => setAuthOpen(true)}
                   />
                   <ResultFeedback
                     outcome={outcome}

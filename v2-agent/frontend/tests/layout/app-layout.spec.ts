@@ -700,6 +700,122 @@ test("结果页完整依据入口使用正文级字号", async ({ page }) => {
   expect(await readableTextOffenders(page, ".agent-result")).toEqual([]);
 });
 
+test("登录用户可以围绕当前检测报告连续提问", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installBaseMocks(page, true);
+  await page.route("**/image_upload/detect_async", (route) => route.fulfill({
+    json: {
+      status: "success",
+      job: {
+        id: "qa-result-job",
+        version: "1",
+        status: "success",
+        result: {
+          status: "success",
+          result: {
+            itemid: 902,
+            final_label: "AI生成图像",
+            probability: 0.91,
+            detector_probability: 0.88,
+            confidence: "高",
+            decisionStatus: "verdict",
+            decisionAuthority: "calibrated_model",
+            reviewRequired: false,
+            modelDecisionReady: true,
+            explanation: "可见平台水印与生成痕迹互相印证。",
+            image_url: "/brand/huijian-forensic-scanner-v3.webp",
+            filename: "qa-review.png",
+            file_size: "1 KB",
+            resolution: "512×512",
+            img_format: "PNG",
+            visual_issues: ["右下角存在平台标记"],
+            all_metadata: { GPS: "should-not-leave-browser" },
+            visibleWatermark: {
+              enabled: true,
+              supported: true,
+              detected: true,
+              provider: "示例平台",
+              confidence: 0.95,
+              evidenceLevel: "strong",
+              hits: [{
+                provider: "示例平台",
+                label: "平台水印",
+                confidence: 0.95,
+                bbox: { x: 0.78, y: 0.88, w: 0.16, h: 0.08 },
+                method: "registry",
+                frame: null,
+                scores: {},
+                decisive: true,
+                crop: "data:image/png;base64,should-not-leave-browser",
+              }],
+              temporal: { sampledFrames: 1, positiveFrames: 1, moving: false },
+              note: "平台标记已完成区域定位。",
+              pipelineTrace: {
+                schemaVersion: "watermark_pipeline_trace_v1",
+                totalElapsedMs: 20,
+                stages: [{
+                  id: "registry",
+                  label: "平台注册表检索",
+                  status: "hit",
+                  elapsedMs: 10,
+                  summary: "命中示例平台标记",
+                  details: { internalEndpoint: "should-not-leave-browser" },
+                }],
+              },
+            },
+          },
+        },
+      },
+    },
+  }));
+  const requests: Array<Record<string, unknown>> = [];
+  await page.route("**/v2-api/report-qa", async (route) => {
+    const payload = route.request().postDataJSON() as Record<string, unknown>;
+    requests.push(payload);
+    await route.fulfill({
+      json: {
+        answer: requests.length === 1
+          ? "报告在右下角定位到平台水印，并与生成痕迹相互印证。"
+          : "这里的 91% 是本次报告的风险分，不代表绝对事实。",
+        evidenceRefs: requests.length === 1 ? ["平台水印"] : ["视觉线索 1"],
+        suggestedQuestions: ["这个风险分应该怎么理解？"],
+        grounded: true,
+        usage: { totalTokens: 80 },
+      },
+    });
+  });
+
+  await page.goto("/?workspace=1");
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "qa-review.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"),
+  });
+
+  const qa = page.locator(".report-qa");
+  await expect(qa.getByRole("heading", { name: "继续问小鉴" })).toBeVisible();
+  await qa.getByRole("button", { name: "为什么判断为 AI 生成？" }).click();
+  await expect(qa.getByText("报告在右下角定位到平台水印，并与生成痕迹相互印证。")).toBeVisible();
+  await expect(qa.getByText("平台水印", { exact: true })).toBeVisible();
+  expect(requests).toHaveLength(1);
+  const firstReport = requests[0].report as Record<string, unknown>;
+  expect(JSON.stringify(firstReport)).not.toContain("should-not-leave-browser");
+  expect(JSON.stringify(firstReport)).not.toContain("image_url");
+  expect(JSON.stringify(firstReport)).not.toContain("data:image");
+
+  const composer = qa.getByRole("textbox", { name: "向小鉴询问本次检测报告" });
+  await composer.fill("这个风险分应该怎么理解？");
+  await composer.press("Enter");
+  await expect(qa.getByText("这里的 91% 是本次报告的风险分，不代表绝对事实。")).toBeVisible();
+  expect(requests).toHaveLength(2);
+  expect(requests[1].history).toEqual([
+    { role: "user", content: "为什么判断为 AI 生成？" },
+    { role: "assistant", content: "报告在右下角定位到平台水印，并与生成痕迹相互印证。" },
+  ]);
+  expect(await readableTextOffenders(page, ".report-qa")).toEqual([]);
+  await expectNoHorizontalOverflow(page);
+});
+
 test("检测进度卡使用清晰的正文级字号", async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 700 });
   await installBaseMocks(page);

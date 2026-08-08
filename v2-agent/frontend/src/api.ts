@@ -1595,6 +1595,37 @@ export async function downloadReport(reportId: string): Promise<string> {
   return downloadResponse(res, fallbackName, "下载报告失败");
 }
 
+export interface ReportQaMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface ReportQaRequest {
+  question: string;
+  history?: ReportQaMessage[];
+  reportId?: string;
+  report?: Record<string, unknown>;
+}
+
+export interface ReportQaAnswer {
+  answer: string;
+  evidenceRefs: string[];
+  suggestedQuestions: string[];
+  grounded: boolean;
+  usage?: { totalTokens?: number };
+}
+
+export async function askReportQuestion(payload: ReportQaRequest, signal?: AbortSignal): Promise<ReportQaAnswer> {
+  await ensureSessionCsrf();
+  const res = await fetch("/v2-api/report-qa", withSession({
+    method: "POST",
+    signal,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }));
+  return parseJson(res, "报告解释暂不可用");
+}
+
 export interface ReportShareLink {
   shareId: string;
   url: string;

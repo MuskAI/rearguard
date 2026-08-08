@@ -40,6 +40,7 @@ from . import (
     provenance,
     provenance_precheck,
     public_payload,
+    report_qa as report_qa_service,
     reporting,
     storage,
     synthid_detector,
@@ -120,6 +121,16 @@ _TELEMETRY_QUEUE: asyncio.Queue | None = None
 _TELEMETRY_WORKER: asyncio.Task | None = None
 _TELEMETRY_MAINTENANCE: asyncio.Task | None = None
 _DOCUMENT_WORKERS: dict[str, asyncio.Task] = {}
+REPORT_QA_MAX_CONCURRENCY = max(1, int(os.getenv("JIANZHEN_REPORT_QA_MAX_CONCURRENCY", "4")))
+REPORT_QA_QUEUE_TIMEOUT_SECONDS = max(
+    0.1,
+    float(os.getenv("JIANZHEN_REPORT_QA_QUEUE_TIMEOUT_SECONDS", "8")),
+)
+REPORT_QA_RATE_LIMIT = max(1, int(os.getenv("JIANZHEN_REPORT_QA_RATE_LIMIT", "20")))
+REPORT_QA_RATE_WINDOW_SECONDS = max(10, int(os.getenv("JIANZHEN_REPORT_QA_RATE_WINDOW_SECONDS", "60")))
+_REPORT_QA_SEMAPHORE = asyncio.Semaphore(REPORT_QA_MAX_CONCURRENCY)
+_REPORT_QA_RATE_LOCK = asyncio.Lock()
+_REPORT_QA_REQUESTS: dict[str, list[float]] = {}
 
 
 @asynccontextmanager
@@ -164,6 +175,7 @@ PROTECTED_ENDPOINTS = [
     "/api/report/{report_id}/verify",
     "/api/report/{report_id}/share",
     "/api/report/{report_id}/share/{share_id}",
+    "/api/report-qa",
     "/api/metrics",
 ]
 DEVELOPER_PROTECTED_ENDPOINTS = [
@@ -1181,6 +1193,92 @@ def csrf_token(request: Request) -> Response:
         path="/",
     )
     return response
+
+
+def _report_qa_rate_key(actor: dict, request: Request) -> str:
+    if actor.get("accountUuid"):
+        return f"account:{actor['accountUuid']}"
+    if actor.get("keyId"):
+        return f"key:{actor['keyId']}"
+    if actor.get("mode") == "admin":
+        return "admin"
+    return f"client:{_client_ip(request) or 'unknown'}"
+
+
+async def _enforce_report_qa_rate_limit(actor: dict, request: Request) -> None:
+    now = time.monotonic()
+    cutoff = now - REPORT_QA_RATE_WINDOW_SECONDS
+    key = _report_qa_rate_key(actor, request)
+    async with _REPORT_QA_RATE_LOCK:
+        if len(_REPORT_QA_REQUESTS) > 2_048:
+            stale_keys = [
+                candidate_key
+                for candidate_key, timestamps in _REPORT_QA_REQUESTS.items()
+                if not timestamps or timestamps[-1] < cutoff
+            ]
+            for candidate_key in stale_keys:
+                _REPORT_QA_REQUESTS.pop(candidate_key, None)
+        recent = [timestamp for timestamp in _REPORT_QA_REQUESTS.get(key, []) if timestamp >= cutoff]
+        if len(recent) >= REPORT_QA_RATE_LIMIT:
+            retry_after = max(1, math.ceil(recent[0] + REPORT_QA_RATE_WINDOW_SECONDS - now))
+            _REPORT_QA_REQUESTS[key] = recent
+            raise HTTPException(
+                status_code=429,
+                detail="提问较频繁，请稍后再试",
+                headers={"Retry-After": str(retry_after)},
+            )
+        recent.append(now)
+        _REPORT_QA_REQUESTS[key] = recent
+
+
+@app.post("/api/report-qa")
+async def ask_report_question(request: Request, payload: dict = Body(...)) -> dict:
+    actor = await run_in_threadpool(_require_protected_access, request)
+    _require_actor_scope(actor, "reports")
+    _require_session_csrf(request, actor)
+    await _enforce_report_qa_rate_limit(actor, request)
+
+    report_id = str(payload.get("reportId") or "").strip()
+    if len(report_id) > 128:
+        raise HTTPException(status_code=400, detail="报告编号无效")
+    report_context = payload.get("report")
+    if report_id:
+        item = await run_in_threadpool(storage.get_history, report_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="报告不存在")
+        _require_actor_owns_item(actor, item, missing_detail="报告不存在")
+        report_context = await run_in_threadpool(
+            _strip_internal_history_fields,
+            item,
+            public=actor.get("mode") != "admin",
+        )
+
+    try:
+        await asyncio.wait_for(
+            _REPORT_QA_SEMAPHORE.acquire(),
+            timeout=REPORT_QA_QUEUE_TIMEOUT_SECONDS,
+        )
+    except TimeoutError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail="报告解释任务较多，请稍后再试",
+            headers={"Retry-After": str(max(1, math.ceil(REPORT_QA_QUEUE_TIMEOUT_SECONDS)))},
+        ) from exc
+
+    try:
+        return await run_in_threadpool(
+            report_qa_service.answer,
+            report_context,
+            payload.get("question"),
+            payload.get("history"),
+        )
+    except report_qa_service.ReportQaValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except report_qa_service.ReportQaUnavailableError as exc:
+        logger.warning("report QA unavailable: %s", type(exc.__cause__ or exc).__name__)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    finally:
+        _REPORT_QA_SEMAPHORE.release()
 
 
 @app.get("/api/ready")
