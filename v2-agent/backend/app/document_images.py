@@ -33,11 +33,11 @@ ErrorCode = Literal["unsupported", "invalid", "limit"]
 MAX_INPUT_BYTES = 25 * 1024 * 1024
 MAX_PDF_PAGES = 200
 MAX_IMAGES = 500
-MAX_TOTAL_IMAGE_BYTES = 256 * 1024 * 1024
+MAX_TOTAL_IMAGE_BYTES = 128 * 1024 * 1024
 MAX_SINGLE_IMAGE_BYTES = 24 * 1024 * 1024
 MAX_IMAGE_PIXELS = 64_000_000
 MAX_DOCX_MEMBERS = 2_048
-MAX_DOCX_EXPANDED_BYTES = 512 * 1024 * 1024
+MAX_DOCX_EXPANDED_BYTES = 256 * 1024 * 1024
 MAX_DOCX_MEMBER_BYTES = 64 * 1024 * 1024
 MAX_DOCX_COMPRESSION_RATIO = 200.0
 MAX_XML_BYTES = 16 * 1024 * 1024
@@ -45,7 +45,7 @@ MAX_XML_ELEMENTS = 250_000
 EXTRACTION_WALL_SECONDS = float(os.getenv("JIANZHEN_DOCUMENT_IMAGE_WALL_SECONDS", "60"))
 PDF_CPU_SECONDS = int(os.getenv("JIANZHEN_DOCUMENT_IMAGE_CPU_SECONDS", "30"))
 PDF_MEMORY_BYTES = int(
-    os.getenv("JIANZHEN_DOCUMENT_IMAGE_MEMORY_BYTES", str(1024 * 1024 * 1024))
+    os.getenv("JIANZHEN_DOCUMENT_IMAGE_MEMORY_BYTES", str(768 * 1024 * 1024))
 )
 
 _RELATIONSHIPS_NAMESPACE = (
@@ -681,6 +681,49 @@ def _extract_docx(filename: str, data: bytes, limits: _Limits) -> DocumentExtrac
     )
 
 
+def _docx_worker(connection, filename: str, data: bytes, limits: _Limits) -> None:
+    try:
+        _apply_pdf_resource_limits(limits)
+        connection.send(("ok", _extract_docx(filename, data, limits)))
+    except DocumentImageError as exc:
+        connection.send(("error", (exc.code, str(exc))))
+    except BaseException:
+        try:
+            connection.send(("error", ("invalid", "DOCX image extraction failed")))
+        except (BrokenPipeError, EOFError, OSError):
+            pass
+    finally:
+        connection.close()
+
+
+def _extract_docx_guarded(filename: str, data: bytes, limits: _Limits) -> DocumentExtraction:
+    context = multiprocessing.get_context("spawn")
+    receive_connection, send_connection = context.Pipe(duplex=False)
+    process = context.Process(
+        target=_docx_worker,
+        args=(send_connection, filename, data, limits),
+        name="huijian-document-image-docx",
+        daemon=True,
+    )
+    try:
+        process.start()
+        send_connection.close()
+        if not receive_connection.poll(max(0.001, limits.wall_seconds)):
+            _raise("limit", "DOCX image extraction exceeded the time limit")
+        try:
+            status, payload = receive_connection.recv()
+        except EOFError as exc:
+            raise DocumentImageError("invalid", "DOCX image extractor exited unexpectedly") from exc
+        if status == "ok":
+            return payload
+        code, message = payload
+        raise DocumentImageError(code, message)
+    finally:
+        receive_connection.close()
+        send_connection.close()
+        _stop_process(process)
+
+
 def extract_document_images(filename: str, data: bytes) -> DocumentExtraction:
     """Extract raster image occurrences from a PDF or DOCX under explicit limits."""
 
@@ -704,4 +747,4 @@ def extract_document_images(filename: str, data: bytes) -> DocumentExtraction:
 
     if data[:4] not in {b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"}:
         _raise("invalid", "DOCX ZIP magic header is missing")
-    return _extract_docx(filename, data, limits)
+    return _extract_docx_guarded(filename, data, limits)

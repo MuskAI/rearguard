@@ -150,6 +150,29 @@ def _normalize_visible_hits(result: dict[str, Any]) -> None:
         result["genericVisibleWatermark"] = normalized
 
 
+def normalize_embedded_visible_precheck(payload: Any) -> dict[str, Any] | None:
+    """Normalize detector-carried visual evidence without trusting provenance claims."""
+    if not isinstance(payload, dict):
+        return None
+    result = dict(payload)
+    _normalize_visible_hits(result)
+    report = result.get("report")
+    if isinstance(report, dict):
+        result["report"] = {**report, "c2paTrusted": False}
+    result["available"] = bool(
+        result.get("status") == "ok"
+        or result.get("visibleHits")
+        or isinstance(result.get("explicitWatermark"), dict)
+        or isinstance(result.get("genericVisibleWatermark"), dict)
+    )
+    result["decision"] = {
+        "shortCircuit": False,
+        "modelRequired": True,
+        "reason": "embedded_visual_evidence_only",
+    }
+    return result
+
+
 def _remote_inspect(data: bytes, filename: str, *, timeout: float) -> dict[str, Any]:
     started = time.perf_counter()
     body, boundary = _multipart(filename, data)

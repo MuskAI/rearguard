@@ -67,6 +67,30 @@ def test_nginx_rate_limit_response_is_machine_readable_and_retryable():
         assert '"code":"rate_limited"' in body
 
 
+def test_document_detection_upload_uses_the_v2_upload_limit():
+    configs = (
+        ROOT / "deploy" / "nginx" / "realguard.conf",
+        ROOT / "realguard-server-main" / "deploy" / "nginx-realguard-frontend.conf",
+    )
+
+    for config in configs:
+        body = config.read_text(encoding="utf-8")
+        location = body.split("location ~ ^/v2-api/(detect|forensics|provenance|document-detections)$", 1)[1].split("}", 1)[0]
+        assert "client_max_body_size 26m;" in location
+        assert "realguard-upload-proxy-security.conf" in location
+
+
+def test_v2_activation_injects_and_checks_the_primary_detector_contract():
+    activate = (ROOT / "scripts" / "remote" / "activate_v2.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "REALGUARD_DETECTOR_INTERNAL_TOKEN" in activate
+    assert "JIANZHEN_PRIMARY_IMAGE_DETECT_TOKEN" in activate
+    assert "JIANZHEN_PRIMARY_IMAGE_DETECT_URL=http://127.0.0.1:%s/image" in activate
+    assert '"http://127.0.0.1:$detector_port/ready"' in activate
+
+
 def test_public_default_nginx_rejects_ip_host_and_internal_preview_is_loopback_only():
     body = (
         ROOT / "realguard-server-main" / "deploy" / "nginx-realguard-frontend.conf"

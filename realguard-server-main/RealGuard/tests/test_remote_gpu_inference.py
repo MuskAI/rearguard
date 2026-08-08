@@ -570,6 +570,48 @@ def test_detector_backend_can_defer_visual_llm(monkeypatch):
     assert calls == [{"image_path": "/tmp/stored-demo.png", "use_llm": False}]
 
 
+def test_detector_backend_can_return_ephemeral_result_without_history(monkeypatch):
+    monkeypatch.setattr(detector_backend, "_ensure_capability_ready", lambda: None)
+    monkeypatch.setattr(
+        detector_backend,
+        "_run_v1_detect",
+        lambda _path, use_llm=False: {
+            "final_label": "真实图像",
+            "detector_probability": 0.12,
+            "probability": 0.12,
+            "explanation": "GPU 主模型已完成。",
+        },
+    )
+    monkeypatch.setattr(detector_backend, "_consume_remote_inference_evidence", lambda: {})
+    monkeypatch.setattr(
+        detector_backend,
+        "_save_upload",
+        lambda image_bytes, folder, filename: ("stored-demo.png", "/tmp/stored-demo.png"),
+    )
+    monkeypatch.setattr(
+        detector_backend,
+        "_persist_result",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("ephemeral calls must not persist")),
+    )
+    monkeypatch.setattr(detector_backend, "DETECTOR_INTERNAL_TOKEN", "detector-test-token")
+    app = detector_backend.create_app()
+    app.config.update(TESTING=True)
+
+    response = app.test_client().post(
+        "/image",
+        headers={"X-RealGuard-Detector-Token": "detector-test-token"},
+        data={
+            "image_file": (BytesIO(VALID_PNG_BYTES), "demo.png"),
+            "defer_visual_llm": "1",
+            "persist_result": "0",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["data"]["persistence"] == "ephemeral"
+
+
 def test_detector_backend_preserves_gpu_overload_status(monkeypatch):
     error = RuntimeError("GPU inference queue is full")
     error.status_code = 429

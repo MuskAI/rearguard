@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="v2-agent/frontend/public/brand/huijian-mascot.webp" width="112" alt="慧鉴 AI 小鉴">
+  <img src="v2-agent/frontend/public/favicon.svg" width="112" alt="慧鉴 AI 品牌标志">
 </p>
 
 # 慧鉴 AI
@@ -13,7 +13,7 @@
 | 问题 | 答案 |
 | --- | --- |
 | 用户看到什么？ | 官网、统一 Agent 工作台、历史记录和开发者平台 |
-| 核心能力是什么？ | 图像鉴伪、显式水印、视频抽帧、元数据实拍证据、Swarm 复核 |
+| 核心能力是什么？ | 图像鉴伪、显式水印、视频抽帧、PDF/Word 逐图检测、元数据实拍证据、Swarm 复核 |
 | 主前端在哪里？ | `v2-agent/frontend` |
 | 业务后端在哪里？ | `realguard-server-main/RealGuard` |
 | 模型在哪里运行？ | 66 GPU 服务器，公网服务器负责排队和转发 |
@@ -48,11 +48,12 @@ flowchart LR
 | 水印分析 | YOLO 定位、OCR、Logo 检索和平台规则融合 |
 | 实拍证据 | 相机型号、拍摄参数、时间和定位等元数据证据 |
 | 视频检测 | 抽取关键帧，逐帧执行图像与水印检测 |
+| 文档检测 | 从 PDF、DOCX 的正文、页眉和页脚提取图片，逐张检测并汇总 |
 | 证据与报告 | 展示关键依据，导出图片或 PDF 报告 |
 | 开发者平台 | API Key、额度、计费、用量和多语言示例 |
 | 管理后台 | 用户、模型、任务、地图、大屏、批测和压测 |
 
-最终结果只显示“真实图像”或“AI生成图像”。不确定性和人工复核建议放在解释中，不作为第三种结论。
+单张图片最终结果只显示“真实图像”或“AI生成图像”。文档批量任务若存在未完成子项，会明确标记“未形成完整结论”，避免把部分失败误报为真实。
 
 ## 仓库结构
 
@@ -135,8 +136,8 @@ DEPLOY_SSH_KEY=/path/to/key STRICT=1 ./scripts/check_deploy_status.sh
 生产发布：
 
 ```bash
-DEPLOY_SSH_KEY=/path/to/key ./scripts/deploy_v2.sh
 DEPLOY_SSH_KEY=/path/to/key ./scripts/deploy_v1.sh
+DEPLOY_SSH_KEY=/path/to/key ./scripts/deploy_v2.sh
 ```
 
 模型或水印服务变更使用 `scripts/deploy_detection_service.sh`。完整步骤、日志命令和故障处理见 [开发与运维指南](docs/HANDOFF_GUIDE.md)。

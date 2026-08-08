@@ -627,6 +627,17 @@ def create_app():
                         "remote_evidence": remote_evidence,
                     },
                 })
+            persist_result = str(request.form.get("persist_result") or "1").strip().lower() not in {
+                "0",
+                "false",
+                "no",
+                "off",
+            }
+            if not persist_result:
+                data = dict(payload)
+                data["filename"] = safe_name
+                data["persistence"] = "ephemeral"
+                return jsonify({"code": 200, "msg": "success", "data": data})
             data = _persist_result(
                 payload,
                 image_bytes,

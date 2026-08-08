@@ -1,5 +1,5 @@
 import { Activity, ChevronDown, Clock3 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useState } from "react";
 import type { WatermarkPipelineStage, WatermarkPipelineTrace } from "../api";
 
 interface Props {
@@ -155,6 +155,22 @@ export default function WatermarkPipeline({ trace }: Props) {
   if (!trace || trace.schemaVersion !== "watermark_pipeline_trace_v1" || !stages.length) return null;
   const selected = stages.find((stage) => stage.id === selectedId) || preferred || stages[0];
   const maxElapsed = Math.max(1, ...stages.map((stage) => Number(stage.elapsedMs) || 0));
+  const stageDomId = (stageId: string) => stageId.replace(/[^a-zA-Z0-9_-]/g, "-");
+
+  function moveTabFocus(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    const tabs = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+    const current = tabs.indexOf(document.activeElement as HTMLButtonElement);
+    if (current < 0) return;
+    event.preventDefault();
+    const next = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? tabs.length - 1
+        : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+    tabs[next]?.focus();
+    tabs[next]?.click();
+  }
 
   return <details className="watermark-pipeline">
     <summary className="pipeline-heading">
@@ -163,15 +179,15 @@ export default function WatermarkPipeline({ trace }: Props) {
       <ChevronDown className="pipeline-toggle" size={16} />
     </summary>
     <div className="pipeline-body">
-      <div className="pipeline-stage-tabs" role="tablist" aria-label="检测阶段">
-        {stages.map((stage, index) => <button key={stage.id} type="button" role="tab" aria-selected={stage.id === selected.id} className={`${stage.status} ${stage.id === selected.id ? "active" : ""}`} onClick={() => setSelectedId(stage.id)}><i>{String(index + 1).padStart(2, "0")}</i><strong>{publicStageLabel(stage)}</strong><small>{duration(stage.elapsedMs)}</small><b aria-hidden="true" /></button>)}
+      <div className="pipeline-stage-tabs" role="tablist" aria-label="检测阶段" onKeyDown={moveTabFocus}>
+        {stages.map((stage, index) => <button id={`pipeline-tab-${stageDomId(stage.id)}`} aria-controls={`pipeline-panel-${stageDomId(stage.id)}`} key={stage.id} type="button" role="tab" aria-selected={stage.id === selected.id} tabIndex={stage.id === selected.id ? 0 : -1} className={`${stage.status} ${stage.id === selected.id ? "active" : ""}`} onClick={() => setSelectedId(stage.id)}><i>{String(index + 1).padStart(2, "0")}</i><strong>{publicStageLabel(stage)}</strong><small>{duration(stage.elapsedMs)}</small><b aria-hidden="true" /></button>)}
       </div>
       <div className="pipeline-workspace">
         <aside className="pipeline-waterfall" aria-label="阶段耗时">
           <header><strong>阶段耗时</strong><span>并行分支不累加</span></header>
           {stages.map((stage) => <button key={stage.id} type="button" className={stage.id === selected.id ? "active" : ""} onClick={() => setSelectedId(stage.id)}><span>{publicStageLabel(stage)}</span><i><b className={stage.status} style={{ width: `${Math.max(2, (Number(stage.elapsedMs) || 0) / maxElapsed * 100)}%` }} /></i><em>{duration(stage.elapsedMs)}</em></button>)}
         </aside>
-        <article className="pipeline-stage-detail" role="tabpanel">
+        <article id={`pipeline-panel-${stageDomId(selected.id)}`} className="pipeline-stage-detail" role="tabpanel" aria-labelledby={`pipeline-tab-${stageDomId(selected.id)}`} tabIndex={0}>
           <header><div><span>STAGE {String(stages.indexOf(selected) + 1).padStart(2, "0")}</span><h4>{publicStageLabel(selected)}</h4></div><b className={selected.status}>{STATUS_LABEL[selected.status] || selected.status}</b></header>
           <p className="pipeline-summary">{PUBLIC_STAGE_SUMMARIES[selected.id] || "本阶段只展示可公开的证据信息。"}</p>
           <StageDetails stage={selected} />

@@ -1,6 +1,4 @@
 import type { ReactNode } from "react";
-import "../c-scheme.css";
-
 export type CapabilityIconName =
   | "fast"
   | "swarm"

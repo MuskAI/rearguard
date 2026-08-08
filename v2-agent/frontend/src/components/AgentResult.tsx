@@ -14,7 +14,6 @@ import {
   Camera,
   CheckCircle2,
   ChevronDown,
-  CircleDashed,
   Copy,
   Download,
   FileSearch,
@@ -52,6 +51,7 @@ import {
   type VisibleWatermarkResult,
 } from "../api";
 import { buildEvidenceExplanation, hasDecisiveAiWatermark, localizedWatermarkHits } from "../evidenceExplanation";
+import { StatusIcon } from "./BrandSystem";
 import WatermarkPipeline from "./WatermarkPipeline";
 
 type ResultTab = "summary" | "evidence" | "file";
@@ -469,10 +469,10 @@ function hasImageFile(outcome: AgentOutcome) {
 }
 
 function ExpertStatus({ status }: { status?: string }) {
-  if (status === "success") return <CheckCircle2 size={15} className="status-success" />;
-  if (status === "failed") return <AlertTriangle size={15} className="status-danger" />;
-  if (status === "running") return <LoaderCircle size={15} className="spin status-running" />;
-  return <CircleDashed size={15} className="status-muted" />;
+  if (status === "success") return <StatusIcon name="real" size={15} className="status-success" />;
+  if (status === "failed") return <StatusIcon name="error" size={15} className="status-danger" />;
+  if (status === "running") return <StatusIcon name="processing" size={15} className="status-running" />;
+  return <StatusIcon name="partial" size={15} className="status-muted" />;
 }
 
 function EvidenceList({ items }: { items: string[] }) {
@@ -970,7 +970,7 @@ export default function AgentResult(props: Props) {
           )}
         </div>
         <div className="result-verdict">
-          <div className="verdict-kicker"><ShieldCheck size={16} /> 小鉴综合判断</div>
+          <div className="verdict-kicker"><StatusIcon name={verdict.tone === "fake" ? "fake" : "real"} size={17} /> 小鉴综合判断</div>
           <h2 id="detection-result-title">{verdict.label}</h2>
           <p>{verdict.description}</p>
           <div className="verdict-meta">

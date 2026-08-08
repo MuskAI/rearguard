@@ -27,7 +27,6 @@ import {
   ShieldCheck,
   SquareTerminal,
   Trash2,
-  UserRound,
   UploadCloud,
   WalletCards,
   X,
@@ -46,6 +45,7 @@ import {
   rotateDeveloperKey,
 } from "../api";
 import HuijianBrand from "./HuijianBrand";
+import { UserAvatar } from "./BrandSystem";
 import "./DeveloperPlatform.css";
 
 type DeveloperTab = "overview" | "keys" | "tester" | "docs" | "usage";
@@ -619,7 +619,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
           <div><strong>账号级额度</strong><span>轮换 Key 不会重置赠送次数</span></div>
         </div>
         <div className="developer-side-account">
-          <span><UserRound size={17} /></span>
+          <span><UserAvatar seed={user.account_uuid || String(user.Userid)} displayName={user.username} size={36} status="online" /></span>
           <div><strong>{user.username || "慧鉴开发者"}</strong><small>{user.phone || `用户 ${user.Userid}`}</small></div>
           <button type="button" onClick={onLogout} title="退出登录" aria-label="退出登录"><LogOut size={16} /></button>
         </div>

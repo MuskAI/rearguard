@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { KeyboardEvent as ReactKeyboardEvent, useEffect, useId, useRef, useState } from "react";
 import type { AccountUser } from "../api";
+import { UserAvatar } from "./BrandSystem";
 import Presence from "./Presence";
 
 interface Props {
@@ -31,7 +32,7 @@ export default function AccountMenu({ user, onWorkspace, onDeveloper, onLogout, 
   const pendingActionRef = useRef<(() => void) | null>(null);
   const menuId = useId();
   const displayName = user.username || "慧鉴用户";
-  const initial = displayName.trim().slice(0, 1) || "慧";
+  const avatarSeed = user.account_uuid || String(user.Userid);
 
   useEffect(() => {
     if (!open) return;
@@ -110,7 +111,7 @@ export default function AccountMenu({ user, onWorkspace, onDeveloper, onLogout, 
           openWithFocus(event.key === "ArrowDown" ? 0 : 2);
         }}
       >
-        <span className="account-menu-avatar" aria-hidden="true">{initial}</span>
+        <span className="account-menu-avatar"><UserAvatar seed={avatarSeed} displayName={displayName} size={32} status="online" /></span>
         {!compact && <span>{displayName}</span>}
         <ChevronDown size={14} aria-hidden="true" />
       </button>
@@ -130,7 +131,7 @@ export default function AccountMenu({ user, onWorkspace, onDeveloper, onLogout, 
         {(phase) => (
           <div id={menuId} className="account-menu-popover" role="menu" aria-label="账户信息与操作" aria-hidden={!open} data-presence={phase}>
             <div className="account-menu-profile">
-              <span className="account-menu-profile-avatar" aria-hidden="true">{initial}</span>
+              <span className="account-menu-profile-avatar"><UserAvatar seed={avatarSeed} displayName={displayName} size={42} status="online" /></span>
               <div><strong>{displayName}</strong><small>{maskPhone(user.phone || "手机号未绑定")}</small></div>
               <span className="account-verified"><ShieldCheck size={13} /> 已登录</span>
             </div>

@@ -785,6 +785,120 @@ export async function detect(file: File, fileType?: FileType, signal?: AbortSign
   return normalizeDetectResult(await parseJson(res, `检测失败 (${res.status})`));
 }
 
+export type DocumentDetectionStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "partial_success"
+  | "failed"
+  | "cancelled";
+
+export interface DocumentDetectionAsset {
+  ordinal: number;
+  pageNumber?: number | null;
+  partPath?: string | null;
+  occurrenceIndex: number;
+  sourceKind: string;
+  mime: string;
+  width: number;
+  height: number;
+  sha256: string;
+  duplicateOf?: number | null;
+  reused?: boolean;
+  status: "completed" | "failed";
+  preview?: string | null;
+  verdict?: Verdict;
+  verdictLabel?: string;
+  confidence?: number;
+  aiProbability?: number;
+  modelVersion?: string;
+  source?: string;
+  explanation?: string;
+  regions?: Region[];
+  visibleWatermark?: VisibleWatermarkResult;
+  synthid?: SynthIDResult;
+  elapsedMs?: number;
+  error?: string;
+}
+
+export interface DocumentDetectionTask {
+  id: string;
+  filename: string;
+  mime: string;
+  size: number;
+  sha256: string;
+  mode: "fast" | "swarm";
+  status: DocumentDetectionStatus;
+  stage: string;
+  progress: number;
+  pageCount?: number | null;
+  discovered: number;
+  completed: number;
+  succeeded: number;
+  failed: number;
+  warnings: string[];
+  assets: DocumentDetectionAsset[];
+  assetOffset: number;
+  assetLimit: number;
+  assetTotal: number;
+  hasMoreAssets: boolean;
+  summary?: {
+    verdict: Verdict | "no_result";
+    verdictLabel: string;
+    realCount: number;
+    fakeCount: number;
+    averageAiProbability: number | null;
+  } | null;
+  error?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  accessToken?: string;
+}
+
+export async function startDocumentDetection(
+  file: File,
+  mode: "fast" | "swarm" = "fast",
+  signal?: AbortSignal,
+): Promise<DocumentDetectionTask> {
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("mode", mode);
+  appendUploadConsent(fd);
+  const res = await fetch("/v2-api/document-detections", withSession({
+    method: "POST",
+    body: fd,
+    signal,
+    headers: { "Idempotency-Key": documentRequestKey(file) },
+  }));
+  return await parseJson(res, `文档任务创建失败 (${res.status})`) as DocumentDetectionTask;
+}
+
+export async function fetchDocumentDetection(
+  taskId: string,
+  accessToken: string,
+  options: { after?: string; wait?: number; offset?: number; limit?: number; signal?: AbortSignal } = {},
+): Promise<DocumentDetectionTask> {
+  const params = new URLSearchParams();
+  if (options.after) params.set("after", options.after);
+  if (options.wait) params.set("wait", String(options.wait));
+  if (options.offset) params.set("assetOffset", String(options.offset));
+  params.set("assetLimit", String(options.limit || 100));
+  const res = await fetch(`/v2-api/document-detections/${encodeURIComponent(taskId)}?${params}`, withSession({
+    signal: options.signal,
+    cache: "no-store",
+    headers: accessToken ? { "X-Document-Task-Token": accessToken } : undefined,
+  }));
+  return await parseJson(res, `文档任务查询失败 (${res.status})`) as DocumentDetectionTask;
+}
+
+export async function cancelDocumentDetection(taskId: string, accessToken: string): Promise<DocumentDetectionTask> {
+  const res = await fetch(`/v2-api/document-detections/${encodeURIComponent(taskId)}/cancel`, withSession({
+    method: "POST",
+    headers: accessToken ? { "X-Document-Task-Token": accessToken } : undefined,
+  }));
+  return await parseJson(res, `取消文档任务失败 (${res.status})`) as DocumentDetectionTask;
+}
+
 export interface AccountUser {
   Userid: number;
   account_uuid?: string;

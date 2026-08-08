@@ -7,6 +7,9 @@ const viewports = [
   { name: "short-desktop", width: 1440, height: 800 },
   { name: "safari-wide", width: 1990, height: 1240 },
   { name: "wide", width: 2560, height: 1440 },
+  { name: "compact-desktop", width: 1366, height: 600 },
+  { name: "compact-mobile", width: 390, height: 600 },
+  { name: "mobile-landscape", width: 844, height: 390 },
 ] as const;
 
 const user = {
@@ -265,7 +268,7 @@ for (const viewport of viewports) {
     await expectHorizontalHeading(page, "#official-home-title");
     await expectReadableHero(page, viewport.width);
     await expectHeroFirstViewport(page, viewport);
-    await expect(page.getByRole("figure", { name: "慧鉴AI光学取证扫描仪" })).toBeVisible();
+    await expect(page.getByRole("figure", { name: "图片、视频与文档经过小鉴核验后形成证据" })).toBeVisible();
     const mascotLoaded = await page.locator('.home-hero-visual-stage > img').evaluate((image) => {
       const element = image as HTMLImageElement;
       return element.complete && element.naturalWidth > 0;
@@ -306,6 +309,24 @@ test("移动官网导航支持键盘关闭并恢复焦点", async ({ page }) => 
   await expect(trigger).toBeFocused();
 });
 
+test("桌面端开发者菜单支持方向键并恢复焦点", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await installBaseMocks(page);
+  await page.goto("/");
+
+  const trigger = page.getByRole("button", { name: "开发者平台", exact: true });
+  await trigger.focus();
+  await page.keyboard.press("ArrowDown");
+  const menu = page.getByRole("menu", { name: "开发者平台入口" });
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: /平台概览/ })).toBeFocused();
+  await page.keyboard.press("End");
+  await expect(menu.getByRole("menuitem", { name: /接入文档/ })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeHidden();
+  await expect(trigger).toBeFocused();
+});
+
 test("官网与统一鉴伪入口不存在低于 12px 的可见文字", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await installBaseMocks(page);
@@ -316,6 +337,144 @@ test("官网与统一鉴伪入口不存在低于 12px 的可见文字", async ({
   await page.goto("/?workspace=1");
   await expect(page.locator(".agent-app")).toBeVisible();
   expect(await readableTextOffenders(page, ".agent-app")).toEqual([]);
+});
+
+test("PDF 文档会展示逐图检测结果并支持放大复核", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installBaseMocks(page);
+  const preview = `data:image/svg+xml;base64,${Buffer.from(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><rect width="640" height="360" fill="#e8eef9"/><rect x="390" y="190" width="170" height="90" fill="#315fa9"/><text x="40" y="80" font-size="36" fill="#17212b">Evidence image</text></svg>',
+  ).toString("base64")}`;
+  await page.route(/\/v2-api\/document-detections(?:\?|$)/, (route) => route.fulfill({
+    status: 202,
+    json: {
+      id: "doc_layout_test",
+      filename: "evidence.pdf",
+      mime: "application/pdf",
+      size: 2048,
+      sha256: "a".repeat(64),
+      mode: "fast",
+      status: "completed",
+      stage: "completed",
+      progress: 100,
+      pageCount: 2,
+      discovered: 1,
+      completed: 1,
+      succeeded: 1,
+      failed: 0,
+      warnings: [],
+      assets: [{
+        ordinal: 1,
+        pageNumber: 2,
+        occurrenceIndex: 1,
+        sourceKind: "pdf_page_image",
+        mime: "image/png",
+        width: 640,
+        height: 360,
+        sha256: "b".repeat(64),
+        status: "completed",
+        preview,
+        verdict: "highly_suspected_fake",
+        verdictLabel: "AI 生成图像",
+        aiProbability: 0.91,
+        confidence: 0.91,
+        modelVersion: "DINOv3",
+        source: "primary_model",
+        explanation: "主模型与来源证据完成交叉核验。",
+        regions: [{ x: 0.61, y: 0.53, w: 0.27, h: 0.25, label: "可疑区域", score: 0.9 }],
+      }],
+      assetOffset: 0,
+      assetLimit: 24,
+      assetTotal: 1,
+      hasMoreAssets: false,
+      summary: {
+        verdict: "highly_suspected_fake",
+        verdictLabel: "发现 AI 生成图像",
+        realCount: 0,
+        fakeCount: 1,
+        averageAiProbability: 0.91,
+      },
+      error: null,
+      createdAt: "2026-08-08T00:00:00Z",
+      updatedAt: "2026-08-08T00:00:01Z",
+      accessToken: "layout-document-token",
+    },
+  }));
+
+  await page.goto("/?workspace=1");
+  await page.getByRole("checkbox", { name: /我授权平台处理本次上传文件/ }).check();
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "evidence.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.from("%PDF-1.7 layout fixture"),
+  });
+
+  await expect(page.getByRole("heading", { name: "发现 AI 生成图像" })).toBeVisible();
+  await expect(page.getByText("AI 风险 91% · 640×360")).toBeVisible();
+  await page.getByRole("button", { name: "放大查看第 2 页" }).click();
+  const dialog = page.getByRole("dialog", { name: "第 2 页放大图" });
+  await expect(dialog).toBeVisible();
+  await expect(page.getByRole("button", { name: "关闭放大视图" })).toBeFocused();
+  await expect(page.getByText("主模型与来源证据完成交叉核验。")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole("button", { name: "放大查看第 2 页" })).toBeFocused();
+  await expectNoHorizontalOverflow(page);
+});
+
+test("刷新工作台会恢复文档结果而不会重新上传", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.addInitScript(() => {
+    window.sessionStorage.setItem("huijian-active-document-task", JSON.stringify({
+      id: "doc_resume_test",
+      accessToken: "resume-token",
+      owner: "guest",
+    }));
+  });
+  await installBaseMocks(page);
+  let queryCount = 0;
+  await page.route(/\/v2-api\/document-detections\/doc_resume_test(?:\?|$)/, (route) => {
+    queryCount += 1;
+    return route.fulfill({
+      json: {
+        id: "doc_resume_test",
+        filename: "resume.docx",
+        mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        size: 4096,
+        sha256: "c".repeat(64),
+        mode: "fast",
+        status: "completed",
+        stage: "completed",
+        progress: 100,
+        pageCount: null,
+        discovered: 1,
+        completed: 1,
+        succeeded: 1,
+        failed: 0,
+        warnings: [],
+        assets: [],
+        assetOffset: 0,
+        assetLimit: 100,
+        assetTotal: 0,
+        hasMoreAssets: false,
+        summary: {
+          verdict: "real",
+          verdictLabel: "未发现 AI 生成图像",
+          realCount: 1,
+          fakeCount: 0,
+          averageAiProbability: 0.08,
+        },
+        error: null,
+        createdAt: "2026-08-08T00:00:00Z",
+        updatedAt: "2026-08-08T00:00:01Z",
+      },
+    });
+  });
+
+  await page.goto("/?workspace=1");
+  await expect(page.getByRole("heading", { name: "未发现 AI 生成图像" })).toBeVisible();
+  await expect(page.locator(".user-file-message strong", { hasText: "resume.docx" })).toBeVisible();
+  expect(queryCount).toBe(1);
 });
 
 test("结果页完整依据入口使用正文级字号", async ({ page }) => {
@@ -425,6 +584,7 @@ for (const viewport of viewports.slice(0, 2)) {
     expect(menuBox).not.toBeNull();
     expect(menuBox!.x).toBeGreaterThanOrEqual(0);
     expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(viewport.width + 1);
+    expect(await readableTextOffenders(page, ".analysis-model-picker")).toEqual([]);
     await expectNoHorizontalOverflow(page);
     await page.keyboard.press("Escape");
     await homeButton.click();
@@ -491,6 +651,7 @@ test("开发者平台移动布局与 API Key 弹窗满足键盘交互", async ({
   await expect(page.getByRole("button", { name: "API 密钥" })).toBeVisible();
   await expect(page.getByRole("button", { name: "返回慧鉴AI官网" })).toBeVisible();
   await expect(page.getByRole("button", { name: "官网", exact: true })).toHaveCount(0);
+  expect(await readableTextOffenders(page, ".developer-shell")).toEqual([]);
   await expectNoHorizontalOverflow(page);
 
   await page.getByRole("button", { name: "API 密钥" }).click();
@@ -510,6 +671,19 @@ test("开发者平台移动布局与 API Key 弹窗满足键盘交互", async ({
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
   await expect(createButton).toBeFocused();
+});
+
+test("开发者平台在手机横屏仍可滚动访问导航", async ({ page }) => {
+  await page.setViewportSize({ width: 844, height: 390 });
+  await installBaseMocks(page, true);
+  await installDeveloperMocks(page);
+  await page.goto("/?developer=1");
+
+  await expect(page.getByRole("heading", { name: "把慧鉴AI接入你的业务流程" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "API 密钥" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "接入文档" })).toBeVisible();
+  expect(await readableTextOffenders(page, ".developer-shell")).toEqual([]);
+  await expectNoHorizontalOverflow(page);
 });
 
 test("开发者凭据读取失败不会伪装成空列表", async ({ page }) => {

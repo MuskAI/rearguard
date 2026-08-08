@@ -14,24 +14,29 @@ import hmac
 import io
 import ipaddress
 import logging
+import math
 import uuid
 import zipfile
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib import error as urlerror
 from urllib.parse import quote
 from urllib import request as urlrequest
 
-from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse, Response
 
 from . import (
     detector,
+    document_images,
+    document_jobs,
     evidence_manifest_v2,
     evidence_probability,
     privacy_erasure_ledger,
+    primary_image_detector,
     provenance,
     provenance_precheck,
     public_payload,
@@ -69,6 +74,11 @@ SESSION_CSRF_HEADER = "x-huijian-csrf"
 DEVELOPER_AUTH_CONFIGURED = bool(DEVELOPER_AUTH_URL and DEVELOPER_AUTH_SECRET)
 REPORT_SHARE_SECRET = os.getenv("JIANZHEN_REPORT_SHARE_SECRET", "").strip()
 CONSENT_AUDIT_SALT = os.getenv("JIANZHEN_CONSENT_AUDIT_SALT", "").strip()
+DOCUMENT_TASK_TOKEN_SECRET = (
+    os.getenv("JIANZHEN_DOCUMENT_TASK_SECRET")
+    or CONSENT_AUDIT_SALT
+    or REPORT_SHARE_SECRET
+).strip()
 LEGAL_CONSENT_VERSION = "2026-08-07+2026-08-08.1"
 LEGAL_TERMS_SHA256 = "619aee74677629f4f5e2c4ccbaa99c458671086de45c0a586e76c8c8c062d2c5"
 LEGAL_PRIVACY_SHA256 = "e2dd0904fbbccef7df74168ede051da7a93029f00b072d0a5f1bd41b7ebf826c"
@@ -94,6 +104,13 @@ DETECTION_QUEUE_TIMEOUT_SECONDS = max(
     float(os.getenv("JIANZHEN_DETECTION_QUEUE_TIMEOUT_SECONDS", "15")),
 )
 _DETECTION_SEMAPHORE = asyncio.Semaphore(DETECTION_MAX_CONCURRENCY)
+DOCUMENT_MAX_CONCURRENCY = max(1, int(os.getenv("JIANZHEN_DOCUMENT_MAX_CONCURRENCY", "2")))
+DOCUMENT_MAX_PENDING_TASKS = max(
+    DOCUMENT_MAX_CONCURRENCY,
+    int(os.getenv("JIANZHEN_DOCUMENT_MAX_PENDING_TASKS", "4")),
+)
+DOCUMENT_MAX_OWNER_ACTIVE = max(1, int(os.getenv("JIANZHEN_DOCUMENT_MAX_OWNER_ACTIVE", "1")))
+_DOCUMENT_SEMAPHORE = asyncio.Semaphore(DOCUMENT_MAX_CONCURRENCY)
 TELEMETRY_QUEUE_MAX = max(64, int(os.getenv("JIANZHEN_TELEMETRY_QUEUE_MAX", "2048")))
 TELEMETRY_PRUNE_INTERVAL_SECONDS = max(
     300,
@@ -102,6 +119,7 @@ TELEMETRY_PRUNE_INTERVAL_SECONDS = max(
 _TELEMETRY_QUEUE: asyncio.Queue | None = None
 _TELEMETRY_WORKER: asyncio.Task | None = None
 _TELEMETRY_MAINTENANCE: asyncio.Task | None = None
+_DOCUMENT_WORKERS: dict[str, asyncio.Task] = {}
 
 
 @asynccontextmanager
@@ -115,9 +133,21 @@ async def _app_lifespan(_app: FastAPI):
     else:
         logger.error("V2 evidence signing is not configured; readiness will fail closed")
     await start_telemetry_worker()
+    await run_in_threadpool(document_jobs.prune_expired)
+    for pending in await run_in_threadpool(document_jobs.recoverable):
+        task_id = str(pending.get("id") or "")
+        if task_id:
+            await run_in_threadpool(document_jobs.reconcile, task_id)
+            _DOCUMENT_WORKERS[task_id] = asyncio.create_task(_process_document_task(task_id))
     try:
         yield
     finally:
+        workers = list(_DOCUMENT_WORKERS.values())
+        for worker in workers:
+            worker.cancel()
+        if workers:
+            await asyncio.gather(*workers, return_exceptions=True)
+        _DOCUMENT_WORKERS.clear()
         await stop_telemetry_worker()
 
 
@@ -138,6 +168,7 @@ PROTECTED_ENDPOINTS = [
 ]
 DEVELOPER_PROTECTED_ENDPOINTS = [
     "/api/detect",
+    "/api/document-detections",
     "/api/forensics",
     "/api/provenance",
 ]
@@ -233,6 +264,7 @@ async def prevent_sensitive_response_caching(request: Request, call_next):
         "/api/history",
         "/api/report",
         "/api/admin",
+        "/api/document-detections",
         "/api/metrics",
     )
     if request.url.path.startswith(sensitive_prefixes):
@@ -821,6 +853,7 @@ def _public_capabilities() -> dict:
     synthid_status = synthid_detector.status()
     watermark_status = visible_watermark_detector.status()
     precheck_status = provenance_precheck.status()
+    primary_status = primary_image_detector.status()
     return {
         "status": "ok",
         "vlmEnabled": bool(detector.API_KEY),
@@ -829,7 +862,13 @@ def _public_capabilities() -> dict:
         "sessionAuthEnabled": bool(SESSION_AUTH_URL),
         "capabilities": {
             "image": "available" if detector.API_KEY else "unavailable",
-            "document": "limited" if detector.API_KEY else "unavailable",
+            "document": (
+                "available"
+                if primary_status.get("configured")
+                else "limited"
+                if detector.API_KEY
+                else "unavailable"
+            ),
             "video": "unavailable",
             "audio": "unavailable",
         },
@@ -849,6 +888,7 @@ def _public_capabilities() -> dict:
             "available": precheck_status.get("available"),
             "lastElapsedMs": precheck_status.get("lastElapsedMs"),
         },
+        "primaryImageDetector": primary_status,
         "limits": {
             "maxUploadBytes": MAX_UPLOAD_BYTES,
         },
@@ -1200,6 +1240,445 @@ def admin_health(request: Request) -> dict:
         "evidenceSigning": evidence_manifest_v2.signing_status(),
         "storage": str(storage.DB_PATH),
     }
+
+
+def _document_task_token(request: Request) -> str:
+    return request.headers.get("x-document-task-token", "").strip()
+
+
+def _document_idempotency_key(request: Request) -> str:
+    key = request.headers.get("idempotency-key", "").strip()
+    if not (8 <= len(key) <= 128 and all(33 <= ord(char) <= 126 for char in key)):
+        raise HTTPException(status_code=400, detail="请提供有效的 Idempotency-Key")
+    return key
+
+
+def _document_owner_key(request: Request, actor: dict) -> str:
+    account_uuid = str(actor.get("accountUuid") or "").strip()
+    if account_uuid:
+        return f"account:{account_uuid}"
+    key_id = str(actor.get("keyId") or "").strip()
+    if key_id:
+        return f"developer-key:{key_id}"
+    mode = str(actor.get("mode") or "public")
+    if mode in {"admin", "internal"}:
+        return f"service:{mode}"
+    if len(DOCUMENT_TASK_TOKEN_SECRET) < 32:
+        raise HTTPException(status_code=503, detail="文档任务授权服务暂不可用")
+    browser_nonce = request.cookies.get(SESSION_CSRF_COOKIE, "").strip()[:128]
+    subject = f"{_client_ip(request) or ''}\0{request.headers.get('user-agent', '')}\0{browser_nonce}"
+    digest = hmac.new(
+        DOCUMENT_TASK_TOKEN_SECRET.encode("utf-8"),
+        subject.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"public:{digest}"
+
+
+def _require_document_task(request: Request, task_id: str, actor: dict) -> dict:
+    task = document_jobs.get(task_id)
+    if not task or not document_jobs.is_authorized(task, actor, _document_task_token(request)):
+        raise HTTPException(status_code=404, detail="文档任务不存在")
+    return task
+
+
+def _document_asset_filename(document_name: str, ordinal: int, mime: str) -> str:
+    stem = os.path.splitext(os.path.basename(document_name))[0][:80] or "document"
+    extension = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+        "image/bmp": ".bmp",
+        "image/tiff": ".tif",
+    }.get(mime, ".png")
+    return f"{stem}-image-{ordinal:04d}{extension}"
+
+
+def _document_watermark_regions(visible: object) -> list[dict]:
+    if not isinstance(visible, dict):
+        return []
+    regions = []
+    for hit in visible.get("hits") or []:
+        if not isinstance(hit, dict) or not isinstance(hit.get("bbox"), dict):
+            continue
+        bbox = hit["bbox"]
+        try:
+            x, y, width, height = (float(bbox[name]) for name in ("x", "y", "w", "h"))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not all(math.isfinite(value) for value in (x, y, width, height)):
+            continue
+        if x < 0 or y < 0 or width <= 0 or height <= 0 or x + width > 1 or y + height > 1:
+            continue
+        try:
+            confidence = min(max(float(hit.get("confidence") or 0), 0.0), 1.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        if not math.isfinite(confidence):
+            confidence = 0.0
+        regions.append({
+            "x": round(x, 4),
+            "y": round(y, 4),
+            "w": round(width, 4),
+            "h": round(height, 4),
+            "label": str(hit.get("label") or "可见水印")[:80],
+            "confidence": round(confidence, 4),
+        })
+    return regions[:24]
+
+
+async def _analyze_document_asset(task_id: str, filename: str, data: bytes, actor: dict) -> dict:
+    await _validate_image_pixels(data)
+    started = time.perf_counter()
+    try:
+        await asyncio.wait_for(
+            _DETECTION_SEMAPHORE.acquire(),
+            timeout=DETECTION_QUEUE_TIMEOUT_SECONDS,
+        )
+    except TimeoutError as exc:
+        raise primary_image_detector.PrimaryDetectorError(
+            "检测队列繁忙，请稍后重试",
+            status=429,
+            code="document_detection_queue_full",
+        ) from exc
+    try:
+        current = document_jobs.get(task_id)
+        if not current or current.get("status") == "cancelled":
+            raise asyncio.CancelledError
+        precheck_report = await run_in_threadpool(provenance_precheck.inspect, data, filename)
+        precheck_analysis = provenance_precheck.build_analysis(precheck_report)
+        if precheck_analysis is not None:
+            analysis = precheck_analysis
+            embedded_precheck = None
+        else:
+            analysis = await run_in_threadpool(
+                primary_image_detector.analyze,
+                filename,
+                data,
+                account_uuid=str(actor.get("_ownerAccountUuid") or ""),
+                phone=str(actor.get("_ownerPhone") or ""),
+                openid=str(actor.get("_ownerOpenid") or ""),
+            )
+            embedded_precheck = provenance_precheck.normalize_embedded_visible_precheck(
+                analysis.pop("visibleWatermarkPrecheck", None)
+            )
+            probability_model = ((precheck_report or {}).get("decision") or {}).get("probabilityModel")
+            analysis = evidence_probability.fuse_with_analysis(analysis, probability_model)
+    finally:
+        _DETECTION_SEMAPHORE.release()
+
+    local_visual_available = bool(
+        (precheck_report or {}).get("visibleHits")
+        or isinstance((precheck_report or {}).get("explicitWatermark"), dict)
+        or isinstance((precheck_report or {}).get("genericVisibleWatermark"), dict)
+    )
+    visual_precheck = precheck_report if local_visual_available or not embedded_precheck else embedded_precheck
+    analysis = watermark_yolo.merge(analysis, visual_precheck)
+    watermark_verdict.apply(analysis, analysis.get("visibleWatermark"))
+    verdict = binary_verdict(analysis)
+    score = analysis.get("aiProbability")
+    if score is None:
+        score = analysis.get("riskScore", analysis.get("confidence"))
+    try:
+        score = max(0.0, min(float(score), 1.0))
+    except (TypeError, ValueError):
+        score = 1.0 if verdict != "real" else 0.0
+    decisive_watermark = watermark_verdict.has_decisive_ai_watermark(analysis.get("visibleWatermark"))
+    if decisive_watermark:
+        verdict = "highly_suspected_fake"
+        score = max(score, 0.95)
+    return {
+        "verdict": verdict,
+        "verdictLabel": binary_label({"verdict": verdict}),
+        "confidence": round(score, 4),
+        "aiProbability": round(score, 4),
+        "modelVersion": analysis.get("modelVersion") or detector.VLM_MODEL,
+        "source": analysis.get("source") or "vlm",
+        "explanation": analysis.get("explanation") or "模型已完成图像鉴伪。",
+        "regions": analysis.get("regions") or _document_watermark_regions(analysis.get("visibleWatermark")),
+        "visibleWatermark": analysis.get("visibleWatermark"),
+        "synthid": analysis.get("synthid"),
+        "elapsedMs": int((time.perf_counter() - started) * 1000),
+    }
+
+
+def _document_summary(assets: list[dict]) -> dict:
+    completed = [item for item in assets if item.get("status") == "completed"]
+    failed = [item for item in assets if item.get("status") == "failed"]
+    fake = [item for item in completed if item.get("verdict") != "real"]
+    real = [item for item in completed if item.get("verdict") == "real"]
+    probabilities = [float(item.get("aiProbability") or 0) for item in completed]
+    if not completed:
+        return {
+            "verdict": "no_result",
+            "verdictLabel": "未形成图像结论",
+            "realCount": 0,
+            "fakeCount": 0,
+            "averageAiProbability": None,
+        }
+    if failed and not fake:
+        verdict = "no_result"
+        verdict_label = "部分图片未完成检测"
+    else:
+        verdict = "highly_suspected_fake" if fake else "real"
+        verdict_label = "发现 AI 生成图像" if fake else "未发现 AI 生成图像"
+    return {
+        "verdict": verdict,
+        "verdictLabel": verdict_label,
+        "realCount": len(real),
+        "fakeCount": len(fake),
+        "averageAiProbability": round(sum(probabilities) / len(probabilities), 4),
+    }
+
+
+async def _process_document_task(task_id: str) -> None:
+    task = document_jobs.get(task_id)
+    if not task:
+        return
+    document_slot = False
+    try:
+        await _DOCUMENT_SEMAPHORE.acquire()
+        document_slot = True
+        task = document_jobs.get(task_id)
+        if not task or task.get("status") == "cancelled":
+            return
+        await run_in_threadpool(document_jobs.update, task_id, status="running", stage="validating", error=None)
+        source_path = str(task.get("_sourcePath") or "")
+        data = await run_in_threadpool(Path(source_path).read_bytes)
+        await run_in_threadpool(document_jobs.update, task_id, stage="extracting")
+        extraction = await run_in_threadpool(
+            document_images.extract_document_images,
+            str(task.get("filename") or "document"),
+            data,
+        )
+        await run_in_threadpool(document_jobs.reconcile, task_id)
+        existing_assets = await run_in_threadpool(document_jobs.list_assets, task_id)
+        existing_ordinals = {int(item.get("ordinal") or 0) for item in existing_assets}
+        await run_in_threadpool(
+            document_jobs.update,
+            task_id,
+            stage="detecting",
+            pageCount=extraction.page_count,
+            discovered=len(extraction.assets),
+            warnings=list(extraction.warnings),
+        )
+        results_by_sha = {
+            str(item.get("sha256") or ""): item
+            for item in existing_assets
+            if item.get("status") == "completed" and item.get("sha256")
+        }
+        for extracted in extraction.assets:
+            current = document_jobs.get(task_id)
+            if not current or current.get("status") == "cancelled":
+                break
+            if int(extracted.ordinal) in existing_ordinals:
+                continue
+            base = {
+                "ordinal": int(extracted.ordinal),
+                "pageNumber": extracted.page_number,
+                "partPath": extracted.part_path,
+                "occurrenceIndex": int(extracted.occurrence_index),
+                "sourceKind": extracted.source_kind,
+                "mime": extracted.mime,
+                "width": int(extracted.width),
+                "height": int(extracted.height),
+                "sha256": extracted.sha256,
+                "duplicateOf": extracted.duplicate_of,
+            }
+            duplicate = results_by_sha.get(extracted.sha256)
+            if duplicate:
+                cloned = {
+                    key: value
+                    for key, value in duplicate.items()
+                    if key not in {"ordinal", "pageNumber", "partPath", "occurrenceIndex", "sourceKind", "duplicateOf"}
+                }
+                item = {**cloned, **base, "reused": True}
+                await run_in_threadpool(document_jobs.add_asset, task_id, item)
+                continue
+            filename = _document_asset_filename(str(task.get("filename") or "document"), extracted.ordinal, extracted.mime)
+            try:
+                result = await _analyze_document_asset(task_id, filename, extracted.data, task)
+                item = {
+                    **base,
+                    **result,
+                    "status": "completed",
+                    "preview": _image_data_uri(extracted.data, "image", max_side=520, quality=68),
+                }
+                results_by_sha[extracted.sha256] = item
+            except primary_image_detector.PrimaryDetectorError as exc:
+                logger.warning("document child detection failed task=%s ordinal=%s error=%s", task_id, extracted.ordinal, type(exc).__name__)
+                item = {
+                    **base,
+                    "status": "failed",
+                    "error": str(exc),
+                    "errorCode": exc.code,
+                }
+            except Exception as exc:
+                logger.warning("document child detection failed task=%s ordinal=%s error=%s", task_id, extracted.ordinal, type(exc).__name__)
+                item = {**base, "status": "failed", "error": "该图片检测未完成", "errorCode": "child_detection_failed"}
+            await run_in_threadpool(document_jobs.add_asset, task_id, item)
+        current = document_jobs.get(task_id) or task
+        if current.get("status") == "cancelled":
+            await run_in_threadpool(document_jobs.update, task_id, stage="cancelled")
+            return
+        await run_in_threadpool(document_jobs.update, task_id, stage="aggregating")
+        current = document_jobs.get(task_id) or task
+        assets = await run_in_threadpool(document_jobs.list_assets, task_id)
+        succeeded = sum(1 for item in assets if item.get("status") == "completed")
+        failed = sum(1 for item in assets if item.get("status") == "failed")
+        final_status = "partial_success" if succeeded and failed else "completed" if succeeded else "failed"
+        final_error = None
+        if not extraction.assets:
+            final_error = "文档中没有可提取的图片"
+        elif final_status == "failed":
+            final_error = "所有提取图片均检测失败"
+        await run_in_threadpool(
+            document_jobs.update,
+            task_id,
+            status=final_status,
+            stage=final_status,
+            summary=_document_summary(assets),
+            error=final_error,
+            errorCode="no_extractable_images" if not extraction.assets else "all_child_detections_failed" if final_status == "failed" else None,
+        )
+    except asyncio.CancelledError:
+        raise
+    except document_images.DocumentImageError as exc:
+        await run_in_threadpool(
+            document_jobs.update,
+            task_id,
+            status="failed",
+            stage="failed",
+            error=str(exc),
+            errorCode=f"document_{exc.code}",
+        )
+    except Exception as exc:
+        logger.exception("document detection job failed task=%s", task_id)
+        await run_in_threadpool(
+            document_jobs.update,
+            task_id,
+            status="failed",
+            stage="failed",
+            error="文档解析或检测服务暂不可用",
+            errorCode="document_pipeline_unavailable",
+        )
+    finally:
+        if document_slot:
+            _DOCUMENT_SEMAPHORE.release()
+        current = document_jobs.get(task_id)
+        if current and current.get("status") in {"completed", "partial_success", "failed", "cancelled"}:
+            await run_in_threadpool(document_jobs.remove_source, current)
+        _DOCUMENT_WORKERS.pop(task_id, None)
+
+
+def _schedule_document_task(task_id: str) -> None:
+    existing = _DOCUMENT_WORKERS.get(task_id)
+    if existing and not existing.done():
+        return
+    _DOCUMENT_WORKERS[task_id] = asyncio.create_task(_process_document_task(task_id))
+
+
+@app.post("/api/document-detections", status_code=202)
+async def create_document_detection(
+    request: Request,
+    file: UploadFile = File(...),
+    mode: str = Form(default="fast"),
+    upload_consent: str | None = Form(default=None),
+    consent_version: str | None = Form(default=None),
+    terms_sha256: str | None = Form(default=None),
+    privacy_sha256: str | None = Form(default=None),
+) -> dict:
+    actor = await _require_developer_access(request)
+    _require_session_csrf(request, actor)
+    idempotency_key = _document_idempotency_key(request)
+    owner_key = _document_owner_key(request, actor)
+    if len(DOCUMENT_TASK_TOKEN_SECRET) < 32:
+        raise HTTPException(status_code=503, detail="文档任务授权服务暂不可用")
+    data = await _read_upload(file)
+    if not data:
+        raise HTTPException(status_code=400, detail="空文件")
+    filename = os.path.basename(file.filename or "document")
+    extension = os.path.splitext(filename)[1].lower()
+    if extension in {".doc", ".docm"}:
+        raise HTTPException(status_code=415, detail="暂不支持旧版 Word .doc 或含宏的 .docm，请另存为 .docx")
+    if extension not in {".pdf", ".docx"}:
+        raise HTTPException(status_code=415, detail="文档图片检测目前支持 PDF 和 DOCX")
+    if actor.get("mode") == "public":
+        _record_public_upload_consent(
+            request,
+            data,
+            idempotency_key=idempotency_key,
+            upload_consent=upload_consent,
+            consent_version=consent_version,
+            terms_sha256=terms_sha256,
+            privacy_sha256=privacy_sha256,
+        )
+    try:
+        task, access_token, created = await run_in_threadpool(
+            document_jobs.create,
+            filename=filename,
+            mime=file.content_type or "application/octet-stream",
+            size=len(data),
+            sha256=hashlib.sha256(data).hexdigest(),
+            # Embedded document images use the same calibrated primary path as
+            # Fast mode. Swarm remains an image-only user choice for now.
+            mode="fast",
+            actor=actor,
+            source=data,
+            owner_key=owner_key,
+            idempotency_key=idempotency_key,
+            token_secret=DOCUMENT_TASK_TOKEN_SECRET,
+            max_active=DOCUMENT_MAX_PENDING_TASKS,
+            max_owner_active=DOCUMENT_MAX_OWNER_ACTIVE,
+        )
+    except document_jobs.DocumentJobCapacityError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail=str(exc),
+            headers={"Retry-After": "5"},
+        ) from exc
+    except document_jobs.DocumentJobIdempotencyConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if task.get("status") in {"queued", "running"}:
+        _schedule_document_task(task["id"])
+    return {
+        **document_jobs.public_payload(task),
+        "accessToken": access_token,
+        "idempotentReplay": not created,
+    }
+
+
+@app.get("/api/document-detections/{task_id}")
+async def get_document_detection(
+    task_id: str,
+    request: Request,
+    after: str = Query(default=""),
+    wait: int = Query(default=0, ge=0, le=20),
+    assetOffset: int = Query(default=0, ge=0),
+    assetLimit: int = Query(default=24, ge=1, le=100),
+) -> dict:
+    actor = await _require_developer_access(request)
+    task = _require_document_task(request, task_id, actor)
+    deadline = time.monotonic() + wait
+    while after and task.get("updatedAt") == after and task.get("status") in {"queued", "running"} and time.monotonic() < deadline:
+        await asyncio.sleep(0.35)
+        task = _require_document_task(request, task_id, actor)
+    return document_jobs.public_payload(task, asset_offset=assetOffset, asset_limit=assetLimit)
+
+
+@app.post("/api/document-detections/{task_id}/cancel")
+async def cancel_document_detection(task_id: str, request: Request) -> dict:
+    actor = await _require_developer_access(request)
+    _require_session_csrf(request, actor)
+    task = _require_document_task(request, task_id, actor)
+    if task.get("status") not in {"queued", "running"}:
+        return document_jobs.public_payload(task)
+    task = await run_in_threadpool(document_jobs.update, task_id, status="cancelled", stage="cancelled")
+    worker = _DOCUMENT_WORKERS.get(task_id)
+    if worker and not worker.done():
+        worker.cancel()
+    return document_jobs.public_payload(task)
 
 
 @app.post("/api/detect")

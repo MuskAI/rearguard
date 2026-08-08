@@ -14,12 +14,14 @@ import {
   AccountUser,
   ApiRequestError,
   DetectResult,
+  DocumentDetectionTask,
   FileType,
   HealthStatus,
   ImageAgentJob,
   ImageHistoryRecord,
   VideoHistoryRecord,
   detect,
+  cancelDocumentDetection,
   deleteHistory,
   deleteImageHistory,
   deleteVideoHistory,
@@ -27,6 +29,7 @@ import {
   downloadAccountReport,
   downloadReport,
   fetchCurrentUser,
+  fetchDocumentDetection,
   fetchHealth,
   fetchHistory,
   fetchHistoryItem,
@@ -40,6 +43,7 @@ import {
   runProvenance,
   SESSION_EXPIRED_EVENT,
   startImageAgent,
+  startDocumentDetection,
   waitForImageAgentJob,
 } from "./api";
 import type { AgentHistoryEntry, AgentOutcome, AgentProgress, ImageAnalysisMode, PendingFile } from "./agentTypes";
@@ -51,7 +55,9 @@ import AccountMenu from "./components/AccountMenu";
 import AgentResult from "./components/AgentResult";
 import AuthDialog from "./components/AuthDialog";
 import BrandArtIcon from "./components/BrandArtIcon";
+import { AgentAvatar } from "./components/BrandSystem";
 import DeveloperPlatform from "./components/DeveloperPlatform";
+import DocumentBatchResult from "./components/DocumentBatchResult";
 import HuijianBrand from "./components/HuijianBrand";
 import OfficialHome from "./components/OfficialHome";
 import ResultFeedback from "./components/ResultFeedback";
@@ -62,11 +68,13 @@ import {
 } from "./analytics";
 import "./interaction.css";
 import "./experience.css";
+import "./c-scheme.css";
 
 const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 256 * 1024 * 1024;
 const AGENT_POLL_INITIAL_MS = 1_200;
 const AGENT_POLL_RATE_LIMIT_RETRIES = 8;
+const DOCUMENT_TASK_SESSION_KEY = "huijian-active-document-task";
 const ACCEPTED_FILES = "image/jpeg,image/png,image/webp,image/bmp,image/gif,image/heic,image/heif,.heic,.heif,video/mp4,video/quicktime,video/webm,application/pdf,.txt,.md,.csv,.json,.log,.docx,.pdf,.mp4,.mov,.webm";
 
 type UploadKind = "image" | "video" | "audio" | "document" | "unknown";
@@ -79,6 +87,10 @@ type FallbackOffer = {
   submitted: boolean;
   jobId?: string;
 };
+
+function documentSessionOwner(account: AccountUser | null) {
+  return account?.account_uuid ? `account:${account.account_uuid}` : account ? `user:${account.Userid}` : "guest";
+}
 
 function initialAppView(): AppView {
   const params = new URLSearchParams(window.location.search);
@@ -98,6 +110,11 @@ function inferKind(name: string): UploadKind {
 function isHeifImage(name: string) {
   const ext = name.split(".").pop()?.toLowerCase() || "";
   return ext === "heic" || ext === "heif";
+}
+
+function extractsEmbeddedImages(name: string) {
+  const ext = name.split(".").pop()?.toLowerCase() || "";
+  return ext === "pdf" || ext === "docx";
 }
 
 function kindLabel(kind: UploadKind) {
@@ -228,6 +245,22 @@ function progressFromJob(job: ImageAgentJob, mode: ImageAnalysisMode): AgentProg
   return { title: "文件已安全接收", detail: "正在确认格式并安排分析能力", percent: Math.min(progress, 28), stage: "validate", experts: job.experts, analysisMode: mode };
 }
 
+function progressFromDocument(task: DocumentDetectionTask): AgentProgress {
+  const details: Record<string, { title: string; detail: string; stage: AgentProgress["stage"] }> = {
+    queued: { title: "文档已进入队列", detail: "正在安排安全解析任务", stage: "validate" },
+    validating: { title: "正在校验文档", detail: "检查格式、结构和安全限制", stage: "validate" },
+    extracting: { title: "正在提取图片", detail: "解析正文、页眉、页脚与 PDF 页面资源", stage: "dispatch" },
+    detecting: { title: "正在逐张检测", detail: `已完成 ${task.completed}/${task.discovered || "待确认"} 张，结果将持续出现`, stage: "evidence" },
+    aggregating: { title: "正在汇总文档结论", detail: "整理真实、AI 生成与失败项目", stage: "report" },
+    completed: { title: "文档检测完成", detail: `已完成 ${task.succeeded} 张图片检测`, stage: "report" },
+    partial_success: { title: "文档检测部分完成", detail: `${task.succeeded} 张成功，${task.failed} 张失败`, stage: "report" },
+    failed: { title: "文档检测未完成", detail: task.error || "文档解析或检测失败", stage: "report" },
+    cancelled: { title: "文档检测已取消", detail: "已停止继续提交图片", stage: "report" },
+  };
+  const copy = details[task.stage] || details[task.status] || details.queued;
+  return { ...copy, percent: Math.max(4, Math.min(Number(task.progress || 0), 100)) };
+}
+
 export default function App() {
   const [view, setView] = useState<AppView>(initialAppView);
   const [user, setUser] = useState<AccountUser | null>(null);
@@ -246,6 +279,7 @@ export default function App() {
   const [pendingFile, setPendingFile] = useState<PendingFile | null>(null);
   const [progress, setProgress] = useState<AgentProgress | null>(null);
   const [outcome, setOutcome] = useState<AgentOutcome | null>(null);
+  const [documentTask, setDocumentTask] = useState<DocumentDetectionTask | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
   const [actionError, setActionError] = useState("");
   const [failedAction, setFailedAction] = useState<"provenance" | "download" | null>(null);
@@ -276,6 +310,9 @@ export default function App() {
   const pendingSwarmFileRef = useRef<File | null>(null);
   const pendingGuestFileRef = useRef<File | null>(null);
   const activeJobIdRef = useRef<string | null>(null);
+  const activeDocumentTaskIdRef = useRef<string | null>(null);
+  const documentTaskTokenRef = useRef("");
+  const documentRestoreAttemptRef = useRef("");
   const webRequestKeysRef = useRef(new WeakMap<File, Partial<Record<ImageAnalysisMode, string>>>());
   const historyOutcomeCacheRef = useRef(new Map<string, AgentOutcome>());
   const lastTrackedPageRef = useRef<string | null>(null);
@@ -364,6 +401,78 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!authReady || view !== "workspace") return;
+    const owner = documentSessionOwner(user);
+    if (documentRestoreAttemptRef.current === owner || activeDocumentTaskIdRef.current) return;
+    documentRestoreAttemptRef.current = owner;
+    let saved: { id?: string; accessToken?: string; owner?: string } | null = null;
+    try {
+      saved = JSON.parse(window.sessionStorage.getItem(DOCUMENT_TASK_SESSION_KEY) || "null");
+    } catch {
+      window.sessionStorage.removeItem(DOCUMENT_TASK_SESSION_KEY);
+    }
+    if (!saved?.id || saved.owner !== owner) {
+      if (saved && saved.owner !== owner) window.sessionStorage.removeItem(DOCUMENT_TASK_SESSION_KEY);
+      return;
+    }
+
+    const controller = new AbortController();
+    const token = ++runTokenRef.current;
+    runControllerRef.current = controller;
+    activeDocumentTaskIdRef.current = saved.id;
+    documentTaskTokenRef.current = saved.accessToken || "";
+    setBusy(true);
+    void (async () => {
+      let task = await fetchDocumentDetection(saved.id!, saved.accessToken || "", {
+        limit: 100,
+        signal: controller.signal,
+      });
+      if (runTokenRef.current !== token) return;
+      setPendingFile({ name: task.filename, size: task.size, typeLabel: "文档" });
+      setDocumentTask(task);
+      setProgress(["queued", "running"].includes(task.status) ? progressFromDocument(task) : null);
+      while (["queued", "running"].includes(task.status)) {
+        task = await fetchDocumentDetection(task.id, saved.accessToken || "", {
+          after: task.updatedAt,
+          wait: 20,
+          limit: 100,
+          signal: controller.signal,
+        });
+        if (runTokenRef.current !== token) return;
+        setDocumentTask(task);
+        setProgress(progressFromDocument(task));
+      }
+      if (task.assetTotal > task.assets.length) {
+        const assets = [...task.assets];
+        for (let offset = assets.length; offset < task.assetTotal; offset += 100) {
+          const page = await fetchDocumentDetection(task.id, saved.accessToken || "", {
+            offset,
+            limit: 100,
+            signal: controller.signal,
+          });
+          assets.push(...page.assets);
+        }
+        task = { ...task, assets };
+      }
+      activeDocumentTaskIdRef.current = null;
+      setDocumentTask(task);
+      setProgress(null);
+    })().catch((error) => {
+      if (isAbort(error) || runTokenRef.current !== token) return;
+      activeDocumentTaskIdRef.current = null;
+      if (error instanceof Error && /不存在|404/.test(error.message)) {
+        window.sessionStorage.removeItem(DOCUMENT_TASK_SESSION_KEY);
+      }
+    }).finally(() => {
+      if (runTokenRef.current === token) {
+        runControllerRef.current = null;
+        setBusy(false);
+      }
+    });
+    return () => controller.abort();
+  }, [authReady, user, view]);
+
+  useEffect(() => {
     document.title = view === "home" ? "慧鉴AI - 数字内容鉴伪" : view === "developer" ? "开发者平台 - 慧鉴AI" : "鉴伪工作台 - 慧鉴AI";
     window.requestAnimationFrame(() => {
       const selector = view === "home" ? "#official-home-title" : view === "developer" ? ".developer-topbar h1" : ".topbar-title h1";
@@ -382,22 +491,24 @@ export default function App() {
   }, [analyticsEnabled, authReady, user?.Userid, view]);
 
   const outcomeId = outcome?.id;
+  const documentTaskId = documentTask?.id;
   useEffect(() => {
     if (!user || !outcome || !activeKey || outcome.id !== activeKey) return;
     historyOutcomeCacheRef.current.set(`${user.Userid}:${activeKey}`, outcome);
   }, [activeKey, outcome, user]);
 
   useEffect(() => {
-    if (!progress && !outcomeId && !errorMessage && !fallbackOffer) return;
+    if (!progress && !outcomeId && !documentTaskId && !errorMessage && !fallbackOffer) return;
     window.requestAnimationFrame(() => {
-      if (outcomeId) {
-        resultRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+      const behavior: ScrollBehavior = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+      if (outcomeId || (documentTaskId && ["completed", "partial_success", "failed"].includes(documentTask?.status || ""))) {
+        resultRef.current?.scrollIntoView({ block: "start", behavior });
         resultRef.current?.focus({ preventScroll: true });
         return;
       }
-      workspaceRef.current?.scrollTo({ top: workspaceRef.current.scrollHeight, behavior: "smooth" });
+      workspaceRef.current?.scrollTo({ top: workspaceRef.current.scrollHeight, behavior });
     });
-  }, [errorMessage, fallbackOffer, outcomeId, progress]);
+  }, [documentTask?.status, documentTaskId, errorMessage, fallbackOffer, outcomeId, progress]);
 
   const resetTask = useCallback(() => {
     runTokenRef.current += 1;
@@ -412,6 +523,7 @@ export default function App() {
     setHistoryDetailLoading(false);
     setProgress(null);
     setOutcome(null);
+    setDocumentTask(null);
     setErrorMessage("");
     setActionError("");
     setFailedAction(null);
@@ -423,6 +535,9 @@ export default function App() {
     pendingGuestFileRef.current = null;
     setActiveKey(undefined);
     activeJobIdRef.current = null;
+    activeDocumentTaskIdRef.current = null;
+    documentTaskTokenRef.current = "";
+    window.sessionStorage.removeItem(DOCUMENT_TASK_SESSION_KEY);
   }, []);
 
   useEffect(() => {
@@ -653,6 +768,20 @@ export default function App() {
   }
 
   function stopWaitingForTask() {
+    const documentTaskId = activeDocumentTaskIdRef.current;
+    if (documentTaskId) {
+      const accessToken = documentTaskTokenRef.current;
+      runTokenRef.current += 1;
+      runControllerRef.current?.abort();
+      runControllerRef.current = null;
+      activeDocumentTaskIdRef.current = null;
+      setBusy(false);
+      setProgress(null);
+      void cancelDocumentDetection(documentTaskId, accessToken)
+        .then((task) => setDocumentTask(task))
+        .catch(() => setErrorMessage("已停止本地等待，但服务器取消请求未确认。任务状态仍可稍后查询。"));
+      return;
+    }
     const jobId = activeJobIdRef.current;
     const file = retryFileRef.current;
     const previewUrl = previewUrlRef.current || undefined;
@@ -675,6 +804,57 @@ export default function App() {
       return;
     }
     setErrorMessage("已停止等待。服务器端若已接收文件，任务仍可能继续运行。当前服务暂不支持真正取消任务。");
+  }
+
+  async function runDocument(
+    file: File,
+    token: number,
+    controller: AbortController,
+    ownerAccount: AccountUser | null,
+  ) {
+    setProgress({ title: "正在安全接收文档", detail: "将提取全部可用图片，并逐张调用快速模型", percent: 8, stage: "validate" });
+    let task = await startDocumentDetection(file, "fast", controller.signal);
+    if (runTokenRef.current !== token) return;
+    const accessToken = task.accessToken || "";
+    documentTaskTokenRef.current = accessToken;
+    activeDocumentTaskIdRef.current = task.id;
+    window.sessionStorage.setItem(DOCUMENT_TASK_SESSION_KEY, JSON.stringify({
+      id: task.id,
+      accessToken,
+      owner: documentSessionOwner(ownerAccount),
+    }));
+    setDocumentTask(task);
+    setProgress(progressFromDocument(task));
+
+    while (["queued", "running"].includes(task.status)) {
+      task = await fetchDocumentDetection(task.id, accessToken, {
+        after: task.updatedAt,
+        wait: 20,
+        limit: 100,
+        signal: controller.signal,
+      });
+      if (runTokenRef.current !== token) return;
+      setDocumentTask(task);
+      setProgress(progressFromDocument(task));
+    }
+
+    if (task.assetTotal > task.assets.length) {
+      const assets = [...task.assets];
+      for (let offset = assets.length; offset < task.assetTotal; offset += 100) {
+        const page = await fetchDocumentDetection(task.id, accessToken, {
+          offset,
+          limit: 100,
+          signal: controller.signal,
+        });
+        assets.push(...page.assets);
+      }
+      task = { ...task, assets };
+    }
+    activeDocumentTaskIdRef.current = null;
+    setDocumentTask(task);
+    setProgress(null);
+    if (task.status === "failed") throw new Error(task.error || "文档图片检测失败");
+    if (task.status === "cancelled") throw new Error("文档检测已取消");
   }
 
   async function analyzeFile(file: File, modeOverride = imageAnalysisMode, accountOverride?: AccountUser) {
@@ -734,11 +914,15 @@ export default function App() {
         setProgress({ title: "鉴伪完成", detail: "视频风险与关键指标已经整理完成", percent: 100, stage: "report" });
         setOutcome({ kind: "video", id: `video:${response.result.itemid}`, result: response.result, file, previewUrl });
       } else {
-        setProgress({ title: "正在分析文档", detail: "提取正文并检查生成式写作线索", percent: 48, stage: "evidence" });
-        const result = await detect(file, "document", controller.signal);
-        if (runTokenRef.current !== token) return;
-        setProgress({ title: "鉴伪完成", detail: "文本结论与证据维度已经整理完成", percent: 100, stage: "report" });
-        setOutcome({ kind: "evidence", id: `evidence:${result.taskId}`, result, file });
+        if (extractsEmbeddedImages(file.name)) {
+          await runDocument(file, token, controller, accountOverride || user);
+        } else {
+          setProgress({ title: "正在分析文档", detail: "提取正文并检查生成式写作线索", percent: 48, stage: "evidence" });
+          const result = await detect(file, "document", controller.signal);
+          if (runTokenRef.current !== token) return;
+          setProgress({ title: "鉴伪完成", detail: "文本结论与证据维度已经整理完成", percent: 100, stage: "report" });
+          setOutcome({ kind: "evidence", id: `evidence:${result.taskId}`, result, file });
+        }
       }
       const historyUser = accountOverride || user;
       if (historyUser && userIdRef.current === historyUser.Userid) void loadHistoryForUser(historyUser);
@@ -1131,7 +1315,7 @@ export default function App() {
             <GuestLimitGate fileName={pendingGuestFileRef.current?.name} onLogin={() => setAuthOpen(true)} />
           )}
 
-          {!guestLimitReached && !pendingFile && !outcome && !errorMessage && (
+          {!guestLimitReached && !pendingFile && !outcome && !documentTask && !errorMessage && (
             <WelcomeWorkspace
               busy={busy}
               dragging={dragging}
@@ -1150,7 +1334,7 @@ export default function App() {
             />
           )}
 
-          {!guestLimitReached && !pendingFile && !outcome && errorMessage && (
+          {!guestLimitReached && !pendingFile && !outcome && !documentTask && errorMessage && (
             <div className="agent-error-message workspace-error-state" role="alert">
               <span><Bot size={18} /></span>
               <div>
@@ -1221,11 +1405,16 @@ export default function App() {
                   />
                 </div>
               )}
+              {documentTask && (
+                <div ref={outcome ? undefined : resultRef} className="result-anchor" role="region" aria-label="文档图片检测结果" aria-live="polite" tabIndex={-1}>
+                  <DocumentBatchResult task={documentTask} />
+                </div>
+              )}
             </div>
           )}
         </div>
 
-        {(pendingFile || outcome) && (
+        {(pendingFile || outcome || documentTask) && (
           <div className="composer-dock">
             <button type="button" className="composer-compact" disabled={busy} onClick={() => fileInputRef.current?.click()}>
               <span className="composer-attach"><Paperclip size={18} /></span>
@@ -1249,7 +1438,7 @@ function GuestLimitGate({ fileName, onLogin }: { fileName?: string; onLogin: () 
   return (
     <section className="guest-limit-gate" aria-labelledby="guest-limit-title">
       <div className="guest-limit-visual" aria-hidden="true">
-        <img src="/brand/huijian-mark-v3.webp" alt="" />
+        <AgentAvatar size={68} state="idle" />
         <span><ShieldCheck size={18} /></span>
       </div>
       <p>访客体验已完成</p>
@@ -1308,7 +1497,7 @@ function WelcomeWorkspace({
             <small>按所选模式调度</small>
           </div>
           <button type="button" className="upload-stage-core" disabled={busy} onClick={onOpenFile}>
-            <div className="upload-stage-icon"><BrandArtIcon name="workflow" /></div>
+            <div className="upload-stage-icon"><AgentAvatar size={88} state={dragging ? "receiving" : "idle"} label="小鉴文件接收入口" /></div>
             <h3>{dragging ? "松开即可开始鉴伪" : "上传或拖放待鉴别内容"}</h3>
             <p>图片、视频和文档将自动进入对应证据链路</p>
             <span className="primary-button upload-button"><Paperclip size={17} /> 选择文件</span>
@@ -1316,7 +1505,7 @@ function WelcomeWorkspace({
           <div className="capability-strip compact-capability-strip" aria-label="支持的内容类型">
             <div><BrandArtIcon name="image" /><span><strong>图片</strong><small>真假与水印</small></span></div>
             <div><BrandArtIcon name="video" /><span><strong>视频</strong><small>关键帧分析</small></span></div>
-            <div><BrandArtIcon name="document" /><span><strong>文档</strong><small>内容检测</small></span></div>
+            <div><BrandArtIcon name="document" /><span><strong>PDF / Word</strong><small>提图逐张检测</small></span></div>
           </div>
           <div className="upload-policy-footer">
             {!user && (
@@ -1326,7 +1515,7 @@ function WelcomeWorkspace({
               </label>
             )}
             {consentWarning && !user && <p className="guest-consent-warning" role="alert">勾选授权后即可选择或拖放文件。</p>}
-            <small className="upload-limits">支持手机实况照片与 PDF 正文提取 · 图片与文档最高 {formatBytes(maxUploadBytes)} · 视频最高 {formatBytes(MAX_VIDEO_BYTES)}</small>
+            <small className="upload-limits">支持手机实况照片、PDF 与 DOCX 图片提取 · 图片与文档最高 {formatBytes(maxUploadBytes)} · 视频最高 {formatBytes(MAX_VIDEO_BYTES)}</small>
           </div>
         </section>
       </section>
@@ -1344,7 +1533,7 @@ function AgentProgressPanel({ progress, onStopWaiting }: { progress: AgentProgre
   const stageIndex = current.stage === "report" ? 2 : current.stage === "evidence" ? 1 : 0;
   return (
     <div className="agent-progress-message" role="status" aria-live="polite">
-      <div className="agent-avatar"><img src="/brand/huijian-mark-v3.webp" alt="" /></div>
+      <div className="agent-avatar"><AgentAvatar size={40} state={current.percent >= 100 ? "complete" : current.stage === "validate" ? "receiving" : "processing"} /></div>
       <div className="progress-panel">
         <div className="progress-heading"><span><LoaderCircle size={17} className={current.percent < 100 ? "spin" : ""} /></span><div><strong>{current.title}</strong><p>{current.detail}</p></div><b>{Math.round(current.percent)}%</b></div>
         <div className="progress-track" role="progressbar" aria-label={current.title} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(current.percent)}><i style={{ width: `${current.percent}%` }} /></div>

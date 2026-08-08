@@ -93,6 +93,26 @@ if ! sudo grep -q '^JIANZHEN_DATA_DIR=' /etc/realguard/jianzhen-v2.env; then
   printf 'JIANZHEN_DATA_DIR=/opt/jianzhen-v2/data\n' \
     | sudo tee -a /etc/realguard/jianzhen-v2.env >/dev/null
 fi
+detector_token="$(sudo awk -F= '/^REALGUARD_DETECTOR_INTERNAL_TOKEN=/{print substr($0, index($0, "=") + 1); exit}' /etc/realguard/realguard-backend.env)"
+if [[ ! "$detector_token" =~ ^[A-Za-z0-9_-]{32,256}$ ]]; then
+  printf 'The primary detector token is missing or invalid. Deploy V1 first.\n' >&2
+  exit 1
+fi
+detector_port="$(systemctl show realguard-detector-backend.service -p Environment --value \
+  | tr ' ' '\n' \
+  | sed -n 's/^REALGUARD_DETECTOR_PORT=//p' \
+  | tail -n 1)"
+if [[ ! "$detector_port" =~ ^[0-9]{2,5}$ ]]; then
+  detector_port=15001
+fi
+sudo sed -i \
+  -e '/^JIANZHEN_PRIMARY_IMAGE_DETECT_URL=/d' \
+  -e '/^JIANZHEN_PRIMARY_IMAGE_DETECT_TOKEN=/d' \
+  /etc/realguard/jianzhen-v2.env
+printf 'JIANZHEN_PRIMARY_IMAGE_DETECT_URL=http://127.0.0.1:%s/image\n' "$detector_port" \
+  | sudo tee -a /etc/realguard/jianzhen-v2.env >/dev/null
+printf 'JIANZHEN_PRIMARY_IMAGE_DETECT_TOKEN=%s\n' "$detector_token" \
+  | sudo tee -a /etc/realguard/jianzhen-v2.env >/dev/null
 if ! sudo grep -q '^REALGUARD_PRIVACY_ERASURE_LEDGER_PATH=' /etc/realguard/jianzhen-v2.env; then
   printf 'REALGUARD_PRIVACY_ERASURE_LEDGER_PATH=/opt/realguard-data/privacy-erasure/privacy-erasure-tombstones.sqlite3\n' \
     | sudo tee -a /etc/realguard/jianzhen-v2.env >/dev/null
@@ -189,6 +209,7 @@ for _ in {1..30}; do
 done
 test "$health_ready" = "1"
 systemctl is-active --quiet jianzhen-v2-backend.service
+curl -fsS --connect-timeout 2 --max-time 12 "http://127.0.0.1:$detector_port/ready" >/dev/null
 
 sudo rm -rf /var/www/v2.next "${frontend_release_root}.next"
 sudo install -d -m 755 "${frontend_release_root}.next"

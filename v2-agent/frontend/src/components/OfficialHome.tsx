@@ -95,6 +95,8 @@ export default function OfficialHome({
   const siteRef = useRef<HTMLDivElement>(null);
   const developerRootRef = useRef<HTMLDivElement>(null);
   const developerTriggerRef = useRef<HTMLButtonElement>(null);
+  const developerMenuRef = useRef<HTMLDivElement>(null);
+  const developerFocusIndexRef = useRef<number | null>(null);
   const mobileNavRef = useRef<HTMLElement>(null);
   const mobileNavTriggerRef = useRef<HTMLButtonElement>(null);
 
@@ -174,16 +176,67 @@ export default function OfficialHome({
             className={`home-developer-menu ${developerOpen ? "is-open" : ""}`}
             onPointerEnter={() => setDeveloperOpen(true)}
             onPointerLeave={(event) => { if (event.pointerType === "mouse") setDeveloperOpen(false); }}
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node)) setDeveloperOpen(false);
+            }}
           >
-            <button ref={developerTriggerRef} type="button" aria-haspopup="menu" aria-expanded={developerOpen} aria-controls="home-developer-navigation" onClick={() => setDeveloperOpen((value) => !value)}>
+            <button
+              ref={developerTriggerRef}
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded={developerOpen}
+              aria-controls="home-developer-navigation"
+              onClick={() => setDeveloperOpen((value) => !value)}
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+                event.preventDefault();
+                developerFocusIndexRef.current = event.key === "ArrowUp" ? -1 : 0;
+                setDeveloperOpen(true);
+              }}
+            >
               <span>开发者平台</span><ChevronDown size={14} />
             </button>
-            <Presence present={developerOpen}>
+            <Presence
+              present={developerOpen}
+              onEnterComplete={() => {
+                const requested = developerFocusIndexRef.current;
+                if (requested == null) return;
+                const items = developerMenuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]');
+                const index = requested < 0 ? (items?.length || 1) - 1 : requested;
+                items?.[index]?.focus();
+                developerFocusIndexRef.current = null;
+              }}
+            >
               {(phase) => (
-                <div id="home-developer-navigation" className="home-developer-popover" role="menu" aria-label="开发者平台入口" aria-hidden={!developerOpen} data-presence={phase}>
+                <div
+                  ref={developerMenuRef}
+                  id="home-developer-navigation"
+                  className="home-developer-popover"
+                  role="menu"
+                  aria-label="开发者平台入口"
+                  aria-hidden={!developerOpen}
+                  data-presence={phase}
+                  onKeyDown={(event) => {
+                    if (!["ArrowDown", "ArrowUp", "Home", "End", "Escape"].includes(event.key)) return;
+                    event.preventDefault();
+                    if (event.key === "Escape") {
+                      setDeveloperOpen(false);
+                      developerTriggerRef.current?.focus();
+                      return;
+                    }
+                    const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
+                    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+                    const next = event.key === "Home"
+                      ? 0
+                      : event.key === "End"
+                        ? items.length - 1
+                        : (Math.max(current, 0) + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+                    items[next]?.focus();
+                  }}
+                >
                   <button type="button" role="menuitem" tabIndex={developerOpen ? 0 : -1} onClick={() => openDeveloper("overview")}><BrandArtIcon name="developer" /><div><strong>平台概览</strong><small>API Key、额度与调用</small></div><ArrowRight size={15} /></button>
-                  <button type="button" role="menuitem" tabIndex={developerOpen ? 0 : -1} onClick={() => openDeveloper("tester")}><BrandArtIcon name="fast" /><div><strong>在线调试</strong><small>发送真实检测请求</small></div><ArrowRight size={15} /></button>
-                  <button type="button" role="menuitem" tabIndex={developerOpen ? 0 : -1} onClick={() => openDeveloper("docs")}><BrandArtIcon name="report" /><div><strong>接入文档</strong><small>多语言示例与错误码</small></div><ArrowRight size={15} /></button>
+                  <button type="button" role="menuitem" tabIndex={-1} onClick={() => openDeveloper("tester")}><BrandArtIcon name="fast" /><div><strong>在线调试</strong><small>发送真实检测请求</small></div><ArrowRight size={15} /></button>
+                  <button type="button" role="menuitem" tabIndex={-1} onClick={() => openDeveloper("docs")}><BrandArtIcon name="report" /><div><strong>接入文档</strong><small>多语言示例与错误码</small></div><ArrowRight size={15} /></button>
                 </div>
               )}
             </Presence>
@@ -234,11 +287,9 @@ export default function OfficialHome({
             </div>
           </div>
 
-          <figure className="home-hero-visual" aria-label="慧鉴AI光学取证扫描仪" data-reveal>
+          <figure className="home-hero-visual companion-hero-visual" aria-label="图片、视频与文档经过小鉴核验后形成证据" data-reveal>
             <div className="home-hero-visual-stage">
-              <span className="hero-orbit orbit-one" aria-hidden="true" />
-              <span className="hero-orbit orbit-two" aria-hidden="true" />
-              <img src="/brand/huijian-forensic-scanner-v3.webp" alt="慧鉴AI光学取证扫描仪" width="900" height="1112" />
+              <img src="/brand/huijian-companion-evidence-flow-c.webp" alt="图片、视频和文档进入小鉴核验流程并形成证据结果" width="1120" height="1400" />
               <span className="hero-art-token token-fast"><BrandArtIcon name="fast" /><b>快速检测</b></span>
               <span className="hero-art-token token-swarm"><BrandArtIcon name="swarm" /><b>Swarm</b></span>
               <span className="hero-art-token token-report"><BrandArtIcon name="report" /><b>证据报告</b></span>

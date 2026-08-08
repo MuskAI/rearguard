@@ -40,7 +40,7 @@
     .sidebar-head{display:flex;align-items:center;gap:8px}
     .sidebar-close,.mobile-nav-toggle,.sidebar-backdrop{display:none}
     .brand{display:flex;align-items:center;gap:12px;height:56px;padding:0 10px;color:#fff}
-    .brand-mark{width:36px;height:36px;border-radius:var(--radius);background:#f4f6f4 url("/brand/generated/huijian-icon-atlas-v2.webp") no-repeat 0 0/300% 300%;border:1px solid #79918a;display:block;flex:0 0 auto}
+    .brand-mark{width:36px;height:36px;border-radius:var(--radius);background:#f4f6f4 url("/favicon.svg") no-repeat center/30px 30px;border:1px solid #79918a;display:block;flex:0 0 auto}
     .brand-title{font-weight:800;font-size:17px}
     .brand-sub{font-family:"IBM Plex Mono",monospace;font-size:10px;color:#8fa3ba;text-transform:uppercase}
     .nav-group{margin-top:18px}
@@ -55,7 +55,10 @@
     .crumbs{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:14px}
     .crumbs strong{color:var(--ink)}
     .top-actions{display:flex;align-items:center;gap:8px}
-    .avatar{width:34px;height:34px;border-radius:50%;background:#275f55;color:#fff;display:grid;place-items:center;font-weight:800}
+    .avatar{position:relative;width:34px;height:34px;border:1px solid #7696c3;border-radius:7px;background:#315fa9;color:#fff;display:grid;place-items:center;font-weight:800;box-shadow:inset 0 0 0 3px rgba(255,255,255,.12)}
+    .avatar:before,.avatar:after{content:"";position:absolute;width:7px;height:7px;pointer-events:none}
+    .avatar:before{left:4px;top:4px;border-left:1.5px solid #a9c5ff;border-top:1.5px solid #a9c5ff}
+    .avatar:after{right:4px;bottom:4px;border-right:1.5px solid #8ed9cf;border-bottom:1.5px solid #8ed9cf}
     .icon-btn{width:36px;height:36px;border:1px solid var(--line);border-radius:var(--radius);background:#fff;color:#475467;display:grid;place-items:center;transition:background .16s,color .16s,border-color .16s}
     .icon-btn:hover{background:#f4f8f7;color:var(--blue);border-color:#b8c8c3}
     .account-menu{position:relative}

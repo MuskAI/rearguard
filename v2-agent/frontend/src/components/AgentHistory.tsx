@@ -11,7 +11,6 @@ import {
   RefreshCw,
   Search,
   Trash2,
-  UserRound,
   Video,
   X,
 } from "lucide-react";
@@ -20,6 +19,7 @@ import type { RefObject } from "react";
 import type { AccountUser } from "../api";
 import type { AgentHistoryEntry } from "../agentTypes";
 import HuijianBrand from "./HuijianBrand";
+import { UserAvatar } from "./BrandSystem";
 
 interface Props {
   entries: AgentHistoryEntry[];
@@ -148,7 +148,7 @@ function HistoryContent(props: Props & { closeButtonRef?: RefObject<HTMLButtonEl
       <div className="sidebar-account">
         {props.user ? (
           <>
-            <span className="account-avatar"><UserRound size={17} /></span>
+            <span className="account-avatar"><UserAvatar seed={props.user.account_uuid || String(props.user.Userid)} displayName={props.user.username} size={34} status="online" /></span>
             <span className="account-copy">
               <strong>{props.user.username || "慧鉴用户"}</strong>
               <small>{maskPhone(props.user.phone || "")}</small>
