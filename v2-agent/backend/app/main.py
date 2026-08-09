@@ -1235,17 +1235,63 @@ async def _enforce_report_qa_rate_limit(actor: dict, request: Request) -> None:
         _REPORT_QA_REQUESTS[key] = recent
 
 
-def _report_qa_client_uuid(payload: dict, field: str) -> str:
+def _report_qa_client_uuid(payload: dict, field: str, *, fallback: str | None = None) -> str:
     value = str(payload.get(field) or "").strip()
     if not value:
-        return str(uuid.uuid4())
+        return fallback or str(uuid.uuid4())
     try:
         return str(uuid.UUID(value))
     except (TypeError, ValueError, AttributeError) as exc:
         raise HTTPException(status_code=400, detail=f"{field} 无效") from exc
 
 
-def _report_qa_tracking(payload: dict, actor: dict, item: dict | None = None) -> dict[str, Any]:
+def _report_qa_session_uuid(
+    request: Request,
+    actor: dict,
+    *,
+    task_id: str,
+    report_id: str,
+    legacy_detection_id: int | None,
+    media_type: str,
+    file_name: str,
+) -> str:
+    """Derive a stable fallback for cached clients that predate conversation IDs."""
+    if actor.get("mode") != "session" or len(DOCUMENT_TASK_TOKEN_SECRET) < 32:
+        return str(uuid.uuid4())
+    browser_session = request.cookies.get(SESSION_CSRF_COOKIE, "").strip()[:256]
+    if not browser_session:
+        browser_session = request.cookies.get("session", "").strip()[:512]
+    account_uuid = str(actor.get("accountUuid") or "").strip()
+    if not browser_session or not account_uuid:
+        return str(uuid.uuid4())
+    binding = next(
+        (
+            value
+            for value in (
+                f"report:{report_id}" if report_id else "",
+                f"task:{task_id}" if task_id else "",
+                f"legacy:{legacy_detection_id}" if legacy_detection_id else "",
+                f"media:{media_type}:{file_name}" if media_type or file_name else "",
+            )
+            if value
+        ),
+        "unbound",
+    )
+    material = "\0".join(("report-qa-session-v1", account_uuid, browser_session, binding))
+    digest = hmac.new(
+        DOCUMENT_TASK_TOKEN_SECRET.encode("utf-8"),
+        material.encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    return str(uuid.UUID(bytes=digest[:16], version=4))
+
+
+def _report_qa_tracking(
+    payload: dict,
+    actor: dict,
+    request: Request,
+    item: dict | None = None,
+) -> dict[str, Any]:
     media = payload.get("media") if isinstance(payload.get("media"), dict) else {}
     task_id = ""
     report_id = ""
@@ -1269,8 +1315,21 @@ def _report_qa_tracking(payload: dict, actor: dict, item: dict | None = None) ->
                 raise HTTPException(status_code=400, detail="检测记录编号无效") from exc
             if legacy_detection_id <= 0:
                 raise HTTPException(status_code=400, detail="检测记录编号无效")
+    fallback_conversation_id = _report_qa_session_uuid(
+        request,
+        actor,
+        task_id=task_id,
+        report_id=report_id,
+        legacy_detection_id=legacy_detection_id,
+        media_type=media_type,
+        file_name=file_name,
+    )
     return {
-        "conversationId": _report_qa_client_uuid(payload, "conversationId"),
+        "conversationId": _report_qa_client_uuid(
+            payload,
+            "conversationId",
+            fallback=fallback_conversation_id,
+        ),
         "turnId": _report_qa_client_uuid(payload, "turnId"),
         "createdAt": storage.now_iso(),
         "actor": actor,
@@ -1331,7 +1390,7 @@ async def _resolve_report_qa_context(request: Request, payload: dict) -> tuple[A
             item,
             public=actor.get("mode") != "admin",
         )
-    return report_context, actor, _report_qa_tracking(payload, actor, item)
+    return report_context, actor, _report_qa_tracking(payload, actor, request, item)
 
 
 async def _acquire_report_qa_slot() -> None:

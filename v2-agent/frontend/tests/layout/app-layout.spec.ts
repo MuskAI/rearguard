@@ -875,6 +875,15 @@ test("登录用户可以围绕当前检测报告连续提问", async ({ page }) 
       .__reportQaStreamRequests || []
   ));
   expect(followUpRequests).toHaveLength(2);
+  expect(followUpRequests[0].conversationId).toBeTruthy();
+  expect(followUpRequests[1].conversationId).toBe(followUpRequests[0].conversationId);
+  expect(followUpRequests[0].turnId).toBeTruthy();
+  expect(followUpRequests[1].turnId).not.toBe(followUpRequests[0].turnId);
+  expect(followUpRequests[0].media).toEqual({
+    type: "image",
+    fileName: "qa-review.png",
+    legacyDetectionId: 902,
+  });
   expect(followUpRequests[1].history).toEqual([
     { role: "user", content: "为什么判断为 AI 生成？" },
     { role: "assistant", content: "报告在右下角定位到平台水印，并与生成痕迹相互印证。" },

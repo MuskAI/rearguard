@@ -50,6 +50,8 @@ interface StreamRevealState {
 }
 
 const MAX_QUESTION_LENGTH = 500;
+const REPORT_QA_SESSION_PREFIX = "huijian-report-qa-session:";
+const inMemoryConversationSessions = new Map<string, string>();
 
 function normalizeScore(value: unknown): number | null {
   const number = Number(value);
@@ -295,6 +297,35 @@ function clientUuid() {
   return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`;
 }
 
+const clientUuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isClientUuid(value: string | null): value is string {
+  return Boolean(value && clientUuidPattern.test(value));
+}
+
+function conversationSessionId(outcomeId: string) {
+  const memoryValue = inMemoryConversationSessions.get(outcomeId);
+  if (memoryValue) return memoryValue;
+  const storageKey = `${REPORT_QA_SESSION_PREFIX}${outcomeId}`;
+  try {
+    const stored = window.sessionStorage.getItem(storageKey);
+    if (isClientUuid(stored)) {
+      inMemoryConversationSessions.set(outcomeId, stored);
+      return stored;
+    }
+  } catch {
+    // Browser privacy modes may disable sessionStorage; memory still keeps the session stable.
+  }
+  const created = clientUuid();
+  inMemoryConversationSessions.set(outcomeId, created);
+  try {
+    window.sessionStorage.setItem(storageKey, created);
+  } catch {
+    // Keep the in-memory value when storage is unavailable.
+  }
+  return created;
+}
+
 function reducedMotionRequested() {
   return typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
@@ -311,7 +342,7 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
   const scrollFrameRef = useRef<number | null>(null);
   const revealRef = useRef<StreamRevealState | null>(null);
   const revealTickRef = useRef<(timestamp: number) => void>(() => undefined);
-  const conversationIdRef = useRef(clientUuid());
+  const conversationIdRef = useRef(conversationSessionId(outcome.id));
   const outcomeRef = useRef(outcome);
   outcomeRef.current = outcome;
   const request = useMemo(() => reportRequest(outcome), [outcome]);
@@ -452,7 +483,7 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
     setStreamingMessageId(null);
     setError("");
     setSuggestions(initialQuestions(outcomeRef.current));
-    conversationIdRef.current = clientUuid();
+    conversationIdRef.current = conversationSessionId(outcomeRef.current.id);
   }, [outcome.id, stopReveal]);
 
   useEffect(() => {

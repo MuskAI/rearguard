@@ -2717,24 +2717,50 @@ def test_report_qa_accepts_bounded_current_page_context_for_logged_in_user(clien
 
     monkeypatch.setattr(main.report_qa_service, "answer", fake_answer)
     client.cookies.set("session", "qa-user")
+    payload = {
+        "question": "为什么判断为假？",
+        "history": [{"role": "user", "content": "先解释水印"}],
+        "report": {
+            "kind": "image",
+            "verdict": "highly_suspected_fake",
+            "explanation": "检测到平台水印",
+            "visibleWatermark": {"detected": True, "provider": "示例平台"},
+        },
+    }
     response = client.post(
         "/api/report-qa",
-        json={
-            "question": "为什么判断为假？",
-            "history": [{"role": "user", "content": "先解释水印"}],
-            "report": {
-                "kind": "image",
-                "verdict": "highly_suspected_fake",
-                "explanation": "检测到平台水印",
-                "visibleWatermark": {"detected": True, "provider": "示例平台"},
-            },
-        },
+        json=payload,
+    )
+    follow_up = client.post(
+        "/api/report-qa",
+        json={**payload, "question": "水印位于哪里？"},
+    )
+    client.cookies.set(main.SESSION_CSRF_COOKIE, "another-browser-session")
+    separate_session = client.post(
+        "/api/report-qa",
+        json={**payload, "question": "这个新会话还有哪些证据？"},
     )
 
     assert response.status_code == 200
+    assert follow_up.status_code == 200
+    assert separate_session.status_code == 200
     assert response.json()["grounded"] is True
-    assert captured["question"] == "为什么判断为假？"
+    assert response.json()["conversationId"] == follow_up.json()["conversationId"]
+    assert response.json()["conversationId"] != separate_session.json()["conversationId"]
+    assert captured["question"] == "这个新会话还有哪些证据？"
     assert captured["report"]["verdict"] == "highly_suspected_fake"
+    with main.storage._connect() as connection:
+        saved = connection.execute(
+            """
+            SELECT conversation_id, COUNT(*) AS turn_count
+            FROM report_qa_turns
+            GROUP BY conversation_id
+            """
+        ).fetchall()
+    assert {row["conversation_id"]: row["turn_count"] for row in saved} == {
+        response.json()["conversationId"]: 2,
+        separate_session.json()["conversationId"]: 1,
+    }
 
 
 def test_report_qa_loads_authoritative_owned_report_and_hides_foreign_report(client, monkeypatch):

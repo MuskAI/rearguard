@@ -876,7 +876,7 @@
           <section class="panel">
             <div class="panel-head">
               <div><h2>用户对话</h2><p>查看用户围绕检测报告提出的问题、系统回答及关联图片。</p></div>
-              <span class="role-badge" id="conversationCount">0 组对话</span>
+              <span class="role-badge" id="conversationCount">0 个会话</span>
             </div>
             <div class="toolbar">
               <input class="input" id="conversationQuery" placeholder="搜索问题、回答或文件名">
@@ -1573,7 +1573,7 @@
       return `<div class="conversation-file"><span class="conversation-thumb"><i class="fa ${icon}" aria-hidden="true"></i></span><span class="conversation-file-copy"><strong title="${esc(conversation.fileName || '')}">${esc(conversation.fileName || '未关联文件名')}</strong><span>${esc(conversation.mediaType || '报告')}${conversation.mediaAvailable?' · 可查看原内容':''}</span></span></div>`;
     }
     function renderConversations(){
-      if($('conversationCount')) $('conversationCount').textContent=`${state.conversationTotal || 0} 组对话`;
+      if($('conversationCount')) $('conversationCount').textContent=`${state.conversationTotal || 0} 个会话`;
       const rows=state.conversations.map(item=>`<tr>
         <td>${conversationMediaCell(item)}</td>
         <td><strong>${esc(item.user?.username || '未识别用户')}</strong><br><span class="mono">${esc(item.user?.phone || '')}</span></td>
@@ -1582,7 +1582,7 @@
         <td>${esc(item.updatedAt || '-')}</td>
         <td><button class="btn mini secondary" onclick="openConversation('${esc(item.id)}')">查看</button></td>
       </tr>`);
-      $('conversations').innerHTML=table(['图片 / 文件','用户','最近问题','对话','更新时间','操作'],rows,'尚无用户对话')+(state.pages.conversations?.hasMore?'<div class="load-more"><button class="btn secondary" onclick="loadConversations(true)">加载更多</button></div>':'');
+      $('conversations').innerHTML=table(['图片 / 文件','用户','最近问题','轮次','更新时间','操作'],rows,'尚无用户会话')+(state.pages.conversations?.hasMore?'<div class="load-more"><button class="btn secondary" onclick="loadConversations(true)">加载更多</button></div>':'');
     }
     async function openConversation(id){
       const dialog=$('conversationDialog');

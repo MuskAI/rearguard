@@ -292,6 +292,8 @@ def test_admin_page_revalidates_session_and_exposes_conversation_workspace(clien
     assert 'href="#conversations" data-route="conversations"' in html
     assert 'id="view-conversations"' in html
     assert 'id="conversationDialog"' in html
+    assert 'id="conversationCount">0 个会话' in html
+    assert "['图片 / 文件','用户','最近问题','轮次','更新时间','操作']" in html
     assert "/api/admin/session" in html
     assert "admin_session_expired" in html
     assert "window.addEventListener('pageshow'" in html
