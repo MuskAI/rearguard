@@ -1403,6 +1403,10 @@ test("Agent Skill 手机页面保持可读并允许横向浏览开发者导航",
   await expect(page.getByRole("button", { name: "复制 Agent Skill 安装指令" })).toBeVisible();
   const copyButtonBox = await page.getByRole("button", { name: "复制 Agent Skill 安装指令" }).boundingBox();
   expect(copyButtonBox?.height || 0).toBeGreaterThanOrEqual(44);
+  const skillPageBox = await page.locator(".developer-agent-skill-page").boundingBox();
+  const copyPanelBox = await page.locator(".agent-skill-copy-panel").boundingBox();
+  expect(skillPageBox ? skillPageBox.x + skillPageBox.width : Number.POSITIVE_INFINITY).toBeLessThanOrEqual(390);
+  expect(copyPanelBox ? copyPanelBox.x + copyPanelBox.width : Number.POSITIVE_INFINITY).toBeLessThanOrEqual(390);
   await expect(page.locator(".agent-skill-client-grid article")).toHaveCount(10);
   expect(await readableTextOffenders(page, ".developer-agent-skill-page")).toEqual([]);
   await expectNoHorizontalOverflow(page);
