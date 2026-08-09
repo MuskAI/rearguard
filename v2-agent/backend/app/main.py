@@ -15,6 +15,7 @@ import io
 import ipaddress
 import logging
 import math
+import sqlite3
 import uuid
 import zipfile
 from contextlib import asynccontextmanager
@@ -1234,7 +1235,82 @@ async def _enforce_report_qa_rate_limit(actor: dict, request: Request) -> None:
         _REPORT_QA_REQUESTS[key] = recent
 
 
-async def _resolve_report_qa_context(request: Request, payload: dict) -> Any:
+def _report_qa_client_uuid(payload: dict, field: str) -> str:
+    value = str(payload.get(field) or "").strip()
+    if not value:
+        return str(uuid.uuid4())
+    try:
+        return str(uuid.UUID(value))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise HTTPException(status_code=400, detail=f"{field} 无效") from exc
+
+
+def _report_qa_tracking(payload: dict, actor: dict, item: dict | None = None) -> dict[str, Any]:
+    media = payload.get("media") if isinstance(payload.get("media"), dict) else {}
+    task_id = ""
+    report_id = ""
+    file_name = ""
+    media_type = ""
+    legacy_detection_id = None
+    if item:
+        file_meta = item.get("fileMeta") if isinstance(item.get("fileMeta"), dict) else {}
+        task_id = str(item.get("taskId") or "").strip()
+        report_id = str(item.get("reportId") or "").strip()
+        file_name = str(file_meta.get("name") or "").strip()
+        media_type = str(file_meta.get("type") or "").strip()
+    else:
+        file_name = str(media.get("fileName") or "").strip()
+        media_type = str(media.get("type") or "").strip()
+        raw_legacy_id = media.get("legacyDetectionId")
+        if raw_legacy_id not in (None, ""):
+            try:
+                legacy_detection_id = int(raw_legacy_id)
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail="检测记录编号无效") from exc
+            if legacy_detection_id <= 0:
+                raise HTTPException(status_code=400, detail="检测记录编号无效")
+    return {
+        "conversationId": _report_qa_client_uuid(payload, "conversationId"),
+        "turnId": _report_qa_client_uuid(payload, "turnId"),
+        "createdAt": storage.now_iso(),
+        "actor": actor,
+        "taskId": task_id or None,
+        "reportId": report_id or None,
+        "legacyDetectionId": legacy_detection_id,
+        "mediaType": media_type or None,
+        "fileName": file_name or None,
+    }
+
+
+def _persist_report_qa_turn(tracking: dict[str, Any], question: Any, result: dict[str, Any]) -> bool:
+    try:
+        storage.put_report_qa_turn(
+            turn_id=tracking["turnId"],
+            conversation_id=tracking["conversationId"],
+            created_at=tracking["createdAt"],
+            actor=tracking["actor"],
+            task_id=tracking.get("taskId"),
+            report_id=tracking.get("reportId"),
+            legacy_detection_id=tracking.get("legacyDetectionId"),
+            media_type=tracking.get("mediaType"),
+            file_name=tracking.get("fileName"),
+            question=str(question or ""),
+            answer=str(result.get("answer") or ""),
+            evidence_refs=result.get("evidenceRefs") if isinstance(result.get("evidenceRefs"), list) else [],
+            suggested_questions=(
+                result.get("suggestedQuestions")
+                if isinstance(result.get("suggestedQuestions"), list)
+                else []
+            ),
+            total_tokens=(result.get("usage") or {}).get("totalTokens", 0),
+        )
+        return True
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        logger.exception("report QA persistence failed")
+        return False
+
+
+async def _resolve_report_qa_context(request: Request, payload: dict) -> tuple[Any, dict, dict[str, Any]]:
     actor = await run_in_threadpool(_require_protected_access, request)
     _require_actor_scope(actor, "reports")
     _require_session_csrf(request, actor)
@@ -1244,6 +1320,7 @@ async def _resolve_report_qa_context(request: Request, payload: dict) -> Any:
     if len(report_id) > 128:
         raise HTTPException(status_code=400, detail="报告编号无效")
     report_context = payload.get("report")
+    item = None
     if report_id:
         item = await run_in_threadpool(storage.get_history, report_id)
         if not item:
@@ -1254,7 +1331,7 @@ async def _resolve_report_qa_context(request: Request, payload: dict) -> Any:
             item,
             public=actor.get("mode") != "admin",
         )
-    return report_context
+    return report_context, actor, _report_qa_tracking(payload, actor, item)
 
 
 async def _acquire_report_qa_slot() -> None:
@@ -1281,16 +1358,23 @@ def _report_qa_sse_event(event: dict[str, Any]) -> str:
 
 @app.post("/api/report-qa")
 async def ask_report_question(request: Request, payload: dict = Body(...)) -> dict:
-    report_context = await _resolve_report_qa_context(request, payload)
+    report_context, _actor, tracking = await _resolve_report_qa_context(request, payload)
     await _acquire_report_qa_slot()
 
     try:
-        return await run_in_threadpool(
+        result = await run_in_threadpool(
             report_qa_service.answer,
             report_context,
             payload.get("question"),
             payload.get("history"),
         )
+        saved = await run_in_threadpool(_persist_report_qa_turn, tracking, payload.get("question"), result)
+        return {
+            **result,
+            "conversationId": tracking["conversationId"],
+            "turnId": tracking["turnId"],
+            "saved": saved,
+        }
     except report_qa_service.ReportQaValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except report_qa_service.ReportQaUnavailableError as exc:
@@ -1302,7 +1386,7 @@ async def ask_report_question(request: Request, payload: dict = Body(...)) -> di
 
 @app.post("/api/report-qa/stream")
 async def stream_report_question(request: Request, payload: dict = Body(...)) -> StreamingResponse:
-    report_context = await _resolve_report_qa_context(request, payload)
+    report_context, _actor, tracking = await _resolve_report_qa_context(request, payload)
     await _acquire_report_qa_slot()
     try:
         iterator = await run_in_threadpool(
@@ -1325,10 +1409,28 @@ async def stream_report_question(request: Request, payload: dict = Body(...)) ->
 
     async def event_stream():
         try:
-            yield _report_qa_sse_event({"type": "start", "grounded": True})
+            yield _report_qa_sse_event({
+                "type": "start",
+                "grounded": True,
+                "conversationId": tracking["conversationId"],
+                "turnId": tracking["turnId"],
+            })
             async for event in iterate_in_threadpool(iterator):
                 if await request.is_disconnected():
                     break
+                if event.get("type") == "done":
+                    saved = await run_in_threadpool(
+                        _persist_report_qa_turn,
+                        tracking,
+                        payload.get("question"),
+                        event,
+                    )
+                    event = {
+                        **event,
+                        "conversationId": tracking["conversationId"],
+                        "turnId": tracking["turnId"],
+                        "saved": saved,
+                    }
                 yield _report_qa_sse_event(event)
         except report_qa_service.ReportQaUnavailableError as exc:
             logger.warning("report QA stream interrupted: %s", type(exc.__cause__ or exc).__name__)

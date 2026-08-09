@@ -339,6 +339,7 @@ def replay_v2(rows: list[dict[str, str | None]], database: Path | None) -> int:
                     (task_id, report_id),
                 ).fetchone()
             for table, clause, params in (
+                ("report_qa_turns", "task_id=? OR report_id=?", (task_id, report_id)),
                 ("report_share_access_events", "report_id=?", (report_id,)),
                 ("report_shares", "report_id=?", (report_id,)),
                 ("report_artifacts_v2", "task_id=? OR report_id=?", (task_id, report_id)),

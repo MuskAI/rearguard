@@ -55,6 +55,18 @@ def test_restore_replay_removes_v2_content_from_an_older_database(monkeypatch, t
         actor={"userId": "user", "accountUuid": "tenant", "keyId": "key"},
     )
     storage.put_history_artifacts(task_id, forensics={"summary": "private"})
+    storage.put_report_qa_turn(
+        turn_id="aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+        conversation_id="11111111-2222-4333-8444-555555555555",
+        created_at="2026-07-20T08:05:00+00:00",
+        actor={"mode": "session", "userId": "user", "accountUuid": "tenant"},
+        task_id=task_id,
+        report_id=report_id,
+        media_type="image",
+        file_name="private.png",
+        question="为什么这样判断？",
+        answer="只依据当前报告回答。",
+    )
     privacy_erasure_ledger.record_tombstone(
         "jianzhen-v2",
         "history",
@@ -69,6 +81,9 @@ def test_restore_replay_removes_v2_content_from_an_older_database(monkeypatch, t
     with storage._connect() as connection:
         assert connection.execute(
             "SELECT COUNT(*) FROM history_artifacts"
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM report_qa_turns"
         ).fetchone()[0] == 0
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 

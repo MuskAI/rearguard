@@ -250,10 +250,21 @@ function videoReportContext(outcome: Extract<AgentOutcome, { kind: "video" }>): 
 
 function reportRequest(outcome: AgentOutcome) {
   if (outcome.kind === "evidence") {
-    return { reportId: outcome.result.reportId };
+    return {
+      reportId: outcome.result.reportId,
+      media: {
+        type: outcome.result.fileMeta.type,
+        fileName: outcome.result.fileMeta.name,
+      },
+    };
   }
   return {
     report: outcome.kind === "image" ? imageReportContext(outcome) : videoReportContext(outcome),
+    media: {
+      type: outcome.kind,
+      fileName: outcome.result.filename,
+      legacyDetectionId: outcome.result.itemid,
+    },
   };
 }
 
@@ -273,6 +284,17 @@ function messageId(role: "user" | "assistant") {
   return `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function clientUuid() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") crypto.getRandomValues(bytes);
+  else bytes.forEach((_value, index) => { bytes[index] = Math.floor(Math.random() * 256); });
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const value = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`;
+}
+
 function reducedMotionRequested() {
   return typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
@@ -289,6 +311,7 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
   const scrollFrameRef = useRef<number | null>(null);
   const revealRef = useRef<StreamRevealState | null>(null);
   const revealTickRef = useRef<(timestamp: number) => void>(() => undefined);
+  const conversationIdRef = useRef(clientUuid());
   const outcomeRef = useRef(outcome);
   outcomeRef.current = outcome;
   const request = useMemo(() => reportRequest(outcome), [outcome]);
@@ -429,6 +452,7 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
     setStreamingMessageId(null);
     setError("");
     setSuggestions(initialQuestions(outcomeRef.current));
+    conversationIdRef.current = clientUuid();
   }, [outcome.id, stopReveal]);
 
   useEffect(() => {
@@ -469,7 +493,13 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
     abortRef.current = controller;
     try {
       const response = await streamReportQuestion(
-        { ...request, question: value, history },
+        {
+          ...request,
+          question: value,
+          history,
+          conversationId: conversationIdRef.current,
+          turnId: clientUuid(),
+        },
         {
           onDelta: (delta) => {
             if (!assistantAdded) {

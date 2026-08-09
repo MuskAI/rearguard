@@ -101,6 +101,36 @@ def _init(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_history_created_at ON history(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_history_sha256 ON history(sha256);
 
+        CREATE TABLE IF NOT EXISTS report_qa_turns (
+            turn_id TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            completed_at TEXT NOT NULL,
+            developer_user_id TEXT,
+            developer_account_uuid TEXT,
+            actor_mode TEXT NOT NULL,
+            task_id TEXT,
+            report_id TEXT,
+            legacy_detection_id INTEGER,
+            media_type TEXT,
+            file_name TEXT,
+            question TEXT NOT NULL,
+            answer TEXT NOT NULL,
+            evidence_refs_json TEXT NOT NULL,
+            suggested_questions_json TEXT NOT NULL,
+            total_tokens INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY(task_id) REFERENCES history(task_id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_report_qa_turns_conversation
+            ON report_qa_turns(conversation_id, completed_at, turn_id);
+        CREATE INDEX IF NOT EXISTS idx_report_qa_turns_owner
+            ON report_qa_turns(developer_account_uuid, completed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_report_qa_turns_task
+            ON report_qa_turns(task_id);
+        CREATE INDEX IF NOT EXISTS idx_report_qa_turns_legacy_detection
+            ON report_qa_turns(legacy_detection_id);
+
         CREATE TABLE IF NOT EXISTS history_artifacts (
             task_id TEXT PRIMARY KEY,
             forensics_json TEXT,
@@ -336,6 +366,109 @@ def _init(conn: sqlite3.Connection) -> None:
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def put_report_qa_turn(
+    *,
+    turn_id: str,
+    conversation_id: str,
+    created_at: str,
+    actor: dict[str, Any] | None,
+    question: str,
+    answer: str,
+    evidence_refs: list[str] | None = None,
+    suggested_questions: list[str] | None = None,
+    total_tokens: int = 0,
+    task_id: str | None = None,
+    report_id: str | None = None,
+    legacy_detection_id: int | None = None,
+    media_type: str | None = None,
+    file_name: str | None = None,
+) -> dict[str, Any]:
+    """Persist one completed, report-grounded QA turn idempotently."""
+    turn_id = str(turn_id or "").strip()
+    conversation_id = str(conversation_id or "").strip()
+    question = str(question or "").strip()
+    answer = str(answer or "").strip()
+    if not turn_id or len(turn_id) > 128 or not conversation_id or len(conversation_id) > 128:
+        raise ValueError("invalid report QA identity")
+    if not question or len(question) > 500 or not answer or len(answer) > 4_000:
+        raise ValueError("invalid report QA content")
+
+    actor = actor or {}
+    developer_user_id = str(actor.get("userId") or "").strip() or None
+    developer_account_uuid = str(actor.get("accountUuid") or "").strip() or None
+    actor_mode = str(actor.get("mode") or "unknown").strip()[:32] or "unknown"
+    task_id = str(task_id or "").strip()[:128] or None
+    report_id = str(report_id or "").strip()[:128] or None
+    media_type = str(media_type or "").strip().lower()[:24] or None
+    if media_type not in {None, "image", "video", "document", "audio"}:
+        media_type = "document"
+    file_name = str(file_name or "").strip()[:255] or None
+    try:
+        legacy_detection_id = int(legacy_detection_id) if legacy_detection_id is not None else None
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid legacy detection id") from exc
+    if legacy_detection_id is not None and legacy_detection_id <= 0:
+        raise ValueError("invalid legacy detection id")
+
+    refs = [str(value).strip()[:100] for value in (evidence_refs or []) if str(value).strip()][:5]
+    suggestions = [
+        str(value).strip()[:100]
+        for value in (suggested_questions or [])
+        if str(value).strip()
+    ][:3]
+    completed_at = now_iso()
+    values = {
+        "turn_id": turn_id,
+        "conversation_id": conversation_id,
+        "created_at": str(created_at or completed_at),
+        "completed_at": completed_at,
+        "developer_user_id": developer_user_id,
+        "developer_account_uuid": developer_account_uuid,
+        "actor_mode": actor_mode,
+        "task_id": task_id,
+        "report_id": report_id,
+        "legacy_detection_id": legacy_detection_id,
+        "media_type": media_type,
+        "file_name": file_name,
+        "question": question,
+        "answer": answer,
+        "evidence_refs_json": json.dumps(refs, ensure_ascii=False, separators=(",", ":")),
+        "suggested_questions_json": json.dumps(suggestions, ensure_ascii=False, separators=(",", ":")),
+        "total_tokens": max(0, int(total_tokens or 0)),
+    }
+    identity_columns = (
+        "conversation_id", "developer_user_id", "developer_account_uuid", "actor_mode",
+        "task_id", "report_id", "legacy_detection_id", "media_type", "file_name",
+    )
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conversation = conn.execute(
+            "SELECT * FROM report_qa_turns WHERE conversation_id = ? LIMIT 1",
+            (conversation_id,),
+        ).fetchone()
+        if conversation and any(conversation[column] != values[column] for column in identity_columns):
+            conn.rollback()
+            raise ValueError("report QA conversation binding conflict")
+        existing = conn.execute(
+            "SELECT * FROM report_qa_turns WHERE turn_id = ? LIMIT 1",
+            (turn_id,),
+        ).fetchone()
+        if existing:
+            comparable_columns = tuple(values.keys())
+            if any(existing[column] != values[column] for column in comparable_columns if column != "completed_at"):
+                conn.rollback()
+                raise ValueError("report QA turn identity conflict")
+            conn.rollback()
+            return dict(existing)
+        columns = tuple(values.keys())
+        conn.execute(
+            f"INSERT INTO report_qa_turns ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+            tuple(values[column] for column in columns),
+        )
+        conn.commit()
+    return values
 
 
 def cache_key(file_type: str, sha256: str) -> str:
@@ -1214,6 +1347,10 @@ def delete_history(item_id: str) -> dict[str, Any] | None:
     )
     with _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "DELETE FROM report_qa_turns WHERE task_id = ? OR report_id = ?",
+            (task_id, report_id),
+        )
         conn.execute(
             """
             DELETE FROM report_share_access_events

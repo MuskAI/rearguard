@@ -1,4 +1,5 @@
 import base64
+import binascii
 import csv
 import hashlib
 import hmac
@@ -10,14 +11,16 @@ import re
 import secrets
 import shutil
 import socket
+import sqlite3
 import ssl
 import stat
 import threading
 import time
 from datetime import datetime, timedelta, timezone
 from http.client import HTTPResponse
+from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 import requests
 from flask import Blueprint, Response, g, jsonify, redirect, render_template, request, send_file, session, stream_with_context, url_for
@@ -147,6 +150,9 @@ ALL_ADMIN_PERMISSIONS = {
     "admin.manage",
     "user.view",
     "user.read_pii",
+    "conversation.view",
+    "conversation.read_content",
+    "conversation.read_media",
     "detection.view",
     "detection.read_pii",
     "api_key.view",
@@ -196,7 +202,8 @@ ADMIN_ROLE_PERMISSIONS = {
     },
     "reviewer": {
         "view", "detection.view", "detection.review", "data.export",
-        "testing.view",
+        "testing.view", "conversation.view", "conversation.read_content",
+        "conversation.read_media",
         "legacy_history.view", "legacy_history.approve",
     },
     "readonly": {"view"},
@@ -232,6 +239,11 @@ def _current_admin_user():
         return g._realguard_admin_user
     refreshed = _refresh_admin_session(user)
     if not refreshed:
+        # Keep the reason available for the remainder of this request. The
+        # normal website session may still be valid, but an expired/revoked
+        # administrator session must be treated as an authentication failure
+        # instead of a generic role denial.
+        g._realguard_admin_session_invalid = True
         session.pop(ADMIN_SESSION_KEY, None)
         session.pop(ADMIN_CSRF_SESSION_KEY, None)
         session.modified = True
@@ -313,8 +325,17 @@ def _is_admin(user):
 def _permission_error(permission):
     return jsonify({
         "status": "error",
+        "code": "admin_permission_denied",
         "message": f"当前管理员角色缺少权限：{permission}",
     }), 403
+
+
+def _admin_auth_error(message="管理员未登录", code="admin_session_required"):
+    return jsonify({
+        "status": "error",
+        "code": code,
+        "message": message,
+    }), 401
 
 
 def _legacy_governance_error(exc):
@@ -374,11 +395,17 @@ def _admin_required(permission="view"):
         if not _has_admin_permission(admin_user, permission):
             return None, _permission_error(permission)
         return admin_user, None
+    if getattr(g, "_realguard_admin_session_invalid", False):
+        return None, _admin_auth_error("后台会话已过期或已被撤销，请重新登录", "admin_session_expired")
     user = _current_user()
     if not user:
-        return None, (jsonify({"status": "error", "message": "管理员未登录"}), 401)
+        return None, _admin_auth_error()
     if not _is_legacy_admin(user):
-        return None, (jsonify({"status": "error", "message": "无后台管理权限"}), 403)
+        return None, (jsonify({
+            "status": "error",
+            "code": "admin_access_denied",
+            "message": "无后台管理权限",
+        }), 403)
     legacy = _legacy_admin_payload(user)
     if not _has_admin_permission(legacy, permission):
         return None, _permission_error(permission)
@@ -396,7 +423,18 @@ def _csrf_token():
 
 def _csrf_error_response():
     if request.path.startswith("/api/"):
-        return jsonify({"status": "error", "message": "CSRF 校验失败，请刷新后台页面后重试"}), 403
+        if request.path.startswith("/api/admin/"):
+            active_admin = _current_admin_user()
+            if not active_admin:
+                if getattr(g, "_realguard_admin_session_invalid", False):
+                    return _admin_auth_error("后台会话已过期或已被撤销，请重新登录", "admin_session_expired")
+                if not _current_user():
+                    return _admin_auth_error()
+        return jsonify({
+            "status": "error",
+            "code": "csrf_failed",
+            "message": "CSRF 校验失败，请刷新后台页面后重试",
+        }), 403
     return render_template(
         "admin_auth.html",
         **_admin_auth_context("login", error="CSRF 校验失败，请刷新页面后重试"),
@@ -1273,6 +1311,110 @@ def _page_payload(items, limit, id_field="id"):
 
 def _search_term():
     return str(request.args.get("q") or "").strip()
+
+
+def _v2_conversation_db_path():
+    configured = str(os.environ.get("REALGUARD_V2_DB_PATH") or "").strip()
+    return Path(configured or "/opt/jianzhen-v2/data/jianzhen-v2.sqlite3").expanduser().resolve()
+
+
+def _v2_conversation_connection():
+    database = _v2_conversation_db_path()
+    if not database.is_file():
+        raise FileNotFoundError(database)
+    encoded = quote(database.as_posix(), safe="/")
+    connection = sqlite3.connect(f"file:{encoded}?mode=ro", uri=True, timeout=3)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA query_only=ON")
+    connection.execute("PRAGMA busy_timeout=3000")
+    table = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='report_qa_turns'"
+    ).fetchone()
+    if not table:
+        connection.close()
+        raise sqlite3.OperationalError("report_qa_turns table is unavailable")
+    return connection
+
+
+def _conversation_time(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(_admin_timezone()).strftime("%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        return format_createtime(text)
+
+
+def _conversation_json_list(value, limit):
+    try:
+        parsed = json.loads(value or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        parsed = []
+    return [str(item) for item in parsed if str(item).strip()][:limit] if isinstance(parsed, list) else []
+
+
+def _conversation_user_directory(rows):
+    account_uuids = sorted({
+        str(row["developer_account_uuid"] or "").strip()
+        for row in rows
+        if str(row["developer_account_uuid"] or "").strip()
+    })
+    user_ids = sorted({
+        int(row["developer_user_id"])
+        for row in rows
+        if str(row["developer_user_id"] or "").isdigit()
+    })
+    filters = []
+    params = []
+    if account_uuids:
+        filters.append(f"account_uuid IN ({', '.join(['%s'] * len(account_uuids))})")
+        params.extend(account_uuids)
+    if user_ids:
+        filters.append(f"Userid IN ({', '.join(['%s'] * len(user_ids))})")
+        params.extend(user_ids)
+    if not filters:
+        return {}
+    users = excute_sql(
+        f"""
+        SELECT Userid, account_uuid, username, phone, openid
+        FROM `user`
+        WHERE {' OR '.join(filters)}
+        """,
+        tuple(params),
+    ) or []
+    directory = {}
+    for user in users:
+        account_uuid = str(user.get("account_uuid") or "").strip()
+        user_id = str(user.get("Userid") or "").strip()
+        if account_uuid:
+            directory[f"account:{account_uuid}"] = user
+        if user_id:
+            directory[f"user:{user_id}"] = user
+    return directory
+
+
+def _conversation_user_for_row(row, directory):
+    account_uuid = str(row["developer_account_uuid"] or "").strip()
+    user_id = str(row["developer_user_id"] or "").strip()
+    return directory.get(f"account:{account_uuid}") or directory.get(f"user:{user_id}") or {}
+
+
+def _conversation_user_payload(row, directory, actor):
+    user = _conversation_user_for_row(row, directory)
+    include_pii = _has_admin_permission(actor, "user.read_pii")
+    user_id = user.get("Userid") or row["developer_user_id"]
+    username = str(user.get("username") or "").strip()
+    phone = str(user.get("phone") or "").strip()
+    return {
+        "id": user_id,
+        "username": username or (f"用户 #{user_id}" if user_id else "未识别用户"),
+        "phone": phone if include_pii else _mask_phone(phone),
+        "actorMode": row["actor_mode"],
+    }
 
 
 def _audit(actor, action, target, before=None, after=None, meta=None):
@@ -2758,6 +2900,37 @@ def admin_testing_console():
     return _render_admin_console("testing")
 
 
+@admin_blueprint.route("/api/admin/session")
+def admin_session_status():
+    active_user, error = _admin_required("view")
+    if error:
+        return error
+    issued_at = None
+    expires_at = None
+    if (active_user or {}).get("authType") == "admin_account":
+        try:
+            issued_at = int(active_user.get("issuedAt") or 0)
+        except (TypeError, ValueError):
+            issued_at = 0
+        if issued_at > 0:
+            expires_at = issued_at + max(300, ADMIN_SESSION_MAX_AGE_SECONDS)
+    response = jsonify({
+        "status": "success",
+        "authenticated": True,
+        "serverTime": int(time.time()),
+        "issuedAt": issued_at,
+        "expiresAt": expires_at,
+        "admin": {
+            "id": active_user.get("adminId"),
+            "username": active_user.get("username") or "",
+            "role": _normalize_admin_role(active_user.get("role") or "readonly"),
+            "authType": active_user.get("authType") or "",
+        },
+    })
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
 @admin_blueprint.route("/admin/login", methods=["GET", "POST"])
 def admin_login():
     next_path = _safe_admin_next(request.form.get("next") if request.method == "POST" else request.args.get("next"))
@@ -3983,6 +4156,262 @@ def admin_users_export():
             for row in rows
         ],
     )
+
+
+@admin_blueprint.route("/api/admin/conversations")
+def admin_conversations():
+    actor, error = _admin_required("conversation.view")
+    if error:
+        return error
+    limit = _limit_arg(40, 100)
+    offset = _cursor_arg() or 0
+    query = _search_term()[:120]
+    search_clause = ""
+    search_params = []
+    if query:
+        like = f"%{query}%"
+        search_clause = """
+        WHERE EXISTS (
+            SELECT 1
+            FROM report_qa_turns search_turn
+            WHERE search_turn.conversation_id = turn.conversation_id
+              AND (
+                search_turn.question LIKE ?
+                OR search_turn.answer LIKE ?
+                OR COALESCE(search_turn.file_name, '') LIKE ?
+              )
+        )
+        """
+        search_params = [like, like, like]
+    try:
+        with _v2_conversation_connection() as connection:
+            rows = connection.execute(
+                f"""
+                WITH ranked AS (
+                    SELECT turn.*,
+                           COUNT(*) OVER (PARTITION BY turn.conversation_id) AS turn_count,
+                           MIN(turn.created_at) OVER (PARTITION BY turn.conversation_id) AS started_at,
+                           MAX(turn.completed_at) OVER (PARTITION BY turn.conversation_id) AS updated_at,
+                           SUM(turn.total_tokens) OVER (PARTITION BY turn.conversation_id) AS conversation_tokens,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY turn.conversation_id
+                               ORDER BY turn.completed_at DESC, turn.rowid DESC
+                           ) AS row_rank
+                    FROM report_qa_turns turn
+                    {search_clause}
+                )
+                SELECT * FROM ranked
+                WHERE row_rank = 1
+                ORDER BY updated_at DESC, turn_id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (*search_params, limit + 1, offset),
+            ).fetchall()
+            total_row = connection.execute(
+                f"""
+                SELECT COUNT(*) AS count
+                FROM (
+                    SELECT turn.conversation_id
+                    FROM report_qa_turns turn
+                    {search_clause}
+                    GROUP BY turn.conversation_id
+                ) grouped
+                """,
+                tuple(search_params),
+            ).fetchone()
+    except (OSError, sqlite3.Error) as exc:
+        print(f"[ADMIN CONVERSATION READ ERROR] {type(exc).__name__}: {exc}")
+        return jsonify({
+            "status": "error",
+            "code": "conversation_store_unavailable",
+            "message": "用户对话存储暂时无法读取",
+        }), 503
+    has_more = len(rows) > limit
+    visible = rows[:limit]
+    directory = _conversation_user_directory(visible)
+    include_content = _has_admin_permission(actor, "conversation.read_content")
+    include_media = _has_admin_permission(actor, "conversation.read_media")
+    items = []
+    for row in visible:
+        media_available = bool(row["task_id"] or row["legacy_detection_id"])
+        items.append({
+            "id": row["conversation_id"],
+            "user": _conversation_user_payload(row, directory, actor),
+            "startedAt": _conversation_time(row["started_at"]),
+            "updatedAt": _conversation_time(row["updated_at"]),
+            "turnCount": int(row["turn_count"] or 0),
+            "totalTokens": int(row["conversation_tokens"] or 0),
+            "fileName": row["file_name"] or "",
+            "mediaType": row["media_type"] or "",
+            "mediaAvailable": media_available,
+            "mediaUrl": (
+                f"/api/admin/conversations/{quote(row['conversation_id'], safe='')}/media"
+                if include_media and media_available else ""
+            ),
+            "lastQuestion": row["question"][:240] if include_content else "内容受限",
+            "lastAnswer": row["answer"][:320] if include_content else "内容受限",
+        })
+    return jsonify({
+        "status": "success",
+        "conversations": items,
+        "total": int(total_row["count"] if total_row else 0),
+        "page": {
+            "hasMore": has_more,
+            "nextCursor": str(offset + limit) if has_more else None,
+        },
+    })
+
+
+@admin_blueprint.route("/api/admin/conversations/<conversation_id>")
+def admin_conversation_detail(conversation_id):
+    actor, error = _admin_required("conversation.read_content")
+    if error:
+        return error
+    if len(conversation_id) > 128:
+        return jsonify({"status": "error", "message": "对话编号无效"}), 400
+    try:
+        with _v2_conversation_connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM report_qa_turns
+                WHERE conversation_id = ?
+                ORDER BY created_at ASC, completed_at ASC, turn_id ASC
+                LIMIT 1000
+                """,
+                (conversation_id,),
+            ).fetchall()
+    except (OSError, sqlite3.Error) as exc:
+        print(f"[ADMIN CONVERSATION DETAIL ERROR] {type(exc).__name__}: {exc}")
+        return jsonify({"status": "error", "message": "用户对话存储暂时无法读取"}), 503
+    if not rows:
+        return jsonify({"status": "error", "message": "对话不存在"}), 404
+    directory = _conversation_user_directory(rows)
+    first = rows[0]
+    media_available = bool(first["task_id"] or first["legacy_detection_id"])
+    include_media = _has_admin_permission(actor, "conversation.read_media")
+    turns = [{
+        "id": row["turn_id"],
+        "createdAt": _conversation_time(row["created_at"]),
+        "completedAt": _conversation_time(row["completed_at"]),
+        "question": row["question"],
+        "answer": row["answer"],
+        "evidenceRefs": _conversation_json_list(row["evidence_refs_json"], 5),
+        "suggestedQuestions": _conversation_json_list(row["suggested_questions_json"], 3),
+        "totalTokens": int(row["total_tokens"] or 0),
+    } for row in rows]
+    _audit(
+        actor,
+        "conversation.detail.read",
+        conversation_id,
+        meta={"turnCount": len(turns), "mediaAvailable": media_available},
+    )
+    return jsonify({
+        "status": "success",
+        "conversation": {
+            "id": conversation_id,
+            "user": _conversation_user_payload(first, directory, actor),
+            "startedAt": _conversation_time(first["created_at"]),
+            "updatedAt": _conversation_time(rows[-1]["completed_at"]),
+            "fileName": first["file_name"] or "",
+            "mediaType": first["media_type"] or "",
+            "mediaAvailable": media_available,
+            "mediaUrl": (
+                f"/api/admin/conversations/{quote(conversation_id, safe='')}/media"
+                if include_media and media_available else ""
+            ),
+            "turns": turns,
+        },
+    })
+
+
+@admin_blueprint.route("/api/admin/conversations/<conversation_id>/media")
+def admin_conversation_media(conversation_id):
+    actor, error = _admin_required("conversation.read_media")
+    if error:
+        return error
+    if len(conversation_id) > 128:
+        return jsonify({"status": "error", "message": "对话编号无效"}), 400
+    try:
+        with _v2_conversation_connection() as connection:
+            binding = connection.execute(
+                """
+                SELECT conversation_id, developer_user_id, developer_account_uuid,
+                       task_id, report_id, legacy_detection_id, media_type
+                FROM report_qa_turns
+                WHERE conversation_id = ?
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                (conversation_id,),
+            ).fetchone()
+            history = None
+            if binding and binding["task_id"]:
+                history = connection.execute(
+                    """
+                    SELECT task_id, report_id, file_type, result_json, thumbnail,
+                           developer_user_id, developer_account_uuid
+                    FROM history
+                    WHERE task_id = ? OR report_id = ?
+                    LIMIT 1
+                    """,
+                    (binding["task_id"], binding["report_id"] or ""),
+                ).fetchone()
+    except (OSError, sqlite3.Error) as exc:
+        print(f"[ADMIN CONVERSATION MEDIA ERROR] {type(exc).__name__}: {exc}")
+        return jsonify({"status": "error", "message": "对话媒体暂时无法读取"}), 503
+    if not binding:
+        return jsonify({"status": "error", "message": "对话不存在"}), 404
+
+    if history:
+        account_uuid = str(binding["developer_account_uuid"] or "")
+        user_id = str(binding["developer_user_id"] or "")
+        if account_uuid and account_uuid != str(history["developer_account_uuid"] or ""):
+            return jsonify({"status": "error", "message": "图片不存在"}), 404
+        if not account_uuid and user_id and user_id != str(history["developer_user_id"] or ""):
+            return jsonify({"status": "error", "message": "图片不存在"}), 404
+        try:
+            result = json.loads(history["result_json"] or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            result = {}
+        file_meta = result.get("fileMeta") if isinstance(result.get("fileMeta"), dict) else {}
+        data_uri = str(file_meta.get("preview") or file_meta.get("thumbnail") or history["thumbnail"] or "")
+        match = re.fullmatch(
+            r"data:(image/(?:png|jpeg|webp|gif|avif));base64,([A-Za-z0-9+/=\r\n]+)",
+            data_uri,
+            re.IGNORECASE,
+        )
+        if match and len(match.group(2)) <= 16 * 1024 * 1024:
+            try:
+                content = base64.b64decode(match.group(2), validate=True)
+            except (ValueError, binascii.Error):
+                content = b""
+            if content:
+                _audit(actor, "conversation.media.read", conversation_id, meta={"source": "v2_preview"})
+                return Response(content, mimetype=match.group(1), headers={"Cache-Control": "private, no-store"})
+
+    legacy_detection_id = binding["legacy_detection_id"]
+    media_type = str(binding["media_type"] or "").lower()
+    if not legacy_detection_id or media_type not in {"image", "video"}:
+        return jsonify({"status": "error", "message": "图片不存在"}), 404
+    directory = _conversation_user_directory([binding])
+    owner = _conversation_user_for_row(binding, directory)
+    history_where, history_params = detection_owner_where(
+        owner.get("phone"),
+        owner.get("openid"),
+        account_uuid=owner.get("account_uuid"),
+        require_account_uuid=True,
+    )
+    table = "data" if media_type == "image" else "video_data"
+    rows = excute_detection_sql(
+        f"SELECT * FROM {table} WHERE itemid = %s AND ({history_where}) LIMIT 1",
+        (legacy_detection_id, *history_params),
+    ) or []
+    if not rows:
+        return jsonify({"status": "error", "message": "图片不存在"}), 404
+    from imagedetection.views.api import _serve_detection_media_item
+    _audit(actor, "conversation.media.read", conversation_id, meta={"source": "legacy_detection"})
+    return _serve_detection_media_item(media_type, rows[0])
 
 
 @admin_blueprint.route("/api/admin/detections")

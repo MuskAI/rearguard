@@ -2610,12 +2610,21 @@ def test_report_qa_stream_returns_sse_deltas_and_final_metadata(client, monkeypa
 
     monkeypatch.setattr(main.report_qa_service, "stream_answer", fake_stream_answer)
     client.cookies.set("session", "qa-stream-user")
+    conversation_id = "11111111-2222-4333-8444-555555555555"
+    turn_id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
     response = client.post(
         "/api/report-qa/stream",
         headers={"Accept": "text/event-stream"},
         json={
+            "conversationId": conversation_id,
+            "turnId": turn_id,
             "question": "为什么判断为假？",
             "history": [{"role": "user", "content": "先解释水印"}],
+            "media": {
+                "type": "image",
+                "fileName": "qa-watermark.png",
+                "legacyDetectionId": 908,
+            },
             "report": {
                 "kind": "image",
                 "verdict": "highly_suspected_fake",
@@ -2633,8 +2642,20 @@ def test_report_qa_stream_returns_sse_deltas_and_final_metadata(client, monkeypa
     assert 'data: {"text":"水印是"}' in response.text
     assert "event: done" in response.text
     assert '"answer":"水印是主要依据。"' in response.text
+    assert f'"conversationId":"{conversation_id}"' in response.text
+    assert '"saved":true' in response.text
     assert captured["question"] == "为什么判断为假？"
     assert captured["report"]["verdict"] == "highly_suspected_fake"
+    with main.storage._connect() as connection:
+        saved = connection.execute(
+            "SELECT * FROM report_qa_turns WHERE turn_id = ?",
+            (turn_id,),
+        ).fetchone()
+    assert saved["conversation_id"] == conversation_id
+    assert saved["developer_account_uuid"] == "53535353-5353-4353-8353-535353535353"
+    assert saved["legacy_detection_id"] == 908
+    assert saved["question"] == "为什么判断为假？"
+    assert saved["answer"] == "水印是主要依据。"
 
 
 def test_report_qa_stream_reports_generation_failure_as_sse_event(client, monkeypatch):

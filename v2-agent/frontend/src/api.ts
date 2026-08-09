@@ -1605,6 +1605,13 @@ export interface ReportQaRequest {
   history?: ReportQaMessage[];
   reportId?: string;
   report?: Record<string, unknown>;
+  conversationId?: string;
+  turnId?: string;
+  media?: {
+    type?: "image" | "video" | "document" | "audio";
+    fileName?: string;
+    legacyDetectionId?: number;
+  };
 }
 
 export interface ReportQaAnswer {

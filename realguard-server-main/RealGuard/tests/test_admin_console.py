@@ -1,6 +1,8 @@
 from pathlib import Path
 from datetime import datetime, timezone
+import base64
 import json
+import sqlite3
 import sys
 import time
 from types import SimpleNamespace
@@ -63,6 +65,43 @@ def _csrf_headers(client):
     with client.session_transaction() as sess:
         sess[admin.ADMIN_CSRF_SESSION_KEY] = token
     return {"X-CSRF-Token": token}
+
+
+def _create_conversation_store(path: Path):
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE report_qa_turns (
+            turn_id TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            completed_at TEXT NOT NULL,
+            developer_user_id TEXT,
+            developer_account_uuid TEXT,
+            actor_mode TEXT NOT NULL,
+            task_id TEXT,
+            report_id TEXT,
+            legacy_detection_id INTEGER,
+            media_type TEXT,
+            file_name TEXT,
+            question TEXT NOT NULL,
+            answer TEXT NOT NULL,
+            evidence_refs_json TEXT NOT NULL,
+            suggested_questions_json TEXT NOT NULL,
+            total_tokens INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE history (
+            task_id TEXT PRIMARY KEY,
+            report_id TEXT NOT NULL,
+            file_type TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            thumbnail TEXT,
+            developer_user_id TEXT,
+            developer_account_uuid TEXT
+        );
+        """
+    )
+    return connection
 
 
 def test_admin_api_requires_admin_phone(client, monkeypatch):
@@ -227,6 +266,202 @@ def test_ordinary_user_cannot_render_admin_console(client, monkeypatch):
 
     assert response.status_code == 403
     assert "无后台管理权限" in response.get_json()["message"]
+
+
+def test_expired_admin_session_returns_relogin_signal_even_when_site_session_is_valid(client, monkeypatch):
+    _login_session(client, admin_role="admin")
+    monkeypatch.setattr(admin, "_refresh_admin_session", lambda _user: None)
+
+    response = client.get("/api/admin/session")
+
+    assert response.status_code == 401
+    assert response.get_json()["code"] == "admin_session_expired"
+    assert "重新登录" in response.get_json()["message"]
+    with client.session_transaction() as sess:
+        assert admin.ADMIN_SESSION_KEY not in sess
+        assert "user_info" in sess
+
+
+def test_admin_page_revalidates_session_and_exposes_conversation_workspace(client):
+    _login_session(client, admin_role="admin")
+
+    response = client.get("/admin")
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert 'href="#conversations" data-route="conversations"' in html
+    assert 'id="view-conversations"' in html
+    assert 'id="conversationDialog"' in html
+    assert "/api/admin/session" in html
+    assert "admin_session_expired" in html
+    assert "window.addEventListener('pageshow'" in html
+    assert "document.addEventListener('visibilitychange'" in html
+
+
+def test_admin_can_review_persisted_user_conversations_and_bound_v2_image(client, monkeypatch, tmp_path):
+    database = tmp_path / "jianzhen-v2.sqlite3"
+    connection = _create_conversation_store(database)
+    conversation_id = "11111111-2222-4333-8444-555555555555"
+    account_uuid = "77777777-7777-4777-8777-777777777777"
+    preview = b"\x89PNG\r\n\x1a\npytest-preview"
+    preview_uri = f"data:image/png;base64,{base64.b64encode(preview).decode('ascii')}"
+    connection.execute(
+        "INSERT INTO history VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            "task-chat-image",
+            "report-chat-image",
+            "image",
+            json.dumps({"fileMeta": {"preview": preview_uri}}, ensure_ascii=False),
+            None,
+            "7",
+            account_uuid,
+        ),
+    )
+    turns = [
+        (
+            "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+            "2026-08-09T08:00:00+00:00",
+            "这张图片为什么是假的？",
+            "报告检测到明确的平台水印。",
+            '["可见水印"]',
+            12,
+        ),
+        (
+            "ffffffff-1111-4222-8333-444444444444",
+            "2026-08-09T08:01:00+00:00",
+            "水印在哪里？",
+            "报告标注在图片右下角。",
+            '["水印位置"]',
+            9,
+        ),
+    ]
+    for turn_id, created_at, question, answer, evidence, tokens in turns:
+        connection.execute(
+            """
+            INSERT INTO report_qa_turns VALUES
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                turn_id,
+                conversation_id,
+                created_at,
+                created_at,
+                "7",
+                account_uuid,
+                "session",
+                "task-chat-image",
+                "report-chat-image",
+                None,
+                "image",
+                "watermark.png",
+                question,
+                answer,
+                evidence,
+                "[]",
+                tokens,
+            ),
+        )
+    connection.commit()
+    connection.close()
+    monkeypatch.setenv("REALGUARD_V2_DB_PATH", str(database))
+    monkeypatch.setattr(admin, "_audit", lambda *_args, **_kwargs: None)
+
+    def fake_accounts(sql, _params=None, **_kwargs):
+        if "FROM `user`" in sql:
+            return [{
+                "Userid": 7,
+                "account_uuid": account_uuid,
+                "username": "对话测试用户",
+                "phone": "13812345678",
+                "openid": "openid-chat-user",
+            }]
+        return []
+
+    monkeypatch.setattr(admin, "excute_sql", fake_accounts)
+    _login_session(client, admin_role="admin")
+
+    listing = client.get("/api/admin/conversations")
+    detail = client.get(f"/api/admin/conversations/{conversation_id}")
+    media = client.get(f"/api/admin/conversations/{conversation_id}/media")
+
+    assert listing.status_code == 200
+    assert listing.get_json()["total"] == 1
+    summary = listing.get_json()["conversations"][0]
+    assert summary["user"]["username"] == "对话测试用户"
+    assert summary["turnCount"] == 2
+    assert summary["lastQuestion"] == "水印在哪里？"
+    assert summary["mediaUrl"].endswith(f"/{conversation_id}/media")
+    assert detail.status_code == 200
+    assert [turn["question"] for turn in detail.get_json()["conversation"]["turns"]] == [
+        "这张图片为什么是假的？",
+        "水印在哪里？",
+    ]
+    assert media.status_code == 200
+    assert media.mimetype == "image/png"
+    assert media.data == preview
+    assert "private" in media.headers["Cache-Control"]
+    assert "no-store" in media.headers["Cache-Control"]
+
+
+def test_admin_conversation_media_fails_closed_for_unverified_legacy_image_owner(client, monkeypatch, tmp_path):
+    database = tmp_path / "jianzhen-v2.sqlite3"
+    connection = _create_conversation_store(database)
+    conversation_id = "99999999-2222-4333-8444-555555555555"
+    account_uuid = "88888888-7777-4666-8555-444444444444"
+    connection.execute(
+        """
+        INSERT INTO report_qa_turns VALUES
+        (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+            conversation_id,
+            "2026-08-09T08:00:00+00:00",
+            "2026-08-09T08:00:01+00:00",
+            "8",
+            account_uuid,
+            "session",
+            None,
+            None,
+            901,
+            "image",
+            "claimed.png",
+            "为什么这样判断？",
+            "只依据当前报告回答。",
+            "[]",
+            "[]",
+            5,
+        ),
+    )
+    connection.commit()
+    connection.close()
+    monkeypatch.setenv("REALGUARD_V2_DB_PATH", str(database))
+    monkeypatch.setattr(
+        admin,
+        "excute_sql",
+        lambda *_args, **_kwargs: [{
+            "Userid": 8,
+            "account_uuid": account_uuid,
+            "username": "绑定测试用户",
+            "phone": "13800000008",
+            "openid": "openid-owner-eight",
+        }],
+    )
+    captured = {}
+
+    def no_owned_detection(sql, params=None, **_kwargs):
+        captured["sql"] = sql
+        captured["params"] = params
+        return []
+
+    monkeypatch.setattr(admin, "excute_detection_sql", no_owned_detection)
+    _login_session(client, admin_role="admin")
+
+    response = client.get(f"/api/admin/conversations/{conversation_id}/media")
+
+    assert response.status_code == 404
+    assert "owner_account_uuid" in captured["sql"]
+    assert captured["params"] == (901, account_uuid)
 
 
 def test_admin_screen_renders_interactive_operations_controls(client, monkeypatch):

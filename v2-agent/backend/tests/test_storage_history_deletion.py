@@ -165,6 +165,54 @@ def test_delete_history_anonymizes_legacy_request_paths_containing_report_ids(is
     }
 
 
+def test_delete_history_removes_report_qa_conversation_content(isolated_storage):
+    storage = isolated_storage
+    task_id = "tenant-qa-task"
+    report_id = f"report-{task_id}"
+    _put_history(storage, task_id, "f" * 64, "tenant-a")
+    storage.put_report_qa_turn(
+        turn_id="aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+        conversation_id="11111111-2222-4333-8444-555555555555",
+        created_at="2026-08-09T08:00:00+00:00",
+        actor={"mode": "session", "userId": task_id, "accountUuid": "tenant-a"},
+        task_id=task_id,
+        report_id=report_id,
+        media_type="image",
+        file_name="private.png",
+        question="为什么判断为假？",
+        answer="报告中的水印是主要依据。",
+    )
+
+    storage.delete_history(task_id)
+
+    with storage._connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM report_qa_turns").fetchone()[0] == 0
+
+
+def test_report_qa_conversation_id_cannot_be_rebound_to_another_user(isolated_storage):
+    storage = isolated_storage
+    common = {
+        "conversation_id": "11111111-2222-4333-8444-555555555555",
+        "created_at": "2026-08-09T08:00:00+00:00",
+        "media_type": "image",
+        "file_name": "private.png",
+        "question": "为什么这样判断？",
+        "answer": "只依据当前报告回答。",
+    }
+    storage.put_report_qa_turn(
+        turn_id="aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+        actor={"mode": "session", "userId": "7", "accountUuid": "tenant-a"},
+        **common,
+    )
+
+    with pytest.raises(ValueError, match="binding conflict"):
+        storage.put_report_qa_turn(
+            turn_id="ffffffff-1111-4222-8333-444444444444",
+            actor={"mode": "session", "userId": "8", "accountUuid": "tenant-b"},
+            **common,
+        )
+
+
 def test_delete_history_fails_closed_when_tombstone_cannot_be_persisted(
     isolated_storage,
     monkeypatch,

@@ -271,6 +271,36 @@
     .audit-item p{margin:6px 0 0}
     .audit-more{margin-top:8px}
     .detail-drawer{border:1px solid var(--line-soft);border-radius:var(--radius);background:#fff;padding:14px;margin-top:14px}
+    .conversation-file{display:grid;grid-template-columns:50px minmax(0,1fr);gap:10px;align-items:center;min-width:180px}
+    .conversation-thumb{width:50px;height:50px;border:1px solid var(--line);border-radius:5px;background:#eef3f1;display:grid;place-items:center;overflow:hidden;color:var(--muted);flex:0 0 auto}
+    .conversation-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+    .conversation-file-copy{min-width:0}
+    .conversation-file-copy strong,.conversation-file-copy span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .conversation-file-copy strong{font-size:12px}
+    .conversation-file-copy span{font-size:11px;color:var(--muted);margin-top:4px}
+    .conversation-question{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.45;max-width:420px}
+    dialog.conversation-dialog{width:min(1080px,calc(100vw - 28px));max-height:min(88vh,860px)}
+    .conversation-dialog-shell{display:grid;grid-template-rows:auto minmax(0,1fr);max-height:min(88vh,860px)}
+    .conversation-dialog-head{padding:18px 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:16px}
+    .conversation-dialog-head h2{font-size:19px;margin:0}
+    .conversation-dialog-head p{font-size:12px;color:var(--muted);margin:4px 0 0}
+    .conversation-dialog-body{display:grid;grid-template-columns:minmax(240px,320px) minmax(0,1fr);min-height:0;overflow:hidden}
+    .conversation-media-pane{padding:18px;border-right:1px solid var(--line);background:#f7faf9;overflow:auto}
+    .conversation-media-frame{width:100%;aspect-ratio:1/1;border:1px solid var(--line);background:#e9efed;display:grid;place-items:center;overflow:hidden;border-radius:var(--radius)}
+    .conversation-media-frame img{width:100%;height:100%;display:block;object-fit:contain;background:#fff}
+    .conversation-media-meta{display:grid;gap:5px;margin-top:12px;font-size:12px}
+    .conversation-media-meta span{color:var(--muted);overflow-wrap:anywhere}
+    .conversation-transcript{padding:4px 22px 22px;overflow:auto;min-height:0}
+    .conversation-turn{padding:18px 0;border-bottom:1px solid var(--line-soft)}
+    .conversation-turn:last-child{border-bottom:0}
+    .conversation-turn-time{font-size:11px;color:var(--muted);margin-bottom:12px}
+    .conversation-bubble{display:grid;grid-template-columns:30px minmax(0,1fr);gap:10px;align-items:start;margin-top:10px}
+    .conversation-bubble-icon{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;background:#e8f1ee;color:var(--green);font-size:12px}
+    .conversation-bubble.assistant .conversation-bubble-icon{background:#eaf3f7;color:var(--blue)}
+    .conversation-bubble-copy{min-width:0;padding-top:3px}
+    .conversation-bubble-copy strong{display:block;font-size:11px;color:var(--muted);margin-bottom:5px}
+    .conversation-bubble-copy p{margin:0;font-size:14px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere}
+    .conversation-evidence{display:flex;flex-wrap:wrap;gap:5px;margin:9px 0 0;padding:0;list-style:none}
     .btn.mini{height:27px;padding:0 8px;font-size:12px}
     .action-row{display:flex;flex-wrap:wrap;gap:6px}
     .testing-status{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid var(--line);background:#fff;border-radius:var(--radius);overflow:hidden}
@@ -431,6 +461,10 @@
       .toast{left:14px;right:14px;bottom:14px}
       .dialog-actions{display:grid;grid-template-columns:1fr 1fr}
       .dialog-actions .btn{justify-content:center;min-height:44px}
+      .conversation-dialog-body{grid-template-columns:1fr;overflow:auto}
+      .conversation-media-pane{border-right:0;border-bottom:1px solid var(--line);overflow:visible}
+      .conversation-media-frame{max-height:280px;aspect-ratio:4/3}
+      .conversation-transcript{overflow:visible;padding:2px 16px 18px}
     }
     @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
   </style>
@@ -477,6 +511,9 @@
         <div class="nav-label">数据</div>
         {% if "user.view" in admin_permissions %}
         <a class="nav-item" href="#users" data-route="users" title="用户管理"><i class="nav-icon fa fa-user"></i><span class="nav-text">用户管理</span></a>
+        {% endif %}
+        {% if "conversation.view" in admin_permissions %}
+        <a class="nav-item" href="#conversations" data-route="conversations" title="用户对话"><i class="nav-icon fa fa-comments"></i><span class="nav-text">用户对话</span></a>
         {% endif %}
         {% if "detection.view" in admin_permissions %}
         <a class="nav-item" href="#detections" data-route="detections" title="检测记录"><i class="nav-icon fa fa-history"></i><span class="nav-text">检测记录</span></a>
@@ -835,6 +872,21 @@
           </section>
         </section>
 
+        <section class="view" id="view-conversations" data-title="用户对话">
+          <section class="panel">
+            <div class="panel-head">
+              <div><h2>用户对话</h2><p>查看用户围绕检测报告提出的问题、系统回答及关联图片。</p></div>
+              <span class="role-badge" id="conversationCount">0 组对话</span>
+            </div>
+            <div class="toolbar">
+              <input class="input" id="conversationQuery" placeholder="搜索问题、回答或文件名">
+              <select class="select" id="conversationLimit"><option>40</option><option>60</option><option>100</option></select>
+              <button class="btn" onclick="loadConversations()"><i class="fa fa-search"></i>查询</button>
+            </div>
+            <div id="conversations"></div>
+          </section>
+        </section>
+
         <section class="view" id="view-detections" data-title="检测记录">
           <section class="panel">
             <div class="panel-head"><div><h2>检测记录</h2><p>筛选手机号、文件名、判定标签和反馈。</p></div></div>
@@ -875,6 +927,15 @@
       </div>
     </form>
   </dialog>
+  <dialog class="conversation-dialog" id="conversationDialog" aria-labelledby="conversationDialogTitle">
+    <div class="conversation-dialog-shell">
+      <header class="conversation-dialog-head">
+        <div><h2 id="conversationDialogTitle">用户对话</h2><p id="conversationDialogMeta"></p></div>
+        <button class="icon-btn" type="button" onclick="$('conversationDialog').close()" aria-label="关闭对话详情" title="关闭"><i class="fa fa-times"></i></button>
+      </header>
+      <div class="conversation-dialog-body" id="conversationDialogBody"></div>
+    </div>
+  </dialog>
   <script>
     const $ = (id) => document.getElementById(id);
     const CSRF_TOKEN = {{ csrf_token|tojson }};
@@ -882,15 +943,19 @@
     const CAN_MANAGE_ADMINS = {{ can_manage_admins|tojson }};
     const ADMIN_ROLE_LABELS = {{ role_options|default({}, true)|tojson }};
     const SERVER_INITIAL_ROUTE = {{ initial_admin_route|default('dashboard')|tojson }};
-    const titles = {dashboard:'控制台',assurance:'在线保障',models:'模型管理',swarm:'专家会诊模式',system:'服务健康',testing:'内部测试平台',governance:'审计告警',admins:'管理员',users:'用户管理',detections:'检测记录',keys:'访问凭证'};
-    const routePermissions = {assurance:'topology.view',models:'topology.view',swarm:'topology.view',system:'topology.view',testing:'testing.view',governance:['alerts.manage','audit.view'],admins:'admin.manage',users:'user.view',detections:'detection.view',keys:'api_key.view'};
+    const titles = {dashboard:'控制台',assurance:'在线保障',models:'模型管理',swarm:'专家会诊模式',system:'服务健康',testing:'内部测试平台',governance:'审计告警',admins:'管理员',users:'用户管理',conversations:'用户对话',detections:'检测记录',keys:'访问凭证'};
+    const routePermissions = {assurance:'topology.view',models:'topology.view',swarm:'topology.view',system:'topology.view',testing:'testing.view',governance:['alerts.manage','audit.view'],admins:'admin.manage',users:'user.view',conversations:'conversation.view',detections:'detection.view',keys:'api_key.view'};
     const routeAllowed = (route) => {
       const required = routePermissions[route];
       if(!required) return true;
       return Array.isArray(required) ? required.some(can) : can(required);
     };
+    const ADMIN_AUTH_ERROR_CODES = new Set(['admin_session_required','admin_session_expired']);
+    const ADMIN_RETURN_ROUTE_KEY = 'realguard.admin.return-route.v1';
     const mutationRequests = new Map();
-    let state = {metrics:null, models:[], routing:{}, routingHistory:[], detections:[], users:[], admins:[], keys:[], services:[], host:null, serviceSummary:null, performance:null, assurance:null, swarm:null, alerts:null, alertDeliveries:[], audit:[], testing:null, testingDetail:null, testingImportId:'', testingImportedPaths:new Set(), testingRejectedPaths:new Set(), testingPendingChunks:new Map(), testingUploadActive:false, testingUploadPaused:false, testingResumeAfterSelection:false, testingFolderFiles:[], testingExtraFiles:[], testingFolderScanning:false, testingFolderName:'', pages:{}, selectedUser:null, selectedDetection:null};
+    let adminAuthRedirecting = false;
+    let lastAdminSessionCheck = 0;
+    let state = {metrics:null, models:[], routing:{}, routingHistory:[], detections:[], users:[], conversations:[], conversationTotal:0, admins:[], keys:[], services:[], host:null, serviceSummary:null, performance:null, assurance:null, swarm:null, alerts:null, alertDeliveries:[], audit:[], testing:null, testingDetail:null, testingImportId:'', testingImportedPaths:new Set(), testingRejectedPaths:new Set(), testingPendingChunks:new Map(), testingUploadActive:false, testingUploadPaused:false, testingResumeAfterSelection:false, testingFolderFiles:[], testingExtraFiles:[], testingFolderScanning:false, testingFolderName:'', pages:{}, selectedUser:null, selectedDetection:null};
     const testingRelativePaths = new WeakMap();
     const TESTING_IMPORT_STORAGE_KEY='realguard.testing.import.v1';
     let testingRefreshTimer = null;
@@ -949,6 +1014,19 @@
     closeMobileNav({restoreFocus:false});
     function toast(message){ const el=$('toast'); el.textContent=message; el.style.display='block'; clearTimeout(window.__toast); window.__toast=setTimeout(()=>el.style.display='none',4200); }
     function updateSync(text){ if($('syncStatus')) $('syncStatus').textContent = text; }
+    function adminAuthFailure(status,data={}){
+      return Number(status)===401 || ADMIN_AUTH_ERROR_CODES.has(String(data?.code || ''));
+    }
+    function redirectToAdminLogin(message='后台会话已过期，请重新登录'){
+      if(adminAuthRedirecting) return;
+      adminAuthRedirecting=true;
+      try{ sessionStorage.setItem(ADMIN_RETURN_ROUTE_KEY,location.hash || '#dashboard'); }catch(_error){}
+      updateSync(message);
+      document.querySelector('.app')?.setAttribute('aria-busy','true');
+      if(document.querySelector('.app')) document.querySelector('.app').inert=true;
+      const next=location.pathname==='/admin/testing'?'/admin/testing':'/admin';
+      location.replace(`/admin/login?next=${encodeURIComponent(next)}`);
+    }
     async function panelLoad(targetIds, retryName, work){
       const targets = targetIds.map($).filter(Boolean);
       targets.forEach((target) => { target.setAttribute('aria-busy','true'); if(!target.innerHTML.trim()) target.innerHTML='<div class="skeleton" aria-label="加载中"></div>'; });
@@ -1011,9 +1089,10 @@
       if(clean && clean.length<240 && ![404,413,502,503,504].includes(status)) message+=`：${clean}`;
       return {status:'error',message};
     }
-    function apiRequestError(message,status=0,retryAfter=''){
+    function apiRequestError(message,status=0,retryAfter='',code=''){
       const error=new Error(message || (status?`HTTP ${status}`:'请求失败'));
       error.status=Number(status || 0);
+      error.code=String(code || '');
       const seconds=Number.parseFloat(String(retryAfter || ''));
       error.retryAfterMs=Number.isFinite(seconds)&&seconds>0?Math.ceil(seconds*1000):0;
       return error;
@@ -1026,8 +1105,12 @@
         const headers = {'Content-Type':'application/json', 'X-CSRF-Token': CSRF_TOKEN, ...(options.headers || {})};
         const res = await fetch(url, {...options, headers});
         const data = parseApiPayload(res.status,res.statusText,await res.text());
-        if(res.status === 401){ location.href='/admin/login'; throw apiRequestError('后台会话已过期，请重新登录',401); }
-        if(!res.ok || data.status === 'error') throw apiRequestError(data.message || `HTTP ${res.status}`,res.status,res.headers.get('Retry-After'));
+        const redirectedToLogin=res.redirected && (()=>{try{return new URL(res.url).pathname==='/admin/login';}catch(_error){return false;}})();
+        if(redirectedToLogin || adminAuthFailure(res.status,data)){
+          redirectToAdminLogin(data.message || '后台会话已过期，请重新登录');
+          throw apiRequestError(data.message || '后台会话已过期，请重新登录',401,'',data.code);
+        }
+        if(!res.ok || data.status === 'error') throw apiRequestError(data.message || `HTTP ${res.status}`,res.status,res.headers.get('Retry-After'),data.code);
         return data;
       })();
       if(mutationKey) mutationRequests.set(mutationKey, requestPromise);
@@ -1052,9 +1135,13 @@
         xhr.ontimeout=()=>reject(apiRequestError('上传超时，请检查网络后重试'));
         xhr.onload=()=>{
           const data=parseApiPayload(xhr.status,xhr.statusText,xhr.responseText);
-          if(xhr.status===401){ location.href='/admin/login'; reject(apiRequestError('后台会话已过期，请重新登录',401)); return; }
+          const redirectedToLogin=(()=>{try{return new URL(xhr.responseURL,location.origin).pathname==='/admin/login';}catch(_error){return false;}})();
+          if(redirectedToLogin || adminAuthFailure(xhr.status,data)){
+            redirectToAdminLogin(data.message || '后台会话已过期，请重新登录');
+            reject(apiRequestError(data.message || '后台会话已过期，请重新登录',401,'',data.code)); return;
+          }
           if(xhr.status<200 || xhr.status>=300 || data.status==='error'){
-            reject(apiRequestError(data.message || `HTTP ${xhr.status}`,xhr.status,xhr.getResponseHeader('Retry-After')));
+            reject(apiRequestError(data.message || `HTTP ${xhr.status}`,xhr.status,xhr.getResponseHeader('Retry-After'),data.code));
             return;
           }
           resolve(data);
@@ -1085,9 +1172,13 @@
         xhr.ontimeout=()=>reject(apiRequestError('上传超时，请检查网络后重试'));
         xhr.onload=()=>{
           const data=parseApiPayload(xhr.status,xhr.statusText,xhr.responseText);
-          if(xhr.status===401){ location.href='/admin/login'; reject(apiRequestError('后台会话已过期，请重新登录',401)); return; }
+          const redirectedToLogin=(()=>{try{return new URL(xhr.responseURL,location.origin).pathname==='/admin/login';}catch(_error){return false;}})();
+          if(redirectedToLogin || adminAuthFailure(xhr.status,data)){
+            redirectToAdminLogin(data.message || '后台会话已过期，请重新登录');
+            reject(apiRequestError(data.message || '后台会话已过期，请重新登录',401,'',data.code)); return;
+          }
           if(xhr.status<200 || xhr.status>=300 || data.status==='error'){
-            reject(apiRequestError(data.message || `HTTP ${xhr.status}`,xhr.status,xhr.getResponseHeader('Retry-After')));
+            reject(apiRequestError(data.message || `HTTP ${xhr.status}`,xhr.status,xhr.getResponseHeader('Retry-After'),data.code));
             return;
           }
           resolve(data);
@@ -1153,6 +1244,7 @@
       if(route === 'governance') { if(can('alerts.manage')) loadAlerts(); if(can('audit.view')) loadAudit(); }
       if(route === 'admins' && CAN_MANAGE_ADMINS) loadAdmins();
       if(route === 'users') loadUsers();
+      if(route === 'conversations') loadConversations();
       if(route === 'detections') loadDetections();
       if(route === 'keys') loadApiKeys();
     }
@@ -1476,6 +1568,49 @@
       $('users').innerHTML = table(['用户','手机号','注册时间','操作'], state.users.map(u => `
         <tr><td><strong>${esc(u.username || `用户 #${u.id}`)}</strong></td><td>${esc(u.phone)}</td><td>${esc(u.createdAt)}</td><td><button class="btn mini secondary" onclick="openUser(${Number(u.id)})">详情</button></td></tr>`)) + (state.pages.users?.hasMore ? '<div class="load-more"><button class="btn secondary" onclick="loadUsers(true)">加载更多</button></div>' : '');
     }
+    function conversationMediaCell(conversation){
+      const icon=conversation.mediaType==='video'?'fa-file-video-o':conversation.mediaType==='image'?'fa-file-image-o':'fa-file-o';
+      return `<div class="conversation-file"><span class="conversation-thumb"><i class="fa ${icon}" aria-hidden="true"></i></span><span class="conversation-file-copy"><strong title="${esc(conversation.fileName || '')}">${esc(conversation.fileName || '未关联文件名')}</strong><span>${esc(conversation.mediaType || '报告')}${conversation.mediaAvailable?' · 可查看原内容':''}</span></span></div>`;
+    }
+    function renderConversations(){
+      if($('conversationCount')) $('conversationCount').textContent=`${state.conversationTotal || 0} 组对话`;
+      const rows=state.conversations.map(item=>`<tr>
+        <td>${conversationMediaCell(item)}</td>
+        <td><strong>${esc(item.user?.username || '未识别用户')}</strong><br><span class="mono">${esc(item.user?.phone || '')}</span></td>
+        <td><span class="conversation-question" title="${esc(item.lastQuestion || '')}">${esc(item.lastQuestion || '-')}</span></td>
+        <td><span class="pill">${Number(item.turnCount || 0)} 轮</span></td>
+        <td>${esc(item.updatedAt || '-')}</td>
+        <td><button class="btn mini secondary" onclick="openConversation('${esc(item.id)}')">查看</button></td>
+      </tr>`);
+      $('conversations').innerHTML=table(['图片 / 文件','用户','最近问题','对话','更新时间','操作'],rows,'尚无用户对话')+(state.pages.conversations?.hasMore?'<div class="load-more"><button class="btn secondary" onclick="loadConversations(true)">加载更多</button></div>':'');
+    }
+    async function openConversation(id){
+      const dialog=$('conversationDialog');
+      $('conversationDialogTitle').textContent='用户对话';
+      $('conversationDialogMeta').textContent='正在读取对话与关联图片…';
+      $('conversationDialogBody').innerHTML='<div class="conversation-media-pane"><div class="skeleton"></div></div><div class="conversation-transcript"><div class="skeleton"></div></div>';
+      if(!dialog.open) dialog.showModal();
+      try{
+        const data=await api(`/api/admin/conversations/${encodeURIComponent(id)}`);
+        const conversation=data.conversation || {};
+        const turns=Array.isArray(conversation.turns)?conversation.turns:[];
+        $('conversationDialogTitle').textContent=conversation.user?.username || '用户对话';
+        $('conversationDialogMeta').textContent=`${conversation.user?.phone || '未绑定手机号'} · ${turns.length} 轮 · ${conversation.updatedAt || '-'}`;
+        const media=conversation.mediaType==='image' && conversation.mediaUrl
+          ? `<a class="conversation-media-frame" href="${esc(conversation.mediaUrl)}" target="_blank" rel="noopener" title="查看原图"><img src="${esc(conversation.mediaUrl)}" alt="用户上传的检测图片"></a>`
+          : `<div class="conversation-media-frame"><span><i class="fa fa-file-image-o"></i>&nbsp; ${conversation.mediaAvailable?'当前媒体不支持图片预览':'未关联可查看图片'}</span></div>`;
+        const mediaPane=`<aside class="conversation-media-pane">${media}<div class="conversation-media-meta"><strong>${esc(conversation.fileName || '未关联文件名')}</strong><span>${esc(conversation.mediaType || '报告')} · ${esc(conversation.startedAt || '-')}</span></div></aside>`;
+        const transcript=turns.map((turn,index)=>`<article class="conversation-turn">
+          <div class="conversation-turn-time">第 ${index+1} 轮 · ${esc(turn.createdAt || '-')} · ${Number(turn.totalTokens || 0)} tokens</div>
+          <div class="conversation-bubble user"><span class="conversation-bubble-icon"><i class="fa fa-user"></i></span><div class="conversation-bubble-copy"><strong>用户提问</strong><p>${esc(turn.question || '')}</p></div></div>
+          <div class="conversation-bubble assistant"><span class="conversation-bubble-icon"><i class="fa fa-shield"></i></span><div class="conversation-bubble-copy"><strong>慧鉴AI 回答</strong><p>${esc(turn.answer || '')}</p>${turn.evidenceRefs?.length?`<ul class="conversation-evidence">${turn.evidenceRefs.map(reference=>`<li class="pill">${esc(reference)}</li>`).join('')}</ul>`:''}</div></div>
+        </article>`).join('') || '<div class="empty">这组对话没有可展示的轮次</div>';
+        $('conversationDialogBody').innerHTML=`${mediaPane}<section class="conversation-transcript">${transcript}</section>`;
+      }catch(error){
+        $('conversationDialogMeta').textContent='读取失败';
+        $('conversationDialogBody').innerHTML=`<div class="conversation-media-pane"></div><div class="conversation-transcript"><div class="inline-state error"><strong>无法打开对话</strong><span>${esc(error?.message || '请稍后重试')}</span></div></div>`;
+      }
+    }
     function roleOptions(selected){
       return Object.entries(ADMIN_ROLE_LABELS || {}).map(([role, label]) => `<option value="${esc(role)}" ${role === selected ? 'selected' : ''}>${esc(label)}</option>`).join('');
     }
@@ -1561,6 +1696,18 @@
         const params=new URLSearchParams({limit:$('userLimit')?.value||'40',q:$('userQuery')?.value||''});
         if(append&&state.pages.users?.nextCursor) params.set('cursor',state.pages.users.nextCursor);
         const data=await api(`/api/admin/users?${params}`); state.users=append?[...state.users,...(data.users||[])]:data.users||[]; state.pages.users=data.page||{}; renderUsers();
+      });
+    }
+    async function loadConversations(append=false){
+      if(!can('conversation.view')) return;
+      return panelLoad(['conversations'],'loadConversations',async()=>{
+        const params=new URLSearchParams({limit:$('conversationLimit')?.value||'40',q:$('conversationQuery')?.value||''});
+        if(append&&state.pages.conversations?.nextCursor) params.set('cursor',state.pages.conversations.nextCursor);
+        const data=await api(`/api/admin/conversations?${params}`);
+        state.conversations=append?[...state.conversations,...(data.conversations||[])]:data.conversations||[];
+        state.conversationTotal=Number(data.total || 0);
+        state.pages.conversations=data.page||{};
+        renderConversations();
       });
     }
     async function loadAdmins(append=false){
@@ -2666,12 +2813,28 @@
       $('testingDetailPanel').scrollIntoView({behavior:'smooth',block:'start'});
       if(['queued','running','cancel_requested'].includes(run.status)) setTimeout(()=>{ if(state.testingDetail?.data?.id===id) openTestingRun(id); },1200);
     }
+    async function validateAdminSession(force=false){
+      const now=Date.now();
+      if(!force && now-lastAdminSessionCheck<60_000) return true;
+      try{
+        const data=await api('/api/admin/session',{cache:'no-store'});
+        lastAdminSessionCheck=now;
+        if(data.authenticated!==true){ redirectToAdminLogin(); return false; }
+        return true;
+      }catch(error){
+        if(error?.status===401 || ADMIN_AUTH_ERROR_CODES.has(String(error?.code || ''))) return false;
+        updateSync('会话校验失败');
+        return false;
+      }
+    }
     async function loadAll(){
+      if(!await validateAdminSession(true)) return;
       updateSync('正在同步…');
       await loadOverview();
       const tasks=[];
       if(can('topology.view')) tasks.push(loadAssurance(),loadExpertReview(),loadSystem());
       if(can('user.view')) tasks.push(loadUsers());
+      if(can('conversation.view')) tasks.push(loadConversations());
       if(can('detection.view')) tasks.push(loadDetections());
       if(can('api_key.view')) tasks.push(loadApiKeys());
       if(can('alerts.manage')) tasks.push(loadAlerts());
@@ -2684,9 +2847,19 @@
       const requested=(location.hash || '#dashboard').slice(1);
       switchRoute(requested,{historyMode:'none'});
     });
-    const initial = (location.hash || `#${SERVER_INITIAL_ROUTE}`).slice(1);
-    const initialRoute = (titles[initial] && routeAllowed(initial)) ? initial : 'dashboard';
-    switchRoute(initialRoute,{historyMode:'replace'}); loadOverview();
+    window.addEventListener('pageshow',(event)=>{ if(event.persisted) void validateAdminSession(true); });
+    window.addEventListener('focus',()=>{ void validateAdminSession(); });
+    document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible') void validateAdminSession(); });
+    async function bootAdmin(){
+      if(!await validateAdminSession(true)) return;
+      let rememberedRoute='';
+      try{ rememberedRoute=sessionStorage.getItem(ADMIN_RETURN_ROUTE_KEY)||''; sessionStorage.removeItem(ADMIN_RETURN_ROUTE_KEY); }catch(_error){}
+      const initial = (location.hash || rememberedRoute || `#${SERVER_INITIAL_ROUTE}`).slice(1);
+      const initialRoute = (titles[initial] && routeAllowed(initial)) ? initial : 'dashboard';
+      switchRoute(initialRoute,{historyMode:'replace'});
+      await loadOverview();
+    }
+    void bootAdmin();
   </script>
 {% endif %}
 </body>
