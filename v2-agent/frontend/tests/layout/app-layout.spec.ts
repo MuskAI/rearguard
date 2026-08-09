@@ -1145,6 +1145,62 @@ test("手机工作台在 320 至 430px 间保持连续布局且首屏可上传",
   }
 });
 
+test("手机登录弹窗保持清晰字号、完整主操作与触控尺寸", async ({ page }) => {
+  await installBaseMocks(page);
+  const mobileViewports = [
+    { width: 320, height: 568 },
+    { width: 390, height: 844 },
+    { width: 520, height: 761 },
+  ];
+
+  for (const viewport of mobileViewports) {
+    await page.setViewportSize(viewport);
+    await page.goto("/?workspace=1");
+    await page.locator(".topbar-login").click();
+    const dialog = page.locator(".auth-dialog");
+    await expect(dialog).toBeVisible();
+    await page.waitForTimeout(300);
+
+    const typography = await page.evaluate(() => ({
+      title: Number.parseFloat(getComputedStyle(document.querySelector<HTMLElement>(".auth-heading h2")!).fontSize),
+      input: Number.parseFloat(getComputedStyle(document.querySelector<HTMLElement>(".field-shell input")!).fontSize),
+    }));
+    expect(typography.title).toBeGreaterThanOrEqual(26);
+    expect(typography.input).toBeGreaterThanOrEqual(16);
+    expect(await readableTextOffenders(page, ".auth-dialog", 13)).toEqual([]);
+
+    await expectNoInternalOverflow(page, [
+      ".auth-dialog",
+      ".auth-brand-row",
+      ".auth-panels",
+      ".auth-mode-switch",
+      ".field-shell",
+      ".terms-check",
+    ]);
+    await expectTouchTargets(page, [
+      ".auth-dialog .dialog-close",
+      ".auth-panels button",
+      ".auth-mode-switch button",
+      ".password-visibility",
+      ".terms-check",
+      ".auth-submit",
+    ]);
+    await expectNoHorizontalOverflow(page);
+
+    if (viewport.height <= 640) {
+      await expect(page.locator(".auth-privacy-details")).toBeHidden();
+      const submit = await page.locator(".auth-submit").boundingBox();
+      expect(submit, "短屏登录主按钮不存在").not.toBeNull();
+      expect(submit!.y + submit!.height, "短屏首屏未完整展示登录按钮").toBeLessThanOrEqual(viewport.height);
+    } else {
+      await expect(page.locator(".auth-privacy-details")).toBeVisible();
+    }
+
+    await page.locator(".auth-dialog .dialog-close").click();
+    await expect(dialog).toBeHidden();
+  }
+});
+
 test("登录态窄屏保留完整模型名称并移除重复开发者按钮", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 568 });
   await installBaseMocks(page, true);

@@ -1,5 +1,5 @@
 import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
-import { Check, ExternalLink, FileCheck2, KeyRound, LoaderCircle, LockKeyhole, MessageSquareText, Smartphone, UserRound, X } from "lucide-react";
+import { Check, ChevronDown, Eye, EyeOff, KeyRound, LoaderCircle, LockKeyhole, MessageSquareText, ShieldCheck, Smartphone, UserRound, X } from "lucide-react";
 import {
   AccountUser,
   completeSmsPasswordSetup,
@@ -25,6 +25,8 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [passwordConfirm, setPasswordConfirm] = useState("");
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const [passwordConfirmVisible, setPasswordConfirmVisible] = useState(false);
   const [username, setUsername] = useState("");
   const [code, setCode] = useState("");
   const [accepted, setAccepted] = useState(false);
@@ -175,6 +177,8 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
     setCode("");
     setPassword("");
     setPasswordConfirm("");
+    setPasswordVisible(false);
+    setPasswordConfirmVisible(false);
   }
 
   function movePanelFocus(event: ReactKeyboardEvent<HTMLDivElement>) {
@@ -198,14 +202,17 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
         <button className="icon-button dialog-close" type="button" onClick={onClose} disabled={busy} aria-label="关闭登录窗口" title="关闭">
           <X size={18} />
         </button>
-        <HuijianBrand />
+        <div className="auth-brand-row">
+          <HuijianBrand />
+          <span className="auth-security-badge"><ShieldCheck size={16} /> 账号保护</span>
+        </div>
         <div className="auth-heading">
           <h2 id="auth-title">
             {panel === "login" ? "欢迎回来" : panel === "register" ? "创建慧鉴AI账号" : "设置登录密码"}
           </h2>
           <p id="auth-description">
             {panel === "login"
-              ? "登录后，任务与报告只对你本人可见。"
+              ? "登录后继续查看你的任务与报告。"
               : panel === "register"
                 ? "注册后即可保存个人鉴伪记录。"
                 : "手机号验证成功，设置密码后即可进入慧鉴AI。"}
@@ -249,13 +256,13 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
           {needsPassword && (
             <label>
               <span>{panel === "setup" ? "设置密码" : "密码"}</span>
-              <div className="field-shell"><KeyRound size={17} /><input type="password" autoComplete={panel === "login" ? "current-password" : "new-password"} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 8 位，包含字母和数字" required minLength={8} maxLength={128} /></div>
+              <div className="field-shell"><KeyRound size={18} /><input type={passwordVisible ? "text" : "password"} autoComplete={panel === "login" ? "current-password" : "new-password"} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 8 位，包含字母和数字" required minLength={8} maxLength={128} /><button className="password-visibility" type="button" onClick={() => setPasswordVisible((visible) => !visible)} aria-label={passwordVisible ? "隐藏密码" : "显示密码"} title={passwordVisible ? "隐藏密码" : "显示密码"}>{passwordVisible ? <EyeOff size={18} /> : <Eye size={18} />}</button></div>
             </label>
           )}
           {needsPasswordConfirm && (
             <label>
               <span>确认密码</span>
-              <div className="field-shell"><KeyRound size={17} /><input type="password" autoComplete="new-password" value={passwordConfirm} onChange={(event) => setPasswordConfirm(event.target.value)} placeholder="请再次输入相同密码" required minLength={8} maxLength={128} /></div>
+              <div className="field-shell"><KeyRound size={18} /><input type={passwordConfirmVisible ? "text" : "password"} autoComplete="new-password" value={passwordConfirm} onChange={(event) => setPasswordConfirm(event.target.value)} placeholder="请再次输入相同密码" required minLength={8} maxLength={128} /><button className="password-visibility" type="button" onClick={() => setPasswordConfirmVisible((visible) => !visible)} aria-label={passwordConfirmVisible ? "隐藏确认密码" : "显示确认密码"} title={passwordConfirmVisible ? "隐藏确认密码" : "显示确认密码"}>{passwordConfirmVisible ? <EyeOff size={18} /> : <Eye size={18} />}</button></div>
             </label>
           )}
           {needsCode && (
@@ -272,17 +279,17 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
 
           {panel !== "setup" && (
             <section className="auth-consent-brief" aria-labelledby="auth-consent-title">
-              <header><LockKeyhole size={16} /><div><strong id="auth-consent-title">账号与隐私摘要</strong><small>同意前请了解本次数据处理</small></div></header>
-              <ul>
-                <li><FileCheck2 size={14} /><span>手机号用于登录与账号安全，上传文件用于鉴伪、报告和个人历史。</span></li>
-                <li><Check size={14} /><span>任务与报告按账号隔离，除你主动创建分享链接外不会公开。</span></li>
-                <li><Check size={14} /><span>你可以删除个人历史、撤销分享链接，并按隐私政策提出数据请求。</span></li>
-              </ul>
-              <div className="auth-legal-links"><a href="/legal/terms.html" target="_blank" rel="noreferrer">查看用户协议 <ExternalLink size={12} /></a><a href="/legal/privacy.html" target="_blank" rel="noreferrer">查看隐私政策 <ExternalLink size={12} /></a></div>
+              <details className="auth-privacy-details">
+                <summary><span><LockKeyhole size={17} /><strong id="auth-consent-title">账号与数据保护</strong></span><ChevronDown size={18} /></summary>
+                <div className="auth-privacy-copy">
+                  <p>手机号仅用于登录与账号安全；上传内容用于鉴伪、报告与个人历史。</p>
+                  <p>任务与报告按账号隔离，你可以随时删除个人历史或撤销分享。</p>
+                </div>
+              </details>
               <label className="terms-check">
                 <input type="checkbox" checked={accepted} onChange={(event) => setAccepted(event.target.checked)} />
                 <span className="check-visual"><Check size={13} /></span>
-                <span>我已阅读并同意上述用户协议和隐私政策</span>
+                <span>我已阅读并同意 <a href="/legal/terms.html" target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>用户协议</a> 与 <a href="/legal/privacy.html" target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>隐私政策</a></span>
               </label>
             </section>
           )}
