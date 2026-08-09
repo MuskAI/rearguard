@@ -1,4 +1,14 @@
 import { KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import claudeCodeLogo from "@lobehub/icons-static-svg/icons/claudecode-color.svg";
+import clineLogo from "@lobehub/icons-static-svg/icons/cline.svg";
+import codeBuddyLogo from "@lobehub/icons-static-svg/icons/codebuddy-color.svg";
+import codexLogo from "@lobehub/icons-static-svg/icons/codex-color.svg";
+import cursorLogo from "@lobehub/icons-static-svg/icons/cursor.svg";
+import kimiLogo from "@lobehub/icons-static-svg/icons/kimi-color.svg";
+import openClawLogo from "@lobehub/icons-static-svg/icons/openclaw-color.svg";
+import qwenLogo from "@lobehub/icons-static-svg/icons/qwen-color.svg";
+import traeLogo from "@lobehub/icons-static-svg/icons/trae-color.svg";
+import windsurfLogo from "@lobehub/icons-static-svg/icons/windsurf.svg";
 import {
   Activity,
   AlertTriangle,
@@ -25,6 +35,7 @@ import {
   RefreshCw,
   RotateCw,
   ShieldCheck,
+  Sparkles,
   SquareTerminal,
   Trash2,
   UploadCloud,
@@ -48,7 +59,7 @@ import HuijianBrand from "./HuijianBrand";
 import { UserAvatar } from "./BrandSystem";
 import "./DeveloperPlatform.css";
 
-type DeveloperTab = "overview" | "keys" | "tester" | "docs" | "usage";
+type DeveloperTab = "overview" | "keys" | "tester" | "docs" | "skill" | "usage";
 type CodeLanguage = "curl" | "python" | "typescript" | "java" | "go";
 type CreateKeyPayload = Parameters<typeof createDeveloperKey>[0];
 type DeveloperResourceErrors = { account: string; keys: string; ledger: string };
@@ -70,11 +81,25 @@ interface Props {
 
 const NAV_ITEMS: Array<{ key: DeveloperTab; label: string; icon: typeof LayoutDashboard }> = [
   { key: "overview", label: "概览", icon: LayoutDashboard },
+  { key: "skill", label: "Agent Skill", icon: Sparkles },
   { key: "keys", label: "API 密钥", icon: KeyRound },
   { key: "tester", label: "在线调试", icon: SquareTerminal },
   { key: "docs", label: "接入文档", icon: BookOpen },
   { key: "usage", label: "用量与账单", icon: Activity },
 ];
+
+const AGENT_CLIENTS = [
+  { name: "Claude Code", detail: "原生 Agent Skills", logo: claudeCodeLogo },
+  { name: "Codex", detail: "个人与项目 Skill", logo: codexLogo },
+  { name: "Cursor", detail: "编辑器与 CLI", logo: cursorLogo },
+  { name: "OpenClaw", detail: "龙虾 Agent", logo: openClawLogo },
+  { name: "TRAE", detail: "国内开发 Agent", logo: traeLogo },
+  { name: "Kimi", detail: "终端与文件工作流", logo: kimiLogo },
+  { name: "Qwen Code", detail: "命令行 Agent", logo: qwenLogo },
+  { name: "CodeBuddy", detail: "开发 Agent", logo: codeBuddyLogo },
+  { name: "Windsurf", detail: "编辑器 Agent", logo: windsurfLogo },
+  { name: "Cline", detail: "VS Code Agent", logo: clineLogo },
+] as const;
 
 function initialDeveloperTab(): DeveloperTab {
   const requested = new URLSearchParams(window.location.search).get("developerTab");
@@ -471,7 +496,17 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
       await navigator.clipboard.writeText(value);
       setCopied(token);
     } catch {
-      window.prompt("复制内容", value);
+      const fallback = document.createElement("textarea");
+      fallback.value = value;
+      fallback.setAttribute("readonly", "");
+      fallback.style.position = "fixed";
+      fallback.style.opacity = "0";
+      document.body.appendChild(fallback);
+      fallback.select();
+      const copiedWithFallback = document.execCommand("copy");
+      fallback.remove();
+      if (copiedWithFallback) setCopied(token);
+      else window.prompt("复制内容", value);
     }
   }
 
@@ -654,8 +689,10 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
               onModeChange={setDocMode}
               onLanguageChange={setLanguage}
               onCopy={copyText}
+              onOpenSkill={() => selectDeveloperTab("skill")}
             />
           )}
+          {tab === "skill" && <AgentSkillPanel origin={origin} copied={copied} onCopy={copyText} onOpenKeys={() => selectDeveloperTab("keys")} />}
           {tab === "usage" && <UsagePanel account={account} ledger={ledger} accountError={resourceErrors.account} ledgerError={resourceErrors.ledger} days={days} onDaysChange={setDays} />}
           </>}
         </div>
@@ -1073,7 +1110,7 @@ function KeysPanel({ keys, loadError, busy, loading, onCreate, onRotate, onRevok
   );
 }
 
-function DocsPanel({ endpoint, mode, language, code, copied, onModeChange, onLanguageChange, onCopy }: { endpoint: string; mode: "fast" | "swarm"; language: CodeLanguage; code: string; copied: string; onModeChange: (mode: "fast" | "swarm") => void; onLanguageChange: (language: CodeLanguage) => void; onCopy: (value: string, token: string) => void }) {
+function DocsPanel({ endpoint, mode, language, code, copied, onModeChange, onLanguageChange, onCopy, onOpenSkill }: { endpoint: string; mode: "fast" | "swarm"; language: CodeLanguage; code: string; copied: string; onModeChange: (mode: "fast" | "swarm") => void; onLanguageChange: (language: CodeLanguage) => void; onCopy: (value: string, token: string) => void; onOpenSkill: () => void }) {
   return (
     <div className="developer-page developer-docs-page">
       <section className="developer-section-heading"><div><p>API v1</p><h2>图像鉴伪接入</h2><small>统一异步任务接口，支持快速检测与 Swarm 多源复核。请求头使用 Bearer API Key。</small></div><a className="developer-secondary-action" href="/api/developer/openapi.json" target="_blank" rel="noreferrer"><FileJson size={16} /> OpenAPI JSON</a></section>
@@ -1085,10 +1122,90 @@ function DocsPanel({ endpoint, mode, language, code, copied, onModeChange, onLan
           <section className="developer-code-section"><header><div className="developer-language-tabs" role="tablist" aria-label="示例代码语言" onKeyDown={moveTabFocus}>{(Object.keys(LANGUAGE_LABELS) as CodeLanguage[]).map((item) => <button id={`developer-language-${item}`} type="button" role="tab" aria-selected={language === item} aria-controls="developer-code-panel" tabIndex={language === item ? 0 : -1} key={item} className={language === item ? "is-active" : ""} onClick={() => onLanguageChange(item)}>{LANGUAGE_LABELS[item]}</button>)}</div><button type="button" onClick={() => void onCopy(code, "code")}>{copied === "code" ? <Check size={15} /> : <Copy size={15} />}{copied === "code" ? "已复制" : "复制"}</button></header><pre id="developer-code-panel" role="tabpanel" aria-labelledby={`developer-language-${language}`} tabIndex={0}><code>{code}</code></pre></section>
           <section id="poll-task"><p className="developer-method-line"><span className="get">GET</span><code>/api/openapi/v1/image-detections/{'{task_id}'}</code></p><h3>查询任务状态</h3><p>建议从 1.5 秒间隔开始轮询，并逐步放慢；收到 429 时遵守 Retry-After。终态为 success、failed 或 rejected，只有 success 会完成额度结算。</p><div className="developer-response-grid"><div><small>status</small><code>queued · running · success · failed · rejected</code></div><div><small>billing.status</small><code>reserved · settled · released</code></div></div></section>
           <section id="download-report"><p className="developer-method-line"><span className="get">GET</span><code>/api/openapi/v1/image-detections/{'{task_id}'}/report</code></p><h3>下载 PDF 报告</h3><p>任务成功后可下载报告。报告与任务都按开发者账号隔离，轮换 Key 后仍可使用同账号的新 Key 访问。</p></section>
-          <section id="agent-skill" className="developer-skill-section"><span><Code2 size={22} /></span><div><h3>慧鉴AI Agent Skill</h3><p>为 Codex 或兼容 Agent 提供图片提交、轮询、证据摘要和 PDF 下载流程。通过 HUIJIAN_API_KEY 配置密钥。</p><code>HUIJIAN_API_KEY=rg_sk_...</code></div><a href="https://github.com/MuskAI/rearguard/tree/main/skills/huijian-image-forensics" target="_blank" rel="noreferrer">查看 Skill <ExternalLink size={15} /></a></section>
+          <section id="agent-skill" className="developer-skill-section"><span><Sparkles size={22} /></span><div><h3>让 Agent 直接使用鉴伪能力</h3><p>复制一句安装指令，即可让 Claude Code、Codex、Cursor、OpenClaw 等 Agent 提交图片、解释证据并下载报告。</p><code>HUIJIAN_API_KEY=rg_sk_...</code></div><button type="button" onClick={onOpenSkill}>查看接入方式 <ChevronRight size={15} /></button></section>
           <section className="developer-endpoint-note"><SquareTerminal size={18} /><div><strong>完整端点</strong><code>{endpoint}</code></div></section>
         </div>
       </div>
+    </div>
+  );
+}
+
+function AgentSkillPanel({ origin, copied, onCopy, onOpenKeys }: { origin: string; copied: string; onCopy: (value: string, token: string) => void; onOpenKeys: () => void }) {
+  const guideUrl = `${origin}/huijian-skill.md`;
+  const installPrompt = `请读取 ${guideUrl}，按照说明安装「慧鉴AI 图像鉴伪」Skill；安装完成后告诉我如何配置 HUIJIAN_API_KEY，并用一个本地图片路径完成验证。`;
+  const terminalCommand = `curl -fsSL ${guideUrl}`;
+  const promptExamples = [
+    "请鉴别 /absolute/path/photo.jpg 是否为 AI 生成，并用通俗语言列出最重要的证据。",
+    "请用 Swarm 模式复核 /absolute/path/photo.jpg，并把完整 PDF 报告下载到当前目录。",
+  ];
+
+  return (
+    <div className="developer-page developer-agent-skill-page">
+      <section className="agent-skill-hero" aria-labelledby="agent-skill-title">
+        <div className="agent-skill-hero-copy">
+          <p><Sparkles size={15} /> HUIJIAN AGENT SKILL</p>
+          <h2 id="agent-skill-title">一句话，让你的<br /><span>Agent 学会鉴伪</span></h2>
+          <span>不需要手写接口。Agent 会完成图片提交、任务轮询、证据解释与 PDF 报告下载。</span>
+          <div className="agent-skill-capability-line" aria-label="Skill 能力">
+            <span>快速检测</span><span>Swarm 复核</span><span>证据解释</span><span>PDF 报告</span>
+          </div>
+        </div>
+
+        <div className="agent-skill-copy-panel">
+          <div className="agent-skill-copy-label"><span>复制给你的 Agent</span><small>推荐</small></div>
+          <p>{installPrompt}</p>
+          <button type="button" onClick={() => void onCopy(installPrompt, "skill-install")} aria-label="复制 Agent Skill 安装指令">
+            {copied === "skill-install" ? <Check size={18} /> : <Copy size={18} />}
+            {copied === "skill-install" ? "已复制，可以发送了" : "复制这句话"}
+          </button>
+          <div className="agent-skill-terminal-line">
+            <code>{terminalCommand}</code>
+            <button type="button" onClick={() => void onCopy(terminalCommand, "skill-curl")} aria-label="复制终端查看命令" title="复制终端命令">
+              {copied === "skill-curl" ? <Check size={16} /> : <Copy size={16} />}
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section className="agent-skill-steps" aria-labelledby="agent-skill-steps-title">
+        <header><p>接入流程</p><h3 id="agent-skill-steps-title">从复制到第一次检测，只需三步</h3></header>
+        <ol>
+          <li><span>01</span><div><strong>把指令发给 Agent</strong><p>Agent 会识别自己的 Skill 目录，下载完整能力包并检查安装结果。</p></div></li>
+          <li><span>02</span><div><strong>配置你的 API Key</strong><p>在本机设置 <code>HUIJIAN_API_KEY</code>。密钥只留在你的环境变量中，不要发到对话里。</p><button type="button" onClick={onOpenKeys}>创建或管理 API Key <ChevronRight size={15} /></button></div></li>
+          <li><span>03</span><div><strong>像平常一样提问</strong><p>给出本地图片路径与检测意图，剩下的上传、等待和证据整理交给 Agent。</p></div></li>
+        </ol>
+      </section>
+
+      <section className="agent-skill-examples" aria-labelledby="agent-skill-examples-title">
+        <header><p>安装后这样问</p><h3 id="agent-skill-examples-title">不需要记命令，直接说需求</h3></header>
+        <div>
+          {promptExamples.map((prompt, index) => (
+            <article key={prompt}>
+              <span>{String(index + 1).padStart(2, "0")}</span>
+              <p>{prompt}</p>
+              <button type="button" onClick={() => void onCopy(prompt, `skill-example-${index}`)} aria-label={`复制示例问题 ${index + 1}`} title="复制示例">
+                {copied === `skill-example-${index}` ? <Check size={16} /> : <Copy size={16} />}
+              </button>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="agent-skill-clients" aria-labelledby="agent-skill-clients-title">
+        <header><p>支持的 Agent</p><h3 id="agent-skill-clients-title">这些 Agent 都能接入</h3><span>原生 Agent Skills 客户端可直接安装；其他具备网页读取、终端与文件能力的 Agent 会按指南完成适配。</span></header>
+        <div className="agent-skill-client-grid">
+          {AGENT_CLIENTS.map((client) => (
+            <article key={client.name}>
+              <span><img src={client.logo} width={32} height={32} alt="" aria-hidden="true" /></span>
+              <div><strong>{client.name}</strong><small>{client.detail}</small></div>
+            </article>
+          ))}
+        </div>
+        <footer>
+          <p><ShieldCheck size={17} /> Skill 只在你明确要求鉴伪时提交文件，完整 API Key 不会写入回答或日志。</p>
+          <a href="https://github.com/MuskAI/rearguard/tree/main/skills/huijian-image-forensics" target="_blank" rel="noreferrer">查看 Skill 源码 <ExternalLink size={15} /></a>
+        </footer>
+      </section>
     </div>
   );
 }

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "node scripts/sync-public-skill.mjs && tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
     "test:layout": "npm run build && playwright test",
@@ -13,6 +13,7 @@
     "test:layout:install": "playwright install chromium webkit"
   },
   "dependencies": {
+    "@lobehub/icons-static-svg": "^1.94.0",
     "fft.js": "^4.0.4",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",

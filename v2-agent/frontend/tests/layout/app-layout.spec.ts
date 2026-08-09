@@ -334,6 +334,7 @@ test("移动官网导航支持键盘关闭并恢复焦点", async ({ page }) => 
   await expect(navigation).toBeVisible();
   await expect(navigation.locator("a").first()).toBeFocused();
   await expect(navigation.getByRole("button", { name: "开发者概览" })).toBeVisible();
+  await expect(navigation.getByRole("button", { name: "Agent Skill" })).toBeVisible();
   await expect(navigation.getByRole("button", { name: "在线调试" })).toBeVisible();
   await expect(navigation.getByRole("button", { name: "接入文档" })).toBeVisible();
   await page.keyboard.press("Escape");
@@ -1358,6 +1359,52 @@ test("开发者平台在手机横屏仍可滚动访问导航", async ({ page }) 
   await expect(page.getByRole("button", { name: "API 密钥" })).toBeVisible();
   await expect(page.getByRole("button", { name: "接入文档" })).toBeVisible();
   expect(await readableTextOffenders(page, ".developer-shell")).toEqual([]);
+  await expectNoHorizontalOverflow(page);
+});
+
+test("Agent Skill 提供一句话接入、使用示例与完整客户端标识", async ({ page, request }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await installBaseMocks(page, true);
+  await installDeveloperMocks(page);
+  await page.goto("/?developer=1&developerTab=skill");
+
+  await expect(page.getByRole("heading", { name: "一句话，让你的 Agent 学会鉴伪" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "复制 Agent Skill 安装指令" })).toBeVisible();
+  await expect(page.getByText("从复制到第一次检测，只需三步")).toBeVisible();
+  await expect(page.getByText("这些 Agent 都能接入")).toBeVisible();
+  await expect(page.getByText("OpenClaw", { exact: true })).toBeVisible();
+  await expect(page.getByText("龙虾 Agent", { exact: true })).toBeVisible();
+
+  const clientLogos = page.locator(".agent-skill-client-grid img");
+  await expect(clientLogos).toHaveCount(10);
+  expect(await clientLogos.evaluateAll((images: HTMLImageElement[]) => images.every((image) => image.complete && image.naturalWidth > 0))).toBeTruthy();
+
+  await page.getByRole("button", { name: "复制 Agent Skill 安装指令" }).click();
+  await expect(page.getByRole("button", { name: "复制 Agent Skill 安装指令" })).toContainText("已复制，可以发送了");
+  expect(await readableTextOffenders(page, ".developer-agent-skill-page")).toEqual([]);
+  await expectNoHorizontalOverflow(page);
+
+  const guideResponse = await request.get("/huijian-skill.md");
+  expect(guideResponse.ok()).toBeTruthy();
+  expect(await guideResponse.text()).toContain("Install the Huijian AI Image Forensics Skill");
+  const skillResponse = await request.get("/skills/huijian-image-forensics/SKILL.md");
+  expect(skillResponse.ok()).toBeTruthy();
+  expect(await skillResponse.text()).toContain("name: huijian-image-forensics");
+});
+
+test("Agent Skill 手机页面保持可读并允许横向浏览开发者导航", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installBaseMocks(page, true);
+  await installDeveloperMocks(page);
+  await page.goto("/?developer=1&developerTab=skill");
+
+  await expect(page.getByRole("heading", { name: "一句话，让你的 Agent 学会鉴伪" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Agent Skill", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "复制 Agent Skill 安装指令" })).toBeVisible();
+  const copyButtonBox = await page.getByRole("button", { name: "复制 Agent Skill 安装指令" }).boundingBox();
+  expect(copyButtonBox?.height || 0).toBeGreaterThanOrEqual(44);
+  await expect(page.locator(".agent-skill-client-grid article")).toHaveCount(10);
+  expect(await readableTextOffenders(page, ".developer-agent-skill-page")).toEqual([]);
   await expectNoHorizontalOverflow(page);
 });
 

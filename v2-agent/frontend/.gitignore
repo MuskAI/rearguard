@@ -12,6 +12,7 @@ dist
 dist-ssr
 playwright-report
 test-results
+/public/skills/huijian-image-forensics/
 *.local
 
 # Editor directories and files

@@ -13,7 +13,7 @@ import BrandArtIcon, { BrandArtIconName } from "./BrandArtIcon";
 import HuijianBrand from "./HuijianBrand";
 import Presence from "./Presence";
 
-export type DeveloperEntry = "overview" | "tester" | "docs";
+export type DeveloperEntry = "overview" | "tester" | "docs" | "skill";
 
 interface Props {
   authReady: boolean;
@@ -239,6 +239,7 @@ export default function OfficialHome({
                   }}
                 >
                   <button type="button" role="menuitem" tabIndex={developerOpen ? 0 : -1} onClick={() => openDeveloper("overview")}><BrandArtIcon name="developer" /><div><strong>平台概览</strong><small>API Key、额度与调用</small></div><ArrowRight size={15} /></button>
+                  <button type="button" role="menuitem" tabIndex={-1} onClick={() => openDeveloper("skill")}><BrandArtIcon name="workflow" /><div><strong>Agent Skill</strong><small>复制一句话完成接入</small></div><ArrowRight size={15} /></button>
                   <button type="button" role="menuitem" tabIndex={-1} onClick={() => openDeveloper("tester")}><BrandArtIcon name="fast" /><div><strong>在线调试</strong><small>发送真实检测请求</small></div><ArrowRight size={15} /></button>
                   <button type="button" role="menuitem" tabIndex={-1} onClick={() => openDeveloper("docs")}><BrandArtIcon name="report" /><div><strong>接入文档</strong><small>多语言示例与错误码</small></div><ArrowRight size={15} /></button>
                 </div>
@@ -271,6 +272,7 @@ export default function OfficialHome({
               {NAV_ITEMS.map((item) => <a key={item.href} href={item.href} tabIndex={mobileNavOpen ? 0 : -1} onClick={() => setMobileNavOpen(false)}>{item.label}<ArrowRight size={16} /></a>)}
               <button type="button" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => { setMobileNavOpen(false); onPlayground(); }}>Playground<ArrowRight size={16} /></button>
               <button type="button" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => openDeveloper("overview")}>开发者概览<ArrowRight size={16} /></button>
+              <button type="button" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => openDeveloper("skill")}>Agent Skill<ArrowRight size={16} /></button>
               <button type="button" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => openDeveloper("tester")}>在线调试<ArrowRight size={16} /></button>
               <button type="button" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => openDeveloper("docs")}>接入文档<ArrowRight size={16} /></button>
               <a href="#faq" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => setMobileNavOpen(false)}>常见问题<ArrowRight size={16} /></a>

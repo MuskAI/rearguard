@@ -597,7 +597,7 @@ export default function App() {
     setView(nextView);
   }, []);
 
-  const navigateToDeveloper = useCallback((tab: "overview" | "tester" | "docs" = "overview") => {
+  const navigateToDeveloper = useCallback((tab: "overview" | "tester" | "docs" | "skill" = "overview") => {
     const url = new URL(window.location.href);
     url.searchParams.delete("workspace");
     url.searchParams.delete("playground");
