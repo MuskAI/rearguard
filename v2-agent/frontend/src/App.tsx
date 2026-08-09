@@ -1294,7 +1294,7 @@ export default function App() {
           onLogout={() => void logout()}
         />
       ) : (
-      <div className={`agent-app ${historyLayoutClass}`}>
+      <div className={`agent-app ${historyLayoutClass} ${user ? "is-authenticated" : "is-guest"}`}>
       {historyAvailable && <AgentHistory
         entries={history}
         activeKey={activeKey}

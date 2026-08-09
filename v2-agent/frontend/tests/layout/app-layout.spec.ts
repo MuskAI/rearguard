@@ -147,6 +147,35 @@ async function expectNoHorizontalOverflow(page: Page) {
   }
 }
 
+async function expectNoInternalOverflow(page: Page, selectors: string[]) {
+  const dimensions = await page.evaluate((targets) => targets.map((selector) => {
+    const element = document.querySelector<HTMLElement>(selector);
+    return element ? {
+      selector,
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+    } : null;
+  }), selectors);
+  for (const item of dimensions) {
+    expect(item, `${item?.selector || "目标元素"} 不存在`).not.toBeNull();
+    expect(item!.scrollWidth, `${item!.selector} 内容被裁切`).toBeLessThanOrEqual(item!.clientWidth + 1);
+  }
+}
+
+async function expectTouchTargets(page: Page, selectors: string[]) {
+  const dimensions = await page.evaluate((targets) => targets.map((selector) => {
+    const element = document.querySelector<HTMLElement>(selector);
+    if (!element) return null;
+    const bounds = element.getBoundingClientRect();
+    return { selector, width: bounds.width, height: bounds.height };
+  }), selectors);
+  for (const item of dimensions) {
+    expect(item, `${item?.selector || "触控元素"} 不存在`).not.toBeNull();
+    expect(item!.width, `${item!.selector} 触控宽度不足`).toBeGreaterThanOrEqual(44);
+    expect(item!.height, `${item!.selector} 触控高度不足`).toBeGreaterThanOrEqual(44);
+  }
+}
+
 async function readableTextOffenders(page: Page, rootSelector: string, minimumPx = 12) {
   return page.locator(rootSelector).evaluate((root, minimum) => {
     const selectors = "p,span,small,strong,b,button,a,label,summary,dt,dd,li,h1,h2,h3,h4";
@@ -274,6 +303,9 @@ for (const viewport of viewports) {
       return element.complete && element.naturalWidth > 0;
     });
     expect(mascotLoaded).toBeTruthy();
+    if (viewport.width <= 700) {
+      await expect(page.locator(".home-header .brand-copy small")).toBeHidden();
+    }
     await expectNoHorizontalOverflow(page);
   });
 }
@@ -698,6 +730,38 @@ test("结果页完整依据入口使用正文级字号", async ({ page }) => {
   expect(sizes.summary).toBeGreaterThanOrEqual(17);
   expect(sizes.count).toBeGreaterThanOrEqual(14);
   expect(await readableTextOffenders(page, ".agent-result")).toEqual([]);
+
+  await page.setViewportSize({ width: 320, height: 568 });
+  await expectNoInternalOverflow(page, [
+    ".agent-topbar",
+    ".topbar-title",
+    ".analysis-model-picker",
+    ".analysis-model-trigger",
+    ".topbar-actions",
+  ]);
+  await expectTouchTargets(page, [
+    ".result-tabs button:nth-child(1)",
+    ".result-tabs button:nth-child(2)",
+    ".result-tabs button:nth-child(3)",
+    ".report-qa-attach",
+    ".report-qa-send",
+  ]);
+  const mobileResult = await page.evaluate(() => {
+    const result = document.querySelector<HTMLElement>(".agent-result")!.getBoundingClientRect();
+    const preview = document.querySelector<HTMLElement>(".result-preview")!.getBoundingClientRect();
+    const dock = document.querySelector<HTMLElement>(".composer-dock")!.getBoundingClientRect();
+    return {
+      resultLeft: result.left,
+      resultRight: result.right,
+      previewWidth: preview.width,
+      dockBottom: dock.bottom,
+    };
+  });
+  expect(mobileResult.resultLeft).toBeGreaterThanOrEqual(12);
+  expect(mobileResult.resultRight).toBeLessThanOrEqual(308);
+  expect(mobileResult.previewWidth).toBeLessThanOrEqual(96.5);
+  expect(mobileResult.dockBottom).toBeLessThanOrEqual(569);
+  await expectNoHorizontalOverflow(page);
 });
 
 test("登录用户可以围绕当前检测报告连续提问", async ({ page }) => {
@@ -1026,6 +1090,84 @@ for (const viewport of viewports.slice(0, 2)) {
     await expect(page.locator(".home-v3")).toBeVisible();
   });
 }
+
+test("手机工作台在 320 至 430px 间保持连续布局且首屏可上传", async ({ page }) => {
+  await installBaseMocks(page);
+  const mobileViewports = [
+    { width: 320, height: 568 },
+    { width: 360, height: 800 },
+    { width: 390, height: 844 },
+    { width: 430, height: 932 },
+  ];
+
+  for (const viewport of mobileViewports) {
+    await page.setViewportSize(viewport);
+    await page.goto("/?workspace=1");
+    await expect(page.locator(".topbar-login")).toBeVisible();
+    await expect(page.locator(".agent-topbar .brand-copy")).toBeHidden();
+
+    await expectNoInternalOverflow(page, [
+      ".agent-topbar",
+      ".topbar-title",
+      ".analysis-model-picker",
+      ".analysis-model-trigger",
+      ".topbar-actions",
+    ]);
+    await expectTouchTargets(page, [
+      ".agent-topbar .brand-home-button",
+      ".analysis-model-trigger",
+      ".topbar-login",
+      ".workspace-developer-button",
+      ".upload-button",
+      ".guest-upload-consent",
+    ]);
+
+    const layout = await page.evaluate(() => {
+      const upload = document.querySelector<HTMLElement>(".upload-stage")!.getBoundingClientRect();
+      const action = document.querySelector<HTMLElement>(".upload-button")!.getBoundingClientRect();
+      const capabilities = Array.from(document.querySelectorAll<HTMLElement>(".compact-capability-strip > div"), (element) => {
+        const bounds = element.getBoundingClientRect();
+        return { top: bounds.top, left: bounds.left, right: bounds.right };
+      });
+      return {
+        uploadHeight: upload.height,
+        actionBottom: action.bottom,
+        capabilities,
+      };
+    });
+    expect(layout.uploadHeight, `${viewport.width}px 上传卡异常增高`).toBeLessThan(600);
+    expect(layout.actionBottom, `${viewport.width}px 首屏未完整展示上传按钮`).toBeLessThanOrEqual(viewport.height);
+    expect(layout.capabilities).toHaveLength(3);
+    expect(Math.max(...layout.capabilities.map((item) => item.top)) - Math.min(...layout.capabilities.map((item) => item.top))).toBeLessThanOrEqual(1);
+    expect(layout.capabilities[0].right).toBeLessThanOrEqual(layout.capabilities[1].left + 1);
+    expect(layout.capabilities[1].right).toBeLessThanOrEqual(layout.capabilities[2].left + 1);
+    await expectNoHorizontalOverflow(page);
+  }
+});
+
+test("登录态窄屏保留完整模型名称并移除重复开发者按钮", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  await installBaseMocks(page, true);
+  await page.goto("/?workspace=1");
+
+  await expect(page.locator(".workspace-account-menu")).toBeVisible();
+  await expect(page.locator(".analysis-model-trigger-copy strong")).toHaveText("快速检测");
+  await expect(page.locator(".workspace-developer-button")).toBeHidden();
+  await expectNoInternalOverflow(page, [
+    ".agent-topbar",
+    ".topbar-title",
+    ".analysis-model-picker",
+    ".analysis-model-trigger",
+    ".topbar-actions",
+  ]);
+  await expectTouchTargets(page, [
+    ".mobile-history-button",
+    ".agent-topbar .brand-home-button",
+    ".analysis-model-trigger",
+    ".workspace-account-menu .account-menu-trigger",
+  ]);
+  await expectNoHorizontalOverflow(page);
+});
 
 test("登录态访问统计携带同源会话 Cookie", async ({ page, context }) => {
   await page.addInitScript(() => {

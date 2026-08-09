@@ -375,16 +375,16 @@
   }
 
   .report-qa-composer {
-    min-height: 56px;
-    grid-template-columns: 42px minmax(0, 1fr) 42px;
+    min-height: 58px;
+    grid-template-columns: 44px minmax(0, 1fr) 44px;
     gap: 4px;
     padding: 5px;
   }
 
   .report-qa-attach,
   .report-qa-send {
-    width: 42px;
-    height: 42px;
+    width: 44px;
+    height: 44px;
   }
 
   .report-qa-composer textarea {
