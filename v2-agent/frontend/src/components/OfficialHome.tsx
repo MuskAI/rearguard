@@ -1,6 +1,8 @@
 import {
   ArrowRight,
+  Check,
   ChevronDown,
+  Copy,
   LogIn,
   Menu,
   Sparkles,
@@ -12,6 +14,7 @@ import AccountMenu from "./AccountMenu";
 import BrandArtIcon, { BrandArtIconName } from "./BrandArtIcon";
 import HuijianBrand from "./HuijianBrand";
 import Presence from "./Presence";
+import { buildAgentSkillInstallPrompt, FEATURED_AGENT_CLIENTS } from "./agentSkillCatalog";
 
 export type DeveloperEntry = "overview" | "tester" | "docs" | "skill";
 
@@ -29,6 +32,7 @@ interface Props {
 
 const NAV_ITEMS = [
   { label: "产品能力", href: "#capabilities" },
+  { label: "Agent Skill", href: "#agent-skill" },
   { label: "应用场景", href: "#scenarios" },
   { label: "工作方式", href: "#workflow" },
 ] as const;
@@ -95,6 +99,7 @@ export default function OfficialHome({
 }: Props) {
   const [developerOpen, setDeveloperOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [skillCopied, setSkillCopied] = useState(false);
   const siteRef = useRef<HTMLDivElement>(null);
   const developerRootRef = useRef<HTMLDivElement>(null);
   const developerTriggerRef = useRef<HTMLButtonElement>(null);
@@ -102,6 +107,8 @@ export default function OfficialHome({
   const developerFocusIndexRef = useRef<number | null>(null);
   const mobileNavRef = useRef<HTMLElement>(null);
   const mobileNavTriggerRef = useRef<HTMLButtonElement>(null);
+  const skillCopyResetRef = useRef<number | null>(null);
+  const skillInstallPrompt = buildAgentSkillInstallPrompt(window.location.origin);
 
   useEffect(() => {
     const root = siteRef.current;
@@ -161,10 +168,33 @@ export default function OfficialHome({
     };
   }, [mobileNavOpen]);
 
+  useEffect(() => () => {
+    if (skillCopyResetRef.current !== null) window.clearTimeout(skillCopyResetRef.current);
+  }, []);
+
   function openDeveloper(entry: DeveloperEntry) {
     setDeveloperOpen(false);
     setMobileNavOpen(false);
     onDeveloper(entry);
+  }
+
+  async function copyAgentSkillPrompt() {
+    try {
+      await navigator.clipboard.writeText(skillInstallPrompt);
+    } catch {
+      const fallback = document.createElement("textarea");
+      fallback.value = skillInstallPrompt;
+      fallback.setAttribute("readonly", "");
+      fallback.style.position = "fixed";
+      fallback.style.opacity = "0";
+      document.body.appendChild(fallback);
+      fallback.select();
+      document.execCommand("copy");
+      fallback.remove();
+    }
+    setSkillCopied(true);
+    if (skillCopyResetRef.current !== null) window.clearTimeout(skillCopyResetRef.current);
+    skillCopyResetRef.current = window.setTimeout(() => setSkillCopied(false), 2200);
   }
 
   return (
@@ -308,6 +338,52 @@ export default function OfficialHome({
           <article><strong>图片 · 视频 · 文档</strong><span>一个入口自动分流</span></article>
           <article><strong>快速 · Swarm</strong><span>按任务重要程度选择</span></article>
           <article><strong>水印 · 元数据 · 报告</strong><span>关键证据集中呈现</span></article>
+        </section>
+
+        <section className={`home-agent-skill ${skillCopied ? "is-copied" : ""}`} id="agent-skill" aria-labelledby="home-agent-skill-title">
+          <div className="home-agent-skill-inner">
+            <div className="home-agent-skill-copy" data-reveal>
+              <p><i /> AGENT SKILL</p>
+              <h2 id="home-agent-skill-title">把鉴伪能力，交给你正在使用的 Agent。</h2>
+              <span>复制一句话，Claude Code、Codex、Cursor、OpenClaw 等 Agent 就能替你提交图片、等待检测并用通俗语言解释证据。</span>
+              <ul aria-label="Agent Skill 核心特点">
+                <li>不用写接口代码</li>
+                <li>API Key 留在本机</li>
+                <li>支持快速与 Swarm</li>
+              </ul>
+              <div className="home-agent-skill-actions">
+                <button type="button" onClick={() => openDeveloper("skill")}>查看完整接入 <ArrowRight size={18} /></button>
+                <a href="/huijian-skill.md" target="_blank" rel="noreferrer">打开安装指南</a>
+              </div>
+            </div>
+
+            <div className="home-agent-skill-console" data-reveal>
+              <header><span><i /> ONE-LINE INSTALL</span><small>READY</small></header>
+              <div className="home-agent-skill-prompt">
+                <p>{skillInstallPrompt}</p>
+                <button type="button" onClick={() => void copyAgentSkillPrompt()} aria-label="复制首页 Agent Skill 安装指令">
+                  {skillCopied ? <Check size={18} /> : <Copy size={18} />}
+                  {skillCopied ? "已复制" : "复制这句话"}
+                </button>
+              </div>
+              <div className="home-agent-skill-handoff" aria-label="慧鉴 Skill 可接入的 Agent">
+                <div className="home-agent-skill-source">
+                  <img src="/brand/huijian-mark-v3.webp" width="52" height="52" alt="" aria-hidden="true" />
+                  <span><small>HUIJIAN SKILL</small><strong>图像鉴伪</strong></span>
+                </div>
+                <div className="home-agent-skill-beam" aria-hidden="true"><i /><i /></div>
+                <div className="home-agent-skill-logos">
+                  {FEATURED_AGENT_CLIENTS.map((client) => (
+                    <span key={client.name} title={client.name}>
+                      <img src={client.logo} width="32" height="32" alt="" aria-hidden="true" />
+                      <small>{client.name}</small>
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <footer><span>本地图片</span><span>证据解释</span><span>PDF 报告</span></footer>
+            </div>
+          </div>
         </section>
 
         <section className="home-capabilities" id="capabilities" aria-labelledby="home-capabilities-title">

@@ -342,6 +342,45 @@ test("移动官网导航支持键盘关闭并恢复焦点", async ({ page }) => 
   await expect(trigger).toBeFocused();
 });
 
+test("官网直接展示 Agent Skill 并可复制一句话进入完整接入页", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await installBaseMocks(page, true);
+  await installDeveloperMocks(page);
+  await page.goto("/");
+
+  const section = page.locator(".home-agent-skill");
+  await section.scrollIntoViewIfNeeded();
+  await expect(page.getByRole("heading", { name: "把鉴伪能力，交给你正在使用的 Agent。" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "复制首页 Agent Skill 安装指令" })).toBeVisible();
+  const logos = section.locator(".home-agent-skill-logos img");
+  await expect(logos).toHaveCount(5);
+  expect(await logos.evaluateAll((images: HTMLImageElement[]) => images.every((image) => image.complete && image.naturalWidth > 0))).toBeTruthy();
+
+  await page.getByRole("button", { name: "复制首页 Agent Skill 安装指令" }).click();
+  await expect(page.getByRole("button", { name: "复制首页 Agent Skill 安装指令" })).toContainText("已复制");
+  await page.getByRole("button", { name: "查看完整接入" }).click();
+  await expect(page).toHaveURL(/developerTab=skill/);
+  await expect(page.getByRole("heading", { name: "一句话，让你的 Agent 学会鉴伪" })).toBeVisible();
+});
+
+test("官网 Agent Skill 在手机端保持完整传递链与可用触控区", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installBaseMocks(page);
+  await page.goto("/");
+
+  const section = page.locator(".home-agent-skill");
+  await section.scrollIntoViewIfNeeded();
+  await expect(section).toBeVisible();
+  await expect(section.locator(".home-agent-skill-logos > span")).toHaveCount(5);
+  await expectTouchTargets(page, [
+    ".home-agent-skill-actions button",
+    ".home-agent-skill-actions a",
+    ".home-agent-skill-prompt button",
+  ]);
+  expect(await readableTextOffenders(page, ".home-agent-skill")).toEqual([]);
+  await expectNoHorizontalOverflow(page);
+});
+
 test("桌面端开发者菜单支持方向键并恢复焦点", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await installBaseMocks(page);
@@ -1372,12 +1411,13 @@ test("Agent Skill 提供一句话接入、使用示例与完整客户端标识",
   await expect(page.getByRole("button", { name: "复制 Agent Skill 安装指令" })).toBeVisible();
   await expect(page.getByText("从复制到第一次检测，只需三步")).toBeVisible();
   await expect(page.getByText("这些 Agent 都能接入")).toBeVisible();
-  await expect(page.getByText("OpenClaw", { exact: true })).toBeVisible();
-  await expect(page.getByText("龙虾 Agent", { exact: true })).toBeVisible();
+  await expect(page.locator(".agent-skill-client-grid").getByText("OpenClaw", { exact: true })).toBeVisible();
+  await expect(page.locator(".agent-skill-client-grid").getByText("龙虾 Agent", { exact: true })).toBeVisible();
 
   const clientLogos = page.locator(".agent-skill-client-grid img");
   await expect(clientLogos).toHaveCount(10);
   expect(await clientLogos.evaluateAll((images: HTMLImageElement[]) => images.every((image) => image.complete && image.naturalWidth > 0))).toBeTruthy();
+  await expect(page.locator(".agent-skill-relay-agents img")).toHaveCount(5);
 
   await page.getByRole("button", { name: "复制 Agent Skill 安装指令" }).click();
   await expect(page.getByRole("button", { name: "复制 Agent Skill 安装指令" })).toContainText("已复制，可以发送了");

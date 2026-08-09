@@ -1,14 +1,4 @@
 import { KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import claudeCodeLogo from "@lobehub/icons-static-svg/icons/claudecode-color.svg";
-import clineLogo from "@lobehub/icons-static-svg/icons/cline.svg";
-import codeBuddyLogo from "@lobehub/icons-static-svg/icons/codebuddy-color.svg";
-import codexLogo from "@lobehub/icons-static-svg/icons/codex-color.svg";
-import cursorLogo from "@lobehub/icons-static-svg/icons/cursor.svg";
-import kimiLogo from "@lobehub/icons-static-svg/icons/kimi-color.svg";
-import openClawLogo from "@lobehub/icons-static-svg/icons/openclaw-color.svg";
-import qwenLogo from "@lobehub/icons-static-svg/icons/qwen-color.svg";
-import traeLogo from "@lobehub/icons-static-svg/icons/trae-color.svg";
-import windsurfLogo from "@lobehub/icons-static-svg/icons/windsurf.svg";
 import {
   Activity,
   AlertTriangle,
@@ -57,6 +47,7 @@ import {
 } from "../api";
 import HuijianBrand from "./HuijianBrand";
 import { UserAvatar } from "./BrandSystem";
+import { AGENT_CLIENTS, buildAgentSkillInstallPrompt, FEATURED_AGENT_CLIENTS } from "./agentSkillCatalog";
 import "./DeveloperPlatform.css";
 
 type DeveloperTab = "overview" | "keys" | "tester" | "docs" | "skill" | "usage";
@@ -87,19 +78,6 @@ const NAV_ITEMS: Array<{ key: DeveloperTab; label: string; icon: typeof LayoutDa
   { key: "docs", label: "接入文档", icon: BookOpen },
   { key: "usage", label: "用量与账单", icon: Activity },
 ];
-
-const AGENT_CLIENTS = [
-  { name: "Claude Code", detail: "原生 Agent Skills", logo: claudeCodeLogo },
-  { name: "Codex", detail: "个人与项目 Skill", logo: codexLogo },
-  { name: "Cursor", detail: "编辑器与 CLI", logo: cursorLogo },
-  { name: "OpenClaw", detail: "龙虾 Agent", logo: openClawLogo },
-  { name: "TRAE", detail: "国内开发 Agent", logo: traeLogo },
-  { name: "Kimi", detail: "终端与文件工作流", logo: kimiLogo },
-  { name: "Qwen Code", detail: "命令行 Agent", logo: qwenLogo },
-  { name: "CodeBuddy", detail: "开发 Agent", logo: codeBuddyLogo },
-  { name: "Windsurf", detail: "编辑器 Agent", logo: windsurfLogo },
-  { name: "Cline", detail: "VS Code Agent", logo: clineLogo },
-] as const;
 
 function initialDeveloperTab(): DeveloperTab {
   const requested = new URLSearchParams(window.location.search).get("developerTab");
@@ -1132,7 +1110,7 @@ function DocsPanel({ endpoint, mode, language, code, copied, onModeChange, onLan
 
 function AgentSkillPanel({ origin, copied, onCopy, onOpenKeys }: { origin: string; copied: string; onCopy: (value: string, token: string) => void; onOpenKeys: () => void }) {
   const guideUrl = `${origin}/huijian-skill.md`;
-  const installPrompt = `请读取 ${guideUrl}，按照说明安装「慧鉴AI 图像鉴伪」Skill；安装完成后告诉我如何配置 HUIJIAN_API_KEY，并用一个本地图片路径完成验证。`;
+  const installPrompt = buildAgentSkillInstallPrompt(origin);
   const terminalCommand = `curl -fsSL ${guideUrl}`;
   const promptExamples = [
     "请鉴别 /absolute/path/photo.jpg 是否为 AI 生成，并用通俗语言列出最重要的证据。",
@@ -1141,19 +1119,41 @@ function AgentSkillPanel({ origin, copied, onCopy, onOpenKeys }: { origin: strin
 
   return (
     <div className="developer-page developer-agent-skill-page">
-      <section className="agent-skill-hero" aria-labelledby="agent-skill-title">
+      <section className={`agent-skill-hero ${copied === "skill-install" ? "is-copied" : ""}`} aria-labelledby="agent-skill-title">
         <div className="agent-skill-hero-copy">
-          <p><Sparkles size={15} /> HUIJIAN AGENT SKILL</p>
+          <p><Sparkles size={15} /> HUIJIAN AGENT SKILL <b>01</b></p>
           <h2 id="agent-skill-title">一句话，让你的<br /><span>Agent 学会鉴伪</span></h2>
-          <span>不需要手写接口。Agent 会完成图片提交、任务轮询、证据解释与 PDF 报告下载。</span>
+          <span>不需要手写接口，也不用记请求参数。把一句安装指令发给 Agent，它会完成图片提交、结果等待、证据解释与 PDF 报告下载。</span>
           <div className="agent-skill-capability-line" aria-label="Skill 能力">
             <span>快速检测</span><span>Swarm 复核</span><span>证据解释</span><span>PDF 报告</span>
           </div>
         </div>
 
-        <div className="agent-skill-copy-panel">
-          <div className="agent-skill-copy-label"><span>复制给你的 Agent</span><small>推荐</small></div>
-          <p>{installPrompt}</p>
+        <div className="agent-skill-copy-panel agent-skill-relay">
+          <header className="agent-skill-relay-header">
+            <span><i /> ONE-LINE HANDOFF</span>
+            <small>无需安装器</small>
+          </header>
+          <div className="agent-skill-relay-prompt">
+            <div><span>复制给你的 Agent</span><small>推荐</small></div>
+            <p>{installPrompt}</p>
+          </div>
+          <div className="agent-skill-relay-route" aria-label="安装指令从慧鉴 Skill 传递到支持的 Agent">
+            <div className="agent-skill-relay-source">
+              <span><img src="/brand/huijian-mark-v3.webp" width="48" height="48" alt="" aria-hidden="true" /></span>
+              <div><small>HUIJIAN SKILL</small><strong>图像鉴伪</strong></div>
+              <b>READY</b>
+            </div>
+            <div className="agent-skill-relay-line" aria-hidden="true"><i /><i /><i /></div>
+            <div className="agent-skill-relay-agents">
+              {FEATURED_AGENT_CLIENTS.map((client) => (
+                <span key={client.name} title={client.name}>
+                  <img src={client.logo} width={30} height={30} alt="" aria-hidden="true" />
+                  <small>{client.name}</small>
+                </span>
+              ))}
+            </div>
+          </div>
           <button type="button" onClick={() => void onCopy(installPrompt, "skill-install")} aria-label="复制 Agent Skill 安装指令">
             {copied === "skill-install" ? <Check size={18} /> : <Copy size={18} />}
             {copied === "skill-install" ? "已复制，可以发送了" : "复制这句话"}
@@ -1168,7 +1168,7 @@ function AgentSkillPanel({ origin, copied, onCopy, onOpenKeys }: { origin: strin
       </section>
 
       <section className="agent-skill-steps" aria-labelledby="agent-skill-steps-title">
-        <header><p>接入流程</p><h3 id="agent-skill-steps-title">从复制到第一次检测，只需三步</h3></header>
+        <header><p>接入流程</p><h3 id="agent-skill-steps-title">从复制到第一次检测，只需三步</h3><span>通常不到一分钟，安装过程由 Agent 自己完成。</span></header>
         <ol>
           <li><span>01</span><div><strong>把指令发给 Agent</strong><p>Agent 会识别自己的 Skill 目录，下载完整能力包并检查安装结果。</p></div></li>
           <li><span>02</span><div><strong>配置你的 API Key</strong><p>在本机设置 <code>HUIJIAN_API_KEY</code>。密钥只留在你的环境变量中，不要发到对话里。</p><button type="button" onClick={onOpenKeys}>创建或管理 API Key <ChevronRight size={15} /></button></div></li>
