@@ -847,6 +847,10 @@ test("登录用户可以围绕当前检测报告连续提问", async ({ page }) 
   await dock.getByRole("button", { name: "为什么判断为 AI 生成？" }).click();
   const qa = page.locator(".report-qa");
   await expect(qa.getByRole("heading", { name: "报告问答" })).toBeVisible();
+  const streamingParagraph = qa.locator(".report-qa-message.is-assistant.is-streaming p");
+  await expect.poll(async () => Array.from((await streamingParagraph.textContent()) || "").length).toBeGreaterThan(0);
+  const earlyAnswer = Array.from((await streamingParagraph.textContent()) || "");
+  expect(earlyAnswer.length).toBeLessThan(Array.from("报告在右下角定位到").length);
   await expect(qa.getByText("报告在右下角定位到", { exact: true })).toBeVisible();
   await expect(qa.locator(".report-qa-stream-cursor")).toBeVisible();
   await expect(qa.getByText("报告在右下角定位到平台水印，并与生成痕迹相互印证。")).toHaveCount(0);

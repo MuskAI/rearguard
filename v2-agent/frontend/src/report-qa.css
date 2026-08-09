@@ -53,12 +53,15 @@
   display: flex;
   align-items: flex-start;
   gap: 10px;
+  transform-origin: 0 0;
+  animation: report-qa-message-enter 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .report-qa-message.is-user {
   max-width: 76%;
   align-self: flex-end;
   flex-direction: row-reverse;
+  transform-origin: 100% 0;
 }
 
 .report-qa-speaker {
@@ -85,6 +88,13 @@
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 3px 7px 7px 7px;
+  transition: border-color 280ms ease, box-shadow 280ms ease, background-color 280ms ease;
+}
+
+.report-qa-message.is-streaming > div {
+  background: color-mix(in srgb, var(--surface) 94%, var(--primary-soft));
+  border-color: color-mix(in srgb, var(--border) 66%, var(--primary));
+  box-shadow: 0 7px 22px rgba(15, 71, 78, 0.065);
 }
 
 .report-qa-message.is-user > div {
@@ -109,12 +119,33 @@
   margin-left: 3px;
   vertical-align: -0.14em;
   background: var(--primary);
-  animation: report-qa-cursor 850ms steps(1, end) infinite;
+  border-radius: 999px;
+  transform-origin: center;
+  animation: report-qa-cursor 1.05s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
 
 @keyframes report-qa-cursor {
+  0%,
+  100% {
+    opacity: 0.32;
+    transform: scaleY(0.72);
+  }
+
   50% {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+}
+
+@keyframes report-qa-message-enter {
+  from {
     opacity: 0;
+    transform: translateY(7px) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }
 
@@ -132,6 +163,19 @@
   margin: 9px 0 0;
   padding: 0;
   list-style: none;
+  animation: report-qa-evidence-enter 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes report-qa-evidence-enter {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .report-qa-references li {
@@ -351,10 +395,13 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .report-qa-message,
+  .report-qa-references,
   .report-qa-stream-cursor {
     animation: none;
   }
 
+  .report-qa-message > div,
   .report-qa-composer,
   .report-qa-suggestions button {
     transition: none;

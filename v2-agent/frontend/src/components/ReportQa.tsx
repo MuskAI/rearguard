@@ -1,4 +1,4 @@
-import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
   LoaderCircle,
@@ -35,6 +35,18 @@ interface Props {
 interface ConversationMessage extends ReportQaMessage {
   id: string;
   evidenceRefs?: string[];
+}
+
+interface StreamRevealState {
+  id: string;
+  target: string;
+  displayed: string;
+  frame: number | null;
+  lastFrame: number;
+  budget: number;
+  pauseUntil: number;
+  finishing: boolean;
+  resolve?: () => void;
 }
 
 const MAX_QUESTION_LENGTH = 500;
@@ -261,6 +273,10 @@ function messageId(role: "user" | "assistant") {
   return `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function reducedMotionRequested() {
+  return typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
 export default function ReportQa({ outcome, requiresLogin, composerHost, onAttach, onLogin }: Props) {
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [question, setQuestion] = useState("");
@@ -270,26 +286,172 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
   const [suggestions, setSuggestions] = useState<string[]>(() => initialQuestions(outcome));
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const scrollFrameRef = useRef<number | null>(null);
+  const revealRef = useRef<StreamRevealState | null>(null);
+  const revealTickRef = useRef<(timestamp: number) => void>(() => undefined);
   const outcomeRef = useRef(outcome);
   outcomeRef.current = outcome;
   const request = useMemo(() => reportRequest(outcome), [outcome]);
 
+  const paintReveal = useCallback((id: string, content: string) => {
+    setMessages((current) => current.map((message) => (
+      message.id === id ? { ...message, content } : message
+    )));
+  }, []);
+
+  const scheduleReveal = useCallback(() => {
+    const state = revealRef.current;
+    if (!state || state.frame !== null) return;
+    state.frame = window.requestAnimationFrame((timestamp) => revealTickRef.current(timestamp));
+  }, []);
+
+  const stopReveal = useCallback(() => {
+    const state = revealRef.current;
+    if (!state) return;
+    if (state.frame !== null) window.cancelAnimationFrame(state.frame);
+    state.resolve?.();
+    revealRef.current = null;
+  }, []);
+
+  revealTickRef.current = (timestamp: number) => {
+    const state = revealRef.current;
+    if (!state) return;
+    state.frame = null;
+
+    if (reducedMotionRequested()) {
+      state.displayed = state.target;
+      paintReveal(state.id, state.displayed);
+    } else if (timestamp < state.pauseUntil) {
+      scheduleReveal();
+      return;
+    } else {
+      if (state.lastFrame === 0) state.lastFrame = timestamp;
+      const elapsed = Math.min(64, Math.max(0, timestamp - state.lastFrame));
+      state.lastFrame = timestamp;
+      const remaining = Array.from(state.target.slice(state.displayed.length));
+      const backlog = remaining.length;
+      const charactersPerSecond = state.finishing
+        ? Math.min(160, 58 + backlog * 2.2)
+        : Math.min(92, 30 + backlog * 1.25);
+      state.budget += elapsed * charactersPerSecond / 1_000;
+      let amount = Math.min(backlog, Math.floor(state.budget));
+      if (amount > 0) {
+        const punctuation = remaining.slice(0, amount).findIndex((character) => /[，。！？；]/.test(character));
+        if (punctuation >= 0) amount = punctuation + 1;
+        const addition = remaining.slice(0, amount).join("");
+        state.displayed += addition;
+        state.budget -= amount;
+        if (/[。！？]$/.test(addition)) state.pauseUntil = timestamp + (state.finishing ? 55 : 85);
+        else if (/[，；]$/.test(addition)) state.pauseUntil = timestamp + (state.finishing ? 35 : 55);
+        paintReveal(state.id, state.displayed);
+      }
+    }
+
+    if (state.displayed.length < state.target.length) {
+      scheduleReveal();
+      return;
+    }
+    state.lastFrame = 0;
+    state.budget = 0;
+    if (state.finishing) {
+      const resolve = state.resolve;
+      state.resolve = undefined;
+      resolve?.();
+    }
+  };
+
+  const appendReveal = useCallback((id: string, delta: string) => {
+    let state = revealRef.current;
+    if (!state || state.id !== id) {
+      stopReveal();
+      state = {
+        id,
+        target: "",
+        displayed: "",
+        frame: null,
+        lastFrame: 0,
+        budget: 0,
+        pauseUntil: 0,
+        finishing: false,
+      };
+      revealRef.current = state;
+    }
+    state.target += delta;
+    if (reducedMotionRequested()) {
+      state.displayed = state.target;
+      paintReveal(id, state.displayed);
+      return;
+    }
+    scheduleReveal();
+  }, [paintReveal, scheduleReveal, stopReveal]);
+
+  const finishReveal = useCallback(async (id: string, finalAnswer: string) => {
+    let state = revealRef.current;
+    if (!state || state.id !== id) {
+      state = {
+        id,
+        target: finalAnswer,
+        displayed: "",
+        frame: null,
+        lastFrame: 0,
+        budget: 0,
+        pauseUntil: 0,
+        finishing: true,
+      };
+      revealRef.current = state;
+    }
+    if (!finalAnswer.startsWith(state.displayed)) {
+      state.target = finalAnswer;
+      state.displayed = finalAnswer;
+      paintReveal(id, finalAnswer);
+      return;
+    }
+    state.target = finalAnswer;
+    state.finishing = true;
+    if (state.displayed === state.target || reducedMotionRequested()) {
+      state.displayed = state.target;
+      paintReveal(id, state.displayed);
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      state!.resolve = resolve;
+      scheduleReveal();
+    });
+  }, [paintReveal, scheduleReveal]);
+
   useEffect(() => {
     abortRef.current?.abort();
     abortRef.current = null;
+    stopReveal();
     setMessages([]);
     setQuestion("");
     setBusy(false);
     setStreamingMessageId(null);
     setError("");
     setSuggestions(initialQuestions(outcomeRef.current));
-  }, [outcome.id]);
+  }, [outcome.id, stopReveal]);
 
   useEffect(() => {
-    if (messages.length > 0 || busy) endRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  }, [busy, messages]);
+    if (messages.length === 0 && !busy) return;
+    if (scrollFrameRef.current !== null) window.cancelAnimationFrame(scrollFrameRef.current);
+    scrollFrameRef.current = window.requestAnimationFrame(() => {
+      endRef.current?.scrollIntoView({
+        behavior: streamingMessageId || reducedMotionRequested() ? "auto" : "smooth",
+        block: "nearest",
+      });
+      scrollFrameRef.current = null;
+    });
+    return () => {
+      if (scrollFrameRef.current !== null) window.cancelAnimationFrame(scrollFrameRef.current);
+      scrollFrameRef.current = null;
+    };
+  }, [busy, messages, streamingMessageId]);
 
-  useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => () => {
+    abortRef.current?.abort();
+    stopReveal();
+    if (scrollFrameRef.current !== null) window.cancelAnimationFrame(scrollFrameRef.current);
+  }, [stopReveal]);
 
   async function submit(rawQuestion: string) {
     const value = rawQuestion.trim();
@@ -298,7 +460,6 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
     const userMessage: ConversationMessage = { id: messageId("user"), role: "user", content: value };
     const assistantId = messageId("assistant");
     let assistantAdded = false;
-    let streamedAnswer = "";
     setMessages((current) => [...current, userMessage]);
     setQuestion("");
     setError("");
@@ -311,24 +472,27 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
         { ...request, question: value, history },
         {
           onDelta: (delta) => {
-            streamedAnswer += delta;
             if (!assistantAdded) {
               assistantAdded = true;
               setStreamingMessageId(assistantId);
               setMessages((current) => [...current, {
                 id: assistantId,
                 role: "assistant",
-                content: streamedAnswer,
+                content: "",
               }]);
-              return;
             }
-            setMessages((current) => current.map((message) => (
-              message.id === assistantId ? { ...message, content: streamedAnswer } : message
-            )));
+            appendReveal(assistantId, delta);
           },
         },
         controller.signal,
       );
+      if (!assistantAdded) {
+        assistantAdded = true;
+        setStreamingMessageId(assistantId);
+        setMessages((current) => [...current, { id: assistantId, role: "assistant", content: "" }]);
+      }
+      await finishReveal(assistantId, response.answer);
+      if (controller.signal.aborted) return;
       setMessages((current) => {
         const finalMessage: ConversationMessage = {
           id: assistantId,
@@ -343,6 +507,7 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
       if (response.suggestedQuestions.length > 0) setSuggestions(response.suggestedQuestions);
     } catch (requestError) {
       if (controller.signal.aborted) return;
+      stopReveal();
       setMessages((current) => current.filter((message) => ![userMessage.id, assistantId].includes(message.id)));
       setQuestion(value);
       const message = requestError instanceof ApiRequestError && requestError.status === 401
@@ -354,6 +519,7 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
       if (!controller.signal.aborted) {
+        stopReveal();
         setStreamingMessageId(null);
         setBusy(false);
       }
@@ -429,9 +595,12 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
               <p><ShieldCheck size={13} /> 只依据当前报告</p>
             </div>
           </header>
-          <div className="report-qa-messages" aria-live="polite" aria-label="报告问答记录">
+          <div className="report-qa-messages" aria-live="polite" aria-busy={busy} aria-label="报告问答记录">
             {messages.map((message) => (
-              <div className={`report-qa-message is-${message.role}`} key={message.id}>
+              <div
+                className={`report-qa-message is-${message.role}${streamingMessageId === message.id ? " is-streaming" : ""}`}
+                key={message.id}
+              >
                 <span className="report-qa-speaker" aria-hidden="true">
                   {message.role === "assistant" ? <AgentAvatar size={30} state="complete" /> : <UserRound size={16} />}
                 </span>
