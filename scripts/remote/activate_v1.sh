@@ -510,10 +510,20 @@ Image.new("RGB", (64, 64), (240, 244, 245)).save("/tmp/realguard-deployment-prob
 curl -fsS --max-time 180 \
   -H "X-RealGuard-Detector-Token: $detector_token" \
   -F internal_probe=1 \
+  -F defer_visual_llm=1 \
   -F openid=deployment-probe \
   -F image_file=@/tmp/realguard-deployment-probe.png \
-  "http://127.0.0.1:$DETECTOR_PORT/image" \
-  | grep -q '"probe":true'
+  -o /tmp/realguard-detector-probe.json \
+  "http://127.0.0.1:$DETECTOR_PORT/image"
+sudo -u ubuntu "$release_root/.venv/bin/python" - /tmp/realguard-detector-probe.json <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as response_file:
+    response = json.load(response_file)
+assert response.get("code") == 200
+assert (response.get("data") or {}).get("probe") is True
+PY
 systemctl is-active --quiet realguard-detector-backend.service
 systemctl is-active --quiet realguard-developer-worker.service
 systemctl is-active --quiet realguard-alert-worker.service

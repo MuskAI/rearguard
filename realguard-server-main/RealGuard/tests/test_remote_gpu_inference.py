@@ -678,16 +678,18 @@ def test_detector_internal_readiness_verifies_callers_token(monkeypatch):
 
 
 def test_detector_deployment_probe_does_not_persist_history(monkeypatch):
-    monkeypatch.setattr(detector_backend, "_ensure_capability_ready", lambda: None)
-    monkeypatch.setattr(
-        detector_backend,
-        "_run_v1_detect",
-        lambda _path: {
+    detect_calls = []
+
+    def fake_detect(path, *, use_llm=True):
+        detect_calls.append({"path": path, "use_llm": use_llm})
+        return {
             "final_label": "真实图像",
             "detector_probability": 0.1,
             "probability": 0.1,
-        },
-    )
+        }
+
+    monkeypatch.setattr(detector_backend, "_ensure_capability_ready", lambda: None)
+    monkeypatch.setattr(detector_backend, "_run_v1_detect", fake_detect)
     monkeypatch.setattr(detector_backend, "_consume_remote_inference_evidence", lambda: {})
     monkeypatch.setattr(
         detector_backend,
@@ -716,6 +718,7 @@ def test_detector_deployment_probe_does_not_persist_history(monkeypatch):
 
     assert response.status_code == 200
     assert response.get_json()["data"]["probe"] is True
+    assert detect_calls == [{"path": "/tmp/stored-demo.png", "use_llm": False}]
 
 
 def test_detector_backend_rejects_missing_internal_token(monkeypatch):

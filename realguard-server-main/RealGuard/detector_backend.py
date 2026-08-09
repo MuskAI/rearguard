@@ -590,6 +590,9 @@ def create_app():
 
         openid = str(request.form.get("openid") or "").strip()[:64]
         phone = str(request.form.get("phone") or "").strip()[:20]
+        internal_probe = (
+            request.form.get("internal_probe") == "1" and openid == "deployment-probe"
+        )
         raw_account_uuid = str(request.form.get("account_uuid") or "").strip()
         account_uuid = normalize_account_uuid(raw_account_uuid)
         if raw_account_uuid and not account_uuid:
@@ -601,12 +604,10 @@ def create_app():
         try:
             _ensure_capability_ready()
             _, temp_path = _save_upload(image_bytes, openid or phone or "guest", safe_name)
-            defer_visual_llm = str(request.form.get("defer_visual_llm") or "").strip().lower() in {
-                "1",
-                "true",
-                "yes",
-                "on",
-            }
+            defer_visual_llm = internal_probe or (
+                str(request.form.get("defer_visual_llm") or "").strip().lower()
+                in {"1", "true", "yes", "on"}
+            )
             payload = (
                 _run_v1_detect(temp_path, use_llm=False)
                 if defer_visual_llm
@@ -616,7 +617,7 @@ def create_app():
             _apply_remote_model_decision_gate(payload, remote_evidence)
             if remote_evidence:
                 payload["remote_evidence"] = remote_evidence
-            if request.form.get("internal_probe") == "1" and openid == "deployment-probe":
+            if internal_probe:
                 return jsonify({
                     "code": 200,
                     "msg": "success",
