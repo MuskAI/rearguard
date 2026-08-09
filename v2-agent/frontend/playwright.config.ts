@@ -1,5 +1,8 @@
 import { defineConfig } from "@playwright/test";
 
+const testPort = process.env.PLAYWRIGHT_PORT || "4173";
+const testBaseUrl = `http://127.0.0.1:${testPort}`;
+
 export default defineConfig({
   testDir: "./tests/layout",
   fullyParallel: false,
@@ -12,7 +15,7 @@ export default defineConfig({
     { name: "webkit", use: { browserName: "webkit" } },
   ],
   use: {
-    baseURL: "http://127.0.0.1:4173",
+    baseURL: testBaseUrl,
     locale: "zh-CN",
     colorScheme: "light",
     trace: "retain-on-failure",
@@ -20,8 +23,8 @@ export default defineConfig({
     video: "off",
   },
   webServer: {
-    command: "VITE_ACCOUNT_API_TARGET=http://127.0.0.1:45873 npm run preview -- --host 127.0.0.1 --port 4173 --strictPort",
-    url: "http://127.0.0.1:4173",
+    command: `VITE_ACCOUNT_API_TARGET=http://127.0.0.1:45873 npm run preview -- --host 127.0.0.1 --port ${testPort} --strictPort`,
+    url: testBaseUrl,
     reuseExistingServer: false,
     timeout: 30_000,
   },
