@@ -534,6 +534,17 @@ def _extract_json(value: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _extract_answer_payload(value: str) -> dict[str, Any] | None:
+    """Accept a safe plain-text answer when a compatible model ignores JSON mode."""
+    parsed = _extract_json(value)
+    if parsed is not None:
+        return parsed
+    text = value.strip()
+    if not text or text.startswith(("{", "[", "```")) or '"answer"' in text:
+        return None
+    return {"answer": text, "evidenceRefs": [], "suggestedQuestions": []}
+
+
 def _partial_json_answer(value: str) -> tuple[str, bool]:
     """Decode the currently available portion of the JSON answer string."""
     match = re.search(r'"answer"\s*:\s*"', value)
@@ -701,20 +712,30 @@ def _iter_stream_events(stream: Any, report: dict[str, Any]) -> Iterator[dict[st
     raw_content = ""
     emitted = ""
     total_tokens = 0
+    response_mode = "unknown"
     try:
         for chunk in stream:
             usage = getattr(chunk, "usage", None)
             total_tokens = max(total_tokens, int(getattr(usage, "total_tokens", 0) or 0))
             raw_content += _stream_chunk_text(chunk)
-            partial, complete = _partial_json_answer(raw_content)
-            prefix = _streamable_prefix(partial, complete)
+            if response_mode == "unknown":
+                leading = raw_content.lstrip()
+                if leading:
+                    response_mode = "json" if leading.startswith(("{", "```")) else "plain"
+            if response_mode == "json":
+                partial, complete = _partial_json_answer(raw_content)
+                prefix = _streamable_prefix(partial, complete)
+            elif response_mode == "plain":
+                prefix = _streamable_prefix(raw_content.strip(), False)
+            else:
+                prefix = ""
             friendly = _normalize_risk_scores(_plain_language(prefix, 4_000))
             if friendly.startswith(emitted) and len(friendly) > len(emitted):
                 delta = friendly[len(emitted):]
                 emitted = friendly
                 yield {"type": "delta", "text": delta}
 
-        parsed = _extract_json(raw_content)
+        parsed = _extract_answer_payload(raw_content)
         if not parsed:
             raise ReportQaUnavailableError("报告解释服务返回了无效结果")
         result = _finalize_answer(report, parsed, total_tokens)
@@ -777,7 +798,7 @@ def answer(report_value: Any, question_value: Any, history_value: Any = None) ->
     except Exception as exc:
         raise ReportQaUnavailableError("报告解释服务暂不可用") from exc
 
-    parsed = _extract_json(str(content))
+    parsed = _extract_answer_payload(str(content))
     if not parsed:
         raise ReportQaUnavailableError("报告解释服务返回了无效结果")
     usage = getattr(response, "usage", None)

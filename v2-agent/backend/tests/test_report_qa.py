@@ -206,6 +206,36 @@ def test_report_answer_stream_rejects_invalid_final_json(monkeypatch):
     assert completions.stream.closed is True
 
 
+def test_report_answer_accepts_safe_plain_text_from_compatible_model(monkeypatch):
+    client, _ = fake_client("报告认为这张图更偏向真实，风险分为 1.49%。")
+    monkeypatch.setattr(report_qa.detector, "_get_client", lambda: client)
+
+    response = report_qa.answer(
+        {"verdict": "real", "riskScore": 0.0149, "explanation": "未见明显异常"},
+        "为什么判断为真？",
+    )
+
+    assert response["answer"].startswith("报告认为这张图更偏向真实，风险分为 1.49%。")
+    assert response["answer"].endswith("它并不代表绝对正确率。")
+    assert response["evidenceRefs"] == []
+
+
+def test_report_answer_streams_safe_plain_text_from_compatible_model(monkeypatch):
+    client, completions = fake_stream_client("报告没有发现足以支持 AI 生成的强证据。因此结果更偏向真实图像。", chunk_size=5)
+    monkeypatch.setattr(report_qa.detector, "_get_client", lambda: client)
+
+    events = list(report_qa.stream_answer(
+        {"verdict": "real", "explanation": "未见明显异常"},
+        "为什么判断为真？",
+    ))
+
+    deltas = [event["text"] for event in events if event["type"] == "delta"]
+    assert len(deltas) >= 2
+    assert "".join(deltas) == events[-1]["answer"]
+    assert events[-1]["type"] == "done"
+    assert completions.stream.closed is True
+
+
 def test_partial_json_answer_waits_for_complete_escape_sequence():
     partial, complete = report_qa._partial_json_answer('{"answer":"第一句\\n第二句\\u4f')
     assert partial == "第一句\n第二句"
