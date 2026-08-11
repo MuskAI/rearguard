@@ -134,6 +134,13 @@ REPORT_QA_RATE_WINDOW_SECONDS = max(10, int(os.getenv("JIANZHEN_REPORT_QA_RATE_W
 _REPORT_QA_SEMAPHORE = asyncio.Semaphore(REPORT_QA_MAX_CONCURRENCY)
 _REPORT_QA_RATE_LOCK = asyncio.Lock()
 _REPORT_QA_REQUESTS: dict[str, list[float]] = {}
+COLLABORATION_RATE_LIMIT = max(1, int(os.getenv("JIANZHEN_COLLABORATION_RATE_LIMIT", "5")))
+COLLABORATION_RATE_WINDOW_SECONDS = max(
+    60, int(os.getenv("JIANZHEN_COLLABORATION_RATE_WINDOW_SECONDS", "3600"))
+)
+_COLLABORATION_RATE_LOCK = asyncio.Lock()
+_COLLABORATION_REQUESTS: dict[str, list[float]] = {}
+COLLABORATION_TYPES = frozenset({"research", "governance", "dataset", "integration", "other"})
 
 
 @asynccontextmanager
@@ -280,6 +287,7 @@ async def prevent_sensitive_response_caching(request: Request, call_next):
         "/api/history",
         "/api/report",
         "/api/admin",
+        "/api/collaboration-inquiries",
         "/api/document-detections",
         "/api/metrics",
     )
@@ -1199,6 +1207,130 @@ def csrf_token(request: Request) -> Response:
     return response
 
 
+def _require_public_form_csrf(request: Request) -> None:
+    if not _session_csrf_required():
+        return
+    expected = request.cookies.get(SESSION_CSRF_COOKIE, "").strip()
+    supplied = request.headers.get(SESSION_CSRF_HEADER, "").strip()
+    if not expected or not supplied or not secrets.compare_digest(expected, supplied):
+        raise HTTPException(status_code=403, detail="提交缺少有效的 CSRF 令牌")
+    if not _request_origin_is_same_site(request):
+        raise HTTPException(status_code=403, detail="提交来源不受信任")
+
+
+async def _enforce_collaboration_rate_limit(request: Request) -> None:
+    now = time.monotonic()
+    cutoff = now - COLLABORATION_RATE_WINDOW_SECONDS
+    key = _client_ip(request) or "unknown"
+    async with _COLLABORATION_RATE_LOCK:
+        if len(_COLLABORATION_REQUESTS) > 2_048:
+            stale = [
+                candidate
+                for candidate, timestamps in _COLLABORATION_REQUESTS.items()
+                if not timestamps or timestamps[-1] < cutoff
+            ]
+            for candidate in stale:
+                _COLLABORATION_REQUESTS.pop(candidate, None)
+        recent = [timestamp for timestamp in _COLLABORATION_REQUESTS.get(key, []) if timestamp >= cutoff]
+        if len(recent) >= COLLABORATION_RATE_LIMIT:
+            retry_after = max(1, math.ceil(recent[0] + COLLABORATION_RATE_WINDOW_SECONDS - now))
+            _COLLABORATION_REQUESTS[key] = recent
+            raise HTTPException(
+                status_code=429,
+                detail="合作意向提交较频繁，请稍后再试",
+                headers={"Retry-After": str(retry_after)},
+            )
+        recent.append(now)
+        _COLLABORATION_REQUESTS[key] = recent
+
+
+def _collaboration_text(
+    payload: dict,
+    field: str,
+    label: str,
+    *,
+    minimum: int,
+    maximum: int,
+    required: bool = True,
+) -> str:
+    raw = payload.get(field)
+    if raw is None:
+        raw = ""
+    if not isinstance(raw, str):
+        raise HTTPException(status_code=422, detail=f"{label}格式无效")
+    value = raw.strip()
+    if not value and not required:
+        return ""
+    if not (minimum <= len(value) <= maximum):
+        raise HTTPException(status_code=422, detail=f"{label}长度应为 {minimum} 至 {maximum} 个字符")
+    if any(ord(char) < 32 and char not in {"\n", "\r", "\t"} for char in value):
+        raise HTTPException(status_code=422, detail=f"{label}包含无效字符")
+    return value
+
+
+@app.post("/api/collaboration-inquiries", status_code=201)
+async def create_collaboration_inquiry(request: Request, payload: dict = Body(...)) -> dict:
+    _require_public_form_csrf(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="合作意向格式无效")
+    # A filled honeypot is acknowledged without retaining bot-provided content.
+    if str(payload.get("website") or "").strip():
+        return {
+            "status": "accepted",
+            "inquiryId": f"coop-{uuid.uuid4().hex[:12]}",
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+        }
+    if payload.get("privacyAccepted") is not True:
+        raise HTTPException(status_code=428, detail="请确认合作沟通所需的信息处理说明")
+    collaboration_type = str(payload.get("collaborationType") or "").strip().lower()
+    if collaboration_type not in COLLABORATION_TYPES:
+        raise HTTPException(status_code=422, detail="请选择有效的合作方向")
+    name = _collaboration_text(payload, "name", "称呼", minimum=1, maximum=60)
+    organization = _collaboration_text(
+        payload, "organization", "机构名称", minimum=1, maximum=120, required=False
+    )
+    contact = _collaboration_text(payload, "contact", "联系方式", minimum=4, maximum=160)
+    message = _collaboration_text(payload, "message", "合作说明", minimum=20, maximum=2000)
+    idempotency_key = request.headers.get("idempotency-key", "").strip()
+    if not (8 <= len(idempotency_key) <= 128 and all(33 <= ord(char) <= 126 for char in idempotency_key)):
+        raise HTTPException(status_code=400, detail="请提供有效的 Idempotency-Key")
+    if len(CONSENT_AUDIT_SALT) < 32:
+        raise HTTPException(status_code=503, detail="合作意向存储服务暂不可用")
+
+    await _enforce_collaboration_rate_limit(request)
+    actor = await run_in_threadpool(_session_access_granted, request)
+    source_material = f"{_client_ip(request) or ''}\0{request.headers.get('user-agent', '')}"
+    source_hash = hmac.new(
+        CONSENT_AUDIT_SALT.encode("utf-8"), source_material.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    idempotency_hash = hmac.new(
+        CONSENT_AUDIT_SALT.encode("utf-8"), idempotency_key.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    try:
+        inquiry = await run_in_threadpool(
+            storage.put_collaboration_inquiry,
+            inquiry_id=f"coop-{uuid.uuid4().hex[:12]}",
+            collaboration_type=collaboration_type,
+            name=name,
+            organization=organization,
+            contact=contact,
+            message=message,
+            actor=actor,
+            source_hash=source_hash,
+            idempotency_hash=idempotency_hash,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="本次提交标识与已有内容冲突，请刷新后重试") from exc
+    except (OSError, sqlite3.Error) as exc:
+        logger.exception("collaboration inquiry persistence failed")
+        raise HTTPException(status_code=503, detail="合作意向暂时无法保存，请稍后再试") from exc
+    return {
+        "status": "accepted",
+        "inquiryId": inquiry["inquiryId"],
+        "createdAt": inquiry["createdAt"],
+    }
+
+
 def _report_qa_rate_key(actor: dict, request: Request) -> str:
     if actor.get("accountUuid"):
         return f"account:{actor['accountUuid']}"
@@ -1572,6 +1704,16 @@ def admin_health(request: Request) -> dict:
         "evidenceSigning": evidence_manifest_v2.signing_status(),
         "storage": str(storage.DB_PATH),
     }
+
+
+@app.get("/api/admin/collaboration-inquiries")
+def admin_collaboration_inquiries(
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict:
+    _require_admin_access(request)
+    items = storage.list_collaboration_inquiries(limit=limit)
+    return {"items": items, "total": storage.collaboration_inquiry_count()}
 
 
 def _document_task_token(request: Request) -> str:

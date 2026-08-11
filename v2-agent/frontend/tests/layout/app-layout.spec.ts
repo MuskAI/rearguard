@@ -423,6 +423,72 @@ test("官网可以进入独立 Playground", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "慧鉴AI" })).toBeVisible();
 });
 
+for (const viewport of [
+  { name: "about-mobile", width: 390, height: 844 },
+  { name: "about-desktop", width: 1440, height: 1000 },
+  { name: "about-landscape", width: 844, height: 390 },
+]) {
+  test(`关于与合作页面在 ${viewport.name} 视口完整可读`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await installBaseMocks(page);
+    await page.goto("/?about=1");
+
+    await expectHorizontalHeading(page, "#about-title");
+    await expect(page.getByRole("heading", { name: /让真假判断/ })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "我们希望和认真解决问题的人，一起往前走。" })).toBeVisible();
+    const portraitLoaded = await page.locator(".about-portrait-stage > img").evaluate((image) => {
+      const element = image as HTMLImageElement;
+      return element.complete && element.naturalWidth === 256 && element.naturalHeight === 256;
+    });
+    expect(portraitLoaded).toBeTruthy();
+    expect(await readableTextOffenders(page, ".about-site")).toEqual([]);
+    await expectNoHorizontalOverflow(page);
+  });
+}
+
+test("官网导航可以进入关于与合作页面并返回产品首页", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await installBaseMocks(page);
+  await page.goto("/");
+
+  await page.locator(".home-desktop-nav").getByRole("link", { name: "关于与合作" }).click();
+  await expect(page).toHaveURL(/about=1/);
+  await expect(page.locator("#about-title")).toBeVisible();
+  await page.locator(".about-header .home-brand-link").click();
+  await expect(page.locator("#official-home-title")).toBeVisible();
+});
+
+test("开放合作表单提交后展示可追踪的成功状态", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await installBaseMocks(page);
+  let submitted: Record<string, unknown> | null = null;
+  await page.route(/\/v2-api\/collaboration-inquiries(?:\?|$)/, async (route) => {
+    submitted = route.request().postDataJSON() as Record<string, unknown>;
+    await route.fulfill({
+      status: 201,
+      json: { status: "accepted", inquiryId: "coop-layout0001", createdAt: "2026-08-11T12:00:00Z" },
+    });
+  });
+  await page.goto("/?about=1#cooperation");
+
+  await page.getByLabel("怎么称呼你").fill("评测伙伴");
+  await page.getByLabel(/所在机构/).fill("真实性研究中心");
+  await page.getByLabel("联系方式").fill("partner@example.com");
+  await page.getByLabel("你想一起解决什么问题").fill("希望使用授权数据共同评估模型在跨平台压缩场景中的真实表现与误判情况。");
+  await page.getByLabel(/我同意仅为合作沟通/).check();
+  await page.getByRole("button", { name: "提交合作意向" }).click();
+
+  await expect(page.getByText("合作意向已提交")).toBeVisible();
+  await expect(page.getByText("参考编号：coop-layout0001")).toBeVisible();
+  expect(submitted).toMatchObject({
+    collaborationType: "research",
+    name: "评测伙伴",
+    organization: "真实性研究中心",
+    contact: "partner@example.com",
+    privacyAccepted: true,
+  });
+});
+
 test("Playground 保持单一六选一玩法并自动进入下一轮", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await installBaseMocks(page);

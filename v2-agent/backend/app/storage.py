@@ -27,6 +27,9 @@ REPORT_SHARE_RETENTION_DAYS = max(
     REPORT_SHARE_ACCESS_RETENTION_DAYS,
     int(os.getenv("JIANZHEN_REPORT_SHARE_RETENTION_DAYS", "730")),
 )
+COLLABORATION_INQUIRY_RETENTION_DAYS = max(
+    30, int(os.getenv("JIANZHEN_COLLABORATION_INQUIRY_RETENTION_DAYS", "365"))
+)
 PUBLISHABLE_VERDICTS = frozenset({"real", "suspected_fake", "highly_suspected_fake"})
 PUBLISHABLE_AUTHORITIES = frozenset({"decisive_provenance"})
 
@@ -340,6 +343,27 @@ def _init(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_report_share_access_report
             ON report_share_access_events(report_id, accessed_at DESC);
 
+        CREATE TABLE IF NOT EXISTS collaboration_inquiries (
+            inquiry_id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            collaboration_type TEXT NOT NULL,
+            name TEXT NOT NULL,
+            organization TEXT,
+            contact TEXT NOT NULL,
+            message TEXT NOT NULL,
+            developer_user_id TEXT,
+            developer_account_uuid TEXT,
+            source_hash TEXT NOT NULL,
+            idempotency_hash TEXT NOT NULL UNIQUE,
+            content_hash TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'new'
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_collaboration_inquiries_created_at
+            ON collaboration_inquiries(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_collaboration_inquiries_status
+            ON collaboration_inquiries(status, created_at DESC);
+
         CREATE TABLE IF NOT EXISTS counters (
             name TEXT PRIMARY KEY,
             value INTEGER NOT NULL
@@ -366,6 +390,111 @@ def _init(conn: sqlite3.Connection) -> None:
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _collaboration_inquiry_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "inquiryId": row["inquiry_id"],
+        "createdAt": row["created_at"],
+        "collaborationType": row["collaboration_type"],
+        "name": row["name"],
+        "organization": row["organization"] or "",
+        "contact": row["contact"],
+        "message": row["message"],
+        "userId": row["developer_user_id"],
+        "accountUuid": row["developer_account_uuid"],
+        "status": row["status"],
+    }
+
+
+def put_collaboration_inquiry(
+    *,
+    inquiry_id: str,
+    collaboration_type: str,
+    name: str,
+    organization: str | None,
+    contact: str,
+    message: str,
+    actor: dict[str, Any] | None,
+    source_hash: str,
+    idempotency_hash: str,
+) -> dict[str, Any]:
+    """Store one public collaboration request without retaining the visitor IP."""
+    actor = actor or {}
+    values = {
+        "inquiry_id": str(inquiry_id).strip(),
+        "created_at": now_iso(),
+        "collaboration_type": str(collaboration_type).strip(),
+        "name": str(name).strip(),
+        "organization": str(organization or "").strip() or None,
+        "contact": str(contact).strip(),
+        "message": str(message).strip(),
+        "developer_user_id": str(actor.get("userId") or "").strip() or None,
+        "developer_account_uuid": str(actor.get("accountUuid") or "").strip() or None,
+        "source_hash": str(source_hash).strip(),
+        "idempotency_hash": str(idempotency_hash).strip(),
+        "status": "new",
+    }
+    if not values["inquiry_id"] or any(
+        not values[key] for key in ("collaboration_type", "name", "contact", "message", "source_hash", "idempotency_hash")
+    ):
+        raise ValueError("invalid collaboration inquiry")
+    content_payload = {
+        key: values[key]
+        for key in ("collaboration_type", "name", "organization", "contact", "message")
+    }
+    values["content_hash"] = hashlib.sha256(
+        json.dumps(content_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            "SELECT * FROM collaboration_inquiries WHERE idempotency_hash = ? LIMIT 1",
+            (values["idempotency_hash"],),
+        ).fetchone()
+        if existing:
+            if existing["content_hash"] != values["content_hash"]:
+                conn.rollback()
+                raise ValueError("collaboration inquiry idempotency conflict")
+            conn.rollback()
+            return {**_collaboration_inquiry_from_row(existing), "created": False}
+        columns = tuple(values.keys())
+        conn.execute(
+            f"INSERT INTO collaboration_inquiries ({', '.join(columns)}) "
+            f"VALUES ({', '.join('?' for _ in columns)})",
+            tuple(values[column] for column in columns),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM collaboration_inquiries WHERE inquiry_id = ?",
+            (values["inquiry_id"],),
+        ).fetchone()
+    return {**_collaboration_inquiry_from_row(row), "created": True}
+
+
+def list_collaboration_inquiries(*, limit: int = 100, status: str | None = None) -> list[dict[str, Any]]:
+    limit = max(1, min(int(limit), 500))
+    status = str(status or "").strip().lower()
+    with _connect() as conn:
+        if status:
+            rows = conn.execute(
+                "SELECT * FROM collaboration_inquiries WHERE status = ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (status, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM collaboration_inquiries ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+    return [_collaboration_inquiry_from_row(row) for row in rows]
+
+
+def collaboration_inquiry_count() -> int:
+    with _connect() as conn:
+        row = conn.execute("SELECT COUNT(*) AS total FROM collaboration_inquiries").fetchone()
+    return int(row["total"] if row else 0)
 
 
 def put_report_qa_turn(
@@ -1792,6 +1921,9 @@ def prune_telemetry() -> dict[str, int]:
     share_revoked_cutoff = (
         datetime.now(timezone.utc) - timedelta(days=REPORT_SHARE_RETENTION_DAYS)
     ).isoformat()
+    collaboration_cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=COLLABORATION_INQUIRY_RETENTION_DAYS)
+    ).isoformat()
     with _connect() as conn:
         request_cursor = conn.execute(
             "DELETE FROM request_events WHERE created_at < ?",
@@ -1812,12 +1944,17 @@ def prune_telemetry() -> dict[str, int]:
             """,
             (share_cutoff_epoch, share_revoked_cutoff),
         )
+        collaboration_cursor = conn.execute(
+            "DELETE FROM collaboration_inquiries WHERE created_at < ?",
+            (collaboration_cutoff,),
+        )
         conn.commit()
         return {
             "requestEvents": max(int(request_cursor.rowcount or 0), 0),
             "tokenUsageEvents": max(int(token_cursor.rowcount or 0), 0),
             "reportShareAccessEvents": max(int(share_access_cursor.rowcount or 0), 0),
             "reportShares": max(int(share_cursor.rowcount or 0), 0),
+            "collaborationInquiries": max(int(collaboration_cursor.rowcount or 0), 0),
         }
 
 

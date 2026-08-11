@@ -31,7 +31,9 @@ DEFAULT_ONLINE_WINDOW_MINUTES = 5
 DEFAULT_VISITOR_DETAIL_LIMIT = 20
 DEFAULT_ACCOUNT_LINK_RETENTION_DAYS = 180
 HOMEPAGE_PATHS = {"/", "/index.html"}
-CONFIRMED_PAGE_TYPES = {"home", "workspace", "developer", "image", "video", "history"}
+CONFIRMED_PAGE_TYPES = {
+    "home", "workspace", "developer", "playground", "about", "image", "video", "history"
+}
 
 LOG_PATTERN = re.compile(
     r'^(?P<ip>\S+)\s+\S+\s+\S+\s+\[(?P<time>[^]]+)]\s+'

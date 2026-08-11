@@ -64,6 +64,7 @@ Vite 默认把账户与检测请求代理到 `5000`，把 `/v2-api` 代理到 `8
 | 需求 | 主要目录 |
 | --- | --- |
 | 官网、工作台、结果页、历史页 | `v2-agent/frontend/src/` |
+| 关于与合作页面、合作意向表单 | `AboutCooperation.tsx`、`about.css`、V2 `main.py` / `storage.py` |
 | 登录、用户隔离、历史和报告 | `realguard-server-main/RealGuard/imagedetection/views/` |
 | 检测任务、Swarm、视觉 LLM | `detection.py`、`developer_platform.py` |
 | 后台管理和内部测试平台 | `imagedetection/views/admin.py`、`internal_testing.py` |

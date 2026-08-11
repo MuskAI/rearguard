@@ -1,4 +1,4 @@
-export type AnalyticsPage = "home" | "workspace" | "developer" | "playground" | "image" | "video" | "history";
+export type AnalyticsPage = "home" | "workspace" | "developer" | "playground" | "about" | "image" | "video" | "history";
 
 const VISITOR_KEY = "realguard_analytics_visitor";
 const EVENT_KEY = "realguard_last_page_event";

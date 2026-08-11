@@ -219,6 +219,24 @@ def test_confirmed_pageview_tracks_workspace_and_developer_as_distinct_surfaces(
     assert payload["provinces"][0]["visitorDetails"][0]["pages"] == 2
 
 
+def test_confirmed_pageview_accepts_about_and_playground_surfaces(tmp_path, monkeypatch):
+    monkeypatch.setenv("REALGUARD_TRAFFIC_CUMULATIVE_DB", str(tmp_path / "traffic.sqlite3"))
+    common = {
+        "ip": "8.8.8.8",
+        "agent": "Mozilla/5.0 Chrome/126.0",
+        "visitor_id": "visitor-00000001",
+        "resolver": lambda _ip: {"country": "中国", "province": "浙江省", "isoCode": "CN"},
+        "occurred_at": NOW,
+    }
+    assert traffic_geo.record_confirmed_pageview(
+        event_id="event-about-0000001", page="about", **common,
+    )
+    assert traffic_geo.record_confirmed_pageview(
+        event_id="event-playground-001", page="playground", **common,
+    )
+    assert traffic_geo.confirmed_traffic_summary(now=NOW)["site"]["pageViews"] == 2
+
+
 def test_registered_account_activity_is_separate_from_anonymous_big_screen_payload(tmp_path, monkeypatch):
     monkeypatch.setenv("REALGUARD_TRAFFIC_CUMULATIVE_DB", str(tmp_path / "traffic.sqlite3"))
     account_uuid = "11111111-1111-4111-8111-111111111111"

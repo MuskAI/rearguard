@@ -24,6 +24,7 @@ interface Props {
   analyticsEnabled: boolean;
   onEnterWorkspace: () => void;
   onPlayground: () => void;
+  onAbout: () => void;
   onDeveloper: (entry?: DeveloperEntry) => void;
   onLogin: () => void;
   onLogout: () => void;
@@ -92,6 +93,7 @@ export default function OfficialHome({
   analyticsEnabled,
   onEnterWorkspace,
   onPlayground,
+  onAbout,
   onDeveloper,
   onLogin,
   onLogout,
@@ -204,6 +206,7 @@ export default function OfficialHome({
 
         <nav className="home-nav home-desktop-nav" aria-label="官网导航">
           {NAV_ITEMS.map((item) => <a key={item.href} href={item.href}>{item.label}</a>)}
+          <a href="/?about=1" onClick={(event) => { event.preventDefault(); onAbout(); }}>关于与合作</a>
           <button type="button" className="home-playground-link" onClick={onPlayground}><Sparkles size={14} /><span>Playground</span></button>
           <div
             ref={developerRootRef}
@@ -300,6 +303,7 @@ export default function OfficialHome({
           {(phase) => (
             <nav ref={mobileNavRef} id="home-mobile-navigation" className="home-mobile-nav" aria-label="移动端官网导航" aria-hidden={!mobileNavOpen} data-presence={phase}>
               {NAV_ITEMS.map((item) => <a key={item.href} href={item.href} tabIndex={mobileNavOpen ? 0 : -1} onClick={() => setMobileNavOpen(false)}>{item.label}<ArrowRight size={16} /></a>)}
+              <a href="/?about=1" tabIndex={mobileNavOpen ? 0 : -1} onClick={(event) => { event.preventDefault(); setMobileNavOpen(false); onAbout(); }}>关于与合作<ArrowRight size={16} /></a>
               <button type="button" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => { setMobileNavOpen(false); onPlayground(); }}>Playground<ArrowRight size={16} /></button>
               <button type="button" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => openDeveloper("overview")}>开发者概览<ArrowRight size={16} /></button>
               <button type="button" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => openDeveloper("skill")}>Agent Skill<ArrowRight size={16} /></button>
@@ -466,6 +470,7 @@ export default function OfficialHome({
         <HuijianBrand compact />
         <p>慧鉴AI 提供数字内容鉴伪辅助分析，不替代专业机构与人工最终判断。</p>
         <div>
+          <button type="button" onClick={onAbout}>关于与合作</button>
           <a href="/legal/terms.html" target="_blank" rel="noreferrer">用户协议</a>
           <a href="/legal/privacy.html" target="_blank" rel="noreferrer">隐私政策</a>
           <button type="button" onClick={onToggleAnalytics} aria-pressed={analyticsEnabled}>匿名统计：{analyticsEnabled ? "已开启" : "已关闭"}</button>

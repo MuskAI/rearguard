@@ -30,6 +30,24 @@ export class ApiRequestError extends Error {
 
 export const SESSION_EXPIRED_EVENT = "huijian:session-expired";
 
+export type CollaborationType = "research" | "governance" | "dataset" | "integration" | "other";
+
+export interface CollaborationInquiryInput {
+  collaborationType: CollaborationType;
+  name: string;
+  organization?: string;
+  contact: string;
+  message: string;
+  website?: string;
+  privacyAccepted: boolean;
+}
+
+export interface CollaborationInquiryResponse {
+  status: "accepted";
+  inquiryId: string;
+  createdAt: string;
+}
+
 export function notifySessionExpired(): void {
   if (typeof window !== "undefined") window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
 }
@@ -122,6 +140,22 @@ export async function ensureSessionCsrf(): Promise<void> {
       sessionCsrfPromise = null;
     });
   return sessionCsrfPromise;
+}
+
+export async function submitCollaborationInquiry(
+  payload: CollaborationInquiryInput,
+  idempotencyKey: string,
+): Promise<CollaborationInquiryResponse> {
+  await ensureSessionCsrf();
+  const res = await fetch("/v2-api/collaboration-inquiries", withSession({
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify(payload),
+  }));
+  return parseJson(res, "合作意向提交失败");
 }
 
 export function sessionCsrfHeaders(init?: HeadersInit): Headers {
