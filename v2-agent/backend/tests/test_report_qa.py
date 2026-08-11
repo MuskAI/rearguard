@@ -246,6 +246,89 @@ def test_report_answer_rewrites_unhelpful_score_suggestion(monkeypatch):
     assert response["suggestedQuestions"] == ["这个风险分代表什么？"]
 
 
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        ("你是谁", "我是慧鉴 AI 的报告解读助手“小鉴”"),
+        ("你背后是什么模型？", "语言模型负责理解问题和组织回答"),
+        ("你能做什么？", "我可以围绕当前报告解释"),
+        ("你好", "你好，我是小鉴"),
+    ],
+)
+def test_report_answer_handles_product_questions_without_calling_model(monkeypatch, question, expected):
+    monkeypatch.setattr(
+        report_qa.detector,
+        "_get_client",
+        lambda: pytest.fail("product questions must not call the completion model"),
+    )
+
+    response = report_qa.answer(
+        {"verdict": "real", "verdictLabel": "真实图像", "explanation": "未见明显异常"},
+        question,
+    )
+
+    assert expected in response["answer"]
+    assert "报告结论为" not in response["answer"]
+    assert response["evidenceRefs"] == []
+    assert response["usage"] == {"totalTokens": 0}
+
+
+def test_report_answer_streams_product_answer_without_calling_model(monkeypatch):
+    monkeypatch.setattr(
+        report_qa.detector,
+        "_get_client",
+        lambda: pytest.fail("product questions must not call the completion model"),
+    )
+
+    events = list(report_qa.stream_answer(
+        {"verdict": "real", "verdictLabel": "真实图像", "explanation": "未见明显异常"},
+        "你是谁？",
+    ))
+
+    assert "".join(event["text"] for event in events if event["type"] == "delta") == events[-1]["answer"]
+    assert events[-1]["type"] == "done"
+    assert events[-1]["evidenceRefs"] == []
+
+
+def test_report_answer_does_not_show_unmentioned_evidence_reference(monkeypatch):
+    client, _ = fake_client(json.dumps({
+        "answer": "系统没有发现明显视觉可疑点。",
+        "evidenceRefs": ["可见水印"],
+        "suggestedQuestions": [],
+    }, ensure_ascii=False))
+    monkeypatch.setattr(report_qa.detector, "_get_client", lambda: client)
+
+    response = report_qa.answer(
+        {
+            "verdict": "real",
+            "explanation": "未见明显异常",
+            "visibleWatermark": {"detected": False, "hits": []},
+        },
+        "为什么判断为真？",
+    )
+
+    assert response["evidenceRefs"] == []
+
+
+def test_current_question_priority_is_explicit_in_prompt(monkeypatch):
+    client, completions = fake_client(json.dumps({
+        "answer": "当前报告没有提供这项信息。",
+        "evidenceRefs": [],
+        "suggestedQuestions": [],
+    }, ensure_ascii=False))
+    monkeypatch.setattr(report_qa.detector, "_get_client", lambda: client)
+
+    report_qa.answer(
+        {"verdict": "real", "explanation": "未见明显异常"},
+        "这份报告还有哪些局限？",
+        [{"role": "assistant", "content": "之前回答过真假结论"}],
+    )
+
+    messages = completions.calls[0]["messages"]
+    assert "CURRENT_QUESTION 是本轮唯一要回答的问题" in messages[0]["content"]
+    assert "现在只回答 CURRENT_QUESTION" in messages[1]["content"]
+
+
 def test_risk_score_is_converted_to_percent_and_explained():
     answer = report_qa._explain_risk_score("综合风险分为 0.18。")
 
