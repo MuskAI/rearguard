@@ -329,7 +329,7 @@ test("登录状态下官网导航不会挤压账号与鉴伪按钮", async ({ pa
   await page.goto("/");
   await expect(page.locator(".home-header .account-menu-trigger")).toBeVisible();
 
-  for (const width of [1440, 1366, 1350, 1180, 961]) {
+  for (const width of [1440, 1366, 1180, 1120, 961]) {
     await page.setViewportSize({ width, height: 800 });
     const layout = await page.evaluate(() => {
       const bounds = (selector: string) => {
@@ -353,7 +353,7 @@ test("登录状态下官网导航不会挤压账号与鉴伪按钮", async ({ pa
 
     expect(layout.labelHeight, `${width}px 下“开始鉴伪”发生换行`).toBeLessThanOrEqual(layout.labelLineHeight + 1);
     expect(layout.brand.right, `${width}px 下品牌与操作区发生重叠`).toBeLessThanOrEqual(layout.actions.left + 1);
-    if (width > 1350) {
+    if (width > 1120) {
       expect(layout.navVisible).toBeTruthy();
       expect(layout.menuVisible).toBeFalsy();
       expect(layout.brand.right, `${width}px 下品牌与桌面导航发生重叠`).toBeLessThanOrEqual(layout.nav.left + 1);
@@ -377,13 +377,33 @@ test("移动官网导航支持键盘关闭并恢复焦点", async ({ page }) => 
   const navigation = page.getByRole("navigation", { name: "移动端官网导航" });
   await expect(navigation).toBeVisible();
   await expect(navigation.locator("a").first()).toBeFocused();
-  await expect(navigation.getByRole("button", { name: "开发者概览" })).toBeVisible();
-  await expect(navigation.getByRole("button", { name: "Agent Skill" })).toBeVisible();
-  await expect(navigation.getByRole("button", { name: "在线调试" })).toBeVisible();
-  await expect(navigation.getByRole("button", { name: "接入文档" })).toBeVisible();
+  await expect(navigation.locator(":scope > *")).toHaveCount(5);
+  expect((await navigation.locator(":scope > *").allTextContents()).map((label) => label.trim())).toEqual([
+    "产品能力",
+    "Playground",
+    "开发者平台",
+    "常见问题",
+    "关于与合作",
+  ]);
   await page.keyboard.press("Escape");
   await expect(page.getByRole("navigation", { name: "移动端官网导航" })).toBeHidden();
   await expect(trigger).toBeFocused();
+});
+
+test("桌面官网导航只保留核心入口并将关于与合作置于末尾", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 800 });
+  await installBaseMocks(page);
+  await page.goto("/");
+
+  const navigation = page.getByRole("navigation", { name: "官网导航" });
+  await expect(navigation.locator(":scope > *")).toHaveCount(5);
+  expect((await navigation.locator(":scope > *").allTextContents()).map((label) => label.trim())).toEqual([
+    "产品能力",
+    "Playground",
+    "开发者平台",
+    "常见问题",
+    "关于与合作",
+  ]);
 });
 
 test("官网直接展示 Agent Skill 并可复制一句话进入完整接入页", async ({ page }) => {

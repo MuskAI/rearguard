@@ -3752,7 +3752,7 @@
   border: 0;
 }
 
-@media (max-width: 1350px) {
+@media (max-width: 1120px) {
   .home-v3 .home-header { grid-template-columns: minmax(0, 1fr) max-content; }
   .home-desktop-nav { display: none !important; }
   .home-mobile-menu-button {

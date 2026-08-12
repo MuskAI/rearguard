@@ -33,9 +33,6 @@ interface Props {
 
 const NAV_ITEMS = [
   { label: "产品能力", href: "#capabilities" },
-  { label: "Agent Skill", href: "#agent-skill" },
-  { label: "应用场景", href: "#scenarios" },
-  { label: "工作方式", href: "#workflow" },
 ] as const;
 
 const FAQS = [
@@ -206,7 +203,6 @@ export default function OfficialHome({
 
         <nav className="home-nav home-desktop-nav" aria-label="官网导航">
           {NAV_ITEMS.map((item) => <a key={item.href} href={item.href}>{item.label}</a>)}
-          <a href="/?about=1" onClick={(event) => { event.preventDefault(); onAbout(); }}>关于与合作</a>
           <button type="button" className="home-playground-link" onClick={onPlayground}><Sparkles size={14} /><span>Playground</span></button>
           <div
             ref={developerRootRef}
@@ -280,6 +276,7 @@ export default function OfficialHome({
             </Presence>
           </div>
           <a href="#faq">常见问题</a>
+          <a href="/?about=1" onClick={(event) => { event.preventDefault(); onAbout(); }}>关于与合作</a>
         </nav>
 
         <div className="home-header-actions">
@@ -303,13 +300,10 @@ export default function OfficialHome({
           {(phase) => (
             <nav ref={mobileNavRef} id="home-mobile-navigation" className="home-mobile-nav" aria-label="移动端官网导航" aria-hidden={!mobileNavOpen} data-presence={phase}>
               {NAV_ITEMS.map((item) => <a key={item.href} href={item.href} tabIndex={mobileNavOpen ? 0 : -1} onClick={() => setMobileNavOpen(false)}>{item.label}<ArrowRight size={16} /></a>)}
-              <a href="/?about=1" tabIndex={mobileNavOpen ? 0 : -1} onClick={(event) => { event.preventDefault(); setMobileNavOpen(false); onAbout(); }}>关于与合作<ArrowRight size={16} /></a>
               <button type="button" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => { setMobileNavOpen(false); onPlayground(); }}>Playground<ArrowRight size={16} /></button>
-              <button type="button" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => openDeveloper("overview")}>开发者概览<ArrowRight size={16} /></button>
-              <button type="button" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => openDeveloper("skill")}>Agent Skill<ArrowRight size={16} /></button>
-              <button type="button" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => openDeveloper("tester")}>在线调试<ArrowRight size={16} /></button>
-              <button type="button" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => openDeveloper("docs")}>接入文档<ArrowRight size={16} /></button>
+              <button type="button" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => openDeveloper("overview")}>开发者平台<ArrowRight size={16} /></button>
               <a href="#faq" tabIndex={mobileNavOpen ? 0 : -1} onClick={() => setMobileNavOpen(false)}>常见问题<ArrowRight size={16} /></a>
+              <a href="/?about=1" tabIndex={mobileNavOpen ? 0 : -1} onClick={(event) => { event.preventDefault(); setMobileNavOpen(false); onAbout(); }}>关于与合作<ArrowRight size={16} /></a>
             </nav>
           )}
         </Presence>
