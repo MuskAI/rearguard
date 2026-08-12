@@ -323,6 +323,50 @@ test("官网主视觉在响应式临界宽度不会收缩成单字列", async ({
   }
 });
 
+test("登录状态下官网导航不会挤压账号与鉴伪按钮", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 800 });
+  await installBaseMocks(page, true);
+  await page.goto("/");
+  await expect(page.locator(".home-header .account-menu-trigger")).toBeVisible();
+
+  for (const width of [1440, 1366, 1350, 1180, 961]) {
+    await page.setViewportSize({ width, height: 800 });
+    const layout = await page.evaluate(() => {
+      const bounds = (selector: string) => {
+        const rect = document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+        return { left: rect.left, right: rect.right };
+      };
+      const label = document.querySelector<HTMLElement>(".home-workspace-button .home-label-wide")!;
+      const labelStyle = getComputedStyle(label);
+      const nav = document.querySelector<HTMLElement>(".home-desktop-nav")!;
+      const menu = document.querySelector<HTMLElement>(".home-mobile-menu-button")!;
+      return {
+        labelHeight: label.getBoundingClientRect().height,
+        labelLineHeight: Number.parseFloat(labelStyle.lineHeight),
+        navVisible: getComputedStyle(nav).display !== "none",
+        menuVisible: getComputedStyle(menu).display !== "none",
+        brand: bounds(".home-brand-link"),
+        nav: bounds(".home-desktop-nav"),
+        actions: bounds(".home-header-actions"),
+      };
+    });
+
+    expect(layout.labelHeight, `${width}px 下“开始鉴伪”发生换行`).toBeLessThanOrEqual(layout.labelLineHeight + 1);
+    expect(layout.brand.right, `${width}px 下品牌与操作区发生重叠`).toBeLessThanOrEqual(layout.actions.left + 1);
+    if (width > 1350) {
+      expect(layout.navVisible).toBeTruthy();
+      expect(layout.menuVisible).toBeFalsy();
+      expect(layout.brand.right, `${width}px 下品牌与桌面导航发生重叠`).toBeLessThanOrEqual(layout.nav.left + 1);
+      expect(layout.nav.right, `${width}px 下桌面导航与操作区发生重叠`).toBeLessThanOrEqual(layout.actions.left + 1);
+    } else {
+      expect(layout.navVisible).toBeFalsy();
+      expect(layout.menuVisible).toBeTruthy();
+    }
+    await expectBoxesDoNotOverlap(page, ".home-header-actions > *");
+    await expectNoHorizontalOverflow(page);
+  }
+});
+
 test("移动官网导航支持键盘关闭并恢复焦点", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await installBaseMocks(page);
