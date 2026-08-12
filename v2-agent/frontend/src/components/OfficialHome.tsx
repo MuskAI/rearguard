@@ -104,6 +104,7 @@ export default function OfficialHome({
   const developerTriggerRef = useRef<HTMLButtonElement>(null);
   const developerMenuRef = useRef<HTMLDivElement>(null);
   const developerFocusIndexRef = useRef<number | null>(null);
+  const developerCloseTimerRef = useRef<number | null>(null);
   const mobileNavRef = useRef<HTMLElement>(null);
   const mobileNavTriggerRef = useRef<HTMLButtonElement>(null);
   const skillCopyResetRef = useRef<number | null>(null);
@@ -168,10 +169,32 @@ export default function OfficialHome({
   }, [mobileNavOpen]);
 
   useEffect(() => () => {
+    if (developerCloseTimerRef.current !== null) window.clearTimeout(developerCloseTimerRef.current);
     if (skillCopyResetRef.current !== null) window.clearTimeout(skillCopyResetRef.current);
   }, []);
 
+  function cancelDeveloperClose() {
+    if (developerCloseTimerRef.current === null) return;
+    window.clearTimeout(developerCloseTimerRef.current);
+    developerCloseTimerRef.current = null;
+  }
+
+  function openDeveloperMenu() {
+    cancelDeveloperClose();
+    setDeveloperOpen(true);
+  }
+
+  function scheduleDeveloperClose(pointerType: string) {
+    if (pointerType !== "mouse") return;
+    cancelDeveloperClose();
+    developerCloseTimerRef.current = window.setTimeout(() => {
+      developerCloseTimerRef.current = null;
+      setDeveloperOpen(false);
+    }, 220);
+  }
+
   function openDeveloper(entry: DeveloperEntry) {
+    cancelDeveloperClose();
     setDeveloperOpen(false);
     setMobileNavOpen(false);
     onDeveloper(entry);
@@ -207,10 +230,13 @@ export default function OfficialHome({
           <div
             ref={developerRootRef}
             className={`home-developer-menu ${developerOpen ? "is-open" : ""}`}
-            onPointerEnter={() => setDeveloperOpen(true)}
-            onPointerLeave={(event) => { if (event.pointerType === "mouse") setDeveloperOpen(false); }}
+            onPointerEnter={openDeveloperMenu}
+            onPointerLeave={(event) => scheduleDeveloperClose(event.pointerType)}
             onBlur={(event) => {
-              if (!event.currentTarget.contains(event.relatedTarget as Node)) setDeveloperOpen(false);
+              if (!event.currentTarget.contains(event.relatedTarget as Node)) {
+                cancelDeveloperClose();
+                setDeveloperOpen(false);
+              }
             }}
           >
             <button
@@ -219,7 +245,10 @@ export default function OfficialHome({
               aria-haspopup="menu"
               aria-expanded={developerOpen}
               aria-controls="home-developer-navigation"
-              onClick={() => setDeveloperOpen((value) => !value)}
+              onClick={() => {
+                cancelDeveloperClose();
+                setDeveloperOpen((value) => !value);
+              }}
               onKeyDown={(event) => {
                 if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
                 event.preventDefault();

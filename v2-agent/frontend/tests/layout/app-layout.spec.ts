@@ -463,6 +463,38 @@ test("桌面端开发者菜单支持方向键并恢复焦点", async ({ page }) 
   await expect(trigger).toBeFocused();
 });
 
+test("鼠标从开发者入口移向菜单末项时不会穿过空隙关闭", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await installBaseMocks(page);
+  await page.goto("/");
+
+  const trigger = page.getByRole("button", { name: "开发者平台", exact: true });
+  await trigger.hover();
+  const menu = page.getByRole("menu", { name: "开发者平台入口" });
+  await expect(menu).toBeVisible();
+
+  const triggerBox = await trigger.boundingBox();
+  const menuBox = await menu.boundingBox();
+  expect(triggerBox).not.toBeNull();
+  expect(menuBox).not.toBeNull();
+  const bridgeY = triggerBox!.y + triggerBox!.height + Math.max(1, (menuBox!.y - triggerBox!.y - triggerBox!.height) / 2);
+  await page.mouse.move(triggerBox!.x + triggerBox!.width / 2, bridgeY, { steps: 4 });
+  await page.waitForTimeout(80);
+  await expect(trigger).toHaveAttribute("aria-expanded", "true");
+
+  const lastItem = menu.getByRole("menuitem", { name: /接入文档/ });
+  const lastItemBox = await lastItem.boundingBox();
+  expect(lastItemBox).not.toBeNull();
+  await page.mouse.move(lastItemBox!.x + lastItemBox!.width / 2, lastItemBox!.y + lastItemBox!.height / 2, { steps: 10 });
+  await page.waitForTimeout(260);
+  await expect(trigger).toHaveAttribute("aria-expanded", "true");
+  await expect(lastItem).toBeVisible();
+
+  await page.mouse.move(12, 180, { steps: 6 });
+  await expect(trigger).toHaveAttribute("aria-expanded", "false", { timeout: 800 });
+  await expect(menu).toBeHidden();
+});
+
 test("官网与统一鉴伪入口不存在低于 12px 的可见文字", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await installBaseMocks(page);
