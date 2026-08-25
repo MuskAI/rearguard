@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { fileURLToPath, URL } from 'node:url'
 
 const runtime = globalThis as unknown as { process?: { env?: Record<string, string | undefined> } }
 const evidenceApiTarget = runtime.process?.env?.VITE_API_TARGET || 'http://127.0.0.1:8848'
@@ -8,6 +9,11 @@ const accountApiTarget = runtime.process?.env?.VITE_ACCOUNT_API_TARGET || 'http:
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: {
+      'lucide-react': fileURLToPath(new URL('./src/components/SystemIcons.tsx', import.meta.url)),
+    },
+  },
   base: "/",
   build: {
     target: ["es2018", "safari12"],

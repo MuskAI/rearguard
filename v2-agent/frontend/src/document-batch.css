@@ -31,7 +31,7 @@
 .document-asset-copy { display: grid; gap: 4px; padding: 14px; }
 .document-asset-copy strong { color: #17212b; font-size: 16px; }
 .document-result-empty { display: grid; justify-items: center; gap: 7px; padding: 42px 20px; border: 1px dashed #bfcbd4; border-radius: 8px; color: #61717d; text-align: center; }
-.document-result-empty svg { width: 36px; height: 36px; color: #315fa9; }
+.document-result-empty :is(svg, .hj-system-icon) { width: 36px; height: 36px; color: #315fa9; }
 .document-result-empty strong { color: #17212b; font-size: 17px; }
 .document-result-empty p { margin: 0; font-size: 14px; }
 .document-lightbox { position: fixed; inset: 0; z-index: 200; display: grid; place-items: center; padding: 24px; background: rgb(10 18 24 / 72%); animation: document-fade-in 180ms cubic-bezier(.22,1,.36,1); }

@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from "react";
+import { useId, type CSSProperties, type ReactNode } from "react";
 export type CapabilityIconName =
   | "fast"
   | "swarm"
@@ -48,6 +48,7 @@ function GlyphFrame({ size = 24, className = "", label, name, children }: GlyphF
       aria-hidden={label ? undefined : true}
       focusable="false"
     >
+      {label && <title>{label}</title>}
       <g stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
         {children}
       </g>
@@ -56,6 +57,10 @@ function GlyphFrame({ size = 24, className = "", label, name, children }: GlyphF
 }
 
 export function BrandLogoMark({ size = 48, className = "", label }: SvgProps) {
+  const paintKey = useId().replace(/:/g, "");
+  const surfaceId = `huijian-surface-${paintKey}`;
+  const lensId = `huijian-lens-${paintKey}`;
+
   return (
     <svg
       className={`brand-logo-mark ${className}`.trim()}
@@ -67,18 +72,27 @@ export function BrandLogoMark({ size = 48, className = "", label }: SvgProps) {
       aria-hidden={label ? undefined : true}
       focusable="false"
     >
-      <path
-        className="brand-logo-page brand-logo-page-left"
-        d="M7 9.5A3.5 3.5 0 0 1 10.5 6h9A4.5 4.5 0 0 1 24 10.5V40c-2.1-2.25-4.55-3.38-7.35-3.38H10.5A3.5 3.5 0 0 0 7 40.12V9.5Z"
-      />
-      <path
-        className="brand-logo-page brand-logo-page-right"
-        d="M41 9.5A3.5 3.5 0 0 0 37.5 6h-9A4.5 4.5 0 0 0 24 10.5V40c2.1-2.25 4.55-3.38 7.35-3.38h6.15a3.5 3.5 0 0 1 3.5 3.5V9.5Z"
-      />
-      <path className="brand-logo-eye" d="M13.5 23.5C16.25 18.85 19.75 16.5 24 16.5s7.75 2.35 10.5 7c-2.75 4.65-6.25 7-10.5 7s-7.75-2.35-10.5-7Z" />
-      <circle className="brand-logo-iris" cx="24" cy="23.5" r="5.15" />
-      <circle className="brand-logo-pupil" cx="24" cy="23.5" r="2.15" />
-      <circle className="brand-logo-glint" cx="25.8" cy="21.8" r=".8" />
+      {label && <title>{label}</title>}
+      <defs>
+        <linearGradient id={surfaceId} x1="7" y1="5" x2="42" y2="45" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#28333c" />
+          <stop offset="1" stopColor="#101418" />
+        </linearGradient>
+        <radialGradient id={lensId} cx="0" cy="0" r="1" gradientTransform="translate(21.5 20.5) rotate(48) scale(13)">
+          <stop stopColor="#f8ffff" />
+          <stop offset=".32" stopColor="#73d9ff" />
+          <stop offset=".7" stopColor="#3978e6" />
+          <stop offset="1" stopColor="#142c60" />
+        </radialGradient>
+      </defs>
+      <rect className="brand-logo-surface" x="2.5" y="2.5" width="43" height="43" rx="11.5" style={{ fill: `url(#${surfaceId})` }} />
+      <rect className="brand-logo-edge" x="3.5" y="3.5" width="41" height="41" rx="10.5" />
+      <path className="brand-logo-panel brand-logo-panel-left" d="M10 13.5A3.5 3.5 0 0 1 13.5 10H21v8h-4.5a3 3 0 0 0-3 3v13.5A3.5 3.5 0 0 1 10 38H9V14.5a1 1 0 0 1 1-1Z" />
+      <path className="brand-logo-panel brand-logo-panel-right" d="M38 13.5A3.5 3.5 0 0 0 34.5 10H27v8h4.5a3 3 0 0 1 3 3v13.5A3.5 3.5 0 0 0 38 38h1V14.5a1 1 0 0 0-1-1Z" />
+      <circle className="brand-logo-lens-shell" cx="24" cy="24" r="8.75" />
+      <circle className="brand-logo-iris" cx="24" cy="24" r="5.75" style={{ fill: `url(#${lensId})` }} />
+      <circle className="brand-logo-glint" cx="21.8" cy="21.6" r="1.55" />
+      <path className="brand-logo-index" d="M13.5 40h21" />
     </svg>
   );
 }
@@ -96,27 +110,27 @@ export function AnalysisModeMark({ name, size = 56, className = "", label }: Svg
       aria-hidden={label ? undefined : true}
       focusable="false"
     >
-      <rect className="analysis-mode-surface" x="4.5" y="4.5" width="47" height="47" rx="12" />
-      <rect className="analysis-mode-plate" x="12.5" y="12.5" width="31" height="31" rx="9" />
+      <rect className="analysis-mode-surface" x="6.5" y="8.5" width="42" height="42" rx="11" transform="rotate(-5 27.5 29.5)" />
+      <rect className="analysis-mode-plate" x="9" y="5" width="42" height="42" rx="11" />
       {name === "fast" ? (
         <>
-          <path className="analysis-mode-ink" d="M19 22v-3h3M34 19h3v3M19 34v3h3M37 34v3h-3" />
-          <circle className="analysis-mode-lens" cx="28" cy="28" r="6.25" />
-          <path className="analysis-mode-accent analysis-mode-scan" d="M17 28h22" />
-          <circle className="analysis-mode-core" cx="28" cy="28" r="2" />
+          <path className="analysis-mode-ink" d="M20 22v-4h4M36 18h4v4M20 34v4h4M40 34v4h-4" />
+          <circle className="analysis-mode-lens" cx="30" cy="28" r="7" />
+          <path className="analysis-mode-accent analysis-mode-scan" d="M18 28h24" />
+          <circle className="analysis-mode-core" cx="30" cy="28" r="2.4" />
         </>
       ) : (
         <>
-          <path className="analysis-mode-ink" d="m20.5 20.5 5 5m10-5-5 5m-10 10 5-5m10 5-5-5" />
-          <circle className="analysis-mode-node" cx="19.5" cy="19.5" r="2.5" />
-          <circle className="analysis-mode-node" cx="36.5" cy="19.5" r="2.5" />
-          <circle className="analysis-mode-node" cx="19.5" cy="36.5" r="2.5" />
-          <circle className="analysis-mode-node" cx="36.5" cy="36.5" r="2.5" />
-          <circle className="analysis-mode-lens" cx="28" cy="28" r="5.5" />
-          <circle className="analysis-mode-core" cx="28" cy="28" r="2" />
+          <path className="analysis-mode-ink" d="m22.5 20.5 4.8 4.8m10.2-4.8-4.8 4.8m-10.2 10.2 4.8-4.8m10.2 4.8-4.8-4.8" />
+          <circle className="analysis-mode-node" cx="21.5" cy="19.5" r="2.6" />
+          <circle className="analysis-mode-node" cx="38.5" cy="19.5" r="2.6" />
+          <circle className="analysis-mode-node" cx="21.5" cy="36.5" r="2.6" />
+          <circle className="analysis-mode-node" cx="38.5" cy="36.5" r="2.6" />
+          <circle className="analysis-mode-lens" cx="30" cy="28" r="6.5" />
+          <circle className="analysis-mode-core" cx="30" cy="28" r="2.4" />
         </>
       )}
-      <path className="analysis-mode-status" d="M17 47h22" />
+      <path className="analysis-mode-focus" d="M38 43h7" />
     </svg>
   );
 }
@@ -127,9 +141,10 @@ export function CapabilityIcon({ name, size = 24, className = "", label }: SvgPr
       case "fast":
         return (
           <>
-            <rect x="4" y="3" width="16" height="18" rx="3" />
-            <path d="M8 8V6.5h1.5M16 6.5h1.5V8M8 16v1.5h1.5M16 17.5h1.5V16" />
-            <path className="brand-glyph-accent" d="m13.4 8.7-3 4.15h2.35l-1.15 3.45 3.45-4.7H12.7l.7-2.9Z" />
+            <path d="M7.5 8V5.5H10M14 5.5h2.5V8M7.5 16v2.5H10M16.5 16v2.5H14" />
+            <circle cx="12" cy="12" r="4.2" />
+            <path className="brand-glyph-accent" d="M4.5 12h15" />
+            <circle className="brand-glyph-fill" cx="12" cy="12" r="1.5" />
           </>
         );
       case "swarm":
@@ -145,10 +160,11 @@ export function CapabilityIcon({ name, size = 24, className = "", label }: SvgPr
       case "image":
         return (
           <>
-            <rect x="3" y="4" width="18" height="16" rx="2.5" />
+            <rect x="3" y="4" width="16" height="15" rx="2.5" />
             <circle className="brand-glyph-accent" cx="8" cy="9" r="1.5" />
-            <path d="m5.5 17 4.2-4.3 2.8 2.7 2.35-2.2 3.65 3.8" />
-            <path d="M16.5 6.5H19v2.5" />
+            <path d="m5.5 16.5 4.2-4.3 2.8 2.7 2.35-2.2 2.15 2.2" />
+            <circle cx="18.2" cy="17.2" r="2.8" />
+            <path className="brand-glyph-accent" d="m20.2 19.2 1.5 1.5" />
           </>
         );
       case "video":
@@ -171,18 +187,18 @@ export function CapabilityIcon({ name, size = 24, className = "", label }: SvgPr
       case "report":
         return (
           <>
-            <path d="M6 3.5h9l3 3V20a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1Z" />
+            <path d="M6 3.5h9l3 3V19a2 2 0 0 1-2 2H6a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1Z" />
             <path d="M15 3.5V7h3M8 10h6M8 13h4" />
-            <circle className="brand-glyph-accent" cx="15.5" cy="16" r="3" />
-            <path d="m14.2 16 1 1 1.8-2" />
+            <path className="brand-glyph-accent" d="m15.5 13.5 3 1.75V19l-3 1.75-3-1.75v-3.75l3-1.75Z" />
+            <path d="m14.2 17.2.9.9 1.8-2" />
           </>
         );
       case "developer":
         return (
           <>
-            <path d="m8 6-5 6 5 6M16 6l5 6-5 6" />
-            <circle className="brand-glyph-accent" cx="12" cy="10" r="2" />
-            <path className="brand-glyph-accent" d="M12 12v5M12 15h2" />
+            <path d="m8 5-5 7 5 7M16 5l5 7-5 7" />
+            <circle className="brand-glyph-accent" cx="12" cy="9.5" r="2" />
+            <path className="brand-glyph-accent" d="M12 11.5v6M12 15.5h2.5" />
           </>
         );
       case "workflow":
@@ -244,10 +260,10 @@ export interface UserAvatarProps {
 }
 
 const USER_AVATAR_TONES = [
-  { surface: "#dfeafb", ink: "#28558e", ring: "#b7cce9" },
-  { surface: "#dff2ed", ink: "#116c62", ring: "#acd8ce" },
-  { surface: "#eee8f7", ink: "#684d87", ring: "#cfc0e3" },
-  { surface: "#fae9e3", ink: "#925143", ring: "#e8c4b8" },
+  { surface: "linear-gradient(145deg, #4b83ee, #2459bf)", ink: "#ffffff", ring: "#b7cdf5" },
+  { surface: "linear-gradient(145deg, #35b8a6, #087b70)", ink: "#ffffff", ring: "#a9ddd5" },
+  { surface: "linear-gradient(145deg, #8d75d8, #60468f)", ink: "#ffffff", ring: "#d0c5e9" },
+  { surface: "linear-gradient(145deg, #ef8877, #bd5040)", ink: "#ffffff", ring: "#edc2ba" },
 ] as const;
 
 function stableAvatarIndex(seed: string) {
@@ -304,16 +320,13 @@ export function AgentAvatar({ state = "idle", size = 40, className = "", label }
       aria-label={label || `小鉴，${stateLabels[state]}`}
     >
       <svg className="brand-agent-portrait" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
-        <path className="brand-agent-antenna" d="M24 8V5.5" />
-        <circle className="brand-agent-signal" cx="24" cy="4.5" r="2" />
-        <rect className="brand-agent-face" x="8" y="8" width="32" height="27" rx="9" />
-        <circle className="brand-agent-eye" cx="18.5" cy="20" r="2.2" />
-        <circle className="brand-agent-eye" cx="29.5" cy="20" r="2.2" />
-        <path className="brand-agent-smile" d="M19.5 26.5c2.8 2.1 6.2 2.1 9 0" />
-        <path className="brand-agent-book-left" d="M9.5 34.5c5.8-1.4 10.6-.2 14.5 3.5v6c-4.4-3.1-9.2-4-14.5-2.7v-6.8Z" />
-        <path className="brand-agent-book-right" d="M38.5 34.5c-5.8-1.4-10.6-.2-14.5 3.5v6c4.4-3.1 9.2-4 14.5-2.7v-6.8Z" />
-        <circle className="brand-agent-lens" cx="35.5" cy="31.5" r="4.25" />
-        <path className="brand-agent-lens-handle" d="m38.7 34.7 3.3 3.3" />
+        <rect className="brand-agent-shell" x="4" y="4" width="40" height="40" rx="12" />
+        <path className="brand-agent-panel brand-agent-panel-left" d="M11 15a3 3 0 0 1 3-3h7v8h-3a3 3 0 0 0-3 3v12a3 3 0 0 1-3 3h-1V15Z" />
+        <path className="brand-agent-panel brand-agent-panel-right" d="M37 15a3 3 0 0 0-3-3h-7v8h3a3 3 0 0 1 3 3v12a3 3 0 0 0 3 3h1V15Z" />
+        <circle className="brand-agent-lens" cx="24" cy="24" r="8" />
+        <circle className="brand-agent-lens-core" cx="24" cy="24" r="4.8" />
+        <circle className="brand-agent-glint" cx="22.2" cy="22" r="1.25" />
+        <path className="brand-agent-focus" d="M15 40h18" />
       </svg>
       <i className="brand-agent-state-emblem" aria-hidden="true" />
     </span>

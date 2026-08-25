@@ -1136,7 +1136,7 @@ video {
   border-radius: 6px;
 }
 
-.capability-strip > div > svg:last-child {
+.capability-strip > div > :is(svg, .hj-system-icon):last-child {
   display: none;
 }
 
@@ -1208,7 +1208,7 @@ video {
   gap: 7px;
 }
 
-.trust-notes svg {
+.trust-notes :is(svg, .hj-system-icon) {
   color: var(--primary);
 }
 
@@ -2178,7 +2178,7 @@ video {
   gap: 10px;
 }
 
-.section-title > svg {
+.section-title > :is(svg, .hj-system-icon) {
   flex: 0 0 auto;
   margin-top: 2px;
   color: var(--primary);
@@ -2268,13 +2268,13 @@ video {
   font-weight: 550;
 }
 
-.rationale-disclosure > summary svg {
+.rationale-disclosure > summary :is(svg, .hj-system-icon) {
   margin-left: auto;
   color: var(--muted);
   transition: transform 160ms ease;
 }
 
-.rationale-disclosure[open] > summary svg {
+.rationale-disclosure[open] > summary :is(svg, .hj-system-icon) {
   transform: rotate(180deg);
 }
 
@@ -2432,7 +2432,7 @@ video {
   color: var(--muted);
 }
 
-.capture-chain-boundary > svg {
+.capture-chain-boundary > :is(svg, .hj-system-icon) {
   margin-top: 1px;
   color: var(--blue);
 }
@@ -2589,7 +2589,7 @@ video {
   color: var(--muted);
 }
 
-.probability-note svg {
+.probability-note :is(svg, .hj-system-icon) {
   flex: 0 0 auto;
   margin-top: 1px;
   color: var(--blue);
@@ -2857,11 +2857,11 @@ video {
   font-size: 9px;
 }
 
-.forensic-progress.is-running svg {
+.forensic-progress.is-running :is(svg, .hj-system-icon) {
   color: var(--blue);
 }
 
-.forensic-progress.is-complete svg {
+.forensic-progress.is-complete :is(svg, .hj-system-icon) {
   color: var(--green);
 }
 
@@ -3251,7 +3251,7 @@ video {
   color: var(--muted);
 }
 
-.watermark-note svg {
+.watermark-note :is(svg, .hj-system-icon) {
   flex: 0 0 auto;
   margin-top: 1px;
   color: var(--blue);
@@ -3300,7 +3300,7 @@ video {
 }
 
 .pipeline-heading > div { gap: 8px; }
-.pipeline-heading > div > svg { color: var(--primary); }
+.pipeline-heading > div > :is(svg, .hj-system-icon) { color: var(--primary); }
 .pipeline-heading > div > span { align-items: flex-start; flex-direction: column; }
 .pipeline-heading strong { color: var(--ink); }
 .pipeline-heading > div strong { font-size: 10px; }
@@ -3637,7 +3637,7 @@ video {
   border-radius: 7px;
 }
 
-.result-disclaimer svg {
+.result-disclaimer :is(svg, .hj-system-icon) {
   flex: 0 0 auto;
   margin-top: 1px;
 }
@@ -4985,7 +4985,7 @@ video {
   font-weight: 760;
 }
 
-.official-eyebrow svg {
+.official-eyebrow :is(svg, .hj-system-icon) {
   color: #d85e48;
 }
 
@@ -5148,7 +5148,7 @@ video {
   border-right: 0;
 }
 
-.official-proof-rail svg {
+.official-proof-rail :is(svg, .hj-system-icon) {
   flex: 0 0 auto;
   color: var(--primary);
 }
@@ -5383,7 +5383,7 @@ video {
   padding-right: 8px;
 }
 
-.official-workflow-list li > svg {
+.official-workflow-list li > :is(svg, .hj-system-icon) {
   position: relative;
   z-index: 1;
   width: 56px;
@@ -5440,7 +5440,7 @@ video {
   border-bottom: 1px solid #c4d6d3;
 }
 
-.trust-principles article > svg {
+.trust-principles article > :is(svg, .hj-system-icon) {
   width: 42px;
   height: 42px;
   padding: 10px;
@@ -5946,7 +5946,7 @@ video {
     font-size: 12px;
   }
 
-  .official-workspace-button svg {
+  .official-workspace-button :is(svg, .hj-system-icon) {
     display: none;
   }
 
@@ -6002,7 +6002,7 @@ video {
     font-size: 13px;
   }
 
-  .official-secondary-cta svg {
+  .official-secondary-cta :is(svg, .hj-system-icon) {
     display: none;
   }
 
@@ -6049,7 +6049,7 @@ video {
     text-align: center;
   }
 
-  .official-proof-rail svg,
+  .official-proof-rail :is(svg, .hj-system-icon),
   .official-proof-rail span {
     display: none;
   }
@@ -6131,7 +6131,7 @@ video {
     gap: 12px;
   }
 
-  .trust-principles article > svg {
+  .trust-principles article > :is(svg, .hj-system-icon) {
     width: 40px;
     height: 40px;
   }
@@ -6468,7 +6468,7 @@ video {
   }
 
   .capability-icon,
-  .trust-principles article > svg {
+  .trust-principles article > :is(svg, .hj-system-icon) {
     background: var(--primary-soft);
     border-color: #315b58;
   }
@@ -6487,7 +6487,7 @@ video {
     background: #456368;
   }
 
-  .official-workflow-list li > svg {
+  .official-workflow-list li > :is(svg, .hj-system-icon) {
     background: var(--surface);
     border-color: #45676a;
     box-shadow: 6px 6px 0 #213d40;

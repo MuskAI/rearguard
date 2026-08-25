@@ -237,7 +237,7 @@
   font-weight: 750;
 }
 
-.about-evidence-tag svg { color: var(--about-teal); }
+.about-evidence-tag :is(svg, .hj-system-icon) { color: var(--about-teal); }
 .tag-explain { top: 60px; left: 0; }
 .tag-review { right: 0; bottom: 76px; }
 
@@ -395,8 +395,8 @@
   text-decoration: none;
 }
 
-.about-collaboration-grid article > a svg { transition: transform 180ms ease; }
-.about-collaboration-grid article > a:hover svg { transform: translateX(4px); }
+.about-collaboration-grid article > a :is(svg, .hj-system-icon) { transition: transform 180ms ease; }
+.about-collaboration-grid article > a:hover :is(svg, .hj-system-icon) { transform: translateX(4px); }
 
 .about-principles {
   display: grid;
@@ -432,7 +432,7 @@
   border-bottom: 1px solid rgba(210, 221, 223, .28);
 }
 
-.about-principles li svg { color: #84aef2; }
+.about-principles li :is(svg, .hj-system-icon) { color: #84aef2; }
 .about-principles li strong { color: #f6f9fa; font-size: 18px; }
 .about-principles li span { color: #c5d2d7; font-size: 14px; line-height: 1.75; }
 
@@ -499,7 +499,7 @@
   border-top: 1px solid #d7ddd8;
 }
 
-.about-contact-copy > div > svg { color: var(--about-teal); }
+.about-contact-copy > div > :is(svg, .hj-system-icon) { color: var(--about-teal); }
 .about-contact-copy > div p { margin: 0; }
 .about-contact-copy > div strong { display: block; font-size: 15px; }
 .about-contact-copy > div small { display: block; margin-top: 7px; color: var(--about-copy); font-size: 13px; line-height: 1.7; }
@@ -653,7 +653,7 @@
   text-align: center;
 }
 
-.about-submit-success > svg { color: var(--about-teal); }
+.about-submit-success > :is(svg, .hj-system-icon) { color: var(--about-teal); }
 .about-submit-success p { margin: 18px 0 0; color: var(--about-ink); font-size: 24px; font-weight: 800; }
 .about-submit-success span { max-width: 440px; margin-top: 10px; color: var(--about-copy); font-size: 15px; line-height: 1.75; }
 .about-submit-success small { margin-top: 14px; color: #71858d; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 12px; }

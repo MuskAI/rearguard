@@ -90,7 +90,7 @@
 .simple-footer-note { margin: 14px 4px 0; color: #71837f; font-size: 12px; text-align: right; }
 
 .simple-finish { min-height: 580px; }
-.simple-finish > svg { color: var(--game-teal); }
+.simple-finish > :is(svg, .hj-system-icon) { color: var(--game-teal); }
 .final-score { margin-top: 8px; color: var(--game-red); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 72px; line-height: 1; }
 .final-copy { margin: 10px 0 0; color: var(--game-muted); font-size: 14px; }
 .final-actions { display: flex; gap: 10px; margin-top: 28px; }

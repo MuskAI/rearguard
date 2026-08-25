@@ -16,7 +16,10 @@ export default function BrandArtIcon({ name, className = "", label }: Props) {
       aria-label={label}
       aria-hidden={label ? undefined : true}
     >
+      <i className="brand-art-icon-rear" aria-hidden="true" />
+      <i className="brand-art-icon-front" aria-hidden="true" />
       <CapabilityIcon name={name} />
+      <i className="brand-art-icon-focus" aria-hidden="true" />
     </span>
   );
 }

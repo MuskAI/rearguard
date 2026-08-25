@@ -227,7 +227,7 @@
   transition: border-color 150ms ease, background 150ms ease, color 150ms ease;
 }
 
-.report-qa-suggestions button svg {
+.report-qa-suggestions button :is(svg, .hj-system-icon) {
   flex: 0 0 auto;
   color: var(--muted);
 }
