@@ -15,6 +15,7 @@ GPU_USER="${GPU_DEPLOY_USER:-ymk}"
 GPU_PORT="${GPU_DEPLOY_PORT:-22}"
 GPU_KEY="${GPU_DEPLOY_SSH_KEY:-}"
 GPU_KNOWN_HOSTS_FILE="${GPU_DEPLOY_KNOWN_HOSTS_FILE:-${HOME:+$HOME/.ssh/known_hosts}}"
+GPU_SUDO_PASSWORD="${GPU_DEPLOY_SUDO_PASSWORD:-}"
 DRY_RUN="${DRY_RUN:-0}"
 TMP_DIR="$(mktemp -d)"
 ARCHIVE="$TMP_DIR/realguard-detection-release.tgz"
@@ -211,9 +212,31 @@ if [[ -n "$GPU_KEY" ]]; then
   scp_options+=(-i "$GPU_KEY" -o IdentitiesOnly=yes)
 fi
 
+gpu_privileged_capture() {
+  local remote_command="$1"
+  local quoted_command
+  printf -v quoted_command '%q' "$remote_command"
+  if [[ -n "$GPU_SUDO_PASSWORD" ]]; then
+    printf '%s\n' "$GPU_SUDO_PASSWORD" \
+      | ssh -q -T "${ssh_options[@]}" "$GPU_USER@$GPU_HOST" \
+          "sudo -S -p '' -- /bin/bash -c $quoted_command"
+  else
+    ssh -q -T "${ssh_options[@]}" "$GPU_USER@$GPU_HOST" \
+      "sudo -n -- /bin/bash -c $quoted_command"
+  fi
+}
+
 if [[ "$DRY_RUN" == "1" ]]; then
   printf 'Would deploy GPU release %s to %s@%s\n' "$commit_sha" "$GPU_USER" "$GPU_HOST"
   exit 0
+fi
+
+if [[ -n "$GPU_SUDO_PASSWORD" ]]; then
+  printf '%s\n' "$GPU_SUDO_PASSWORD" \
+    | ssh -q -T "${ssh_options[@]}" "$GPU_USER@$GPU_HOST" "sudo -S -p '' -v"
+elif ! ssh -q -T "${ssh_options[@]}" "$GPU_USER@$GPU_HOST" "sudo -n -v"; then
+  echo "GPU_DEPLOY_SUDO_PASSWORD is required when the GPU user needs a sudo password" >&2
+  exit 2
 fi
 
 gpu_remote_stage="$(
@@ -241,8 +264,8 @@ public_response_key_hash="$(public_ssh \
      /etc/realguard/model-inference.env | python3 -c \
      'import hashlib,sys; value=sys.stdin.read().strip(); assert len(value)==64 and all(c in \"0123456789abcdef\" for c in value); print(hashlib.sha256(value.encode()).hexdigest())'")"
 gpu_response_key_hash="$(
-  ssh -q -tt "${ssh_options[@]}" "$GPU_USER@$GPU_HOST" \
-    "sudo awk -F= '/^REALGUARD_MODEL_RESPONSE_HMAC_KEY=/{print substr(\$0, index(\$0, \"=\") + 1); exit}' \
+  gpu_privileged_capture \
+    "awk -F= '/^REALGUARD_MODEL_RESPONSE_HMAC_KEY=/{print substr(\$0, index(\$0, \"=\") + 1); exit}' \
        /etc/realguard/model-inference.env | python3 -c \
        'import hashlib,sys; value=sys.stdin.read().strip(); assert len(value)==64 and all(c in \"0123456789abcdef\" for c in value); print(hashlib.sha256(value.encode()).hexdigest())'" \
     | tr -d '\r' \
@@ -254,8 +277,8 @@ public_response_key_id="$(public_ssh \
   "value=\$(sudo awk -F= '/^REALGUARD_MODEL_RESPONSE_HMAC_KEY_ID=/{print substr(\$0, index(\$0, \"=\") + 1); exit}' \
      /etc/realguard/model-inference.env); printf '%s' \"\${value:-v1}\"")"
 gpu_response_key_id="$(
-  ssh -tt "${ssh_options[@]}" "$GPU_USER@$GPU_HOST" \
-    "value=\$(sudo awk -F= '/^REALGUARD_MODEL_RESPONSE_HMAC_KEY_ID=/{print substr(\$0, index(\$0, \"=\") + 1); exit}' \
+  gpu_privileged_capture \
+    "value=\$(awk -F= '/^REALGUARD_MODEL_RESPONSE_HMAC_KEY_ID=/{print substr(\$0, index(\$0, \"=\") + 1); exit}' \
        /etc/realguard/model-inference.env); printf '%s' \"\${value:-v1}\"" \
     | tr -d '\r' \
     | tail -n 1

@@ -414,6 +414,19 @@ def test_gpu_uploads_and_activation_use_a_unique_remote_stage() -> None:
     assert "gpu_activation_started=1" in body
 
 
+def test_gpu_privileged_preflight_never_hides_an_interactive_sudo_prompt() -> None:
+    body = (ROOT / "scripts" / "deploy_detection_service.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'GPU_SUDO_PASSWORD="${GPU_DEPLOY_SUDO_PASSWORD:-}"' in body
+    assert '"sudo -S -p \'\' -- /bin/bash -c $quoted_command"' in body
+    assert '"sudo -n -- /bin/bash -c $quoted_command"' in body
+    assert '"sudo -S -p \'\' -v"' in body
+    assert "GPU_DEPLOY_SUDO_PASSWORD is required" in body
+    assert 'ssh -q -tt "${ssh_options[@]}" "$GPU_USER@$GPU_HOST" \\\n+    "sudo awk' not in body
+
+
 def test_converge_final_status_pins_every_target_commit() -> None:
     body = (ROOT / "scripts" / "deploy_converge.sh").read_text(encoding="utf-8")
     final_block = body.split("final_status_check()", 1)[1]
