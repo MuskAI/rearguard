@@ -18,8 +18,11 @@ import requests
 from PIL import Image
 from flask import Blueprint, Response, jsonify, request, send_file, session, stream_with_context
 
-from imagedetection.decision_labels import binary_final_label
-from imagedetection.views.historical_record import DETECTION_BACKEND_BASE_URL
+from imagedetection.decision_labels import binary_final_label, binary_video_final_label
+from imagedetection.views.historical_record import (
+    DETECTION_BACKEND_BASE_URL,
+    VIDEO_DETECTION_BACKEND_BASE_URL,
+)
 from imagedetection.views import (
     admin_state,
     evidence_manifest,
@@ -1622,8 +1625,13 @@ def _backend_media_url(kind, item):
     folder = (item or {}).get("openid") or (item or {}).get("phone") or "guest"
     if not filename:
         return ""
+    backend_base_url = (
+        VIDEO_DETECTION_BACKEND_BASE_URL
+        if kind == "video"
+        else DETECTION_BACKEND_BASE_URL
+    )
     return (
-        f"{DETECTION_BACKEND_BASE_URL}/static/uploads/"
+        f"{backend_base_url}/static/uploads/"
         f"{quote(str(folder), safe='')}/{kind}/{quote(str(filename), safe='')}"
     )
 
@@ -1737,7 +1745,7 @@ def _image_history_matches_filter(record, filter_key):
 
 
 def _video_history_record(item):
-    final_label = binary_final_label(item.get("final_label"), item.get("fake"))
+    final_label = binary_video_final_label(item.get("final_label"), item.get("fake_percentage"))
     return {
         "itemid": item.get("itemid"),
         "filename": item.get("filename", ""),

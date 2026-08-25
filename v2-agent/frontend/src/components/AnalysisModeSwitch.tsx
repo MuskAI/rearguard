@@ -1,6 +1,7 @@
 import { Check, ChevronDown } from "lucide-react";
 import { KeyboardEvent as ReactKeyboardEvent, useEffect, useId, useRef, useState } from "react";
 import type { ImageAnalysisMode } from "../agentTypes";
+import { AnalysisModeMark } from "./BrandSystem";
 import Presence from "./Presence";
 
 interface Props {
@@ -14,14 +15,13 @@ const OPTIONS: Array<{
   label: string;
   detail: string;
   note: string;
-  artwork: string;
 }> = [
-  { mode: "fast", label: "快速检测", detail: "即时鉴别", note: "真实性分析与 AI 水印同步核验", artwork: "/brand/huijian-model-fast-gpt.webp" },
-  { mode: "swarm", label: "Swarm 模式", detail: "蜂群复核", note: "更多独立证据源参与交叉判断", artwork: "/brand/huijian-model-swarm-gpt.webp" },
+  { mode: "fast", label: "快速检测", detail: "即时鉴别", note: "真实性分析与 AI 水印同步核验" },
+  { mode: "swarm", label: "Swarm 模式", detail: "蜂群复核", note: "更多独立证据源参与交叉判断" },
 ];
 
-function ModelArtwork({ src }: { src: string }) {
-  return <img className="analysis-model-artwork" src={src} width={256} height={256} alt="" aria-hidden="true" draggable={false} />;
+function ModelArtwork({ mode }: { mode: ImageAnalysisMode }) {
+  return <AnalysisModeMark name={mode} />;
 }
 
 export default function AnalysisModeSwitch({ mode, disabled = false, onChange }: Props) {
@@ -99,7 +99,7 @@ export default function AnalysisModeSwitch({ mode, disabled = false, onChange }:
           openWithFocus(event.key === "ArrowDown" ? 0 : OPTIONS.length - 1);
         }}
       >
-        <span className="analysis-model-trigger-icon"><ModelArtwork src={selected.artwork} /></span>
+        <span className="analysis-model-trigger-icon"><ModelArtwork mode={selected.mode} /></span>
         <span className="analysis-model-trigger-copy">
           <small>图片检测模型</small>
           <strong>{selected.label}</strong>
@@ -135,7 +135,7 @@ export default function AnalysisModeSwitch({ mode, disabled = false, onChange }:
                     triggerRef.current?.focus();
                   }}
                 >
-                  <span className="analysis-model-option-icon"><ModelArtwork src={option.artwork} /></span>
+                  <span className="analysis-model-option-icon"><ModelArtwork mode={option.mode} /></span>
                   <span><strong>{option.label}</strong><small>{option.detail}</small><em>{option.note}</em></span>
                   <span className="analysis-model-check">{active && <Check size={16} />}</span>
                 </button>

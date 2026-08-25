@@ -54,7 +54,7 @@ import AgentResult from "./components/AgentResult";
 import AboutCooperation from "./components/AboutCooperation";
 import AuthDialog from "./components/AuthDialog";
 import BrandArtIcon from "./components/BrandArtIcon";
-import { AgentAvatar } from "./components/BrandSystem";
+import { AgentAvatar, AnalysisModeMark, CapabilityIcon } from "./components/BrandSystem";
 import DeveloperPlatform from "./components/DeveloperPlatform";
 import DocumentBatchResult from "./components/DocumentBatchResult";
 import HuijianBrand from "./components/HuijianBrand";
@@ -1372,7 +1372,7 @@ export default function App() {
               <button type="button" className="secondary-button topbar-login" onClick={() => setAuthOpen(true)}><LogIn size={16} /> 登录</button>
             ))}
             <button type="button" className="workspace-developer-button" onClick={() => navigateToDeveloper("overview")} title="开发者平台">
-              <img className="workspace-developer-artwork" src="/brand/huijian-developer-gpt.webp" width={256} height={256} alt="" aria-hidden="true" draggable={false} />
+              <CapabilityIcon name="developer" size={32} className="workspace-developer-artwork" />
               <span>开发者</span>
             </button>
           </div>
@@ -1616,7 +1616,7 @@ function AgentProgressPanel({ progress, onStopWaiting }: { progress: AgentProgre
       <div className="progress-panel">
         <div className="progress-heading">
           <span className={`progress-scan-artwork ${current.percent >= 100 ? "is-complete" : "is-active"}`}>
-            <img src="/brand/huijian-progress-scan-gpt.webp" width={256} height={256} alt="" aria-hidden="true" draggable={false} />
+            <AnalysisModeMark name={current.analysisMode === "swarm" ? "swarm" : "fast"} />
           </span>
           <div><strong>{current.title}</strong><p>{current.detail}</p></div>
           <b>{Math.round(current.percent)}%</b>

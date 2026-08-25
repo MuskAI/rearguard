@@ -8,6 +8,8 @@ from typing import Any
 
 AI_GENERATED_LABEL = "AI生成图像"
 REAL_IMAGE_LABEL = "真实图像"
+AI_GENERATED_VIDEO_LABEL = "AI生成视频"
+REAL_VIDEO_LABEL = "真实视频"
 
 _AI_LABELS = {
     "ai",
@@ -64,3 +66,8 @@ def binary_final_label(label: Any = "", fake_probability: Any = None) -> str:
         if normalized_fake_probability(fake_probability) >= 0.5
         else REAL_IMAGE_LABEL
     )
+
+
+def binary_video_final_label(label: Any = "", fake_probability: Any = None) -> str:
+    image_label = binary_final_label(label, fake_probability)
+    return AI_GENERATED_VIDEO_LABEL if image_label == AI_GENERATED_LABEL else REAL_VIDEO_LABEL

@@ -167,16 +167,81 @@
   fill: var(--brand-c-ink);
 }
 
-.brand-logo-focus {
+.brand-logo-eye {
+  fill: #fff;
+  opacity: .96;
+}
+
+.brand-logo-iris {
+  fill: var(--brand-c-green);
+  stroke: #fff;
+  stroke-width: 1.25px;
+  vector-effect: non-scaling-stroke;
+}
+
+.brand-logo-pupil {
+  fill: var(--brand-c-ink);
+}
+
+.brand-logo-glint {
+  fill: #fff;
+}
+
+.analysis-mode-mark {
+  display: block;
+  width: 100%;
+  height: 100%;
+  color: var(--brand-c-blue);
+  overflow: visible;
+}
+
+.analysis-mode-mark * {
+  vector-effect: non-scaling-stroke;
+}
+
+.analysis-mode-surface {
+  fill: #fff;
+  stroke: #c8d4df;
+  stroke-width: 1.1px;
+}
+
+.analysis-mode-plate {
+  fill: var(--brand-c-blue-soft);
+  stroke: color-mix(in srgb, var(--brand-c-blue) 30%, transparent);
+  stroke-width: 1px;
+}
+
+.analysis-mode-ink,
+.analysis-mode-lens,
+.analysis-mode-node,
+.analysis-mode-status,
+.analysis-mode-accent {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.analysis-mode-lens {
+  fill: #fff;
+}
+
+.analysis-mode-node {
+  fill: #fff;
+}
+
+.analysis-mode-accent,
+.analysis-mode-status {
+  stroke: var(--brand-c-green);
+}
+
+.analysis-mode-core {
   fill: var(--brand-c-green);
 }
 
-.brand-logo-focus-line {
-  fill: none;
-  stroke: #fff;
-  stroke-width: 1.75px;
-  stroke-linecap: round;
-  vector-effect: non-scaling-stroke;
+.analysis-mode-status {
+  opacity: .72;
 }
 
 .brand-art-icon.brand-system-c-icon {
@@ -280,7 +345,38 @@
 }
 
 .brand-user-avatar {
-  object-fit: cover;
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  overflow: visible;
+  color: var(--avatar-ink);
+  background: var(--avatar-surface);
+  border: 1px solid var(--avatar-ring);
+  box-shadow: none;
+  font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-weight: 780;
+  line-height: 1;
+}
+
+.brand-user-avatar-letter {
+  font-size: var(--avatar-letter-size, 15px);
+  line-height: 1;
+  transform: translateY(-.02em);
+}
+
+.brand-user-avatar-status {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: clamp(8px, 27%, 12px);
+  aspect-ratio: 1;
+  background: var(--brand-c-muted);
+  border: 2px solid #fff;
+  border-radius: 50%;
+}
+
+.brand-user-avatar-status.is-online {
+  background: var(--brand-c-green);
 }
 
 .brand-agent-avatar {
@@ -300,8 +396,48 @@
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
   border-radius: inherit;
+}
+
+.brand-agent-antenna,
+.brand-agent-smile,
+.brand-agent-lens-handle {
+  fill: none;
+  stroke: var(--brand-c-ink);
+  stroke-width: 1.8px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.brand-agent-signal {
+  fill: var(--brand-c-green);
+}
+
+.brand-agent-face {
+  fill: #fff;
+  stroke: var(--brand-c-ink);
+  stroke-width: 1.65px;
+  vector-effect: non-scaling-stroke;
+}
+
+.brand-agent-eye {
+  fill: var(--brand-c-blue);
+}
+
+.brand-agent-book-left {
+  fill: var(--brand-c-blue);
+}
+
+.brand-agent-book-right {
+  fill: var(--brand-c-green);
+}
+
+.brand-agent-lens {
+  fill: #fff;
+  stroke: var(--brand-c-green);
+  stroke-width: 1.8px;
+  vector-effect: non-scaling-stroke;
 }
 
 .brand-agent-state-emblem {
@@ -452,6 +588,32 @@
   .brand-art-icon.brand-system-c-icon:hover {
     transform: none;
   }
+}
+
+.agent-app .progress-scan-artwork {
+  overflow: visible;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.agent-app .progress-scan-artwork::after {
+  display: none;
+}
+
+.agent-app .progress-scan-artwork > .analysis-mode-mark {
+  width: 34px;
+  height: 34px;
+}
+
+.agent-app .progress-scan-artwork.is-active .analysis-mode-scan {
+  animation: brand-c-scan 1.6s var(--brand-c-ease) infinite;
+}
+
+.agent-app .progress-scan-artwork.is-complete .analysis-mode-core,
+.agent-app .progress-scan-artwork.is-complete .analysis-mode-status {
+  fill: var(--brand-c-green);
+  stroke: var(--brand-c-green);
 }
 
 /* C direction applied across the public site and product surfaces. */
@@ -748,35 +910,49 @@
 
 .agent-app .analysis-model-trigger-icon,
 .agent-app .analysis-model-option-icon {
-  overflow: hidden;
-  border: 1px solid #cbd7e0;
-  border-radius: var(--brand-c-radius-card);
-  background: #fff;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   box-shadow: none;
 }
 
-.agent-app .analysis-model-artwork {
+.agent-app .analysis-mode-mark {
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
-  transform: scale(1.08);
-  transition: transform 180ms var(--brand-c-ease);
+  transform: translateY(0);
+  transition: transform 180ms var(--brand-c-ease), color 180ms ease;
   user-select: none;
 }
 
 .agent-app .analysis-model-option:hover .analysis-model-option-icon {
   color: inherit;
-  background: #fff;
+  background: transparent;
   transform: none;
 }
 
-.agent-app .analysis-model-option:hover .analysis-model-artwork {
-  transform: scale(1.12);
+.agent-app .analysis-model-option:hover .analysis-mode-mark {
+  color: var(--brand-c-blue-strong);
+  transform: translateY(-1px);
+}
+
+.agent-app .analysis-model-picker.is-open .analysis-mode-mark-fast .analysis-mode-scan {
+  animation: brand-c-scan 1.6s var(--brand-c-ease) infinite;
 }
 
 .agent-app .progress-track > i {
   background: var(--brand-c-blue);
+}
+
+.agent-app .lucide,
+.official-site .lucide {
+  stroke-width: 1.8;
+}
+
+@keyframes brand-c-scan {
+  0%, 100% { transform: translateY(-4px); opacity: .55; }
+  50% { transform: translateY(4px); opacity: 1; }
 }
 
 .account-menu-avatar,
@@ -1146,7 +1322,7 @@
   }
 
   .agent-app .analysis-model-trigger-icon,
-  .agent-app .analysis-model-trigger-icon .analysis-model-artwork {
+  .agent-app .analysis-model-trigger-icon .analysis-mode-mark {
     width: 36px;
     height: 36px;
   }

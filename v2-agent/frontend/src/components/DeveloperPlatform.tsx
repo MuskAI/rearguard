@@ -46,7 +46,7 @@ import {
   rotateDeveloperKey,
 } from "../api";
 import HuijianBrand from "./HuijianBrand";
-import { UserAvatar } from "./BrandSystem";
+import { BrandLogoMark, UserAvatar } from "./BrandSystem";
 import { AGENT_CLIENTS, buildAgentSkillInstallPrompt, FEATURED_AGENT_CLIENTS } from "./agentSkillCatalog";
 import "./DeveloperPlatform.css";
 
@@ -1140,7 +1140,7 @@ function AgentSkillPanel({ origin, copied, onCopy, onOpenKeys }: { origin: strin
           </div>
           <div className="agent-skill-relay-route" aria-label="安装指令从慧鉴 Skill 传递到支持的 Agent">
             <div className="agent-skill-relay-source">
-              <span><img src="/brand/huijian-mark-v3.webp" width="48" height="48" alt="" aria-hidden="true" /></span>
+              <span><BrandLogoMark size={48} /></span>
               <div><small>HUIJIAN SKILL</small><strong>图像鉴伪</strong></div>
               <b>READY</b>
             </div>

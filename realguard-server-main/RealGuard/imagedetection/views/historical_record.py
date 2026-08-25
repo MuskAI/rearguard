@@ -1,7 +1,7 @@
 import os
 from flask import Blueprint, render_template, session
 
-from imagedetection.decision_labels import binary_final_label
+from imagedetection.decision_labels import binary_final_label, binary_video_final_label
 from imagedetection.views import admin_state, evidence_manifest
 
 from imagedetection.views.utils import (
@@ -15,6 +15,10 @@ historical_record_blueprint = Blueprint('historical_record_blueprint', __name__)
 
 DETECTION_BACKEND_BASE_URL = os.environ.get(
     'REALGUARD_DETECTION_BACKEND_URL',
+    'http://127.0.0.1:15000'
+).rstrip('/')
+VIDEO_DETECTION_BACKEND_BASE_URL = os.environ.get(
+    'REALGUARD_VIDEO_DETECTION_BACKEND_URL',
     'http://127.0.0.1:15000'
 ).rstrip('/')
 DETECTION_PUBLIC_STATIC_PREFIX = os.environ.get(
@@ -108,7 +112,7 @@ def history_video_detect():
     real_count = 0
     if result:
         for item in result:
-            final_label = binary_final_label(item.get('final_label'), item.get('fake'))
+            final_label = binary_video_final_label(item.get('final_label'), item.get('fake_percentage'))
             if 'AI' in final_label:
                 ai_count += 1
             else:

@@ -145,7 +145,7 @@ export default function Sidebar({
       </button>
 
       <div className="px-4 pb-1 inline-flex items-center gap-1.5 text-[11px] text-ink-500 uppercase">
-        <IconfontIcon name="history" size={13} />
+        <IconfontIcon name="history" size={16} />
         <span>历史记录</span>
       </div>
       <div className="flex-1 overflow-y-auto px-2 space-y-1">
@@ -194,7 +194,7 @@ export default function Sidebar({
                       : "border-ink-600 bg-ink-800 text-ink-500"
                   }`}
                 >
-                  <IconfontIcon name={FILTER_ICONS[item.key as SidebarFilterKey] || "history"} size={12} />
+                  <IconfontIcon name={FILTER_ICONS[item.key as SidebarFilterKey] || "history"} size={16} />
                   <span>{item.label}</span>
                   <span
                     className={`rounded-full px-1.5 py-0.5 text-[9px] ${
@@ -216,7 +216,7 @@ export default function Sidebar({
                     : "border-ink-600 bg-ink-800 text-ink-500"
                   }`}
               >
-                <IconfontIcon name="deep-analysis" size={12} />
+                <IconfontIcon name="deep-analysis" size={16} />
                 更多筛选
                 {activeFilterInMore && <span className="rounded-full bg-brand-cyan/15 px-1.5 py-0.5 text-[9px]">{activeFilterLabel}</span>}
               </button>
@@ -234,7 +234,7 @@ export default function Sidebar({
                         : "border-ink-600 bg-ink-900 text-ink-500"
                     }`}
                   >
-                    <IconfontIcon name={FILTER_ICONS[item.key as SidebarFilterKey] || "deep-analysis"} size={12} />
+                    <IconfontIcon name={FILTER_ICONS[item.key as SidebarFilterKey] || "deep-analysis"} size={16} />
                     <span>{item.label}</span>
                     <span
                       className={`rounded-full px-1.5 py-0.5 text-[9px] ${
@@ -314,7 +314,7 @@ export default function Sidebar({
                       onClick={onClearSelection}
                       className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-ink-600 bg-ink-900 text-[10px]"
                     >
-                      <IconfontIcon name="close" size={11} />
+                      <IconfontIcon name="close" size={14} />
                       清除选中
                     </button>
                   )}

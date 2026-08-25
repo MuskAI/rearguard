@@ -397,6 +397,7 @@ sudo install -d -m 755 /etc/systemd/system/realguard-backend.service.d
 sudo tee /etc/systemd/system/realguard-backend.service.d/40-detector-backend-url.conf >/dev/null <<UNIT
 [Service]
 Environment=REALGUARD_DETECTION_BACKEND_URL=http://127.0.0.1:$DETECTOR_PORT
+Environment=REALGUARD_VIDEO_DETECTION_BACKEND_URL=http://127.0.0.1:15000
 UNIT
 
 sudo bash -lc '

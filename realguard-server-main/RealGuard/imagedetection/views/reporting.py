@@ -8,7 +8,7 @@ from typing import Any, Mapping
 from urllib.parse import quote
 from werkzeug.exceptions import UnprocessableEntity
 
-from imagedetection.decision_labels import binary_final_label
+from imagedetection.decision_labels import binary_final_label, binary_video_final_label
 from . import evidence_manifest
 from .report_pdf import image_report_pdf as _render_image_report_pdf
 from .report_pdf import video_report_pdf
@@ -335,7 +335,7 @@ def video_report_content(item: dict, result: dict) -> str:
     probability = None if review_only or raw_probability is None else round(float(raw_probability), 1)
     confidence = _safe_text(result.get("confidence"), "")
     requires_review = review_only or probability is None
-    final_label = binary_final_label(result.get("final_label"), item.get("fake"))
+    final_label = binary_video_final_label(result.get("final_label"), item.get("fake_percentage"))
     accent = "#b36a12" if requires_review else ("#d9573f" if "AI" in str(final_label) else "#1b8f7a")
     video_url = escape(_safe_text(result.get("video_url"), ""))
     preview = f'<video class="preview" src="{video_url}" controls></video>' if video_url else '<div class="preview" style="min-height:260px;"></div>'

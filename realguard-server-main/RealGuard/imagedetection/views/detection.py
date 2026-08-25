@@ -20,7 +20,11 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from werkzeug.utils import secure_filename
 
 from model_decision_contract import validate_inference_audit, validate_model_decision
-from imagedetection.decision_labels import binary_final_label, normalized_fake_probability
+from imagedetection.decision_labels import (
+    binary_final_label,
+    binary_video_final_label,
+    normalized_fake_probability,
+)
 from imagedetection.image_formats import is_heif_filename
 
 from imagedetection.views import (
@@ -58,12 +62,16 @@ DETECTION_BACKEND_BASE_URL = os.environ.get(
     'REALGUARD_DETECTION_BACKEND_URL',
     'http://127.0.0.1:15000'
 ).rstrip('/')
+VIDEO_DETECTION_BACKEND_BASE_URL = os.environ.get(
+    'REALGUARD_VIDEO_DETECTION_BACKEND_URL',
+    'http://127.0.0.1:15000'
+).rstrip('/')
 DETECTION_PUBLIC_STATIC_PREFIX = os.environ.get(
     'REALGUARD_DETECTION_PUBLIC_STATIC_PREFIX',
     '/detection-static'
 ).rstrip('/')
 IMAGE_DETECT_API = f"{DETECTION_BACKEND_BASE_URL}/image"
-VIDEO_DETECT_API = f"{DETECTION_BACKEND_BASE_URL}/video"
+VIDEO_DETECT_API = f"{VIDEO_DETECTION_BACKEND_BASE_URL}/video"
 V2_DETECT_API = os.environ.get(
     'REALGUARD_V2_INTERNAL_DETECT_URL',
     'http://127.0.0.1:8848/api/detect'
@@ -4223,7 +4231,10 @@ def video_detect():
         }), 502
     fake_pct = _to_float(data.get('fake_percentage', 0), 0.0)
     conf_score = None
-    final_label = binary_final_label(fake_probability=fake_pct)
+    final_label = binary_video_final_label(
+        data.get('final_label'),
+        fake_pct,
+    )
     explanation = (
         f'视频抽帧与时序分析给出二元结论“{final_label}”。当前视频模型及聚合策略尚未通过独立签名校准，'
         '因此结论置信度为低，自动真假分数不对外发布；请结合原始视频和可疑片段复核。'
@@ -4280,7 +4291,7 @@ def video_result_api():
     item = _load_detection_record('video_data', itemid)
     if not item:
         return jsonify({'status': 'error', 'message': '未找到该视频检测记录'}), 404
-    final_label = binary_final_label(item.get('final_label'), item.get('fake'))
+    final_label = binary_video_final_label(item.get('final_label'), item.get('fake_percentage'))
     return jsonify({
         'status': 'success',
         'result': {
@@ -4322,7 +4333,7 @@ def video_report_api():
     if not item:
         return jsonify({'status': 'error', 'message': '未找到该视频检测记录'}), 404
 
-    final_label = binary_final_label(item.get('final_label'), item.get('fake'))
+    final_label = binary_video_final_label(item.get('final_label'), item.get('fake_percentage'))
     result = {
         'itemid': item.get('itemid'),
         'filename': item.get('filename', ''),

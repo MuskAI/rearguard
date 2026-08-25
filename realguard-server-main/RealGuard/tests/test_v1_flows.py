@@ -793,12 +793,12 @@ def test_video_review_only_report_never_fabricates_zero_probability():
             "fake_percentage": None,
             "real_percentage": None,
             "confidence": "低",
-            "final_label": "真实图像",
+            "final_label": "真实视频",
             "explanation": "模型尚未获得自动结论授权。",
         },
     )
 
-    assert "真实图像 · 未发布自动概率" in html
+    assert "真实视频 · 未发布自动概率" in html
     assert "<td class=\"right\">未发布</td>" in html
     assert "AI 概率 0.0%" not in html
     assert "真实概率 0.0%" not in html
@@ -2770,10 +2770,11 @@ def test_detector_backend_image_endpoint_returns_v1_contract(monkeypatch):
 
 def test_video_detect_logged_in_builds_public_media_url(client, monkeypatch):
     _login_session(client)
-    monkeypatch.setattr(
-        detection,
-        "_backend_post",
-        lambda url, **kwargs: _FakeResponse(
+    requested_urls = []
+
+    def fake_video_backend(url, **kwargs):
+        requested_urls.append(url)
+        return _FakeResponse(
             {
                 "code": 200,
                 "data": {
@@ -2792,7 +2793,12 @@ def test_video_detect_logged_in_builds_public_media_url(client, monkeypatch):
                     },
                 },
             }
-        ),
+        )
+
+    monkeypatch.setattr(
+        detection,
+        "_backend_post",
+        fake_video_backend,
     )
 
     monkeypatch.setattr(
@@ -2819,11 +2825,25 @@ def test_video_detect_logged_in_builds_public_media_url(client, monkeypatch):
 
     assert response.status_code == 200
     payload = response.get_json()["result"]
-    assert payload["final_label"] == "AI生成图像"
+    assert requested_urls == [detection.VIDEO_DETECT_API]
+    assert detection.VIDEO_DETECT_API == "http://127.0.0.1:15000/video"
+    assert payload["final_label"] == "AI生成视频"
     assert payload["confidence"] == "低"
     assert payload["fake_percentage"] is None
     assert payload["decisionStatus"] == "review_only"
     assert payload["video_url"] == "/api/media/video/21"
+
+
+def test_video_media_uses_video_backend(monkeypatch):
+    monkeypatch.setattr(api, "DETECTION_BACKEND_BASE_URL", "http://127.0.0.1:15001")
+    monkeypatch.setattr(api, "VIDEO_DETECTION_BACKEND_BASE_URL", "http://127.0.0.1:15000")
+
+    url = api._backend_media_url("video", {
+        "openid": "user-1",
+        "filename": "clip.mp4",
+    })
+
+    assert url == "http://127.0.0.1:15000/static/uploads/user-1/video/clip.mp4"
 
 
 def test_guest_image_report_downloads_attachment(client, monkeypatch):

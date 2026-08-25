@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from "react";
 import type { AccountUser } from "../api";
 import AccountMenu from "./AccountMenu";
 import BrandArtIcon, { BrandArtIconName } from "./BrandArtIcon";
+import { BrandLogoMark } from "./BrandSystem";
 import HuijianBrand from "./HuijianBrand";
 import Presence from "./Presence";
 import { buildAgentSkillInstallPrompt, FEATURED_AGENT_CLIENTS } from "./agentSkillCatalog";
@@ -395,7 +396,7 @@ export default function OfficialHome({
               </div>
               <div className="home-agent-skill-handoff" aria-label="慧鉴 Skill 可接入的 Agent">
                 <div className="home-agent-skill-source">
-                  <img src="/brand/huijian-mark-v3.webp" width="52" height="52" alt="" aria-hidden="true" />
+                  <BrandLogoMark size={52} />
                   <span><small>HUIJIAN SKILL</small><strong>图像鉴伪</strong></span>
                 </div>
                 <div className="home-agent-skill-beam" aria-hidden="true"><i /><i /></div>

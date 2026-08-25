@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 export type CapabilityIconName =
   | "fast"
   | "swarm"
@@ -22,6 +22,7 @@ export type BrandStatusIconName =
   | "error";
 
 export type AgentAvatarState = "idle" | "receiving" | "processing" | "complete" | "error";
+export type AnalysisModeMarkName = "fast" | "swarm";
 
 interface SvgProps {
   size?: number;
@@ -74,8 +75,48 @@ export function BrandLogoMark({ size = 48, className = "", label }: SvgProps) {
         className="brand-logo-page brand-logo-page-right"
         d="M41 9.5A3.5 3.5 0 0 0 37.5 6h-9A4.5 4.5 0 0 0 24 10.5V40c2.1-2.25 4.55-3.38 7.35-3.38h6.15a3.5 3.5 0 0 1 3.5 3.5V9.5Z"
       />
-      <rect className="brand-logo-focus" x="20" y="15" width="8" height="18" rx="2.5" />
-      <path className="brand-logo-focus-line" d="M22.5 20.5h3M22.5 24h3M22.5 27.5h2" />
+      <path className="brand-logo-eye" d="M13.5 23.5C16.25 18.85 19.75 16.5 24 16.5s7.75 2.35 10.5 7c-2.75 4.65-6.25 7-10.5 7s-7.75-2.35-10.5-7Z" />
+      <circle className="brand-logo-iris" cx="24" cy="23.5" r="5.15" />
+      <circle className="brand-logo-pupil" cx="24" cy="23.5" r="2.15" />
+      <circle className="brand-logo-glint" cx="25.8" cy="21.8" r=".8" />
+    </svg>
+  );
+}
+
+export function AnalysisModeMark({ name, size = 56, className = "", label }: SvgProps & { name: AnalysisModeMarkName }) {
+  return (
+    <svg
+      className={`analysis-mode-mark analysis-mode-mark-${name} ${className}`.trim()}
+      viewBox="0 0 56 56"
+      width={size}
+      height={size}
+      fill="none"
+      role={label ? "img" : undefined}
+      aria-label={label}
+      aria-hidden={label ? undefined : true}
+      focusable="false"
+    >
+      <rect className="analysis-mode-surface" x="4.5" y="4.5" width="47" height="47" rx="12" />
+      <rect className="analysis-mode-plate" x="12.5" y="12.5" width="31" height="31" rx="9" />
+      {name === "fast" ? (
+        <>
+          <path className="analysis-mode-ink" d="M19 22v-3h3M34 19h3v3M19 34v3h3M37 34v3h-3" />
+          <circle className="analysis-mode-lens" cx="28" cy="28" r="6.25" />
+          <path className="analysis-mode-accent analysis-mode-scan" d="M17 28h22" />
+          <circle className="analysis-mode-core" cx="28" cy="28" r="2" />
+        </>
+      ) : (
+        <>
+          <path className="analysis-mode-ink" d="m20.5 20.5 5 5m10-5-5 5m-10 10 5-5m10 5-5-5" />
+          <circle className="analysis-mode-node" cx="19.5" cy="19.5" r="2.5" />
+          <circle className="analysis-mode-node" cx="36.5" cy="19.5" r="2.5" />
+          <circle className="analysis-mode-node" cx="19.5" cy="36.5" r="2.5" />
+          <circle className="analysis-mode-node" cx="36.5" cy="36.5" r="2.5" />
+          <circle className="analysis-mode-lens" cx="28" cy="28" r="5.5" />
+          <circle className="analysis-mode-core" cx="28" cy="28" r="2" />
+        </>
+      )}
+      <path className="analysis-mode-status" d="M17 47h22" />
     </svg>
   );
 }
@@ -140,9 +181,8 @@ export function CapabilityIcon({ name, size = 24, className = "", label }: SvgPr
         return (
           <>
             <path d="m8 6-5 6 5 6M16 6l5 6-5 6" />
-            <circle cx="12" cy="8" r="1.5" />
-            <circle className="brand-glyph-accent" cx="12" cy="16" r="1.5" />
-            <path d="M12 9.5v5M10.5 12h3" />
+            <circle className="brand-glyph-accent" cx="12" cy="10" r="2" />
+            <path className="brand-glyph-accent" d="M12 12v5M12 15h2" />
           </>
         );
       case "workflow":
@@ -203,18 +243,42 @@ export interface UserAvatarProps {
   label?: string;
 }
 
-export function UserAvatar({ displayName, size = 40, className = "", label }: UserAvatarProps) {
+const USER_AVATAR_TONES = [
+  { surface: "#dfeafb", ink: "#28558e", ring: "#b7cce9" },
+  { surface: "#dff2ed", ink: "#116c62", ring: "#acd8ce" },
+  { surface: "#eee8f7", ink: "#684d87", ring: "#cfc0e3" },
+  { surface: "#fae9e3", ink: "#925143", ring: "#e8c4b8" },
+] as const;
+
+function stableAvatarIndex(seed: string) {
+  let hash = 0;
+  for (const char of seed) hash = ((hash << 5) - hash + char.codePointAt(0)!) | 0;
+  return Math.abs(hash) % USER_AVATAR_TONES.length;
+}
+
+export function UserAvatar({ seed, displayName, size = 40, className = "", status, label }: UserAvatarProps) {
   const name = displayName?.trim() || "用户";
+  const initial = Array.from(name)[0]?.toUpperCase() || "慧";
+  const tone = USER_AVATAR_TONES[stableAvatarIndex(`${seed}:${name}`)];
+  const style = {
+    width: size,
+    height: size,
+    "--avatar-surface": tone.surface,
+    "--avatar-ink": tone.ink,
+    "--avatar-ring": tone.ring,
+    "--avatar-letter-size": `${Math.max(13, Math.round(size * .42))}px`,
+  } as CSSProperties;
 
   return (
-    <img
+    <span
       className={`brand-avatar brand-user-avatar ${className}`.trim()}
-      src="/brand/huijian-account-user-gpt.webp"
-      width={size}
-      height={size}
-      alt={label || `${name}的账户图标`}
-      draggable={false}
-    />
+      style={style}
+      role="img"
+      aria-label={label || `${name}的账户头像${status === "online" ? "，在线" : status === "offline" ? "，离线" : ""}`}
+    >
+      <span className="brand-user-avatar-letter" aria-hidden="true">{initial}</span>
+      {status && <i className={`brand-user-avatar-status is-${status}`} aria-hidden="true" />}
+    </span>
   );
 }
 
@@ -239,7 +303,18 @@ export function AgentAvatar({ state = "idle", size = 40, className = "", label }
       role="img"
       aria-label={label || `小鉴，${stateLabels[state]}`}
     >
-      <img className="brand-agent-portrait" src="/brand/huijian-agent-portrait-gpt.webp" width={256} height={256} alt="" aria-hidden="true" draggable={false} />
+      <svg className="brand-agent-portrait" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+        <path className="brand-agent-antenna" d="M24 8V5.5" />
+        <circle className="brand-agent-signal" cx="24" cy="4.5" r="2" />
+        <rect className="brand-agent-face" x="8" y="8" width="32" height="27" rx="9" />
+        <circle className="brand-agent-eye" cx="18.5" cy="20" r="2.2" />
+        <circle className="brand-agent-eye" cx="29.5" cy="20" r="2.2" />
+        <path className="brand-agent-smile" d="M19.5 26.5c2.8 2.1 6.2 2.1 9 0" />
+        <path className="brand-agent-book-left" d="M9.5 34.5c5.8-1.4 10.6-.2 14.5 3.5v6c-4.4-3.1-9.2-4-14.5-2.7v-6.8Z" />
+        <path className="brand-agent-book-right" d="M38.5 34.5c-5.8-1.4-10.6-.2-14.5 3.5v6c4.4-3.1 9.2-4 14.5-2.7v-6.8Z" />
+        <circle className="brand-agent-lens" cx="35.5" cy="31.5" r="4.25" />
+        <path className="brand-agent-lens-handle" d="m38.7 34.7 3.3 3.3" />
+      </svg>
       <i className="brand-agent-state-emblem" aria-hidden="true" />
     </span>
   );

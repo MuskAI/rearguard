@@ -1199,12 +1199,14 @@ test("检测进度卡使用清晰的正文级字号", async ({ page }) => {
   await expect(panel).toBeVisible();
   await expect(panel.locator(".progress-heading strong")).toHaveText(/正在核验内容真实性|任务仍在运行/);
   const agentArtwork = page.locator(".agent-progress-message .brand-agent-portrait");
-  const scanArtwork = panel.locator(".progress-scan-artwork > img");
+  const scanArtwork = panel.locator(".progress-scan-artwork > .analysis-mode-mark");
   await expect(agentArtwork).toBeVisible();
   await expect(scanArtwork).toBeVisible();
-  expect(await agentArtwork.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth === 256 && image.naturalHeight === 256)).toBeTruthy();
-  expect(await scanArtwork.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth === 256 && image.naturalHeight === 256)).toBeTruthy();
-  await expect(panel.locator(".progress-heading .spin, .progress-heading svg")).toHaveCount(0);
+  await expect(agentArtwork).toHaveAttribute("viewBox", "0 0 48 48");
+  await expect(scanArtwork).toHaveAttribute("viewBox", "0 0 56 56");
+  expect((await scanArtwork.boundingBox())?.width).toBeGreaterThanOrEqual(32);
+  await expect(panel.locator(".progress-heading .spin")).toHaveCount(0);
+  await expect(panel.locator(".progress-heading .analysis-mode-mark")).toHaveCount(1);
   const sizes = await panel.evaluate((element) => {
     const size = (selector: string) => Number.parseFloat(getComputedStyle(element.querySelector<HTMLElement>(selector)!).fontSize);
     return {
@@ -1481,19 +1483,19 @@ test("登录用户可以隐藏并恢复最近任务侧栏", async ({ page }) => 
   await expectNoHorizontalOverflow(page);
 });
 
-test("模型选择器完整加载 GPT Image 模式图标", async ({ page }) => {
+test("模型选择器完整加载统一矢量模式图标", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await installBaseMocks(page, true);
   await page.goto("/?workspace=1");
 
   const picker = page.locator(".analysis-model-picker");
-  const triggerArtwork = picker.locator(".analysis-model-trigger .analysis-model-artwork");
+  const triggerArtwork = picker.locator(".analysis-model-trigger .analysis-mode-mark");
   await expect(triggerArtwork).toBeVisible();
-  expect(await triggerArtwork.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth === 256 && image.naturalHeight === 256)).toBeTruthy();
+  await expect(triggerArtwork).toHaveAttribute("viewBox", "0 0 56 56");
   await page.getByRole("button", { name: "选择图片检测模型" }).click();
-  const menuArtwork = picker.locator(".analysis-model-menu .analysis-model-artwork");
+  const menuArtwork = picker.locator(".analysis-model-menu .analysis-mode-mark");
   await expect(menuArtwork).toHaveCount(2);
-  expect(await menuArtwork.evaluateAll((images: HTMLImageElement[]) => images.every((image) => image.complete && image.naturalWidth === 256 && image.naturalHeight === 256))).toBeTruthy();
+  expect(await menuArtwork.evaluateAll((icons) => icons.every((icon) => icon.getAttribute("viewBox") === "0 0 56 56"))).toBeTruthy();
   await expect(picker.locator(".brand-art-icon")).toHaveCount(0);
 });
 
@@ -1509,12 +1511,14 @@ test("工作台账户使用明确的用户图标并与开发者入口保持统�
 
   await expect(accountArtwork).toBeVisible();
   await expect(developerArtwork).toBeVisible();
-  expect(await accountArtwork.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth === 256 && image.naturalHeight === 256)).toBeTruthy();
-  expect(await developerArtwork.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth === 256 && image.naturalHeight === 256)).toBeTruthy();
+  await expect(accountArtwork).toHaveAttribute("role", "img");
+  await expect(accountArtwork.locator(".brand-user-avatar-letter")).toHaveCount(1);
+  await expect(developerArtwork).toHaveAttribute("viewBox", "0 0 24 24");
   await expect(accountButton.locator("svg")).toHaveCount(0);
   await expect(developerButton.locator(".brand-art-icon")).toHaveCount(0);
   await expect(developerButton).toContainText("开发者");
-  await expect(page.locator(".sidebar-account .brand-user-avatar")).toHaveAttribute("src", "/brand/huijian-account-user-gpt.webp");
+  await expect(page.locator(".sidebar-account .brand-user-avatar")).toHaveAttribute("role", "img");
+  await expect(page.locator(".sidebar-account .brand-user-avatar img")).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
 });
 

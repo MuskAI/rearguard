@@ -37,7 +37,7 @@ import {
 } from "lucide-react";
 import { createPortal } from "react-dom";
 import type { AgentOutcome } from "../agentTypes";
-import { binaryVerdictLabel, isFakeVerdict } from "../binaryVerdict";
+import { binaryVerdictLabel, binaryVideoVerdictLabel, isFakeVerdict } from "../binaryVerdict";
 import {
   createReportShareLink,
   listReportShares,
@@ -398,7 +398,7 @@ function verdictFor(outcome: AgentOutcome): VerdictView {
   if (outcome.kind === "video") {
     const reviewOnly = outcome.result.decisionStatus !== "verdict" || outcome.result.reviewRequired === true;
     const risk = clamp01(Number(outcome.result.fake_percentage ?? 0) / 100);
-    const label = binaryVerdictLabel(outcome.result.final_label, outcome.result.fake_percentage);
+    const label = binaryVideoVerdictLabel(outcome.result.final_label, outcome.result.fake_percentage);
     const tone = isFakeVerdict(label) ? "fake" : "real";
     return {
       label,

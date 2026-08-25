@@ -1,4 +1,4 @@
-export type BinaryVerdictLabel = "真实图像" | "AI生成图像";
+export type BinaryVerdictLabel = "真实图像" | "AI生成图像" | "真实视频" | "AI生成视频";
 
 const AI_LABELS = new Set([
   "ai", "ai生成", "ai生成图像", "ai生成视频", "fake", "highly_suspected_fake",
@@ -35,6 +35,10 @@ export function binaryVerdictLabel(label: unknown, score?: unknown): BinaryVerdi
   return normalized !== null && normalized >= 0.5 ? "AI生成图像" : "真实图像";
 }
 
+export function binaryVideoVerdictLabel(label: unknown, score?: unknown): BinaryVerdictLabel {
+  return binaryVerdictLabel(label, score) === "AI生成图像" ? "AI生成视频" : "真实视频";
+}
+
 export function isFakeVerdict(label: BinaryVerdictLabel): boolean {
-  return label === "AI生成图像";
+  return label === "AI生成图像" || label === "AI生成视频";
 }
