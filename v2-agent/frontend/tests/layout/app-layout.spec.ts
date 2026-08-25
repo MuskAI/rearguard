@@ -1512,13 +1512,18 @@ test("工作台账户使用明确的用户图标并与开发者入口保持统�
   await expect(accountArtwork).toBeVisible();
   await expect(developerArtwork).toBeVisible();
   await expect(accountArtwork).toHaveAttribute("role", "img");
-  await expect(accountArtwork.locator(".brand-user-avatar-letter")).toHaveCount(1);
+  const accountAvatarImage = accountArtwork.locator(".brand-user-avatar-art");
+  await expect(accountAvatarImage).toHaveCount(1);
+  await expect(accountAvatarImage).toHaveAttribute("src", /^data:image\/svg\+xml/);
+  await expect.poll(() => accountAvatarImage.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBeTruthy();
+  await expect(accountArtwork.locator(".brand-user-avatar-letter")).toHaveCount(0);
   await expect(developerArtwork).toHaveAttribute("viewBox", "0 0 24 24");
   await expect(accountButton.locator("svg")).toHaveCount(0);
   await expect(developerButton.locator(".brand-art-icon")).toHaveCount(0);
   await expect(developerButton).toContainText("开发者");
-  await expect(page.locator(".sidebar-account .brand-user-avatar")).toHaveAttribute("role", "img");
-  await expect(page.locator(".sidebar-account .brand-user-avatar img")).toHaveCount(0);
+  const sidebarAvatar = page.locator(".sidebar-account .brand-user-avatar");
+  await expect(sidebarAvatar).toHaveAttribute("role", "img");
+  await expect(sidebarAvatar.locator(".brand-user-avatar-art")).toHaveAttribute("src", /^data:image\/svg\+xml/);
   await expectNoHorizontalOverflow(page);
 });
 

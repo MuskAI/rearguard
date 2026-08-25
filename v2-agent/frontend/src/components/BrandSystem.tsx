@@ -1,4 +1,5 @@
-import { useId, type CSSProperties, type ReactNode } from "react";
+import { useId, useMemo, type ReactNode } from "react";
+import { createHuijianAvatarDataUri } from "../avatar/huijianAvatar";
 export type CapabilityIconName =
   | "fast"
   | "swarm"
@@ -259,40 +260,18 @@ export interface UserAvatarProps {
   label?: string;
 }
 
-const USER_AVATAR_TONES = [
-  { surface: "linear-gradient(145deg, #4b83ee, #2459bf)", ink: "#ffffff", ring: "#b7cdf5" },
-  { surface: "linear-gradient(145deg, #35b8a6, #087b70)", ink: "#ffffff", ring: "#a9ddd5" },
-  { surface: "linear-gradient(145deg, #8d75d8, #60468f)", ink: "#ffffff", ring: "#d0c5e9" },
-  { surface: "linear-gradient(145deg, #ef8877, #bd5040)", ink: "#ffffff", ring: "#edc2ba" },
-] as const;
-
-function stableAvatarIndex(seed: string) {
-  let hash = 0;
-  for (const char of seed) hash = ((hash << 5) - hash + char.codePointAt(0)!) | 0;
-  return Math.abs(hash) % USER_AVATAR_TONES.length;
-}
-
 export function UserAvatar({ seed, displayName, size = 40, className = "", status, label }: UserAvatarProps) {
   const name = displayName?.trim() || "用户";
-  const initial = Array.from(name)[0]?.toUpperCase() || "慧";
-  const tone = USER_AVATAR_TONES[stableAvatarIndex(`${seed}:${name}`)];
-  const style = {
-    width: size,
-    height: size,
-    "--avatar-surface": tone.surface,
-    "--avatar-ink": tone.ink,
-    "--avatar-ring": tone.ring,
-    "--avatar-letter-size": `${Math.max(13, Math.round(size * .42))}px`,
-  } as CSSProperties;
+  const avatarSource = useMemo(() => createHuijianAvatarDataUri(name, seed), [name, seed]);
 
   return (
     <span
       className={`brand-avatar brand-user-avatar ${className}`.trim()}
-      style={style}
+      style={{ width: size, height: size }}
       role="img"
       aria-label={label || `${name}的账户头像${status === "online" ? "，在线" : status === "offline" ? "，离线" : ""}`}
     >
-      <span className="brand-user-avatar-letter" aria-hidden="true">{initial}</span>
+      <img className="brand-user-avatar-art" src={avatarSource} alt="" aria-hidden="true" draggable={false} />
       {status && <i className={`brand-user-avatar-status is-${status}`} aria-hidden="true" />}
     </span>
   );

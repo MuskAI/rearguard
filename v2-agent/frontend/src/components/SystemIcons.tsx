@@ -63,6 +63,7 @@ function createSystemIcon(displayName: string, symbol: string) {
 export const Activity = createSystemIcon("activity", "monitoring");
 export const AlertTriangle = createSystemIcon("alert-triangle", "warning");
 export const Archive = createSystemIcon("archive", "inventory_2");
+export const ArrowLeft = createSystemIcon("arrow-left", "arrow_back");
 export const ArrowRight = createSystemIcon("arrow-right", "arrow_forward");
 export const BadgeCheck = createSystemIcon("badge-check", "verified");
 export const BookOpen = createSystemIcon("book-open", "menu_book");

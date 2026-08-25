@@ -400,20 +400,20 @@
   display: inline-grid;
   place-items: center;
   overflow: visible;
-  color: var(--avatar-ink);
-  background: var(--avatar-surface);
-  border: 1px solid var(--avatar-ring);
+  background: #f5f8f9;
+  border: 1px solid #cbd6dc;
   border-radius: 50%;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--avatar-ring) 22%, transparent);
-  font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
-  font-weight: 780;
-  line-height: 1;
+  box-shadow: 0 0 0 3px rgba(40, 105, 223, .08);
 }
 
-.brand-user-avatar-letter {
-  font-size: var(--avatar-letter-size, 15px);
-  line-height: 1;
-  transform: translateY(-.02em);
+.brand-user-avatar-art {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: contain;
+  transform: scale(1.04);
+  transition: transform 240ms cubic-bezier(.2, .8, .2, 1), filter 240ms cubic-bezier(.2, .8, .2, 1);
 }
 
 .brand-user-avatar-status {
@@ -2787,12 +2787,25 @@
 
 .brand-user-avatar {
   overflow: visible;
-  border-radius: 27%;
-  box-shadow: 0 6px 14px rgba(26, 37, 47, .13), 0 0 0 1px color-mix(in srgb, var(--avatar-ring) 45%, transparent);
+  border-radius: 50%;
+  box-shadow: 0 5px 12px rgba(26, 37, 47, .12), 0 0 0 1px rgba(40, 105, 223, .12);
 }
 
 .brand-user-avatar-status {
   border-width: 2px;
+}
+
+.account-menu-trigger:hover .brand-user-avatar-art,
+.account-menu.is-open .brand-user-avatar-art,
+.sidebar-account:hover .brand-user-avatar-art {
+  filter: saturate(1.05) contrast(1.02);
+  transform: scale(1.08);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brand-user-avatar-art {
+    transition: none;
+  }
 }
 
 .brand-agent-avatar {
