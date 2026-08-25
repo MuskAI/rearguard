@@ -137,6 +137,33 @@ def test_pdf_flate_image_is_returned_as_png():
     assert extracted.assets[0].data.startswith(b"\x89PNG\r\n\x1a\n")
 
 
+def test_pdf_alpha_image_retains_soft_mask_relationship_metadata():
+    image = io.BytesIO()
+    Image.new("RGBA", (48, 36), (20, 90, 180, 96)).save(image, "PNG")
+    output = io.BytesIO()
+    document = canvas.Canvas(output, pagesize=(240, 180))
+    document.drawImage(
+        ImageReader(io.BytesIO(image.getvalue())),
+        20,
+        20,
+        width=190,
+        height=130,
+        mask="auto",
+    )
+    document.save()
+
+    extracted = extract_document_images("alpha.pdf", output.getvalue())
+
+    assert len(extracted.assets) == 1
+    asset = extracted.assets[0]
+    assert asset.pdf_object_id is not None
+    assert asset.pdf_smask_object_id is not None
+    assert asset.pdf_is_soft_mask is False
+    assert asset.pdf_is_image_mask is False
+    assert asset.pdf_color_space == "/DeviceRGB"
+    assert asset.pdf_bits_per_component == 8
+
+
 def test_pdf_rejects_malformed_encrypted_and_oversized_inputs(monkeypatch):
     _assert_error("invalid", "broken.pdf", b"%PDF-1.7\nnot a PDF")
 

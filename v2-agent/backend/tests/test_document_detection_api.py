@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import io
 import sys
 import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+import numpy as np
+from PIL import Image
 import pytest
 
 
@@ -44,6 +47,98 @@ def _consent() -> dict[str, str]:
         "terms_sha256": "619aee74677629f4f5e2c4ccbaa99c458671086de45c0a586e76c8c8c062d2c5",
         "privacy_sha256": "e2dd0904fbbccef7df74168ede051da7a93029f00b072d0a5f1bd41b7ebf826c",
     }
+
+
+def _png(array: np.ndarray) -> bytes:
+    output = io.BytesIO()
+    Image.fromarray(array.astype(np.uint8), mode="RGB").save(output, "PNG")
+    return output.getvalue()
+
+
+def test_document_router_preview_does_not_call_detection_model(document_client, monkeypatch):
+    main, client = document_client
+    from app.document_images import DocumentExtraction, DocumentImageAsset
+
+    uniform = _png(np.full((180, 240, 3), 150, dtype=np.uint8))
+    random = np.random.default_rng(7)
+    photo = _png(random.integers(0, 256, size=(240, 360, 3), dtype=np.uint8))
+    extraction = DocumentExtraction(
+        filename="router.pdf",
+        page_count=1,
+        warnings=[],
+        assets=[
+            DocumentImageAsset(1, uniform, "image/png", 240, 180, hashlib.sha256(uniform).hexdigest(), "pdf_embedded", 1, None, 1, None),
+            DocumentImageAsset(2, photo, "image/png", 360, 240, hashlib.sha256(photo).hexdigest(), "pdf_embedded", 1, None, 2, None),
+        ],
+    )
+    monkeypatch.setattr(main.document_images, "extract_document_images", lambda _name, _data: extraction)
+
+    async def forbidden_model_call(*_args, **_kwargs):
+        raise AssertionError("Router preview must not call the detection model")
+
+    monkeypatch.setattr(main, "_analyze_document_asset", forbidden_model_call)
+    response = client.post(
+        "/api/document-router/preview",
+        files={"file": ("router.pdf", b"%PDF-router-fixture", "application/pdf")},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"] == {
+        "extracted": 2,
+        "detect": 1,
+        "skip": 1,
+        "uncertain": 0,
+        "recommendedModelCalls": 1,
+        "modelCallsAvoided": 1,
+    }
+    assert [item["router"]["route"] for item in payload["assets"]] == ["skip", "detect"]
+    assert all(item["preview"].startswith("data:image/") for item in payload["assets"])
+
+
+def test_document_task_skips_high_confidence_router_objects(document_client, monkeypatch):
+    main, client = document_client
+    from app.document_images import DocumentExtraction, DocumentImageAsset
+
+    uniform = _png(np.full((180, 240, 3), 150, dtype=np.uint8))
+    extraction = DocumentExtraction(
+        filename="background.docx",
+        page_count=None,
+        warnings=[],
+        assets=[
+            DocumentImageAsset(1, uniform, "image/png", 240, 180, hashlib.sha256(uniform).hexdigest(), "docx_body", None, "word/document.xml", 1, None),
+        ],
+    )
+    monkeypatch.setattr(main.document_images, "extract_document_images", lambda _name, _data: extraction)
+
+    async def forbidden_model_call(*_args, **_kwargs):
+        raise AssertionError("High-confidence skipped objects must not call the model")
+
+    monkeypatch.setattr(main, "_analyze_document_asset", forbidden_model_call)
+    response = client.post(
+        "/api/document-detections",
+        data=_consent(),
+        files={"file": ("background.docx", b"PK\x03\x04fixture", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+        headers={"Idempotency-Key": "document-router-skip-001"},
+    )
+    assert response.status_code == 202
+    task = response.json()
+    token = task["accessToken"]
+    deadline = time.monotonic() + 3
+    while task["status"] in {"queued", "running"} and time.monotonic() < deadline:
+        task = client.get(
+            f"/api/document-detections/{task['id']}?wait=1&assetLimit=100",
+            headers={"X-Document-Task-Token": token},
+        ).json()
+
+    assert task["status"] == "completed"
+    assert task["completed"] == 1
+    assert task["succeeded"] == 0
+    assert task["failed"] == 0
+    assert task["skipped"] == 1
+    assert task["routerSummary"]["modelCallsAvoided"] == 1
+    assert task["assets"][0]["status"] == "skipped"
+    assert task["assets"][0]["router"]["category"] == "uniform_layer"
 
 
 def test_document_detection_runs_as_owned_parent_task(document_client, monkeypatch):

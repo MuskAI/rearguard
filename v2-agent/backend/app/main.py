@@ -36,6 +36,7 @@ from . import (
     detector,
     document_images,
     document_jobs,
+    document_router,
     evidence_manifest_v2,
     evidence_probability,
     privacy_erasure_ledger,
@@ -192,6 +193,7 @@ PROTECTED_ENDPOINTS = [
 DEVELOPER_PROTECTED_ENDPOINTS = [
     "/api/detect",
     "/api/document-detections",
+    "/api/document-router/preview",
     "/api/forensics",
     "/api/provenance",
 ]
@@ -289,6 +291,7 @@ async def prevent_sensitive_response_caching(request: Request, call_next):
         "/api/admin",
         "/api/collaboration-inquiries",
         "/api/document-detections",
+        "/api/document-router",
         "/api/metrics",
     )
     if request.url.path.startswith(sensitive_prefixes):
@@ -1880,6 +1883,7 @@ async def _analyze_document_asset(task_id: str, filename: str, data: bytes, acto
 def _document_summary(assets: list[dict]) -> dict:
     completed = [item for item in assets if item.get("status") == "completed"]
     failed = [item for item in assets if item.get("status") == "failed"]
+    skipped = [item for item in assets if item.get("status") == "skipped"]
     fake = [item for item in completed if item.get("verdict") != "real"]
     real = [item for item in completed if item.get("verdict") == "real"]
     probabilities = [float(item.get("aiProbability") or 0) for item in completed]
@@ -1889,6 +1893,7 @@ def _document_summary(assets: list[dict]) -> dict:
             "verdictLabel": "未形成图像结论",
             "realCount": 0,
             "fakeCount": 0,
+            "skipCount": len(skipped),
             "averageAiProbability": None,
         }
     if failed and not fake:
@@ -1902,6 +1907,7 @@ def _document_summary(assets: list[dict]) -> dict:
         "verdictLabel": verdict_label,
         "realCount": len(real),
         "fakeCount": len(fake),
+        "skipCount": len(skipped),
         "averageAiProbability": round(sum(probabilities) / len(probabilities), 4),
     }
 
@@ -1926,6 +1932,14 @@ async def _process_document_task(task_id: str) -> None:
             str(task.get("filename") or "document"),
             data,
         )
+        router_decisions = {
+            int(asset.ordinal): await run_in_threadpool(document_router.route_document_asset, asset)
+            for asset in extraction.assets
+        }
+        router_counts = {
+            route: sum(1 for decision in router_decisions.values() if decision.route == route)
+            for route in ("detect", "skip", "uncertain")
+        }
         await run_in_threadpool(document_jobs.reconcile, task_id)
         existing_assets = await run_in_threadpool(document_jobs.list_assets, task_id)
         existing_ordinals = {int(item.get("ordinal") or 0) for item in existing_assets}
@@ -1936,6 +1950,13 @@ async def _process_document_task(task_id: str) -> None:
             pageCount=extraction.page_count,
             discovered=len(extraction.assets),
             warnings=list(extraction.warnings),
+            routerSummary={
+                "version": "document-router-rules-v1",
+                "detect": router_counts["detect"],
+                "skip": router_counts["skip"],
+                "uncertain": router_counts["uncertain"],
+                "modelCallsAvoided": router_counts["skip"],
+            },
         )
         results_by_sha = {
             str(item.get("sha256") or ""): item
@@ -1959,6 +1980,14 @@ async def _process_document_task(task_id: str) -> None:
                 "height": int(extracted.height),
                 "sha256": extracted.sha256,
                 "duplicateOf": extracted.duplicate_of,
+                "pdfObjectId": extracted.pdf_object_id,
+                "pdfSoftMaskObjectId": extracted.pdf_smask_object_id,
+                "pdfIsSoftMask": extracted.pdf_is_soft_mask,
+                "pdfIsImageMask": extracted.pdf_is_image_mask,
+                "pdfColorSpace": extracted.pdf_color_space,
+                "pdfBitsPerComponent": extracted.pdf_bits_per_component,
+                "pdfFilters": list(extracted.pdf_filters),
+                "router": router_decisions[int(extracted.ordinal)].public_payload(),
             }
             duplicate = results_by_sha.get(extracted.sha256)
             if duplicate:
@@ -1968,6 +1997,16 @@ async def _process_document_task(task_id: str) -> None:
                     if key not in {"ordinal", "pageNumber", "partPath", "occurrenceIndex", "sourceKind", "duplicateOf"}
                 }
                 item = {**cloned, **base, "reused": True}
+                await run_in_threadpool(document_jobs.add_asset, task_id, item)
+                continue
+            decision = router_decisions[int(extracted.ordinal)]
+            if not decision.should_detect:
+                item = {
+                    **base,
+                    "status": "skipped",
+                    "preview": _image_data_uri(extracted.data, "image", max_side=520, quality=68),
+                    "explanation": "；".join(decision.reasons),
+                }
                 await run_in_threadpool(document_jobs.add_asset, task_id, item)
                 continue
             filename = _document_asset_filename(str(task.get("filename") or "document"), extracted.ordinal, extracted.mime)
@@ -2001,7 +2040,8 @@ async def _process_document_task(task_id: str) -> None:
         assets = await run_in_threadpool(document_jobs.list_assets, task_id)
         succeeded = sum(1 for item in assets if item.get("status") == "completed")
         failed = sum(1 for item in assets if item.get("status") == "failed")
-        final_status = "partial_success" if succeeded and failed else "completed" if succeeded else "failed"
+        skipped = sum(1 for item in assets if item.get("status") == "skipped")
+        final_status = "partial_success" if succeeded and failed else "completed" if succeeded or skipped else "failed"
         final_error = None
         if not extraction.assets:
             final_error = "文档中没有可提取的图片"
@@ -2051,6 +2091,82 @@ def _schedule_document_task(task_id: str) -> None:
     if existing and not existing.done():
         return
     _DOCUMENT_WORKERS[task_id] = asyncio.create_task(_process_document_task(task_id))
+
+
+@app.post("/api/document-router/preview")
+async def preview_document_router(
+    request: Request,
+    file: UploadFile = File(...),
+) -> dict:
+    actor = await _require_developer_access(request)
+    _require_session_csrf(request, actor)
+    data = await _read_upload(file)
+    if not data:
+        raise HTTPException(status_code=400, detail="空文件")
+    filename = os.path.basename(file.filename or "document")
+    extension = os.path.splitext(filename)[1].lower()
+    if extension not in {".pdf", ".docx"}:
+        raise HTTPException(status_code=415, detail="Router Lab 目前支持 PDF 和 DOCX")
+
+    started = time.perf_counter()
+    try:
+        extraction = await run_in_threadpool(
+            document_images.extract_document_images,
+            filename,
+            data,
+        )
+    except document_images.DocumentImageError as exc:
+        status = 415 if exc.code == "unsupported" else 413 if exc.code == "limit" else 400
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+    routed_assets = []
+    for asset in extraction.assets:
+        decision = await run_in_threadpool(document_router.route_document_asset, asset)
+        routed_assets.append({
+            "ordinal": int(asset.ordinal),
+            "pageNumber": asset.page_number,
+            "partPath": asset.part_path,
+            "occurrenceIndex": int(asset.occurrence_index),
+            "sourceKind": asset.source_kind,
+            "mime": asset.mime,
+            "width": int(asset.width),
+            "height": int(asset.height),
+            "sha256": asset.sha256,
+            "duplicateOf": asset.duplicate_of,
+            "pdfObjectId": asset.pdf_object_id,
+            "pdfSoftMaskObjectId": asset.pdf_smask_object_id,
+            "pdfIsSoftMask": asset.pdf_is_soft_mask,
+            "pdfIsImageMask": asset.pdf_is_image_mask,
+            "pdfColorSpace": asset.pdf_color_space,
+            "pdfBitsPerComponent": asset.pdf_bits_per_component,
+            "pdfFilters": list(asset.pdf_filters),
+            "preview": _image_data_uri(asset.data, "image", max_side=520, quality=72),
+            "router": decision.public_payload(),
+        })
+
+    counts = {
+        route: sum(1 for item in routed_assets if item["router"]["route"] == route)
+        for route in ("detect", "skip", "uncertain")
+    }
+    return {
+        "filename": filename,
+        "mime": file.content_type or "application/octet-stream",
+        "size": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "pageCount": extraction.page_count,
+        "warnings": extraction.warnings,
+        "routerVersion": "document-router-rules-v1",
+        "elapsedMs": int((time.perf_counter() - started) * 1000),
+        "summary": {
+            "extracted": len(routed_assets),
+            "detect": counts["detect"],
+            "skip": counts["skip"],
+            "uncertain": counts["uncertain"],
+            "recommendedModelCalls": counts["detect"] + counts["uncertain"],
+            "modelCallsAvoided": counts["skip"],
+        },
+        "assets": routed_assets,
+    }
 
 
 @app.post("/api/document-detections", status_code=202)

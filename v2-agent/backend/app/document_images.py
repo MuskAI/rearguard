@@ -101,6 +101,13 @@ class DocumentImageAsset:
     part_path: str | None
     occurrence_index: int
     duplicate_of: int | None
+    pdf_object_id: int | None = None
+    pdf_smask_object_id: int | None = None
+    pdf_is_soft_mask: bool = False
+    pdf_is_image_mask: bool = False
+    pdf_color_space: str | None = None
+    pdf_bits_per_component: int | None = None
+    pdf_filters: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,6 +213,13 @@ class _AssetCollector:
         page_number: int | None,
         part_path: str | None,
         occurrence_index: int,
+        pdf_object_id: int | None = None,
+        pdf_smask_object_id: int | None = None,
+        pdf_is_soft_mask: bool = False,
+        pdf_is_image_mask: bool = False,
+        pdf_color_space: str | None = None,
+        pdf_bits_per_component: int | None = None,
+        pdf_filters: tuple[str, ...] = (),
     ) -> None:
         _check_deadline(self.deadline)
         if len(self.assets) >= self.limits.max_images:
@@ -231,9 +245,51 @@ class _AssetCollector:
                 part_path=part_path,
                 occurrence_index=occurrence_index,
                 duplicate_of=duplicate_of,
+                pdf_object_id=pdf_object_id,
+                pdf_smask_object_id=pdf_smask_object_id,
+                pdf_is_soft_mask=pdf_is_soft_mask,
+                pdf_is_image_mask=pdf_is_image_mask,
+                pdf_color_space=pdf_color_space,
+                pdf_bits_per_component=pdf_bits_per_component,
+                pdf_filters=pdf_filters,
             )
         )
         self.total_bytes = next_total
+
+
+def _pdf_image_metadata(image_file: object, soft_mask_object_ids: set[int]) -> dict:
+    reference = getattr(image_file, "indirect_reference", None)
+    try:
+        image_object = reference.get_object() if reference is not None else None
+    except (AttributeError, KeyError, TypeError, ValueError):
+        image_object = None
+    if not hasattr(image_object, "get"):
+        return {}
+
+    object_id = getattr(reference, "idnum", None)
+    smask = image_object.get("/SMask")
+    smask_object_id = getattr(smask, "idnum", None)
+    raw_filters = image_object.get("/Filter")
+    if raw_filters is None:
+        filters: tuple[str, ...] = ()
+    elif isinstance(raw_filters, (list, tuple)):
+        filters = tuple(str(item) for item in raw_filters)
+    else:
+        filters = (str(raw_filters),)
+    bits = image_object.get("/BitsPerComponent")
+    try:
+        bits_per_component = int(bits) if bits is not None else None
+    except (TypeError, ValueError):
+        bits_per_component = None
+    return {
+        "pdf_object_id": int(object_id) if object_id is not None else None,
+        "pdf_smask_object_id": int(smask_object_id) if smask_object_id is not None else None,
+        "pdf_is_soft_mask": bool(object_id is not None and int(object_id) in soft_mask_object_ids),
+        "pdf_is_image_mask": bool(image_object.get("/ImageMask", False)),
+        "pdf_color_space": str(image_object.get("/ColorSpace")) if image_object.get("/ColorSpace") is not None else None,
+        "pdf_bits_per_component": bits_per_component,
+        "pdf_filters": filters,
+    }
 
 
 def _apply_pdf_resource_limits(limits: _Limits) -> None:
@@ -279,17 +335,28 @@ def _extract_pdf_untrusted(filename: str, data: bytes, limits: _Limits) -> Docum
         try:
             page = reader.pages[page_index]
             image_keys = list(page.images.keys())
+            image_entries = [(image_key, page.images[image_key]) for image_key in image_keys]
         except (PdfReadError, ValueError, TypeError, KeyError, OSError, AttributeError, RecursionError):
             _append_warning(
                 extraction_warnings,
                 f"PDF page {page_number} image resources could not be inspected",
             )
             continue
+        soft_mask_object_ids: set[int] = set()
+        for _image_key, image_file in image_entries:
+            reference = getattr(image_file, "indirect_reference", None)
+            try:
+                image_object = reference.get_object() if reference is not None else None
+                smask = image_object.get("/SMask") if hasattr(image_object, "get") else None
+                smask_object_id = getattr(smask, "idnum", None)
+                if smask_object_id is not None:
+                    soft_mask_object_ids.add(int(smask_object_id))
+            except (AttributeError, KeyError, TypeError, ValueError):
+                continue
         failed_objects = 0
-        for occurrence_index, image_key in enumerate(image_keys, start=1):
+        for occurrence_index, (_image_key, image_file) in enumerate(image_entries, start=1):
             _check_deadline(deadline)
             try:
-                image_file = page.images[image_key]
                 image_data = bytes(image_file.data)
                 inspected = _inspect_raster(
                     image_data,
@@ -314,6 +381,7 @@ def _extract_pdf_untrusted(filename: str, data: bytes, limits: _Limits) -> Docum
                 page_number=page_number,
                 part_path=None,
                 occurrence_index=occurrence_index,
+                **_pdf_image_metadata(image_file, soft_mask_object_ids),
             )
         if failed_objects:
             _append_warning(

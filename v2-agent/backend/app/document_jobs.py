@@ -126,6 +126,7 @@ def create(
         "completed": 0,
         "succeeded": 0,
         "failed": 0,
+        "skipped": 0,
         "warnings": [],
         "summary": None,
         "error": None,
@@ -233,17 +234,23 @@ def add_asset(task_id: str, asset: dict[str, Any]) -> dict[str, Any]:
         _atomic_write(path, asset)
         succeeded = int(task.get("succeeded") or 0)
         failed = int(task.get("failed") or 0)
+        skipped = int(task.get("skipped") or 0)
         if previous and previous.get("status") == "completed":
             succeeded = max(0, succeeded - 1)
         elif previous and previous.get("status") == "failed":
             failed = max(0, failed - 1)
+        elif previous and previous.get("status") == "skipped":
+            skipped = max(0, skipped - 1)
         if asset.get("status") == "completed":
             succeeded += 1
         elif asset.get("status") == "failed":
             failed += 1
-        task["completed"] = succeeded + failed
+        elif asset.get("status") == "skipped":
+            skipped += 1
+        task["completed"] = succeeded + failed + skipped
         task["succeeded"] = succeeded
         task["failed"] = failed
+        task["skipped"] = skipped
         task["updatedAt"] = _now()
         _atomic_write(_job_path(task_id), task)
         return task
@@ -259,6 +266,7 @@ def reconcile(task_id: str) -> dict[str, Any]:
         task["completed"] = len(assets)
         task["succeeded"] = sum(1 for item in assets if item.get("status") == "completed")
         task["failed"] = sum(1 for item in assets if item.get("status") == "failed")
+        task["skipped"] = sum(1 for item in assets if item.get("status") == "skipped")
         task["updatedAt"] = _now()
         _atomic_write(_job_path(task_id), task)
         return task

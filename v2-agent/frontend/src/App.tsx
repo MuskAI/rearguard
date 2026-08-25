@@ -56,6 +56,7 @@ import AuthDialog from "./components/AuthDialog";
 import BrandArtIcon from "./components/BrandArtIcon";
 import { AgentAvatar, AnalysisModeMark, CapabilityIcon } from "./components/BrandSystem";
 import DeveloperPlatform from "./components/DeveloperPlatform";
+import DocumentRouterLab from "./components/DocumentRouterLab";
 import DocumentBatchResult from "./components/DocumentBatchResult";
 import HuijianBrand from "./components/HuijianBrand";
 import OfficialHome from "./components/OfficialHome";
@@ -73,6 +74,7 @@ import "./c-scheme.css";
 import "./playground.css";
 import "./report-qa.css";
 import "./about.css";
+import "./router-lab.css";
 
 const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 256 * 1024 * 1024;
@@ -82,7 +84,7 @@ const DOCUMENT_TASK_SESSION_KEY = "huijian-active-document-task";
 const ACCEPTED_FILES = "image/jpeg,image/png,image/webp,image/bmp,image/gif,image/heic,image/heif,.heic,.heif,video/mp4,video/quicktime,video/webm,application/pdf,.txt,.md,.csv,.json,.log,.docx,.pdf,.mp4,.mov,.webm";
 
 type UploadKind = "image" | "video" | "audio" | "document" | "unknown";
-type AppView = "home" | "workspace" | "developer" | "playground" | "about";
+type AppView = "home" | "workspace" | "developer" | "playground" | "about" | "router";
 type FallbackOffer = {
   file: File;
   previewUrl?: string;
@@ -98,6 +100,7 @@ function documentSessionOwner(account: AccountUser | null) {
 
 function initialAppView(): AppView {
   const params = new URLSearchParams(window.location.search);
+  if (params.get("router") === "1") return "router";
   if (params.get("about") === "1") return "about";
   if (params.get("playground") === "1") return "playground";
   if (params.get("developer") === "1") return "developer";
@@ -484,6 +487,8 @@ export default function App() {
       ? "慧鉴AI - 数字内容鉴伪"
       : view === "about"
         ? "关于与开放合作 - 慧鉴AI"
+      : view === "router"
+        ? "图像送检 Router Lab - 慧鉴AI"
       : view === "developer"
         ? "开发者平台 - 慧鉴AI"
         : view === "playground"
@@ -500,6 +505,8 @@ export default function App() {
         ? "#official-home-title"
         : view === "about"
           ? "#about-title"
+        : view === "router"
+          ? "#router-lab-title"
         : view === "developer"
           ? ".developer-topbar h1"
           : view === "playground"
@@ -511,7 +518,7 @@ export default function App() {
 
   useEffect(() => {
     if (!analyticsEnabled || !authReady) return;
-    const page = view === "home" ? "home" : view === "about" ? "about" : view === "developer" ? "developer" : view === "playground" ? "playground" : "workspace";
+    const page = view === "home" ? "home" : view === "about" ? "about" : view === "developer" || view === "router" ? "developer" : view === "playground" ? "playground" : "workspace";
     const trackingKey = `${page}:${user?.Userid ?? "guest"}`;
     if (lastTrackedPageRef.current === trackingKey) return;
     const forceNew = lastTrackedPageRef.current !== null;
@@ -595,6 +602,7 @@ export default function App() {
     url.searchParams.delete("developerTab");
     url.searchParams.delete("playground");
     url.searchParams.delete("about");
+    url.searchParams.delete("router");
     if (nextView === "workspace") {
       url.searchParams.set("workspace", "1");
       url.hash = "";
@@ -607,6 +615,9 @@ export default function App() {
     } else if (nextView === "about") {
       url.searchParams.set("about", "1");
       url.hash = "about";
+    } else if (nextView === "router") {
+      url.searchParams.set("router", "1");
+      url.hash = "";
     } else {
       url.hash = "home";
     }
@@ -619,6 +630,7 @@ export default function App() {
     url.searchParams.delete("workspace");
     url.searchParams.delete("playground");
     url.searchParams.delete("about");
+    url.searchParams.delete("router");
     url.searchParams.set("developer", "1");
     url.searchParams.set("developerTab", tab);
     url.hash = "";
@@ -1315,6 +1327,11 @@ export default function App() {
           onHome={() => navigateToView("home")}
           onWorkspace={() => navigateToView("workspace")}
           onLogout={logout}
+        />
+      ) : view === "router" ? (
+        <DocumentRouterLab
+          onHome={() => navigateToView("home")}
+          onWorkspace={() => navigateToView("workspace")}
         />
       ) : view === "playground" ? (
         <Playground

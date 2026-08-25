@@ -812,6 +812,126 @@ test("PDF 文档会展示逐图检测结果并支持放大复核", async ({ page
   await expectNoHorizontalOverflow(page);
 });
 
+test("Router Lab 在手机端展示逐图依据并保持可滚动", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installBaseMocks(page);
+  const gray = `data:image/svg+xml;base64,${Buffer.from(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="220"><rect width="320" height="220" fill="#999"/></svg>',
+  ).toString("base64")}`;
+  const photo = `data:image/svg+xml;base64,${Buffer.from(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="380" height="260"><rect width="380" height="260" fill="#dfe9f7"/><circle cx="190" cy="130" r="88" fill="#2869df"/></svg>',
+  ).toString("base64")}`;
+  await page.route(/\/v2-api\/document-router\/preview(?:\?|$)/, (route) => route.fulfill({
+    json: {
+      filename: "router.pdf",
+      mime: "application/pdf",
+      size: 327680,
+      sha256: "a".repeat(64),
+      pageCount: 2,
+      warnings: [],
+      routerVersion: "document-router-rules-v1",
+      elapsedMs: 188,
+      summary: {
+        extracted: 3,
+        detect: 1,
+        skip: 1,
+        uncertain: 1,
+        recommendedModelCalls: 2,
+        modelCallsAvoided: 1,
+      },
+      assets: [
+        {
+          ordinal: 1,
+          pageNumber: 1,
+          occurrenceIndex: 1,
+          sourceKind: "pdf_embedded",
+          mime: "image/png",
+          width: 320,
+          height: 220,
+          sha256: "b".repeat(64),
+          preview: gray,
+          router: {
+            route: "skip",
+            shouldDetect: false,
+            confidence: 0.997,
+            category: "uniform_layer",
+            categoryLabel: "纯色或低信息图层",
+            reasons: ["主色占比为 100.0%", "更接近背景、蒙版或占位块"],
+            features: { entropy: 0, dominantColorRatio: 1, width: 320, height: 220 },
+            version: "document-router-rules-v1",
+          },
+        },
+        {
+          ordinal: 2,
+          pageNumber: 1,
+          occurrenceIndex: 2,
+          sourceKind: "pdf_embedded",
+          mime: "image/png",
+          width: 380,
+          height: 260,
+          sha256: "c".repeat(64),
+          preview: photo,
+          router: {
+            route: "detect",
+            shouldDetect: true,
+            confidence: 0.9,
+            category: "photo_or_artwork",
+            categoryLabel: "照片或完整视觉作品",
+            reasons: ["具备可分析细节", "纹理、边缘和色彩分布符合完整视觉内容"],
+            features: { entropy: 4.8, dominantColorRatio: 0.3, width: 380, height: 260 },
+            version: "document-router-rules-v1",
+          },
+        },
+        {
+          ordinal: 3,
+          pageNumber: 2,
+          occurrenceIndex: 1,
+          sourceKind: "pdf_embedded",
+          mime: "image/png",
+          width: 260,
+          height: 180,
+          sha256: "d".repeat(64),
+          preview: gray,
+          router: {
+            route: "uncertain",
+            shouldDetect: true,
+            confidence: 0.66,
+            category: "ambiguous_visual",
+            categoryLabel: "边界视觉内容",
+            reasons: ["当前规则不足以确认类型", "正式流程默认继续进入快速检测"],
+            features: { entropy: 2.4, dominantColorRatio: 0.8, width: 260, height: 180 },
+            version: "document-router-rules-v1",
+          },
+        },
+      ],
+    },
+  }));
+
+  await page.goto("/?router=1");
+  await page
+    .getByRole("region", { name: "上传测试文档" })
+    .locator('input[type="file"]')
+    .setInputFiles({
+    name: "router.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.from("%PDF-router-layout"),
+  });
+  await page.getByRole("button", { name: "开始 Router 测试" }).click();
+
+  await expect(page.getByText("减少 1 次模型调用")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "纯色或低信息图层" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "照片或完整视觉作品" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "边界视觉内容" })).toBeVisible();
+  const geometry = await page.locator(".router-lab-page").evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }));
+  expect(geometry.scrollWidth).toBe(geometry.clientWidth);
+  expect(geometry.scrollHeight).toBeGreaterThan(geometry.clientHeight);
+});
+
 test("刷新工作台会恢复文档结果而不会重新上传", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.addInitScript(() => {

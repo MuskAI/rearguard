@@ -839,7 +839,7 @@ export interface DocumentDetectionAsset {
   sha256: string;
   duplicateOf?: number | null;
   reused?: boolean;
-  status: "completed" | "failed";
+  status: "completed" | "failed" | "skipped";
   preview?: string | null;
   verdict?: Verdict;
   verdictLabel?: string;
@@ -853,6 +853,14 @@ export interface DocumentDetectionAsset {
   synthid?: SynthIDResult;
   elapsedMs?: number;
   error?: string;
+  router?: DocumentRouterDecision;
+  pdfObjectId?: number | null;
+  pdfSoftMaskObjectId?: number | null;
+  pdfIsSoftMask?: boolean;
+  pdfIsImageMask?: boolean;
+  pdfColorSpace?: string | null;
+  pdfBitsPerComponent?: number | null;
+  pdfFilters?: string[];
 }
 
 export interface DocumentDetectionTask {
@@ -870,6 +878,7 @@ export interface DocumentDetectionTask {
   completed: number;
   succeeded: number;
   failed: number;
+  skipped?: number;
   warnings: string[];
   assets: DocumentDetectionAsset[];
   assetOffset: number;
@@ -881,7 +890,15 @@ export interface DocumentDetectionTask {
     verdictLabel: string;
     realCount: number;
     fakeCount: number;
+    skipCount?: number;
     averageAiProbability: number | null;
+  } | null;
+  routerSummary?: {
+    version: string;
+    detect: number;
+    skip: number;
+    uncertain: number;
+    modelCallsAvoided: number;
   } | null;
   error?: string | null;
   createdAt: string;
@@ -931,6 +948,72 @@ export async function cancelDocumentDetection(taskId: string, accessToken: strin
     headers: accessToken ? { "X-Document-Task-Token": accessToken } : undefined,
   }));
   return await parseJson(res, `取消文档任务失败 (${res.status})`) as DocumentDetectionTask;
+}
+
+export type DocumentRouterRoute = "detect" | "skip" | "uncertain";
+
+export interface DocumentRouterDecision {
+  route: DocumentRouterRoute;
+  shouldDetect: boolean;
+  confidence: number;
+  category: string;
+  categoryLabel: string;
+  reasons: string[];
+  features: Record<string, string | number | boolean | null>;
+  version: string;
+}
+
+export interface DocumentRouterAsset {
+  ordinal: number;
+  pageNumber?: number | null;
+  partPath?: string | null;
+  occurrenceIndex: number;
+  sourceKind: string;
+  mime: string;
+  width: number;
+  height: number;
+  sha256: string;
+  duplicateOf?: number | null;
+  pdfObjectId?: number | null;
+  pdfSoftMaskObjectId?: number | null;
+  pdfIsSoftMask?: boolean;
+  pdfIsImageMask?: boolean;
+  pdfColorSpace?: string | null;
+  pdfBitsPerComponent?: number | null;
+  pdfFilters?: string[];
+  preview: string;
+  router: DocumentRouterDecision;
+}
+
+export interface DocumentRouterPreview {
+  filename: string;
+  mime: string;
+  size: number;
+  sha256: string;
+  pageCount?: number | null;
+  warnings: string[];
+  routerVersion: string;
+  elapsedMs: number;
+  summary: {
+    extracted: number;
+    detect: number;
+    skip: number;
+    uncertain: number;
+    recommendedModelCalls: number;
+    modelCallsAvoided: number;
+  };
+  assets: DocumentRouterAsset[];
+}
+
+export async function previewDocumentRouter(file: File, signal?: AbortSignal): Promise<DocumentRouterPreview> {
+  const form = new FormData();
+  form.append("file", file);
+  const response = await fetch("/v2-api/document-router/preview", withSession({
+    method: "POST",
+    body: form,
+    signal,
+  }));
+  return await parseJson(response, `Router 预览失败 (${response.status})`) as DocumentRouterPreview;
 }
 
 export interface AccountUser {
