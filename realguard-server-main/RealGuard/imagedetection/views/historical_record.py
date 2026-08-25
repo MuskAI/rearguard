@@ -112,7 +112,7 @@ def history_video_detect():
     real_count = 0
     if result:
         for item in result:
-            final_label = binary_video_final_label(item.get('final_label'), item.get('fake_percentage'))
+            final_label = binary_video_final_label(item.get('final_label'), item.get('fake'))
             if 'AI' in final_label:
                 ai_count += 1
             else:

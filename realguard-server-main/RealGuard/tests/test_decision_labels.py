@@ -1,7 +1,10 @@
 from imagedetection.decision_labels import (
+    AI_GENERATED_VIDEO_LABEL,
     AI_GENERATED_LABEL,
     REAL_IMAGE_LABEL,
+    REAL_VIDEO_LABEL,
     binary_final_label,
+    binary_video_final_label,
     normalized_fake_probability,
 )
 from imagedetection.views import report_pdf
@@ -22,6 +25,12 @@ def test_binary_label_normalizes_specialized_risk_labels():
 def test_explicit_binary_label_is_preserved():
     assert binary_final_label(AI_GENERATED_LABEL, 0.1) == AI_GENERATED_LABEL
     assert binary_final_label(REAL_IMAGE_LABEL, 0.9) == REAL_IMAGE_LABEL
+
+
+def test_video_label_uses_video_specific_copy():
+    assert binary_video_final_label("fake", 0.1) == AI_GENERATED_VIDEO_LABEL
+    assert binary_video_final_label("真实视频", 0.9) == REAL_VIDEO_LABEL
+    assert binary_video_final_label("需人工复核", 18) == REAL_VIDEO_LABEL
 
 
 def test_probability_normalization_accepts_percent_values():

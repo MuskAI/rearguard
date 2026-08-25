@@ -24,6 +24,7 @@ a `Retry-After` header instead of occupying memory indefinitely.
 - `image_preprocessing.py` -> `/home/ymk/RealGuard/AIGC_image_detection_system/imagedetection/Agent/tools/AIGC_Detection/image_preprocessing.py`
 - `model_decision_policy.py` -> `/home/ymk/RealGuard/AIGC_image_detection_system/imagedetection/Agent/tools/AIGC_Detection/model_decision_policy.py`
 - `remote_inference.py` -> `/home/ymk/RealGuard/AIGC_image_detection_system/imagedetection/views/remote_inference.py`
+- `video_detection.py` -> `/home/ymk/RealGuard/AIGC_image_detection_system/imagedetection/views/video_detection.py`
 - `realguard-detection.service` -> `/etc/systemd/system/realguard-detection.service`
 - `realguard-detection-gpu.conf` -> `/etc/systemd/system/realguard-detection.service.d/gpu.conf`
 - `realguard-detection-shared-precheck.conf` -> `/etc/systemd/system/realguard-detection.service.d/shared-precheck.conf`

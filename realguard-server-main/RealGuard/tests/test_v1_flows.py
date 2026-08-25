@@ -2779,6 +2779,7 @@ def test_video_detect_logged_in_builds_public_media_url(client, monkeypatch):
                 "code": 200,
                 "data": {
                     "data_itemid": 21,
+                    "filename": "remote-video.mp4",
                     "fake_percentage": 83.0,
                     "real_percentage": 17.0,
                     "confidence": 0.91,
@@ -2803,15 +2804,15 @@ def test_video_detect_logged_in_builds_public_media_url(client, monkeypatch):
 
     monkeypatch.setattr(
         detection,
-        "claim_detection_record_owner",
-        lambda table, itemid, account_uuid, *args: account_uuid == ACCOUNT_UUID,
+        "excute_detection_sql_lastid",
+        lambda sql, params=None: 21,
     )
     monkeypatch.setattr(
         detection,
         "excute_detection_sql",
         lambda sql, params=None, fetch=True: [{
             "itemid": 21,
-            "filename": "video.mp4",
+            "filename": "remote-video.mp4",
             "openid": "openid-1",
             "phone": "13800000000",
         }] if sql == f"SELECT * FROM video_data WHERE itemid = %s AND ({OWNER_WHERE}) LIMIT 1" else [],
@@ -2831,7 +2832,71 @@ def test_video_detect_logged_in_builds_public_media_url(client, monkeypatch):
     assert payload["confidence"] == "低"
     assert payload["fake_percentage"] is None
     assert payload["decisionStatus"] == "review_only"
+    assert payload["filename"] == "remote-video.mp4"
     assert payload["video_url"] == "/api/media/video/21"
+
+
+def test_video_detect_rejects_backend_without_remote_media_reference(client, monkeypatch):
+    _login_session(client)
+    monkeypatch.setattr(
+        detection,
+        "_backend_post",
+        lambda *args, **kwargs: _FakeResponse({
+            "code": 200,
+            "data": {
+                "data_itemid": 22,
+                "fake_percentage": 20.0,
+                "final_label": "real",
+                "meta": {},
+            },
+        }),
+    )
+
+    response = client.post(
+        "/video_upload/detect",
+        data={"video_file": (BytesIO(b"fake-video"), "video.mp4"), "fast_mode": "1"},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 502
+    assert "媒体文件名" in response.get_json()["message"]
+
+
+def test_remote_video_result_is_archived_as_metadata_only(monkeypatch):
+    inserted = []
+    monkeypatch.setattr(detection, "_detection_database_user_id", lambda *args: 17)
+    monkeypatch.setattr(
+        detection,
+        "excute_detection_sql_lastid",
+        lambda sql, params=None: inserted.append((sql, params)) or 42,
+    )
+
+    itemid = detection._insert_remote_video_record(
+        {
+            "filename": "8bd475f9f66c4b98a847.mp4",
+            "fake_percentage": 18.0,
+            "final_label": "real",
+            "confidence": "低",
+            "frame_count": 3,
+            "meta": {
+                "file_size": "1.2 MB",
+                "duration": 4.0,
+                "resolution": "320x240",
+                "video_format": "MP4",
+            },
+        },
+        "openid-1",
+        "13800000000",
+        {"account_uuid": ACCOUNT_UUID},
+    )
+
+    assert itemid == 42
+    sql, params = inserted[0]
+    assert "INSERT INTO video_data" in sql
+    assert params[0] == "8bd475f9f66c4b98a847.mp4"
+    assert params[3] == 17
+    assert params[4] == ACCOUNT_UUID
+    assert params[7] == "真实视频"
 
 
 def test_video_media_uses_video_backend(monkeypatch):

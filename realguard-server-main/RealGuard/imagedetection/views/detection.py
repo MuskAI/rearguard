@@ -4127,6 +4127,52 @@ def image_report_api():
     )
 
 
+def _insert_remote_video_record(data, backend_openid, phone, user_info):
+    """Mirror video metadata locally while the source media remains on the GPU server."""
+    data = data or {}
+    raw_filename = str(data.get('filename') or '').strip()
+    filename = os.path.basename(raw_filename)
+    if not filename or filename != raw_filename:
+        raise RuntimeError('视频检测完成，但算法服务未返回可验证的媒体文件名')
+
+    meta = data.get('meta') if isinstance(data.get('meta'), dict) else {}
+    fake_pct = max(0.0, min(100.0, _to_float(data.get('fake_percentage'), 0.0)))
+    final_label = binary_video_final_label(data.get('final_label'), fake_pct)
+    explanation = str(data.get('explanation') or data.get('explantation') or '').strip()
+    d3_std = data.get('d3_std')
+    duration = meta.get('duration')
+    itemid = excute_detection_sql_lastid(
+        """
+        INSERT INTO video_data
+            (createtime, filename, openid, phone, Userid, owner_account_uuid,
+             fake, d3_std, final_label, confidence, encoder, frame_count,
+             explanation, file_size, duration, resolution, video_format)
+        VALUES (NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            filename,
+            backend_openid,
+            phone,
+            _detection_database_user_id(phone, backend_openid),
+            _account_uuid(user_info) or None,
+            fake_pct,
+            _to_float(d3_std, 0.0) if d3_std is not None else None,
+            final_label,
+            str(data.get('confidence') or '低')[:10],
+            str(data.get('encoder') or '')[:30],
+            max(0, int(_to_float(data.get('frame_count'), 0))),
+            safe_truncate(explanation, 500),
+            str(meta.get('file_size') or '')[:20],
+            _to_float(duration, 0.0) if duration not in (None, '') else None,
+            str(meta.get('resolution') or '')[:30],
+            str(meta.get('video_format') or '')[:20],
+        ),
+    )
+    if not itemid:
+        raise RuntimeError('视频检测完成，但历史记录归档失败')
+    return itemid
+
+
 @image_upload_blueprint.route('/video_upload/detect', methods=['POST'])
 def video_detect():
     user_info, is_guest, auth_error = _detection_actor()
@@ -4222,12 +4268,17 @@ def video_detect():
         return jsonify({'status': 'error', 'message': api_json.get('msg', '视频鉴伪失败')}), 400
 
     data = api_json.get('data') or {}
-    itemid = data.get('data_itemid')
-    account_uuid = _account_uuid(user_info)
-    if itemid and account_uuid and not claim_detection_record_owner('video_data', itemid, account_uuid):
+    try:
+        itemid = _insert_remote_video_record(
+            data,
+            backend_openid,
+            phone,
+            user_info,
+        )
+    except RuntimeError as exc:
         return jsonify({
             'status': 'error',
-            'message': '视频检测完成，但后端未返回可验证的账号归属；结果已拒绝展示',
+            'message': str(exc),
         }), 502
     fake_pct = _to_float(data.get('fake_percentage', 0), 0.0)
     conf_score = None
@@ -4248,10 +4299,13 @@ def video_detect():
     frame_count = data.get('frame_count', 0)
     d3_std = data.get('d3_std', None)
     encoder = data.get('encoder', '')
-    record = None
-    if itemid:
-        record = _load_detection_record('video_data', itemid)
-    video_file_url = _backend_static_url('video', record or {'openid': backend_openid, 'filename': ''})
+    record = _load_detection_record('video_data', itemid)
+    if not record:
+        return jsonify({
+            'status': 'error',
+            'message': '视频检测完成，但历史记录归属校验失败；结果已拒绝展示',
+        }), 502
+    video_file_url = _backend_static_url('video', record)
 
     _mark_guest_detection_used(is_guest)
     return jsonify({
@@ -4291,7 +4345,7 @@ def video_result_api():
     item = _load_detection_record('video_data', itemid)
     if not item:
         return jsonify({'status': 'error', 'message': '未找到该视频检测记录'}), 404
-    final_label = binary_video_final_label(item.get('final_label'), item.get('fake_percentage'))
+    final_label = binary_video_final_label(item.get('final_label'), item.get('fake'))
     return jsonify({
         'status': 'success',
         'result': {
@@ -4333,7 +4387,7 @@ def video_report_api():
     if not item:
         return jsonify({'status': 'error', 'message': '未找到该视频检测记录'}), 404
 
-    final_label = binary_video_final_label(item.get('final_label'), item.get('fake_percentage'))
+    final_label = binary_video_final_label(item.get('final_label'), item.get('fake'))
     result = {
         'itemid': item.get('itemid'),
         'filename': item.get('filename', ''),

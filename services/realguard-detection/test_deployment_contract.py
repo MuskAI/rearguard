@@ -13,6 +13,8 @@ def test_gpu_release_preflights_before_stopping_services():
 
     assert dependency_check < switch_started
     assert "model_decision_policy.py" in activate
+    assert "video_detection.py" in activate
+    assert "Video Detection API Ready" in activate
     assert '"$release_root/model/runtime.lock"' in activate
     assert '"$release_root/watermark/runtime.lock"' in activate
     assert '"$release_root/yolo/runtime.lock"' in activate
@@ -42,6 +44,7 @@ def test_gpu_deploy_recovers_public_worker_after_ambiguous_ssh_stop():
     assert attempt < activation
     assert "realguard-developer-worker.service.active" in deploy
     assert "model_decision_policy.py" in deploy
+    assert "video_detection.py" in deploy
     assert "runtime.lock" in deploy
     assert "realguard-web-tunnel.service" in deploy
     assert "finalize_gpu_release" not in deploy
@@ -101,11 +104,21 @@ def test_remote_watchdogs_restore_both_hosts_after_deployer_loss():
     assert "restore_unit_state" in gpu_rollback
     assert "previous_current" in gpu_rollback
     assert "realguard-detection.service" in gpu_rollback
+    assert "video_detection.py" in gpu_rollback
     assert "/var/lock/realguard-public-gpu-deploy.lock" in public_activate
     assert "/var/lock/realguard-public-gpu-deploy.lock" in public_rollback
     assert '"$release_base/.deploy.lock"' in activate
     assert '"$release_base/.deploy.lock"' in gpu_rollback
     assert "cleanup_remote_rollback_artifacts" not in deploy
+
+
+def test_video_detection_returns_the_remote_media_reference():
+    video = (ROOT / "services/realguard-detection/video_detection.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"filename": filename' in video
+    assert 'f"{folder_name}/video/{filename}"' in video
 
 
 def test_runtime_locks_are_complete_pinned_and_have_no_duplicate_packages():

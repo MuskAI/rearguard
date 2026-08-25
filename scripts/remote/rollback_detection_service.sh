@@ -84,6 +84,8 @@ restore_file "$backup_root/model_decision_policy.py" \
   "$backup_root/model_decision_policy.py.missing"
 restore_file "$backup_root/remote_inference.py" \
   "$application_root/imagedetection/views/remote_inference.py"
+restore_file "$backup_root/video_detection.py" \
+  "$application_root/imagedetection/views/video_detection.py"
 restore_file "$backup_root/watermark-service.py" "$watermark_root/service.py"
 restore_file "$backup_root/watermark-policy.py" "$watermark_root/policy.py"
 restore_file "$backup_root/watermark-evidence_probability.py" "$watermark_root/evidence_probability.py"

@@ -107,6 +107,7 @@ paths=(
   services/realguard-detection/image_preprocessing.py
   services/realguard-detection/model_decision_policy.py
   services/realguard-detection/remote_inference.py
+  services/realguard-detection/video_detection.py
   services/realguard-detection/runtime.lock
   services/watermark-precheck/service.py
   services/watermark-precheck/policy.py
@@ -157,6 +158,7 @@ python3 -m py_compile \
   "$SOURCE_DIR/image_preprocessing.py" \
   "$SOURCE_DIR/model_decision_policy.py" \
   "$SOURCE_DIR/remote_inference.py" \
+  "$SOURCE_DIR/video_detection.py" \
   "$WATERMARK_DIR/service.py" \
   "$WATERMARK_DIR/policy.py" \
   "$WATERMARK_DIR/evidence_probability.py" \
@@ -171,6 +173,7 @@ cp "$SOURCE_DIR/inference_onnx.py" "$STAGE_DIR/model/"
 cp "$SOURCE_DIR/image_preprocessing.py" "$STAGE_DIR/model/"
 cp "$SOURCE_DIR/model_decision_policy.py" "$STAGE_DIR/model/"
 cp "$SOURCE_DIR/remote_inference.py" "$STAGE_DIR/model/"
+cp "$SOURCE_DIR/video_detection.py" "$STAGE_DIR/model/"
 cp "$SOURCE_DIR/runtime.lock" "$STAGE_DIR/model/"
 cp "$WATERMARK_DIR/service.py" "$STAGE_DIR/watermark/"
 cp "$WATERMARK_DIR/policy.py" "$STAGE_DIR/watermark/"

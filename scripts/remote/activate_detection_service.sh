@@ -22,6 +22,7 @@ model_target="$application_root/imagedetection/Agent/tools/AIGC_Detection/infere
 preprocess_target="$application_root/imagedetection/Agent/tools/AIGC_Detection/image_preprocessing.py"
 decision_policy_target="$application_root/imagedetection/Agent/tools/AIGC_Detection/model_decision_policy.py"
 view_target="$application_root/imagedetection/views/remote_inference.py"
+video_view_target="$application_root/imagedetection/views/video_detection.py"
 watermark_service_target="$watermark_root/service.py"
 watermark_policy_target="$watermark_root/policy.py"
 watermark_probability_target="$watermark_root/evidence_probability.py"
@@ -66,6 +67,7 @@ else
   touch "$backup_root/model_decision_policy.py.missing"
 fi
 cp -a "$view_target" "$backup_root/remote_inference.py"
+cp -a "$video_view_target" "$backup_root/video_detection.py"
 cp -a "$watermark_service_target" "$backup_root/watermark-service.py"
 cp -a "$watermark_policy_target" "$backup_root/watermark-policy.py"
 cp -a "$watermark_probability_target" "$backup_root/watermark-evidence_probability.py"
@@ -78,6 +80,7 @@ install -m 644 "$marker" "$release_root/DEPLOYED_COMMIT"
   "$release_root/model/image_preprocessing.py" \
   "$release_root/model/model_decision_policy.py" \
   "$release_root/model/remote_inference.py" \
+  "$release_root/model/video_detection.py" \
   "$release_root/watermark/service.py" \
   "$release_root/watermark/policy.py" \
   "$release_root/watermark/evidence_probability.py" \
@@ -205,6 +208,8 @@ ln -sfn "$release_root/model/model_decision_policy.py" "$decision_policy_target.
 mv -Tf "$decision_policy_target.next" "$decision_policy_target"
 ln -sfn "$release_root/model/remote_inference.py" "$view_target.next"
 mv -Tf "$view_target.next" "$view_target"
+ln -sfn "$release_root/model/video_detection.py" "$video_view_target.next"
+mv -Tf "$video_view_target.next" "$video_view_target"
 ln -sfn "$release_root/watermark/service.py" "$watermark_service_target.next"
 mv -Tf "$watermark_service_target.next" "$watermark_service_target"
 ln -sfn "$release_root/watermark/policy.py" "$watermark_policy_target.next"
@@ -307,6 +312,13 @@ assert isinstance(policy.get("ready"), bool)
 done
 test "$health_ready" = "1"
 sudo systemctl is-active --quiet "$service_name"
+curl -fsS --max-time 10 http://127.0.0.1:5000/video \
+  | /home/ymk/miniconda3/envs/realguard/bin/python -c '
+import json, sys
+payload = json.load(sys.stdin)
+assert payload.get("code") == 200
+assert payload.get("msg") == "Video Detection API Ready"
+'
 
 /home/ymk/miniconda3/envs/realguard/bin/python -c '
 from PIL import Image

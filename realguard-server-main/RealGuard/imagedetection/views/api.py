@@ -1745,7 +1745,7 @@ def _image_history_matches_filter(record, filter_key):
 
 
 def _video_history_record(item):
-    final_label = binary_video_final_label(item.get("final_label"), item.get("fake_percentage"))
+    final_label = binary_video_final_label(item.get("final_label"), item.get("fake"))
     return {
         "itemid": item.get("itemid"),
         "filename": item.get("filename", ""),

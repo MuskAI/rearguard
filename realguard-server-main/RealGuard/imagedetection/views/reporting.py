@@ -335,7 +335,7 @@ def video_report_content(item: dict, result: dict) -> str:
     probability = None if review_only or raw_probability is None else round(float(raw_probability), 1)
     confidence = _safe_text(result.get("confidence"), "")
     requires_review = review_only or probability is None
-    final_label = binary_video_final_label(result.get("final_label"), item.get("fake_percentage"))
+    final_label = binary_video_final_label(result.get("final_label"), item.get("fake"))
     accent = "#b36a12" if requires_review else ("#d9573f" if "AI" in str(final_label) else "#1b8f7a")
     video_url = escape(_safe_text(result.get("video_url"), ""))
     preview = f'<video class="preview" src="{video_url}" controls></video>' if video_url else '<div class="preview" style="min-height:260px;"></div>'
