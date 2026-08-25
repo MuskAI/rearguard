@@ -153,6 +153,8 @@ ALL_ADMIN_PERMISSIONS = {
     "conversation.view",
     "conversation.read_content",
     "conversation.read_media",
+    "collaboration.view",
+    "collaboration.manage",
     "detection.view",
     "detection.read_pii",
     "api_key.view",
@@ -1333,6 +1335,26 @@ def _v2_conversation_connection():
     if not table:
         connection.close()
         raise sqlite3.OperationalError("report_qa_turns table is unavailable")
+    return connection
+
+
+def _v2_collaboration_connection(*, writable=False):
+    database = _v2_conversation_db_path()
+    if not database.is_file():
+        raise FileNotFoundError(database)
+    encoded = quote(database.as_posix(), safe="/")
+    mode = "rw" if writable else "ro"
+    connection = sqlite3.connect(f"file:{encoded}?mode={mode}", uri=True, timeout=3)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA busy_timeout=3000")
+    if not writable:
+        connection.execute("PRAGMA query_only=ON")
+    table = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='collaboration_inquiries'"
+    ).fetchone()
+    if not table:
+        connection.close()
+        raise sqlite3.OperationalError("collaboration_inquiries table is unavailable")
     return connection
 
 
@@ -4412,6 +4434,130 @@ def admin_conversation_media(conversation_id):
     from imagedetection.views.api import _serve_detection_media_item
     _audit(actor, "conversation.media.read", conversation_id, meta={"source": "legacy_detection"})
     return _serve_detection_media_item(media_type, rows[0])
+
+
+COLLABORATION_STATUSES = {"new", "contacted", "qualified", "closed"}
+
+
+@admin_blueprint.route("/api/admin/collaboration-inquiries")
+def admin_collaboration_inquiries():
+    _, error = _admin_required("collaboration.view")
+    if error:
+        return error
+    limit = _limit_arg(40, 100)
+    offset = _cursor_arg() or 0
+    query = _search_term()[:120]
+    status = str(request.args.get("status") or "").strip().lower()
+    if status and status not in COLLABORATION_STATUSES:
+        return jsonify({"status": "error", "message": "合作意向状态无效"}), 400
+
+    clauses = []
+    params = []
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    if query:
+        like = f"%{query}%"
+        clauses.append(
+            "(name LIKE ? OR COALESCE(organization, '') LIKE ? OR contact LIKE ? "
+            "OR message LIKE ? OR collaboration_type LIKE ?)"
+        )
+        params.extend([like, like, like, like, like])
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    try:
+        with _v2_collaboration_connection() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT * FROM collaboration_inquiries
+                {where}
+                ORDER BY created_at DESC, inquiry_id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (*params, limit + 1, offset),
+            ).fetchall()
+            total_row = connection.execute(
+                f"SELECT COUNT(*) AS count FROM collaboration_inquiries {where}",
+                tuple(params),
+            ).fetchone()
+            summary_rows = connection.execute(
+                "SELECT status, COUNT(*) AS count FROM collaboration_inquiries GROUP BY status"
+            ).fetchall()
+    except (OSError, sqlite3.Error) as exc:
+        print(f"[ADMIN COLLABORATION READ ERROR] {type(exc).__name__}: {exc}")
+        return jsonify({
+            "status": "error",
+            "code": "collaboration_store_unavailable",
+            "message": "合作意向存储暂时无法读取",
+        }), 503
+
+    has_more = len(rows) > limit
+    visible = rows[:limit]
+    summary = {key: 0 for key in COLLABORATION_STATUSES}
+    for row in summary_rows:
+        key = str(row["status"] or "").strip().lower()
+        if key in summary:
+            summary[key] = int(row["count"] or 0)
+    items = [{
+        "id": row["inquiry_id"],
+        "createdAt": _conversation_time(row["created_at"]),
+        "collaborationType": row["collaboration_type"],
+        "name": row["name"],
+        "organization": row["organization"] or "",
+        "contact": row["contact"],
+        "message": row["message"],
+        "userId": row["developer_user_id"],
+        "accountUuid": row["developer_account_uuid"],
+        "status": row["status"],
+    } for row in visible]
+    return jsonify({
+        "status": "success",
+        "inquiries": items,
+        "total": int(total_row["count"] if total_row else 0),
+        "summary": summary,
+        "page": {
+            "hasMore": has_more,
+            "nextCursor": str(offset + limit) if has_more else None,
+        },
+    })
+
+
+@admin_blueprint.route("/api/admin/collaboration-inquiries/<inquiry_id>", methods=["PATCH", "POST"])
+def admin_update_collaboration_inquiry(inquiry_id):
+    actor, error = _admin_required("collaboration.manage")
+    if error:
+        return error
+    inquiry_id = str(inquiry_id or "").strip()
+    if not re.fullmatch(r"coop-[a-zA-Z0-9_-]{6,64}", inquiry_id):
+        return jsonify({"status": "error", "message": "合作意向编号无效"}), 400
+    payload = request.get_json(silent=True) or {}
+    next_status = str(payload.get("status") or "").strip().lower()
+    if next_status not in COLLABORATION_STATUSES:
+        return jsonify({"status": "error", "message": "请选择有效的处理状态"}), 400
+    try:
+        with _v2_collaboration_connection(writable=True) as connection:
+            before = connection.execute(
+                "SELECT inquiry_id, status FROM collaboration_inquiries WHERE inquiry_id = ?",
+                (inquiry_id,),
+            ).fetchone()
+            if not before:
+                return jsonify({"status": "error", "message": "合作意向不存在"}), 404
+            connection.execute(
+                "UPDATE collaboration_inquiries SET status = ? WHERE inquiry_id = ?",
+                (next_status, inquiry_id),
+            )
+            connection.commit()
+    except (OSError, sqlite3.Error) as exc:
+        print(f"[ADMIN COLLABORATION UPDATE ERROR] {type(exc).__name__}: {exc}")
+        return jsonify({"status": "error", "message": "合作意向状态更新失败"}), 503
+    after = {"inquiryId": inquiry_id, "status": next_status}
+    _audit(
+        actor,
+        "collaboration.status.update",
+        inquiry_id,
+        before={"inquiryId": before["inquiry_id"], "status": before["status"]},
+        after=after,
+    )
+    return jsonify({"status": "success", "inquiry": after})
 
 
 @admin_blueprint.route("/api/admin/detections")

@@ -43,12 +43,23 @@
     .brand-mark{width:36px;height:36px;border-radius:var(--radius);background:#f4f6f4 url("/favicon.svg") no-repeat center/30px 30px;border:1px solid #79918a;display:block;flex:0 0 auto}
     .brand-title{font-weight:800;font-size:17px}
     .brand-sub{font-family:"IBM Plex Mono",monospace;font-size:10px;color:#8fa3ba;text-transform:uppercase}
-    .nav-group{margin-top:18px}
+    .nav-group{margin-top:12px}
     .nav-label{font-family:"IBM Plex Mono",monospace;font-size:10px;text-transform:uppercase;color:#7f93aa;padding:12px 12px 6px}
     .nav-item{height:42px;display:flex;align-items:center;gap:11px;padding:0 12px;border-radius:var(--radius);color:#c9d4e2;margin:3px 0;transition:background .16s,color .16s}
     .nav-item:hover,.nav-item.active{background:var(--sidebar-soft);color:#fff}
     .nav-icon{width:20px;text-align:center;font-size:14px;color:#8fb3a8}
     .nav-item:hover .nav-icon,.nav-item.active .nav-icon{color:#77dfbc}
+    .nav-home{margin-bottom:8px}
+    .nav-section{margin:4px 0;border-top:1px solid rgba(255,255,255,.06)}
+    .nav-section>summary{min-height:42px;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 12px;list-style:none;border-radius:var(--radius);color:#aebeb9;cursor:pointer;font-size:12px;font-weight:800;transition:background .16s,color .16s}
+    .nav-section>summary::-webkit-details-marker{display:none}
+    .nav-section>summary>span{display:flex;align-items:center;gap:11px;min-width:0}
+    .nav-section>summary:hover,.nav-section.active>summary{background:rgba(255,255,255,.045);color:#fff}
+    .nav-section-chevron{font-size:11px;color:#71867f;transition:transform .18s ease}
+    .nav-section[open] .nav-section-chevron{transform:rotate(180deg)}
+    .nav-children{margin:0 0 7px 19px;padding-left:8px;border-left:1px solid rgba(143,179,168,.24)}
+    .nav-children .nav-item{height:38px;margin:2px 0;padding-left:10px;font-size:13px}
+    .nav-children .nav-icon{font-size:13px}
     .main{min-width:0}
     .topbar{height:58px;background:#fff;border-bottom:1px solid var(--line-soft);display:flex;align-items:center;justify-content:space-between;padding:0 22px;position:sticky;top:0;z-index:8}
     .topbar-leading{display:flex;align-items:center;gap:10px;min-width:0}
@@ -203,6 +214,18 @@
     .operation-copy small{display:block;color:var(--muted);font-size:12px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .operation-value{text-align:right;font-size:12px;color:var(--muted);font-weight:700}
     .operation-warning{margin-top:12px;padding:10px 12px;border-left:3px solid var(--amber);background:#fffaf3;color:#9a3412;font-size:12px;line-height:1.5}
+    .inquiry-summary{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .inquiry-list{border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:#fff}
+    .inquiry-item{display:grid;grid-template-columns:minmax(0,1fr) 210px;gap:20px;padding:16px;border-bottom:1px solid var(--line-soft)}
+    .inquiry-item:last-child{border-bottom:0}
+    .inquiry-main{min-width:0}
+    .inquiry-title{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .inquiry-title strong{font-size:15px}
+    .inquiry-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:7px;color:var(--muted);font-size:12px}
+    .inquiry-message{margin:12px 0 0!important;color:#344054!important;white-space:pre-wrap;overflow-wrap:anywhere}
+    .inquiry-actions{display:grid;align-content:start;gap:8px;padding-left:18px;border-left:1px solid var(--line-soft)}
+    .inquiry-actions label{display:grid;gap:6px;color:var(--muted);font-size:12px;font-weight:700}
+    .inquiry-actions .select,.inquiry-actions .btn{width:100%}
     .compact-table table{min-width:560px;table-layout:fixed}
     .compact-table th,.compact-table td{padding:10px}
     .compact-table th:nth-child(1){width:118px}
@@ -406,7 +429,7 @@
     @media(max-width:1280px){.testing-workbench{grid-template-columns:1fr}.testing-status{grid-template-columns:repeat(2,minmax(0,1fr))}.testing-status-item:nth-child(2){border-right:0}.testing-status-item:nth-child(-n+2){border-bottom:1px solid var(--line-soft)}.testing-analysis-grid{grid-template-columns:1fr}}
     @media(max-width:1280px){.dashboard-grid,.model-workbench{grid-template-columns:1fr}.side-stack{position:static}.models{grid-template-columns:1fr}.host-strip{grid-template-columns:repeat(3,minmax(0,1fr))}}
     @media(max-width:1280px){.assurance-grid{grid-template-columns:1fr}}
-    @media(max-width:960px){.app{grid-template-columns:76px minmax(0,1fr)}.brand-title,.brand-sub,.nav-text,.nav-label{display:none}.nav-item{justify-content:center}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.secondary-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.secondary-item:nth-child(3){padding-left:0;border-left:0}.account-name{display:none}}
+    @media(max-width:960px){.app{grid-template-columns:216px minmax(0,1fr)}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.secondary-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.secondary-item:nth-child(3){padding-left:0;border-left:0}.account-name{display:none}}
     @media(max-width:720px){.testing-folder-head{align-items:stretch;flex-direction:column}.testing-folder-head .btn{justify-content:center}.testing-folder-summary-head{align-items:flex-start;flex-direction:column;gap:4px}.testing-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.testing-kpi:nth-child(4n){border-right:1px solid var(--line)}.testing-kpi:nth-child(2n){border-right:0}.testing-kpi:nth-last-child(-n+4){border-bottom:1px solid var(--line)}.testing-kpi:nth-last-child(-n+2){border-bottom:0}.testing-resource-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.testing-resource-item:nth-child(2){border-right:0}.testing-resource-item:nth-child(-n+2){border-bottom:1px solid var(--line)}.testing-report-head,.testing-primary-score{align-items:flex-start;flex-direction:column}.testing-primary-score small{text-align:left}.testing-histogram{height:140px;gap:3px}}
     @media(max-width:720px){
       body.admin-nav-open{overflow:hidden}
@@ -420,8 +443,9 @@
       .sidebar-backdrop.is-visible{opacity:1;pointer-events:auto}
       .brand-title,.brand-sub,.nav-text,.nav-label{display:block}
       .nav-group{display:grid;margin-top:6px;gap:2px}
-      .nav-label{padding-top:16px}
       .nav-item{width:100%;min-width:0;justify-content:flex-start;padding:0 12px}
+      .nav-section>summary{min-height:46px}
+      .nav-children .nav-item{min-height:42px}
       .topbar{height:56px;padding:0 10px}
       .mobile-nav-toggle{width:40px;height:40px;display:grid;place-items:center;flex:0 0 auto;border:1px solid var(--line);border-radius:var(--radius);background:#fff;color:#344054}
       .crumbs>span{display:none}
@@ -449,8 +473,10 @@
       .compact-table table{min-width:520px}
       .host-strip{grid-template-columns:1fr}
       .host-stat{border-right:0;border-bottom:1px solid var(--line)}
-      .operation-row{grid-template-columns:30px minmax(0,1fr)}
-      .operation-value{grid-column:2;text-align:left}
+      .operation-row{grid-template-columns:30px minmax(0,1fr) auto}
+      .operation-value{grid-column:auto;text-align:right}
+      .inquiry-item{grid-template-columns:1fr;gap:14px}
+      .inquiry-actions{padding:12px 0 0;border-left:0;border-top:1px solid var(--line-soft)}
       #view-testing .workspace-heading{display:block}
       #view-testing .workspace-heading>.action-row{width:auto;margin-top:12px}
       #view-testing .workspace-heading>.action-row .btn{width:auto}
@@ -491,35 +517,44 @@
         <button class="sidebar-close" id="mobileNavClose" type="button" aria-label="关闭后台菜单" title="关闭后台菜单"><i class="fa fa-times" aria-hidden="true"></i></button>
       </div>
       <nav class="nav-group">
-        <div class="nav-label">监控</div>
-        <a class="nav-item active" href="#dashboard" data-route="dashboard" title="控制台"><i class="nav-icon fa fa-dashboard"></i><span class="nav-text">控制台</span></a>
+        <a class="nav-item nav-home active" href="#dashboard" data-route="dashboard" title="总览"><i class="nav-icon fa fa-dashboard"></i><span class="nav-text">总览</span></a>
+        <details class="nav-section" data-nav-section="operations">
+          <summary><span><i class="nav-icon fa fa-inbox"></i><span class="nav-text">运营数据</span></span><i class="nav-section-chevron fa fa-angle-down"></i></summary>
+          <div class="nav-children">
+            {% if "user.view" in admin_permissions %}<a class="nav-item" href="#users" data-route="users"><i class="nav-icon fa fa-user"></i><span class="nav-text">用户</span></a>{% endif %}
+            {% if "conversation.view" in admin_permissions %}<a class="nav-item" href="#conversations" data-route="conversations"><i class="nav-icon fa fa-comments"></i><span class="nav-text">用户对话</span></a>{% endif %}
+            {% if "collaboration.view" in admin_permissions %}<a class="nav-item" href="#collaborations" data-route="collaborations"><i class="nav-icon fa fa-handshake-o"></i><span class="nav-text">合作意向</span></a>{% endif %}
+            {% if "detection.view" in admin_permissions %}<a class="nav-item" href="#detections" data-route="detections"><i class="nav-icon fa fa-history"></i><span class="nav-text">检测记录</span></a>{% endif %}
+          </div>
+        </details>
         {% if "topology.view" in admin_permissions %}
-        <a class="nav-item" href="#assurance" data-route="assurance" title="在线保障"><i class="nav-icon fa fa-shield"></i><span class="nav-text">在线保障</span></a>
-        <a class="nav-item" href="#system" data-route="system" title="服务健康"><i class="nav-icon fa fa-heartbeat"></i><span class="nav-text">服务健康</span></a>
-        <div class="nav-label">模型运营</div>
-        <a class="nav-item" href="#models" data-route="models" title="模型管理"><i class="nav-icon fa fa-cubes"></i><span class="nav-text">模型管理</span></a>
-        <a class="nav-item" href="#swarm" data-route="swarm" title="专家会诊模式"><i class="nav-icon fa fa-sitemap"></i><span class="nav-text">专家会诊模式</span></a>
+        <details class="nav-section" data-nav-section="services">
+          <summary><span><i class="nav-icon fa fa-cubes"></i><span class="nav-text">模型与服务</span></span><i class="nav-section-chevron fa fa-angle-down"></i></summary>
+          <div class="nav-children">
+            <a class="nav-item" href="#models" data-route="models"><i class="nav-icon fa fa-cube"></i><span class="nav-text">模型管理</span></a>
+            <a class="nav-item" href="#swarm" data-route="swarm"><i class="nav-icon fa fa-sitemap"></i><span class="nav-text">Swarm 模式</span></a>
+            <a class="nav-item" href="#assurance" data-route="assurance"><i class="nav-icon fa fa-shield"></i><span class="nav-text">在线保障</span></a>
+            <a class="nav-item" href="#system" data-route="system"><i class="nav-icon fa fa-heartbeat"></i><span class="nav-text">服务健康</span></a>
+          </div>
+        </details>
         {% endif %}
-        {% if "testing.view" in admin_permissions %}
-        <a class="nav-item" href="/admin/testing" data-route="testing" title="内部测试平台"><i class="nav-icon fa fa-flask"></i><span class="nav-text">内部测试</span></a>
+        {% if "testing.view" in admin_permissions or "alerts.manage" in admin_permissions or "audit.view" in admin_permissions %}
+        <details class="nav-section" data-nav-section="quality">
+          <summary><span><i class="nav-icon fa fa-check-square-o"></i><span class="nav-text">质量与治理</span></span><i class="nav-section-chevron fa fa-angle-down"></i></summary>
+          <div class="nav-children">
+            {% if "testing.view" in admin_permissions %}<a class="nav-item" href="/admin/testing" data-route="testing"><i class="nav-icon fa fa-flask"></i><span class="nav-text">内部测试</span></a>{% endif %}
+            {% if "alerts.manage" in admin_permissions or "audit.view" in admin_permissions %}<a class="nav-item" href="#governance" data-route="governance"><i class="nav-icon fa fa-bell"></i><span class="nav-text">审计与告警</span></a>{% endif %}
+          </div>
+        </details>
         {% endif %}
-        <div class="nav-label">治理</div>
-        {% if "alerts.manage" in admin_permissions or "audit.view" in admin_permissions %}
-        <a class="nav-item" href="#governance" data-route="governance" title="审计告警"><i class="nav-icon fa fa-bell"></i><span class="nav-text">审计告警</span></a>
-        {% endif %}
-        {% if can_manage_admins %}<a class="nav-item" href="#admins" data-route="admins" title="管理员"><i class="nav-icon fa fa-users"></i><span class="nav-text">管理员</span></a>{% endif %}
-        <div class="nav-label">数据</div>
-        {% if "user.view" in admin_permissions %}
-        <a class="nav-item" href="#users" data-route="users" title="用户管理"><i class="nav-icon fa fa-user"></i><span class="nav-text">用户管理</span></a>
-        {% endif %}
-        {% if "conversation.view" in admin_permissions %}
-        <a class="nav-item" href="#conversations" data-route="conversations" title="用户对话"><i class="nav-icon fa fa-comments"></i><span class="nav-text">用户对话</span></a>
-        {% endif %}
-        {% if "detection.view" in admin_permissions %}
-        <a class="nav-item" href="#detections" data-route="detections" title="检测记录"><i class="nav-icon fa fa-history"></i><span class="nav-text">检测记录</span></a>
-        {% endif %}
-        {% if "api_key.view" in admin_permissions %}
-        <a class="nav-item" href="#keys" data-route="keys" title="访问凭证"><i class="nav-icon fa fa-key"></i><span class="nav-text">访问凭证</span></a>
+        {% if "api_key.view" in admin_permissions or can_manage_admins %}
+        <details class="nav-section" data-nav-section="settings">
+          <summary><span><i class="nav-icon fa fa-sliders"></i><span class="nav-text">平台设置</span></span><i class="nav-section-chevron fa fa-angle-down"></i></summary>
+          <div class="nav-children">
+            {% if "api_key.view" in admin_permissions %}<a class="nav-item" href="#keys" data-route="keys"><i class="nav-icon fa fa-key"></i><span class="nav-text">API 凭证</span></a>{% endif %}
+            {% if can_manage_admins %}<a class="nav-item" href="#admins" data-route="admins"><i class="nav-icon fa fa-users"></i><span class="nav-text">管理员</span></a>{% endif %}
+          </div>
+        </details>
         {% endif %}
       </nav>
     </aside>
@@ -568,10 +603,7 @@
           <div class="dashboard-grid">
             <section class="panel">
               <div class="panel-head">
-                <div><h2>运行状态</h2></div>
-                {% if "topology.view" in admin_permissions %}
-                <div class="action-row"><button class="btn mini secondary" onclick="switchRoute('system')">服务健康</button><button class="btn mini secondary" onclick="switchRoute('models')">模型管理</button></div>
-                {% endif %}
+                <div><h2>待处理</h2><p>优先处理用户反馈、合作意向和服务异常。</p></div>
               </div>
               <div class="operations-list" id="operationsSummary"></div>
             </section>
@@ -887,6 +919,26 @@
           </section>
         </section>
 
+        {% if "collaboration.view" in admin_permissions %}
+        <section class="view" id="view-collaborations" data-title="合作意向">
+          <section class="panel">
+            <div class="panel-head">
+              <div><h2>合作意向</h2><p>统一查看官网“关于与合作”提交的联系信息，并持续更新处理进度。</p></div>
+              <div class="inquiry-summary" id="collaborationSummary"></div>
+            </div>
+            <div class="toolbar">
+              <input class="input" id="collaborationQuery" placeholder="搜索称呼、机构、联系方式或合作说明">
+              <select class="select" id="collaborationStatus">
+                <option value="">全部状态</option><option value="new">待处理</option><option value="contacted">已联系</option><option value="qualified">推进中</option><option value="closed">已结束</option>
+              </select>
+              <select class="select" id="collaborationLimit"><option>40</option><option>60</option><option>100</option></select>
+              <button class="btn" onclick="loadCollaborations()"><i class="fa fa-search"></i>查询</button>
+            </div>
+            <div id="collaborations"></div>
+          </section>
+        </section>
+        {% endif %}
+
         <section class="view" id="view-detections" data-title="检测记录">
           <section class="panel">
             <div class="panel-head"><div><h2>检测记录</h2><p>筛选手机号、文件名、判定标签和反馈。</p></div></div>
@@ -943,8 +995,8 @@
     const CAN_MANAGE_ADMINS = {{ can_manage_admins|tojson }};
     const ADMIN_ROLE_LABELS = {{ role_options|default({}, true)|tojson }};
     const SERVER_INITIAL_ROUTE = {{ initial_admin_route|default('dashboard')|tojson }};
-    const titles = {dashboard:'控制台',assurance:'在线保障',models:'模型管理',swarm:'专家会诊模式',system:'服务健康',testing:'内部测试平台',governance:'审计告警',admins:'管理员',users:'用户管理',conversations:'用户对话',detections:'检测记录',keys:'访问凭证'};
-    const routePermissions = {assurance:'topology.view',models:'topology.view',swarm:'topology.view',system:'topology.view',testing:'testing.view',governance:['alerts.manage','audit.view'],admins:'admin.manage',users:'user.view',conversations:'conversation.view',detections:'detection.view',keys:'api_key.view'};
+    const titles = {dashboard:'总览',assurance:'在线保障',models:'模型管理',swarm:'Swarm 模式',system:'服务健康',testing:'内部测试平台',governance:'审计与告警',admins:'管理员',users:'用户',conversations:'用户对话',collaborations:'合作意向',detections:'检测记录',keys:'API 凭证'};
+    const routePermissions = {assurance:'topology.view',models:'topology.view',swarm:'topology.view',system:'topology.view',testing:'testing.view',governance:['alerts.manage','audit.view'],admins:'admin.manage',users:'user.view',conversations:'conversation.view',collaborations:'collaboration.view',detections:'detection.view',keys:'api_key.view'};
     const routeAllowed = (route) => {
       const required = routePermissions[route];
       if(!required) return true;
@@ -955,7 +1007,9 @@
     const mutationRequests = new Map();
     let adminAuthRedirecting = false;
     let lastAdminSessionCheck = 0;
-    let state = {metrics:null, models:[], routing:{}, routingHistory:[], detections:[], users:[], conversations:[], conversationTotal:0, admins:[], keys:[], services:[], host:null, serviceSummary:null, performance:null, assurance:null, swarm:null, alerts:null, alertDeliveries:[], audit:[], testing:null, testingDetail:null, testingImportId:'', testingImportedPaths:new Set(), testingRejectedPaths:new Set(), testingPendingChunks:new Map(), testingUploadActive:false, testingUploadPaused:false, testingResumeAfterSelection:false, testingFolderFiles:[], testingExtraFiles:[], testingFolderScanning:false, testingFolderName:'', pages:{}, selectedUser:null, selectedDetection:null};
+    const COLLABORATION_STATUS_LABELS = {new:'待处理',contacted:'已联系',qualified:'推进中',closed:'已结束'};
+    const COLLABORATION_TYPE_LABELS = {research:'联合研究',governance:'真实性治理',dataset:'数据与基准',integration:'产品接入',other:'其他合作'};
+    let state = {metrics:null, models:[], routing:{}, routingHistory:[], detections:[], users:[], conversations:[], conversationTotal:0, collaborations:[], collaborationReady:null, collaborationTotal:0, collaborationSummary:{new:0,contacted:0,qualified:0,closed:0}, admins:[], keys:[], services:[], host:null, serviceSummary:null, performance:null, assurance:null, swarm:null, alerts:null, alertDeliveries:[], audit:[], testing:null, testingDetail:null, testingImportId:'', testingImportedPaths:new Set(), testingRejectedPaths:new Set(), testingPendingChunks:new Map(), testingUploadActive:false, testingUploadPaused:false, testingResumeAfterSelection:false, testingFolderFiles:[], testingExtraFiles:[], testingFolderScanning:false, testingFolderName:'', pages:{}, selectedUser:null, selectedDetection:null};
     const testingRelativePaths = new WeakMap();
     const TESTING_IMPORT_STORAGE_KEY='realguard.testing.import.v1';
     let testingRefreshTimer = null;
@@ -968,6 +1022,7 @@
     const mobileNavMedia = window.matchMedia('(max-width: 720px)');
     function openMobileNav(){
       if(!mobileNavMedia.matches) return;
+      adminSidebar.inert=false;
       adminSidebar.classList.add('mobile-open');
       adminSidebar.setAttribute('aria-hidden','false');
       mobileNavBackdrop.classList.add('is-visible');
@@ -987,6 +1042,7 @@
       mobileNavToggle.setAttribute('aria-expanded','false');
       mobileNavToggle.setAttribute('aria-label','打开后台菜单');
       document.body.classList.remove('admin-nav-open');
+      adminSidebar.inert=mobileNavMedia.matches;
       if(mobileNavMedia.matches) adminSidebar.setAttribute('aria-hidden','true');
       else adminSidebar.removeAttribute('aria-hidden');
       if(restoreFocus && mobileNavMedia.matches) mobileNavToggle.focus();
@@ -1010,7 +1066,14 @@
     mobileNavClose.addEventListener('click',()=>closeMobileNav());
     mobileNavBackdrop.addEventListener('click',()=>closeMobileNav());
     document.addEventListener('keydown',trapMobileNavFocus);
-    window.addEventListener('resize',()=>{if(!mobileNavMedia.matches)closeMobileNav({restoreFocus:false});});
+    window.addEventListener('resize',()=>{
+      if(mobileNavMedia.matches){
+        if(!adminSidebar.classList.contains('mobile-open')){
+          adminSidebar.inert=true;
+          adminSidebar.setAttribute('aria-hidden','true');
+        }
+      }else closeMobileNav({restoreFocus:false});
+    });
     closeMobileNav({restoreFocus:false});
     function toast(message){ const el=$('toast'); el.textContent=message; el.style.display='block'; clearTimeout(window.__toast); window.__toast=setTimeout(()=>el.style.display='none',4200); }
     function updateSync(text){ if($('syncStatus')) $('syncStatus').textContent = text; }
@@ -1224,6 +1287,13 @@
       return notes.join(' ');
     }
     function routeTitle(route){ return titles[route] || route; }
+    function syncNavSections(route){
+      document.querySelectorAll('.nav-section').forEach(section=>{
+        const containsRoute=Array.from(section.querySelectorAll('[data-route]')).some(item=>item.dataset.route===route);
+        section.classList.toggle('active',containsRoute);
+        section.open=containsRoute;
+      });
+    }
     function switchRoute(route, options={}){
       let historyMode=options.historyMode || 'push';
       if(!routeAllowed(route)){
@@ -1233,6 +1303,7 @@
       }
       document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === `view-${route}`));
       document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.route === route));
+      syncNavSections(route);
       $('crumb').textContent = routeTitle(route);
       const nextHash=`#${route}`;
       if(historyMode==='replace') history.replaceState({route},'',nextHash);
@@ -1245,6 +1316,7 @@
       if(route === 'admins' && CAN_MANAGE_ADMINS) loadAdmins();
       if(route === 'users') loadUsers();
       if(route === 'conversations') loadConversations();
+      if(route === 'collaborations') loadCollaborations();
       if(route === 'detections') loadDetections();
       if(route === 'keys') loadApiKeys();
     }
@@ -1252,46 +1324,49 @@
       const win = metrics?.todayWindow || {};
       const traffic = metrics?.traffic || {};
       const dateLabel = win.start ? win.start.slice(0, 10) : '今日';
-      const timezone = win.timezone || 'Asia/Shanghai';
       const windowHours = traffic.windowHours || 24;
       const onlineMinutes = traffic.onlineWindowMinutes || 5;
       const trafficReady = traffic.ready === true;
       const trafficMessage = traffic?.source?.message || '访问统计暂不可用';
+      const newCollaborations = Number(state.collaborationSummary?.new || 0);
+      const negativeFeedback = Number(metrics?.detections?.feedbackNegative || 0);
       const items = [
-        {label:'今日检测', value: metrics?.detections?.today ?? '--', hint:`${dateLabel} · 图像 ${metrics?.detections?.todayImages ?? '--'} / 视频 ${metrics?.detections?.todayVideos ?? '--'} · ${timezone}`},
+        {label:'今日检测', value: metrics?.detections?.today ?? '--', hint:`${dateLabel} · 图像 ${metrics?.detections?.todayImages ?? '--'} / 视频 ${metrics?.detections?.todayVideos ?? '--'}`},
         {label:'主页访客', value: trafficReady ? (traffic.homepageUniqueVisitors ?? '--') : '--', hint:trafficReady ? `最近 ${windowHours} 小时 · ${traffic.homepagePageViews ?? '--'} 次访问` : trafficMessage},
-        {label:'网站访问量', value: trafficReady ? (traffic.sitePageViews ?? '--') : '--', hint:trafficReady ? `最近 ${windowHours} 小时 · ${traffic.siteUniqueVisitors ?? '--'} 位访客` : trafficMessage},
-        {label:'当前在线', value: trafficReady ? (traffic.onlineVisitors ?? '--') : '--', hint:trafficReady ? `最近 ${onlineMinutes} 分钟有页面活动` : trafficMessage},
+        {label:'待处理合作', value: can('collaboration.view') && state.collaborationReady===true ? newCollaborations : '--', hint:can('collaboration.view') ? (state.collaborationReady===true ? '来自官网合作表单' : state.collaborationReady===false ? '合作数据暂不可用' : '合作数据正在同步') : '当前角色不可查看'},
+        {label:'用户负反馈', value: can('detection.view') ? negativeFeedback : '--', hint:can('detection.view') ? '需要复核的检测结果' : '当前角色不可查看'},
       ];
       $('metrics').innerHTML = items.map((item) => `<article class="metric ${String(item.value || '').length > 8 ? 'compact' : ''}"><small>${esc(item.label)}</small><strong>${esc(item.value)}</strong><em>${esc(item.hint || '')}</em></article>`).join('');
       $('secondaryStats').innerHTML = [
-        ['网站独立访客', trafficReady ? `${traffic.siteUniqueVisitors ?? '--'} 人 · 最近 ${windowHours} 小时` : trafficMessage],
+        ['网站访问量', trafficReady ? `${traffic.sitePageViews ?? '--'} 次 · ${traffic.siteUniqueVisitors ?? '--'} 位访客` : trafficMessage],
+        ['当前在线', trafficReady ? `${traffic.onlineVisitors ?? '--'} 人 · 最近 ${onlineMinutes} 分钟` : trafficMessage],
         ['累计网站访问', traffic.cumulativeReady ? `${traffic.cumulativeSitePageViews ?? '--'} 次 · ${traffic.cumulativeSiteUniqueVisitors ?? '--'} 位访客` : '累计统计尚未就绪'],
         ['用户总数', `${metrics?.users?.total ?? '--'} 人 · 今日新增 ${metrics?.users?.todayNew ?? '--'}`],
         ['活跃 API 密钥', `${metrics?.users?.apiKeys ?? '--'} 个`],
-        ['累计起始时间', traffic.cumulativeReady ? (traffic.cumulativeSince || '--') : '--'],
         ['数据更新时间', win.generatedAt || '-'],
       ].map(([label,value]) => `<div class="secondary-item"><small>${esc(label)}</small><strong>${esc(value)}</strong></div>`).join('');
     }
     function renderOperationsSummary(){
       const models = state.models || [];
       const primary = currentModel(state.routing.imagePrimary);
-      const fallback = currentModel(state.routing.imageFallback);
       const healthy = models.filter(m => m.health?.ok).length;
       const degraded = models.filter(m => !m.health?.ok && (m.health?.serviceOk || m.health?.capabilityReady)).length;
       const offline = Math.max(0, models.length - healthy - degraded);
       const primaryReady = !!(primary.health?.ok || primary.health?.capabilityReady);
       const issueCount = degraded + offline + (primary.id ? 0 : 1);
+      const newCollaborations = Number(state.collaborationSummary?.new || 0);
+      const negativeFeedback = Number(state.metrics?.detections?.feedbackNegative || 0);
       const overall = $('overallHealth');
       overall.className = `overall-health ${issueCount === 0 ? 'ok' : offline || !primaryReady ? 'danger' : ''}`;
       overall.innerHTML = `<span class="health-dot"></span><span><strong>${issueCount === 0 ? '运行正常' : `存在 ${issueCount} 项需处理`}</strong>${models.length ? ` · ${healthy}/${models.length} 个模型在线` : ' · 尚未注册模型'}</span>`;
       const rows = [
-        {icon:'cube', tone:primaryReady ? '' : 'danger', label:'线上主模型', detail:primary.name || state.routing.imagePrimary || '未配置', value:primaryReady ? '可用' : '需检查'},
-        {icon:state.routing.fallbackEnabled ? 'exchange' : 'lock', tone:state.routing.fallbackEnabled ? 'warn' : '', label:'自动兜底', detail:fallback.name || state.routing.imageFallback || '未配置', value:state.routing.fallbackEnabled ? '已开启' : '已关闭'},
-        {icon:'heartbeat', tone:offline ? 'danger' : degraded ? 'warn' : '', label:'模型服务', detail:`在线 ${healthy} · 降级 ${degraded} · 离线 ${offline}`, value:`共 ${models.length} 个`},
+        ...(can('collaboration.view') ? [{icon:'handshake-o', tone:state.collaborationReady===false?'danger':newCollaborations?'warn':'', label:'新合作意向', detail:state.collaborationReady===false?'合作数据暂不可用':state.collaborationReady===null?'正在同步合作数据':newCollaborations?`${newCollaborations} 项尚未联系`:'没有待处理合作意向', value:state.collaborationReady===true?'查看':'检查', route:'collaborations'}] : []),
+        ...(can('detection.view') ? [{icon:'thumbs-o-down', tone:negativeFeedback ? 'danger' : '', label:'检测负反馈', detail:negativeFeedback ? `${negativeFeedback} 条结果被用户点踩` : '没有待复核负反馈', value:'复核', route:'detections'}] : []),
+        {icon:'heartbeat', tone:offline ? 'danger' : degraded ? 'warn' : '', label:'模型服务', detail:`在线 ${healthy} · 降级 ${degraded} · 离线 ${offline}`, value:offline || degraded ? '检查' : '正常', route:'system'},
+        {icon:'cube', tone:primaryReady ? '' : 'danger', label:'线上主模型', detail:primary.name || state.routing.imagePrimary || '未配置', value:primaryReady ? '可用' : '需检查', route:'models'},
       ];
       const issues = models.filter(m => !m.health?.ok).slice(0, 2).map(m => `${m.name || m.id}: ${m.health?.message || m.health?.warnings?.[0] || '服务未就绪'}`);
-      $('operationsSummary').innerHTML = rows.map(item => `<div class="operation-row"><span class="operation-icon ${item.tone}"><i class="fa fa-${item.icon}"></i></span><span class="operation-copy"><strong>${esc(item.label)}</strong><small>${esc(item.detail)}</small></span><span class="operation-value">${esc(item.value)}</span></div>`).join('') + (issues.length ? `<div class="operation-warning">${issues.map(esc).join('<br>')}</div>` : '');
+      $('operationsSummary').innerHTML = rows.map(item => `<div class="operation-row"><span class="operation-icon ${item.tone}"><i class="fa fa-${item.icon}"></i></span><span class="operation-copy"><strong>${esc(item.label)}</strong><small>${esc(item.detail)}</small></span><span class="operation-value">${item.route && routeAllowed(item.route) ? `<button class="btn mini secondary" type="button" onclick="switchRoute('${esc(item.route)}')">${esc(item.value)}</button>` : esc(item.value)}</span></div>`).join('') + (issues.length ? `<div class="operation-warning">${issues.map(esc).join('<br>')}</div>` : '');
     }
     function currentModel(id){ return state.models.find(m => m.id === id) || {}; }
     function isImageModel(m){ return String(m.modality || 'image').toLowerCase().includes('image'); }
@@ -1584,6 +1659,44 @@
       </tr>`);
       $('conversations').innerHTML=table(['图片 / 文件','用户','最近问题','轮次','更新时间','操作'],rows,'尚无用户会话')+(state.pages.conversations?.hasMore?'<div class="load-more"><button class="btn secondary" onclick="loadConversations(true)">加载更多</button></div>':'');
     }
+    function collaborationStatusPill(status){
+      const tone=status==='new'?'amber':status==='qualified'?'green':'';
+      return `<span class="pill ${tone}">${esc(COLLABORATION_STATUS_LABELS[status] || status || '未知')}</span>`;
+    }
+    function renderCollaborations(){
+      const summary=state.collaborationSummary || {};
+      if($('collaborationSummary')) $('collaborationSummary').innerHTML=`<span class="pill amber">待处理 ${Number(summary.new || 0)}</span><span class="pill">全部 ${Number(state.collaborationTotal || 0)}</span>`;
+      const items=state.collaborations.map(item=>`<article class="inquiry-item">
+        <div class="inquiry-main">
+          <div class="inquiry-title"><strong>${esc(item.name || '未署名')}</strong>${item.organization?`<span>${esc(item.organization)}</span>`:''}${collaborationStatusPill(item.status)}<span class="pill">${esc(COLLABORATION_TYPE_LABELS[item.collaborationType] || item.collaborationType || '其他合作')}</span></div>
+          <div class="inquiry-meta"><span><i class="fa fa-address-card-o" aria-hidden="true"></i>&nbsp; ${esc(item.contact || '-')}</span><span>${esc(item.createdAt || '-')}</span>${item.userId?'<span>已登录用户提交</span>':'<span>访客提交</span>'}</div>
+          <p class="inquiry-message">${esc(item.message || '-')}</p>
+        </div>
+        <div class="inquiry-actions">
+          <label>处理进度
+            <select class="select" id="collaboration-status-${esc(item.id)}" ${can('collaboration.manage')?'':'disabled'}>
+              ${Object.entries(COLLABORATION_STATUS_LABELS).map(([value,label])=>`<option value="${value}" ${item.status===value?'selected':''}>${label}</option>`).join('')}
+            </select>
+          </label>
+          <button class="btn secondary" type="button" ${can('collaboration.manage')?'':'disabled'} onclick="saveCollaborationStatus('${esc(item.id)}')">保存状态</button>
+        </div>
+      </article>`).join('');
+      $('collaborations').innerHTML=`<div class="inquiry-list">${items || '<div class="empty">暂无合作意向</div>'}</div>${state.pages.collaborations?.hasMore?'<div class="load-more"><button class="btn secondary" onclick="loadCollaborations(true)">加载更多</button></div>':''}`;
+    }
+    async function saveCollaborationStatus(id){
+      if(!can('collaboration.manage')){toast('当前角色无合作意向处理权限');return;}
+      const select=$(`collaboration-status-${id}`);
+      if(!select) return;
+      select.disabled=true;
+      try{
+        await api(`/api/admin/collaboration-inquiries/${encodeURIComponent(id)}`,{method:'PATCH',body:JSON.stringify({status:select.value})});
+        toast('合作意向状态已更新');
+        await loadCollaborations();
+        if(can('audit.view')) await loadAudit();
+      }finally{
+        if(select) select.disabled=false;
+      }
+    }
     async function openConversation(id){
       const dialog=$('conversationDialog');
       $('conversationDialogTitle').textContent='用户对话';
@@ -1709,6 +1822,28 @@
         state.pages.conversations=data.page||{};
         renderConversations();
       });
+    }
+    async function loadCollaborations(append=false){
+      if(!can('collaboration.view')) return;
+      const result=await panelLoad(['collaborations'],'loadCollaborations',async()=>{
+        const params=new URLSearchParams({limit:$('collaborationLimit')?.value||'40',q:$('collaborationQuery')?.value||'',status:$('collaborationStatus')?.value||''});
+        if(append&&state.pages.collaborations?.nextCursor) params.set('cursor',state.pages.collaborations.nextCursor);
+        const data=await api(`/api/admin/collaboration-inquiries?${params}`);
+        state.collaborations=append?[...state.collaborations,...(data.inquiries||[])]:data.inquiries||[];
+        state.collaborationReady=true;
+        state.collaborationSummary=data.summary||{new:0,contacted:0,qualified:0,closed:0};
+        state.collaborationTotal=Object.values(state.collaborationSummary).reduce((total,value)=>total+Number(value||0),0);
+        state.pages.collaborations=data.page||{};
+        renderCollaborations();
+        if(state.metrics) renderMetrics(state.metrics);
+        renderOperationsSummary();
+      });
+      if(result===null){
+        state.collaborationReady=false;
+        if(state.metrics) renderMetrics(state.metrics);
+        renderOperationsSummary();
+      }
+      return result;
     }
     async function loadAdmins(append=false){
       if(!CAN_MANAGE_ADMINS) return;
@@ -2835,6 +2970,7 @@
       if(can('topology.view')) tasks.push(loadAssurance(),loadExpertReview(),loadSystem());
       if(can('user.view')) tasks.push(loadUsers());
       if(can('conversation.view')) tasks.push(loadConversations());
+      if(can('collaboration.view')) tasks.push(loadCollaborations());
       if(can('detection.view')) tasks.push(loadDetections());
       if(can('api_key.view')) tasks.push(loadApiKeys());
       if(can('alerts.manage')) tasks.push(loadAlerts());
@@ -2843,6 +2979,10 @@
       await Promise.allSettled(tasks);
     }
     document.querySelectorAll('[data-route]').forEach(el => el.addEventListener('click', e => { e.preventDefault(); switchRoute(el.dataset.route); closeMobileNav(); }));
+    document.querySelectorAll('.nav-section').forEach(section=>section.addEventListener('toggle',()=>{
+      if(!section.open) return;
+      document.querySelectorAll('.nav-section').forEach(other=>{if(other!==section) other.open=false;});
+    }));
     window.addEventListener('popstate',()=>{
       const requested=(location.hash || '#dashboard').slice(1);
       switchRoute(requested,{historyMode:'none'});
@@ -2858,6 +2998,10 @@
       const initialRoute = (titles[initial] && routeAllowed(initial)) ? initial : 'dashboard';
       switchRoute(initialRoute,{historyMode:'replace'});
       await loadOverview();
+      const dashboardTasks=[];
+      if(can('collaboration.view')) dashboardTasks.push(loadCollaborations());
+      if(can('detection.view')) dashboardTasks.push(loadDetections());
+      await Promise.allSettled(dashboardTasks);
     }
     void bootAdmin();
   </script>

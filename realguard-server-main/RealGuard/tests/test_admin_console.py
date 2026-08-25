@@ -99,6 +99,21 @@ def _create_conversation_store(path: Path):
             developer_user_id TEXT,
             developer_account_uuid TEXT
         );
+        CREATE TABLE collaboration_inquiries (
+            inquiry_id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            collaboration_type TEXT NOT NULL,
+            name TEXT NOT NULL,
+            organization TEXT,
+            contact TEXT NOT NULL,
+            message TEXT NOT NULL,
+            developer_user_id TEXT,
+            developer_account_uuid TEXT,
+            source_hash TEXT NOT NULL,
+            idempotency_hash TEXT NOT NULL UNIQUE,
+            content_hash TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'new'
+        );
         """
     )
     return connection
@@ -298,6 +313,102 @@ def test_admin_page_revalidates_session_and_exposes_conversation_workspace(clien
     assert "admin_session_expired" in html
     assert "window.addEventListener('pageshow'" in html
     assert "document.addEventListener('visibilitychange'" in html
+
+
+def test_admin_page_groups_navigation_and_exposes_collaboration_workspace(client):
+    _login_session(client, admin_role="admin")
+
+    response = client.get("/admin")
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert 'data-nav-section="operations"' in html
+    assert 'data-nav-section="services"' in html
+    assert 'href="#collaborations" data-route="collaborations"' in html
+    assert 'id="view-collaborations"' in html
+    assert "待处理合作" in html
+    assert "/api/admin/collaboration-inquiries" in html
+
+
+def test_admin_can_list_filter_and_update_collaboration_inquiries(client, monkeypatch, tmp_path):
+    database = tmp_path / "jianzhen-v2.sqlite3"
+    connection = _create_conversation_store(database)
+    rows = [
+        (
+            "coop-111111111111",
+            "2026-08-20T08:00:00+00:00",
+            "research",
+            "林老师",
+            "示例大学",
+            "lin@example.com",
+            "希望共同建设面向科研场景的图像真实性评测基准。",
+            "7",
+            "account-7",
+            "source-1",
+            "idem-1",
+            "content-1",
+            "new",
+        ),
+        (
+            "coop-222222222222",
+            "2026-08-19T08:00:00+00:00",
+            "integration",
+            "陈经理",
+            "示例公司",
+            "chen@example.com",
+            "希望将图像鉴伪能力接入现有内容审核工作流。",
+            None,
+            None,
+            "source-2",
+            "idem-2",
+            "content-2",
+            "contacted",
+        ),
+    ]
+    connection.executemany(
+        "INSERT INTO collaboration_inquiries VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    connection.commit()
+    connection.close()
+    monkeypatch.setenv("REALGUARD_V2_DB_PATH", str(database))
+    monkeypatch.setattr(admin, "_audit", lambda *_args, **_kwargs: None)
+    _login_session(client, admin_role="admin")
+
+    listing = client.get("/api/admin/collaboration-inquiries?status=new&q=示例大学")
+
+    assert listing.status_code == 200
+    payload = listing.get_json()
+    assert payload["total"] == 1
+    assert payload["summary"] == {"new": 1, "contacted": 1, "qualified": 0, "closed": 0}
+    assert payload["inquiries"][0]["name"] == "林老师"
+    assert payload["inquiries"][0]["contact"] == "lin@example.com"
+
+    updated = client.patch(
+        "/api/admin/collaboration-inquiries/coop-111111111111",
+        json={"status": "qualified"},
+        headers=_csrf_headers(client),
+    )
+
+    assert updated.status_code == 200
+    assert updated.get_json()["inquiry"]["status"] == "qualified"
+    with sqlite3.connect(database) as check:
+        status = check.execute(
+            "SELECT status FROM collaboration_inquiries WHERE inquiry_id = ?",
+            ("coop-111111111111",),
+        ).fetchone()[0]
+    assert status == "qualified"
+
+
+def test_collaboration_inquiries_are_not_visible_to_reviewer(client, monkeypatch, tmp_path):
+    database = tmp_path / "jianzhen-v2.sqlite3"
+    _create_conversation_store(database).close()
+    monkeypatch.setenv("REALGUARD_V2_DB_PATH", str(database))
+    _login_session(client, admin_role="reviewer")
+
+    response = client.get("/api/admin/collaboration-inquiries")
+
+    assert response.status_code == 403
 
 
 def test_admin_can_review_persisted_user_conversations_and_bound_v2_image(client, monkeypatch, tmp_path):
@@ -509,6 +620,8 @@ def test_admin_screen_renders_interactive_operations_controls(client, monkeypatc
     assert 'id="mobileNavToggle"' in client.get("/admin").get_data(as_text=True)
     assert 'id="adminSidebar"' in client.get("/admin").get_data(as_text=True)
     assert "transform:translateX(-105%)" in client.get("/admin").get_data(as_text=True)
+    assert "adminSidebar.inert=mobileNavMedia.matches" in client.get("/admin").get_data(as_text=True)
+    assert "adminSidebar.setAttribute('aria-hidden','true')" in client.get("/admin").get_data(as_text=True)
 
 
 def test_registered_users_by_province_requires_admin_and_masks_without_pii_permission(client, monkeypatch):
