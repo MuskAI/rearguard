@@ -24,6 +24,11 @@ def test_gpu_release_preflights_before_stopping_services():
     assert "duplicate runtime requirement" in activate
     assert '"$rollback_script_target" "$release_root" watchdog' in activate
 
+    public_activate = (
+        ROOT / "scripts/remote/activate_public_gpu_deploy.sh"
+    ).read_text(encoding="utf-8")
+    assert "install -m 0600 -o root -g root /dev/null /var/lock/realguard-public-release.lock" in public_activate
+
 
 def test_prediction_runtime_exposes_model_identity_required_by_activation_probe():
     inference = (ROOT / "services/realguard-detection/inference_onnx.py").read_text(
@@ -53,6 +58,8 @@ def test_gpu_deploy_recovers_public_worker_after_ambiguous_ssh_stop():
     assert "public_response_key_hash" in deploy
     assert "gpu_response_key_hash" in deploy
     assert 'test "$public_response_key_hash" = "$gpu_response_key_hash"' in deploy
+    assert '"set -e; sudo bash \'$PUBLIC_ACTIVATE_TMP\'' in deploy
+    assert "else state=active; fi" in deploy
 
 
 def test_convergence_status_is_parsed_without_eval():

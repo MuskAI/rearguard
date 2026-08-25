@@ -25,6 +25,8 @@ worker_service="${11:-realguard-developer-worker.service}"
 test -s "$config_tmp"
 test -s "$rollback_tmp"
 
+install -m 0600 -o root -g root /dev/null /var/lock/realguard-public-release.lock
+install -m 0600 -o root -g root /dev/null /var/lock/realguard-public-gpu-deploy.lock
 exec 8>/var/lock/realguard-public-release.lock
 flock -w 900 8
 exec 9>/var/lock/realguard-public-gpu-deploy.lock

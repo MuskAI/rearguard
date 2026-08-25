@@ -48,7 +48,9 @@ public_ssh() {
 
 recover_public_worker() {
   public_ssh \
-    "state=\$(sudo cat '$PUBLIC_BACKUP_ROOT/realguard-developer-worker.service.active'); \
+    "if sudo test -f '$PUBLIC_BACKUP_ROOT/realguard-developer-worker.service.active'; then \
+       state=\$(sudo cat '$PUBLIC_BACKUP_ROOT/realguard-developer-worker.service.active'); \
+     else state=active; fi; \
      case \"\$state\" in \
        active) sudo systemctl start realguard-developer-worker.service ;; \
        inactive) sudo systemctl stop realguard-developer-worker.service ;; \
@@ -194,7 +196,7 @@ cp "$WATERMARK_DIR/realguard-watermark-precheck-yolo.conf" "$STAGE_DIR/systemd/"
 cp "$WATERMARK_DIR/realguard-v2-precheck-tunnel.service" "$STAGE_DIR/systemd/"
 cp "$YOLO_DIR/realguard-yolo-watermark.service" "$STAGE_DIR/systemd/"
 cp "$GPU_ROLLBACK_SOURCE" "$STAGE_DIR/scripts/"
-tar -C "$STAGE_DIR" -czf "$ARCHIVE" model watermark yolo systemd config scripts
+COPYFILE_DISABLE=1 tar -C "$STAGE_DIR" -czf "$ARCHIVE" model watermark yolo systemd config scripts
 
 for known_hosts_file in "$GPU_KNOWN_HOSTS_FILE" "$WEB_DRAIN_KNOWN_HOSTS_FILE"; do
   [[ -n "$known_hosts_file" && -f "$known_hosts_file" && -r "$known_hosts_file" ]] || {
@@ -273,7 +275,7 @@ if [[ "$WEB_DRAIN_ENABLED" == "1" ]]; then
   web_worker_drain_attempted=1
 fi
 public_ssh \
-  "sudo bash '$PUBLIC_ACTIVATE_TMP' '$commit_sha' '$PUBLIC_CONFIG_TMP' \
+  "set -e; sudo bash '$PUBLIC_ACTIVATE_TMP' '$commit_sha' '$PUBLIC_CONFIG_TMP' \
      '$PUBLIC_BACKUP_ROOT' '$PUBLIC_CONFIG_TARGET' '$PUBLIC_CONFIG_MARKER' \
      '$PUBLIC_ROLLBACK_TMP' '$PUBLIC_ROLLBACK_SCRIPT' '$PUBLIC_RECOVERY_UNIT' \
      '$WEB_DRAIN_ENABLED' realguard-detector-backend.service \
