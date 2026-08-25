@@ -2911,6 +2911,34 @@ def test_video_media_uses_video_backend(monkeypatch):
     assert url == "http://127.0.0.1:15000/static/uploads/user-1/video/clip.mp4"
 
 
+def test_video_media_falls_back_to_detector_guest_store(monkeypatch):
+    monkeypatch.setattr(api, "DETECTION_BACKEND_BASE_URL", "http://127.0.0.1:15001")
+    monkeypatch.setattr(api, "VIDEO_DETECTION_BACKEND_BASE_URL", "http://127.0.0.1:15000")
+
+    urls = api._backend_media_urls("video", {
+        "openid": "user-1",
+        "filename": "clip.mp4",
+    })
+
+    assert urls == [
+        "http://127.0.0.1:15000/static/uploads/user-1/video/clip.mp4",
+        "http://127.0.0.1:15000/static/uploads/guest/video/clip.mp4",
+    ]
+
+
+def test_image_media_never_falls_back_to_guest_store(monkeypatch):
+    monkeypatch.setattr(api, "DETECTION_BACKEND_BASE_URL", "http://127.0.0.1:15001")
+
+    urls = api._backend_media_urls("image", {
+        "openid": "user-1",
+        "filename": "photo.jpg",
+    })
+
+    assert urls == [
+        "http://127.0.0.1:15001/static/uploads/user-1/image/photo.jpg",
+    ]
+
+
 def test_guest_image_report_downloads_attachment(client, monkeypatch):
     with client.session_transaction() as sess:
         sess["guest_openid"] = "guest-123"

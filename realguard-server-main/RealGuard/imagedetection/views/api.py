@@ -1636,6 +1636,17 @@ def _backend_media_url(kind, item):
     )
 
 
+def _backend_media_urls(kind, item):
+    """Return authorized upstream candidates, including the video service guest store."""
+    urls = [_backend_media_url(kind, item)]
+    if kind == "video":
+        guest_item = {**(item or {}), "openid": "guest", "phone": ""}
+        guest_url = _backend_media_url(kind, guest_item)
+        if guest_url and guest_url not in urls:
+            urls.append(guest_url)
+    return [url for url in urls if url]
+
+
 def _thumbnail_cache_path(item):
     key = "|".join(
         str(item.get(name, ""))
@@ -2424,22 +2435,35 @@ def _serve_detection_media_item(kind, item):
         response.headers["Cache-Control"] = "private, no-store"
         return response
 
-    source_url = _backend_media_url(kind, item)
-    if not source_url:
+    source_urls = _backend_media_urls(kind, item)
+    if not source_urls:
         return jsonify({"status": "error", "message": "媒体不存在"}), 404
     upstream_session = requests.Session()
     upstream_session.trust_env = False
     forwarded_headers = {}
     if request.headers.get("Range"):
         forwarded_headers["Range"] = request.headers["Range"]
-    try:
-        upstream = upstream_session.get(source_url, headers=forwarded_headers, timeout=30, stream=True)
-    except requests.RequestException:
+    upstream = None
+    upstream_unavailable = False
+    for source_url in source_urls:
+        try:
+            candidate = upstream_session.get(
+                source_url,
+                headers=forwarded_headers,
+                timeout=30,
+                stream=True,
+            )
+        except requests.RequestException:
+            upstream_unavailable = True
+            continue
+        if candidate.status_code in {200, 206}:
+            upstream = candidate
+            break
+        candidate.close()
+    if upstream is None:
         upstream_session.close()
-        return jsonify({"status": "error", "message": "媒体服务暂不可用"}), 502
-    if upstream.status_code not in {200, 206}:
-        upstream.close()
-        upstream_session.close()
+        if upstream_unavailable:
+            return jsonify({"status": "error", "message": "媒体服务暂不可用"}), 502
         return jsonify({"status": "error", "message": "媒体不存在"}), 404
 
     def stream():
