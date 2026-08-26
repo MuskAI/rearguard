@@ -217,6 +217,8 @@ def _stop_process(process) -> None:
 def _extract_pdf_text(data: bytes) -> tuple[str, int, int, bool, int]:
     if len(data) > MAX_PDF_INPUT_BYTES:
         raise DocumentSafetyError("PDF input exceeds the safety limit")
+    if PDF_PARSE_WALL_SECONDS <= 0:
+        raise PdfParseTimeoutError("PDF parsing deadline is disabled")
     context = multiprocessing.get_context("spawn")
     receive_connection, send_connection = context.Pipe(duplex=False)
     limits = (
