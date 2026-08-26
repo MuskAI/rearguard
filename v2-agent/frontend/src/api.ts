@@ -1728,6 +1728,29 @@ export interface ReportQaMessage {
   content: string;
 }
 
+export type ReportQaWebSearchMode = "auto" | "on" | "off";
+
+export interface ReportQaWebSource {
+  index: number;
+  title: string;
+  url: string;
+  siteName: string;
+  domain: string;
+  quality: "primary" | "major" | "other" | string;
+}
+
+export interface ReportQaWebSearch {
+  attempted: boolean;
+  used: boolean;
+  status: string;
+  claim: string;
+  query: string;
+  contentVerdict: "confirmed" | "contradicted" | "misleading" | "satire_likely" | "unverified" | "not_applicable" | string;
+  sourceRefs: number[];
+  sources: ReportQaWebSource[];
+  cached?: boolean;
+}
+
 export interface ReportQaRequest {
   question: string;
   history?: ReportQaMessage[];
@@ -1735,10 +1758,12 @@ export interface ReportQaRequest {
   report?: Record<string, unknown>;
   conversationId?: string;
   turnId?: string;
+  webSearch?: { mode: ReportQaWebSearchMode };
   media?: {
     type?: "image" | "video" | "document" | "audio";
     fileName?: string;
     legacyDetectionId?: number;
+    searchImage?: string;
   };
 }
 
@@ -1747,11 +1772,14 @@ export interface ReportQaAnswer {
   evidenceRefs: string[];
   suggestedQuestions: string[];
   grounded: boolean;
+  webSearch?: ReportQaWebSearch;
   usage?: { totalTokens?: number };
 }
 
 export interface ReportQaStreamHandlers {
   onStart?: () => void;
+  onStatus?: (status: { stage: string; message: string }) => void;
+  onSources?: (webSearch: ReportQaWebSearch) => void;
   onDelta: (text: string) => void;
 }
 
@@ -1775,12 +1803,50 @@ function parseReportQaAnswer(value: unknown): ReportQaAnswer {
     : [];
   const usage = errorRecord(record.usage);
   const totalTokens = Number(usage.totalTokens);
+  const parsedWebSearch = parseReportQaWebSearch(record.webSearch);
   return {
     answer,
     evidenceRefs: stringList(record.evidenceRefs),
     suggestedQuestions: stringList(record.suggestedQuestions),
     grounded: record.grounded !== false,
+    webSearch: parsedWebSearch,
     usage: Number.isFinite(totalTokens) ? { totalTokens } : undefined,
+  };
+}
+
+function parseReportQaWebSearch(value: unknown): ReportQaWebSearch | undefined {
+  const record = errorRecord(value);
+  if (Object.keys(record).length === 0) return undefined;
+  const sources = Array.isArray(record.sources)
+    ? record.sources.flatMap((value) => {
+      const source = errorRecord(value);
+      const title = errorText(source.title);
+      const url = errorText(source.url);
+      if (!title || !/^https?:\/\//i.test(url)) return [];
+      const index = Number(source.index);
+      return [{
+        index: Number.isFinite(index) && index > 0 ? index : 1,
+        title,
+        url,
+        siteName: errorText(source.siteName),
+        domain: errorText(source.domain),
+        quality: errorText(source.quality) || "other",
+      } satisfies ReportQaWebSource];
+    })
+    : [];
+  const sourceRefs = Array.isArray(record.sourceRefs)
+    ? record.sourceRefs.map(Number).filter((value) => Number.isInteger(value) && value > 0 && value <= sources.length)
+    : [];
+  return {
+    attempted: record.attempted === true,
+    used: record.used === true && sources.length > 0,
+    status: errorText(record.status) || "not_requested",
+    claim: errorText(record.claim),
+    query: errorText(record.query),
+    contentVerdict: errorText(record.contentVerdict) || "not_applicable",
+    sourceRefs,
+    sources,
+    cached: record.cached === true,
   };
 }
 
@@ -1831,6 +1897,18 @@ export async function streamReportQuestion(
     const record = errorRecord(message.data);
     if (message.event === "start") {
       handlers.onStart?.();
+      return;
+    }
+    if (message.event === "status") {
+      handlers.onStatus?.({
+        stage: errorText(record.stage),
+        message: errorText(record.message),
+      });
+      return;
+    }
+    if (message.event === "sources") {
+      const webSearch = parseReportQaWebSearch(record.webSearch);
+      if (webSearch) handlers.onSources?.(webSearch);
       return;
     }
     if (message.event === "delta") {

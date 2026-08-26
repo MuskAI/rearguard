@@ -506,6 +506,183 @@ def test_risk_score_normalizes_common_plain_text_phrasing(raw, expected_prefix):
     assert report_qa._explain_risk_score(raw).startswith(expected_prefix)
 
 
+def test_report_answer_separates_image_verdict_from_web_claim_verdict(monkeypatch):
+    web_result = {
+        "attempted": True,
+        "used": True,
+        "status": "success",
+        "claim": "特朗普爱上高市早苗",
+        "query": "特朗普 高市早苗 恋爱 新闻",
+        "summary": "公开活动报道没有证实恋爱说法，相关表达出现在戏仿内容中。[1][2]",
+        "sources": [
+            {
+                "index": 1,
+                "title": "公开活动记录",
+                "url": "https://www.kantei.go.jp/example",
+                "siteName": "日本首相官邸",
+                "domain": "www.kantei.go.jp",
+                "quality": "primary",
+            },
+            {
+                "index": 2,
+                "title": "Fact check",
+                "url": "https://www.reuters.com/fact-check/example",
+                "siteName": "Reuters",
+                "domain": "www.reuters.com",
+                "quality": "major",
+            },
+        ],
+        "usage": {"totalTokens": 600, "searchCount": 1},
+    }
+    monkeypatch.setattr(report_qa.report_web_search, "lookup", lambda *_args, **_kwargs: web_result)
+    client, completions = fake_client(json.dumps({
+        "answer": (
+            "图像模型认为图片像素更偏向真实，但这不代表配文中的事件真实。"
+            "现有公开来源没有证实恋爱说法，更像网友戏仿或恶搞。[1][2]"
+        ),
+        "evidenceRefs": [],
+        "sourceRefs": [1, 2, 9],
+        "contentVerdict": "satire_likely",
+        "suggestedQuestions": ["图片像素真假和内容真假有什么区别？"],
+    }, ensure_ascii=False))
+    monkeypatch.setattr(report_qa.detector, "_get_client", lambda: client)
+
+    response = report_qa.answer(
+        {"verdict": "real", "riskScore": 0.08, "explanation": "图像像素更偏向真实"},
+        "特朗普爱上高市早苗是真的吗？请联网核实",
+    )
+
+    assert "图片像素更偏向真实" in response["answer"]
+    assert "更像网友戏仿或恶搞" in response["answer"]
+    assert response["webSearch"]["contentVerdict"] == "satire_likely"
+    assert response["webSearch"]["sourceRefs"] == [1, 2]
+    assert len(response["webSearch"]["sources"]) == 2
+    assert response["usage"]["totalTokens"] == 673
+    prompt = completions.calls[0]["messages"]
+    assert "图片本身是否为 AI 生成或篡改" in prompt[0]["content"]
+    assert "WEB_SEARCH_EVIDENCE" in prompt[1]["content"]
+    assert '"strongVerdictAllowed":true' in prompt[1]["content"]
+    assert "https://www.reuters.com/fact-check/example" in prompt[1]["content"]
+
+
+def test_report_answer_stream_emits_search_progress_and_sources(monkeypatch):
+    web_result = {
+        "attempted": True,
+        "used": True,
+        "status": "success",
+        "claim": "图片中的事件",
+        "query": "图片中的事件 新闻",
+        "summary": "主流媒体未证实该说法。[1]",
+        "sources": [{
+            "index": 1,
+            "title": "公开核查",
+            "url": "https://www.reuters.com/fact-check/example",
+            "siteName": "Reuters",
+            "domain": "www.reuters.com",
+            "quality": "major",
+        }],
+        "usage": {"totalTokens": 200, "searchCount": 1},
+    }
+    monkeypatch.setattr(report_qa.report_web_search, "lookup", lambda *_args, **_kwargs: web_result)
+    model_payload = json.dumps({
+        "answer": "公开报道尚未证实这件事。[1]",
+        "evidenceRefs": [],
+        "sourceRefs": [1],
+        "contentVerdict": "unverified",
+        "suggestedQuestions": [],
+    }, ensure_ascii=False)
+    client, _ = fake_stream_client(model_payload)
+    monkeypatch.setattr(report_qa.detector, "_get_client", lambda: client)
+
+    events = list(report_qa.stream_answer(
+        {"verdict": "real", "explanation": "图像像素更偏向真实"},
+        "请联网核验这件事是否属实",
+    ))
+
+    assert events[0]["type"] == "status"
+    assert any(event["type"] == "sources" for event in events)
+    assert any(event["type"] == "delta" for event in events)
+    assert events[-1]["type"] == "done"
+    assert events[-1]["webSearch"]["sources"][0]["title"] == "公开核查"
+    assert events[-1]["webSearch"]["sourceRefs"] == [1]
+
+
+def test_invalid_web_citation_is_removed(monkeypatch):
+    web_result = {
+        "attempted": True,
+        "used": True,
+        "status": "success",
+        "claim": "公开主张",
+        "query": "公开主张",
+        "summary": "一个来源。[1]",
+        "sources": [{
+            "index": 1,
+            "title": "来源一",
+            "url": "https://example.com/one",
+            "siteName": "Example",
+            "domain": "example.com",
+            "quality": "other",
+        }],
+        "usage": {"totalTokens": 0, "searchCount": 1},
+    }
+    monkeypatch.setattr(report_qa.report_web_search, "lookup", lambda *_args, **_kwargs: web_result)
+    client, _ = fake_client(json.dumps({
+        "answer": "来源支持这一点。[1] 不存在的来源不能使用。[8]",
+        "sourceRefs": [1, 8],
+        "contentVerdict": "unverified",
+        "suggestedQuestions": [],
+    }, ensure_ascii=False))
+    monkeypatch.setattr(report_qa.detector, "_get_client", lambda: client)
+
+    response = report_qa.answer(
+        {"verdict": "real", "explanation": "未见明显异常"},
+        "请联网查证这个事件",
+    )
+
+    assert "[1]" in response["answer"]
+    assert "[8]" not in response["answer"]
+    assert response["webSearch"]["sourceRefs"] == [1]
+
+
+def test_strong_content_verdict_is_downgraded_without_reliable_sources(monkeypatch):
+    web_result = {
+        "attempted": True,
+        "used": True,
+        "status": "success",
+        "claim": "公开主张",
+        "query": "公开主张",
+        "summary": "论坛帖子声称该事件不存在。[1]",
+        "sources": [{
+            "index": 1,
+            "title": "论坛帖子",
+            "url": "https://example.com/post",
+            "siteName": "Example",
+            "domain": "example.com",
+            "quality": "other",
+        }],
+        "usage": {"totalTokens": 0, "searchCount": 1},
+    }
+    monkeypatch.setattr(report_qa.report_web_search, "lookup", lambda *_args, **_kwargs: web_result)
+    client, completions = fake_client(json.dumps({
+        "answer": "这个说法已经被否定。[1]",
+        "sourceRefs": [1],
+        "contentVerdict": "contradicted",
+        "suggestedQuestions": [],
+    }, ensure_ascii=False))
+    monkeypatch.setattr(report_qa.detector, "_get_client", lambda: client)
+
+    response = report_qa.answer(
+        {"verdict": "real", "explanation": "未见明显异常"},
+        "请联网查证这个事件",
+    )
+
+    assert response["webSearch"]["contentVerdict"] == "unverified"
+    assert "公开来源不足以确认或否定" in response["answer"]
+    assert "已经被否定" not in response["answer"]
+    assert response["webSearch"]["sourceRefs"] == []
+    assert '"strongVerdictAllowed":false' in completions.calls[0]["messages"][1]["content"]
+
+
 @pytest.mark.parametrize("question", ["", "   ", "问" * (report_qa.REPORT_QA_MAX_QUESTION_CHARS + 1)])
 def test_report_question_validation(question):
     with pytest.raises(report_qa.ReportQaValidationError):

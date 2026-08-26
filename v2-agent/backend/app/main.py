@@ -1537,6 +1537,7 @@ def _persist_report_qa_turn(tracking: dict[str, Any], question: Any, result: dic
                 if isinstance(result.get("suggestedQuestions"), list)
                 else []
             ),
+            web_search=result.get("webSearch") if isinstance(result.get("webSearch"), dict) else {},
             total_tokens=(result.get("usage") or {}).get("totalTokens", 0),
         )
         return True
@@ -1585,7 +1586,7 @@ async def _acquire_report_qa_slot() -> None:
 
 def _report_qa_sse_event(event: dict[str, Any]) -> str:
     event_type = str(event.get("type") or "message")
-    if event_type not in {"start", "delta", "done", "error"}:
+    if event_type not in {"start", "status", "sources", "delta", "done", "error"}:
         event_type = "message"
     data = {key: value for key, value in event.items() if key != "type"}
     return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}\n\n"
@@ -1602,6 +1603,8 @@ async def ask_report_question(request: Request, payload: dict = Body(...)) -> di
             report_context,
             payload.get("question"),
             payload.get("history"),
+            (payload.get("webSearch") or {}).get("mode") if isinstance(payload.get("webSearch"), dict) else "auto",
+            (payload.get("media") or {}).get("searchImage") if isinstance(payload.get("media"), dict) else None,
         )
         saved = await run_in_threadpool(_persist_report_qa_turn, tracking, payload.get("question"), result)
         return {
@@ -1629,6 +1632,8 @@ async def stream_report_question(request: Request, payload: dict = Body(...)) ->
             report_context,
             payload.get("question"),
             payload.get("history"),
+            (payload.get("webSearch") or {}).get("mode") if isinstance(payload.get("webSearch"), dict) else "auto",
+            (payload.get("media") or {}).get("searchImage") if isinstance(payload.get("media"), dict) else None,
         )
     except report_qa_service.ReportQaValidationError as exc:
         _REPORT_QA_SEMAPHORE.release()

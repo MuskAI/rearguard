@@ -2595,7 +2595,7 @@ def test_report_qa_stream_returns_sse_deltas_and_final_metadata(client, monkeypa
     )
     captured = {}
 
-    def fake_stream_answer(report, question, history):
+    def fake_stream_answer(report, question, history, *_args):
         captured.update({"report": report, "question": question, "history": history})
         yield {"type": "delta", "text": "水印是"}
         yield {"type": "delta", "text": "主要依据。"}
@@ -2605,6 +2605,21 @@ def test_report_qa_stream_returns_sse_deltas_and_final_metadata(client, monkeypa
             "evidenceRefs": ["可见水印"],
             "suggestedQuestions": ["水印位于哪里？"],
             "grounded": True,
+            "webSearch": {
+                "attempted": True,
+                "used": True,
+                "status": "success",
+                "claim": "图片中的公开事件是否属实",
+                "contentVerdict": "unverified",
+                "sourceRefs": [1],
+                "sources": [{
+                    "index": 1,
+                    "title": "公开来源",
+                    "url": "https://example.com/news",
+                    "siteName": "示例媒体",
+                    "quality": "other",
+                }],
+            },
             "usage": {"totalTokens": 12},
         }
 
@@ -2656,6 +2671,7 @@ def test_report_qa_stream_returns_sse_deltas_and_final_metadata(client, monkeypa
     assert saved["legacy_detection_id"] == 908
     assert saved["question"] == "为什么判断为假？"
     assert saved["answer"] == "水印是主要依据。"
+    assert json.loads(saved["web_search_json"])["sources"][0]["title"] == "公开来源"
 
 
 def test_report_qa_stream_reports_generation_failure_as_sse_event(client, monkeypatch):
@@ -2705,7 +2721,7 @@ def test_report_qa_accepts_bounded_current_page_context_for_logged_in_user(clien
     )
     captured = {}
 
-    def fake_answer(report, question, history):
+    def fake_answer(report, question, history, *_args):
         captured.update({"report": report, "question": question, "history": history})
         return {
             "answer": "报告中的可见水印是主要依据。",
@@ -2793,7 +2809,7 @@ def test_report_qa_loads_authoritative_owned_report_and_hides_foreign_report(cli
 
     captured = {}
 
-    def fake_answer(report, question, history):
+    def fake_answer(report, question, history, *_args):
         captured["report"] = report
         return {
             "answer": "这是当前账号报告的解释。",

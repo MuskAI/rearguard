@@ -1,6 +1,8 @@
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
+  ExternalLink,
+  Globe2,
   LoaderCircle,
   LogIn,
   MessageCircleQuestion,
@@ -18,6 +20,7 @@ import {
   type ProbabilityModel,
   type ProvenanceReport,
   type ReportQaMessage,
+  type ReportQaWebSearch,
   type SynthIDResult,
   type VisibleWatermarkResult,
 } from "../api";
@@ -35,6 +38,7 @@ interface Props {
 interface ConversationMessage extends ReportQaMessage {
   id: string;
   evidenceRefs?: string[];
+  webSearch?: ReportQaWebSearch;
 }
 
 interface StreamRevealState {
@@ -52,6 +56,16 @@ interface StreamRevealState {
 const MAX_QUESTION_LENGTH = 500;
 const REPORT_QA_SESSION_PREFIX = "huijian-report-qa-session:";
 const inMemoryConversationSessions = new Map<string, string>();
+const PUBLIC_CLAIM_QUESTION_PATTERN = /(?:联网|搜索|搜一下|查一下|查证|核实|核验|事实核查|新闻|报道|辟谣|谣言|传闻|网传|事件|发生过|是否属实|属实吗|是真的吗|真的假的|恶搞|二创|假新闻)/i;
+const SEARCH_IMAGE_MAX_DATA_URL_LENGTH = 1_250_000;
+
+const contentVerdictLabels: Record<string, string> = {
+  confirmed: "公开信息相互印证",
+  contradicted: "已有可靠来源否定",
+  misleading: "存在误导性配文",
+  satire_likely: "更像戏仿或恶搞",
+  unverified: "公开信息尚不足",
+};
 
 function normalizeScore(value: unknown): number | null {
   const number = Number(value);
@@ -277,9 +291,9 @@ function initialQuestions(outcome: AgentOutcome): string[] {
       ? binaryVerdictLabel(outcome.result.final_label, outcome.result.probability)
       : binaryVerdictLabel(outcome.result.final_label, outcome.result.fake_percentage);
   if (isFakeVerdict(label)) {
-    return ["为什么判断为 AI 生成？", "哪些位置或证据最可疑？", "水印和元数据分别说明了什么？"];
+    return ["为什么判断为 AI 生成？", "哪些位置或证据最可疑？", "联网核验图片里的事件是否属实"];
   }
-  return ["为什么判断为真实图像？", "有哪些实拍来源证据？", "当前报告还有哪些局限？"];
+  return ["为什么判断为真实图像？", "有哪些实拍来源证据？", "联网核验图片里的事件是否属实"];
 }
 
 function messageId(role: "user" | "assistant") {
@@ -326,8 +340,108 @@ function conversationSessionId(outcomeId: string) {
   return created;
 }
 
+async function sourceImageBlob(outcome: AgentOutcome): Promise<Blob | null> {
+  if (outcome.kind !== "image") return null;
+  if (outcome.file && /^image\/(?:jpeg|png|webp|gif)$/i.test(outcome.file.type)) return outcome.file;
+  const source = outcome.previewUrl || outcome.result.image_url;
+  if (!source) return null;
+  try {
+    const response = await fetch(source, { credentials: "include", cache: "no-store" });
+    if (!response.ok) return null;
+    const blob = await response.blob();
+    return blob.type.startsWith("image/") ? blob : null;
+  } catch {
+    return null;
+  }
+}
+
+async function imageElementFromBlob(blob: Blob): Promise<HTMLImageElement> {
+  const url = URL.createObjectURL(blob);
+  try {
+    const image = new Image();
+    image.decoding = "async";
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error("image decode failed"));
+      image.src = url;
+    });
+    return image;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function boundedSearchImage(outcome: AgentOutcome): Promise<string | undefined> {
+  const blob = await sourceImageBlob(outcome);
+  if (!blob) return undefined;
+  let bitmap: ImageBitmap | HTMLImageElement;
+  try {
+    bitmap = typeof createImageBitmap === "function"
+      ? await createImageBitmap(blob)
+      : await imageElementFromBlob(blob);
+  } catch {
+    return undefined;
+  }
+  try {
+    const sourceWidth = bitmap.width;
+    const sourceHeight = bitmap.height;
+    if (!sourceWidth || !sourceHeight) return undefined;
+    const scale = Math.min(1, 960 / Math.max(sourceWidth, sourceHeight));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+    canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+    const context = canvas.getContext("2d", { alpha: false });
+    if (!context) return undefined;
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    let dataUrl = canvas.toDataURL("image/jpeg", 0.72);
+    if (dataUrl.length > SEARCH_IMAGE_MAX_DATA_URL_LENGTH) {
+      const nextScale = Math.min(1, 720 / Math.max(canvas.width, canvas.height));
+      const compact = document.createElement("canvas");
+      compact.width = Math.max(1, Math.round(canvas.width * nextScale));
+      compact.height = Math.max(1, Math.round(canvas.height * nextScale));
+      compact.getContext("2d", { alpha: false })?.drawImage(canvas, 0, 0, compact.width, compact.height);
+      dataUrl = compact.toDataURL("image/jpeg", 0.62);
+    }
+    return dataUrl.length <= SEARCH_IMAGE_MAX_DATA_URL_LENGTH ? dataUrl : undefined;
+  } finally {
+    if ("close" in bitmap && typeof bitmap.close === "function") bitmap.close();
+  }
+}
+
 function reducedMotionRequested() {
   return typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+function WebSearchEvidence({ value }: { value: ReportQaWebSearch }) {
+  if (!value.attempted && !value.used) return null;
+  const selected = value.sourceRefs.length > 0
+    ? value.sourceRefs.flatMap((index) => value.sources.find((source) => source.index === index) || [])
+    : value.sources.slice(0, 4);
+  const verdict = contentVerdictLabels[value.contentVerdict]
+    || (value.used ? "已检索公开来源" : "公开信息尚不足");
+  return (
+    <aside className={`report-qa-web-evidence${value.used ? " has-sources" : " is-limited"}`} aria-label="联网核验来源">
+      <div className="report-qa-web-summary">
+        <span><Globe2 size={14} /> 联网核验</span>
+        <strong>{verdict}</strong>
+      </div>
+      {value.claim && <p className="report-qa-web-claim">核验内容：{value.claim}</p>}
+      {selected.length > 0 && (
+        <ol className="report-qa-web-sources">
+          {selected.map((source) => (
+            <li key={`${source.index}:${source.url}`}>
+              <a href={source.url} target="_blank" rel="noopener noreferrer">
+                <span className="report-qa-source-index">{source.index}</span>
+                <span><strong>{source.title}</strong><small>{source.siteName || source.domain}</small></span>
+                <ExternalLink size={13} aria-hidden="true" />
+              </a>
+            </li>
+          ))}
+        </ol>
+      )}
+      <small className="report-qa-web-note">公开信息用于核验图片表达的事件，不会改写图像模型结论。</small>
+    </aside>
+  );
 }
 
 export default function ReportQa({ outcome, requiresLogin, composerHost, onAttach, onLogin }: Props) {
@@ -337,11 +451,14 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [suggestions, setSuggestions] = useState<string[]>(() => initialQuestions(outcome));
+  const [webSearchEnabled, setWebSearchEnabled] = useState(true);
+  const [searchStatus, setSearchStatus] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const scrollFrameRef = useRef<number | null>(null);
   const revealRef = useRef<StreamRevealState | null>(null);
   const revealTickRef = useRef<(timestamp: number) => void>(() => undefined);
+  const pendingWebSearchRef = useRef<ReportQaWebSearch | undefined>(undefined);
   const conversationIdRef = useRef(conversationSessionId(outcome.id));
   const outcomeRef = useRef(outcome);
   outcomeRef.current = outcome;
@@ -482,7 +599,9 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
     setBusy(false);
     setStreamingMessageId(null);
     setError("");
+    setSearchStatus("");
     setSuggestions(initialQuestions(outcomeRef.current));
+    pendingWebSearchRef.current = undefined;
     conversationIdRef.current = conversationSessionId(outcomeRef.current.id);
   }, [outcome.id, stopReveal]);
 
@@ -519,10 +638,16 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
     setQuestion("");
     setError("");
     setBusy(true);
+    const expectsWebSearch = webSearchEnabled && PUBLIC_CLAIM_QUESTION_PATTERN.test(value);
+    setSearchStatus(expectsWebSearch ? "正在读取图片中的公开信息" : "正在核对报告证据");
+    pendingWebSearchRef.current = undefined;
     const controller = new AbortController();
     abortRef.current?.abort();
     abortRef.current = controller;
     try {
+      const searchImage = expectsWebSearch
+        ? await boundedSearchImage(outcomeRef.current)
+        : undefined;
       const response = await streamReportQuestion(
         {
           ...request,
@@ -530,16 +655,32 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
           history,
           conversationId: conversationIdRef.current,
           turnId: clientUuid(),
+          webSearch: { mode: webSearchEnabled ? "auto" : "off" },
+          media: {
+            ...request.media,
+            ...(searchImage ? { searchImage } : {}),
+          },
         },
         {
+          onStatus: ({ message }) => {
+            if (message) setSearchStatus(message);
+          },
+          onSources: (webSearch) => {
+            pendingWebSearchRef.current = webSearch;
+            setMessages((current) => current.map((message) => (
+              message.id === assistantId ? { ...message, webSearch } : message
+            )));
+          },
           onDelta: (delta) => {
             if (!assistantAdded) {
               assistantAdded = true;
               setStreamingMessageId(assistantId);
+              setSearchStatus("");
               setMessages((current) => [...current, {
                 id: assistantId,
                 role: "assistant",
                 content: "",
+                webSearch: pendingWebSearchRef.current,
               }]);
             }
             appendReveal(assistantId, delta);
@@ -560,6 +701,7 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
           role: "assistant",
           content: response.answer,
           evidenceRefs: response.evidenceRefs,
+          webSearch: response.webSearch,
         };
         return assistantAdded
           ? current.map((message) => message.id === assistantId ? finalMessage : message)
@@ -582,6 +724,8 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
       if (!controller.signal.aborted) {
         stopReveal();
         setStreamingMessageId(null);
+        setSearchStatus("");
+        pendingWebSearchRef.current = undefined;
         setBusy(false);
       }
     }
@@ -613,16 +757,27 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
         <button type="button" className="report-qa-attach" onClick={onAttach} disabled={busy} aria-label="上传新的内容" title="上传新的内容">
           <Paperclip size={19} />
         </button>
+        <button
+          type="button"
+          className={`report-qa-web-toggle${webSearchEnabled ? " is-active" : ""}`}
+          aria-pressed={webSearchEnabled}
+          aria-label={webSearchEnabled ? "关闭智能联网核验" : "开启智能联网核验"}
+          title={webSearchEnabled ? "智能联网已开启" : "开启后可核验图片中的公开事件"}
+          disabled={busy || requiresLogin}
+          onClick={() => setWebSearchEnabled((current) => !current)}
+        >
+          <Globe2 size={17} /><span>联网</span>
+        </button>
         {requiresLogin ? (
           <button type="button" className="report-qa-login-field" onClick={onLogin}>
-            <span><strong>登录后询问当前报告</strong><small>对话只使用本次检测证据</small></span>
+            <span><strong>登录后询问当前报告</strong><small>可结合报告与公开来源核验</small></span>
           </button>
         ) : (
           <textarea
             value={question}
             rows={1}
             maxLength={MAX_QUESTION_LENGTH}
-            placeholder="询问当前检测报告…"
+            placeholder={webSearchEnabled ? "询问报告，或核验图片里的事件…" : "询问当前检测报告…"}
             aria-label="向小鉴询问本次检测报告"
             disabled={busy}
             onChange={(event) => setQuestion(event.target.value)}
@@ -653,7 +808,7 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
             <span className="report-qa-mark"><MessageCircleQuestion size={18} /></span>
             <div>
               <h3 id="report-qa-title">报告问答</h3>
-              <p><ShieldCheck size={13} /> 只依据当前报告</p>
+              <p><ShieldCheck size={13} /> 报告证据优先，联网信息单独标注</p>
             </div>
           </header>
           <div className="report-qa-messages" aria-live="polite" aria-busy={busy} aria-label="报告问答记录">
@@ -675,13 +830,14 @@ export default function ReportQa({ outcome, requiresLogin, composerHost, onAttac
                       {message.evidenceRefs.map((reference) => <li key={reference}>{reference}</li>)}
                     </ul>
                   )}
+                  {message.webSearch && <WebSearchEvidence value={message.webSearch} />}
                 </div>
               </div>
             ))}
             {busy && !streamingMessageId && (
               <div className="report-qa-message is-assistant is-loading" role="status">
                 <span className="report-qa-speaker" aria-hidden="true"><AgentAvatar size={30} state="processing" /></span>
-                <div><p><LoaderCircle size={15} className="spin" /> 正在核对报告证据</p></div>
+                <div><p><LoaderCircle size={15} className="spin" /> {searchStatus || "正在核对报告证据"}</p></div>
               </div>
             )}
             <div ref={endRef} />

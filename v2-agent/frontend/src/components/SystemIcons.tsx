@@ -90,6 +90,7 @@ export const FileText = createSystemIcon("file-text", "description");
 export const Fingerprint = createSystemIcon("fingerprint", "fingerprint");
 export const FlaskConical = createSystemIcon("flask-conical", "science");
 export const Gauge = createSystemIcon("gauge", "speed");
+export const Globe2 = createSystemIcon("globe-2", "travel_explore");
 export const Handshake = createSystemIcon("handshake", "handshake");
 export const Heart = createSystemIcon("heart", "favorite");
 export const History = createSystemIcon("history", "history");

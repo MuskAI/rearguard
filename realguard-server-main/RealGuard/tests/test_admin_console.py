@@ -300,6 +300,26 @@ def test_admin_page_revalidates_session_and_exposes_conversation_workspace(clien
     assert "document.addEventListener('visibilitychange'" in html
 
 
+def test_admin_sanitizes_persisted_web_search_evidence():
+    evidence = admin._conversation_json_object(json.dumps({
+        "attempted": True,
+        "used": True,
+        "claim": "公开事件是否属实",
+        "contentVerdict": "misleading",
+        "sourceRefs": [1, 99],
+        "sources": [
+            {"title": "官方说明", "url": "https://example.gov.cn/notice", "siteName": "示例官网"},
+            {"title": "危险链接", "url": "javascript:alert(1)"},
+            {"title": "带凭据链接", "url": "https://user:secret@example.com/private"},
+        ],
+    }, ensure_ascii=False))
+
+    assert evidence["claim"] == "公开事件是否属实"
+    assert evidence["contentVerdict"] == "misleading"
+    assert evidence["sourceRefs"] == [1]
+    assert [source["title"] for source in evidence["sources"]] == ["官方说明"]
+
+
 def test_admin_can_review_persisted_user_conversations_and_bound_v2_image(client, monkeypatch, tmp_path):
     database = tmp_path / "jianzhen-v2.sqlite3"
     connection = _create_conversation_store(database)

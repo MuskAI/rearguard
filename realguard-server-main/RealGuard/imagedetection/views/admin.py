@@ -1357,6 +1357,62 @@ def _conversation_json_list(value, limit):
     return [str(item) for item in parsed if str(item).strip()][:limit] if isinstance(parsed, list) else []
 
 
+def _conversation_json_object(value):
+    try:
+        parsed = json.loads(value or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    sources = []
+    for item in parsed.get("sources") or []:
+        if not isinstance(item, dict):
+            continue
+        raw_url = str(item.get("url") or "").strip()
+        try:
+            url = urlparse(raw_url)
+            hostname = url.hostname
+        except ValueError:
+            continue
+        if (
+            url.scheme not in {"http", "https"}
+            or not hostname
+            or url.username
+            or url.password
+        ):
+            continue
+        sources.append({
+            "index": len(sources) + 1,
+            "title": str(item.get("title") or "公开来源")[:240],
+            "url": raw_url[:2000],
+            "siteName": str(item.get("siteName") or hostname)[:100],
+            "quality": str(item.get("quality") or "other")[:20],
+        })
+        if len(sources) >= 6:
+            break
+    source_refs = []
+    for value in parsed.get("sourceRefs") or []:
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= number <= len(sources) and number not in source_refs:
+            source_refs.append(number)
+    return {
+        "attempted": bool(parsed.get("attempted")),
+        "used": bool(parsed.get("used") and sources),
+        "status": str(parsed.get("status") or "not_requested")[:32],
+        "claim": str(parsed.get("claim") or "")[:320],
+        "contentVerdict": str(parsed.get("contentVerdict") or "not_applicable")[:32],
+        "sourceRefs": source_refs[:5],
+        "sources": sources,
+    }
+
+
+def _conversation_optional_column(row, column, default=None):
+    return row[column] if column in row.keys() else default
+
+
 def _conversation_user_directory(rows):
     account_uuids = sorted({
         str(row["developer_account_uuid"] or "").strip()
@@ -4298,6 +4354,9 @@ def admin_conversation_detail(conversation_id):
         "answer": row["answer"],
         "evidenceRefs": _conversation_json_list(row["evidence_refs_json"], 5),
         "suggestedQuestions": _conversation_json_list(row["suggested_questions_json"], 3),
+        "webSearch": _conversation_json_object(
+            _conversation_optional_column(row, "web_search_json", "{}")
+        ),
         "totalTokens": int(row["total_tokens"] or 0),
     } for row in rows]
     _audit(

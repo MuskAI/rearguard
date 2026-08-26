@@ -10,6 +10,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from . import evidence_manifest_v2, privacy_erasure_ledger, public_payload, watermark_verdict
 from .verdict_labels import binary_verdict
@@ -121,6 +122,7 @@ def _init(conn: sqlite3.Connection) -> None:
             answer TEXT NOT NULL,
             evidence_refs_json TEXT NOT NULL,
             suggested_questions_json TEXT NOT NULL,
+            web_search_json TEXT NOT NULL DEFAULT '{}',
             total_tokens INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY(task_id) REFERENCES history(task_id) ON DELETE CASCADE
         );
@@ -379,6 +381,7 @@ def _init(conn: sqlite3.Connection) -> None:
         "ALTER TABLE history ADD COLUMN developer_user_id TEXT",
         "ALTER TABLE history ADD COLUMN developer_account_uuid TEXT",
         "ALTER TABLE history ADD COLUMN developer_key_id TEXT",
+        "ALTER TABLE report_qa_turns ADD COLUMN web_search_json TEXT NOT NULL DEFAULT '{}'",
     ):
         try:
             conn.execute(statement)
@@ -507,6 +510,7 @@ def put_report_qa_turn(
     answer: str,
     evidence_refs: list[str] | None = None,
     suggested_questions: list[str] | None = None,
+    web_search: dict[str, Any] | None = None,
     total_tokens: int = 0,
     task_id: str | None = None,
     report_id: str | None = None,
@@ -547,6 +551,57 @@ def put_report_qa_turn(
         for value in (suggested_questions or [])
         if str(value).strip()
     ][:3]
+    web = web_search if isinstance(web_search, dict) else {}
+    web_sources = []
+    for value in web.get("sources") or []:
+        if not isinstance(value, dict):
+            continue
+        title = str(value.get("title") or "").strip()[:240]
+        url = str(value.get("url") or "").strip()[:2_000]
+        try:
+            parsed_url = urlsplit(url)
+            hostname = parsed_url.hostname
+        except ValueError:
+            continue
+        if (
+            not title
+            or parsed_url.scheme.lower() not in {"http", "https"}
+            or not hostname
+            or parsed_url.username
+            or parsed_url.password
+        ):
+            continue
+        url = urlunsplit((
+            parsed_url.scheme.lower(),
+            parsed_url.netloc,
+            parsed_url.path or "/",
+            parsed_url.query,
+            "",
+        ))
+        web_sources.append({
+            "index": len(web_sources) + 1,
+            "title": title,
+            "url": url,
+            "siteName": str(value.get("siteName") or "").strip()[:100],
+            "domain": str(value.get("domain") or hostname).strip()[:255],
+            "quality": str(value.get("quality") or "other").strip()[:24],
+        })
+        if len(web_sources) >= 10:
+            break
+    web_payload = {
+        "attempted": bool(web.get("attempted")),
+        "used": bool(web.get("used") and web_sources),
+        "status": str(web.get("status") or "not_requested").strip()[:32],
+        "claim": str(web.get("claim") or "").strip()[:320],
+        "query": str(web.get("query") or "").strip()[:180],
+        "contentVerdict": str(web.get("contentVerdict") or "not_applicable").strip()[:32],
+        "sourceRefs": [
+            int(value)
+            for value in (web.get("sourceRefs") or [])
+            if type(value) is int and 1 <= value <= len(web_sources)
+        ][:5],
+        "sources": web_sources,
+    }
     completed_at = now_iso()
     values = {
         "turn_id": turn_id,
@@ -565,6 +620,7 @@ def put_report_qa_turn(
         "answer": answer,
         "evidence_refs_json": json.dumps(refs, ensure_ascii=False, separators=(",", ":")),
         "suggested_questions_json": json.dumps(suggestions, ensure_ascii=False, separators=(",", ":")),
+        "web_search_json": json.dumps(web_payload, ensure_ascii=False, separators=(",", ":")),
         "total_tokens": max(0, int(total_tokens or 0)),
     }
     identity_columns = (

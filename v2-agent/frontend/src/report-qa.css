@@ -188,6 +188,129 @@
   line-height: 1.35;
 }
 
+.report-qa-web-evidence {
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px solid var(--border);
+  animation: report-qa-evidence-enter 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.report-qa-web-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted-strong);
+  font-size: 12px;
+}
+
+.report-qa-web-summary span,
+.report-qa-web-summary strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.report-qa-web-summary span {
+  color: var(--blue);
+}
+
+.report-qa-web-summary strong {
+  color: var(--ink-strong);
+  font-size: 12px;
+}
+
+.report-qa-web-evidence.is-limited .report-qa-web-summary strong {
+  color: #95651f;
+}
+
+.report-qa-message .report-qa-web-claim {
+  margin-top: 7px;
+  color: var(--muted-strong);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.report-qa-web-sources {
+  display: grid;
+  gap: 1px;
+  margin: 9px 0 0;
+  padding: 0;
+  list-style: none;
+  border-block: 1px solid var(--border);
+}
+
+.report-qa-web-sources a {
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: 25px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px;
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px solid var(--border);
+  transition: color 160ms ease, background-color 160ms ease;
+}
+
+.report-qa-web-sources li:last-child a {
+  border-bottom: 0;
+}
+
+.report-qa-web-sources a:hover {
+  color: var(--blue);
+  background: color-mix(in srgb, var(--blue-soft) 54%, transparent);
+}
+
+.report-qa-source-index {
+  width: 23px;
+  height: 23px;
+  display: grid;
+  place-items: center;
+  color: var(--blue);
+  background: var(--blue-soft);
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.report-qa-web-sources a > span:nth-child(2) {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.report-qa-web-sources strong,
+.report-qa-web-sources small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.report-qa-web-sources strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.report-qa-web-sources small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.report-qa-web-sources svg {
+  color: var(--muted);
+}
+
+.report-qa-web-note {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .report-qa-dock-slot,
 .report-qa-dock-content {
   width: min(900px, 100%);
@@ -241,7 +364,7 @@
 .report-qa-composer {
   min-height: 58px;
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  grid-template-columns: 44px auto minmax(0, 1fr) 44px;
   align-items: center;
   gap: 7px;
   padding: 6px;
@@ -277,6 +400,7 @@
 }
 
 .report-qa-attach,
+.report-qa-web-toggle,
 .report-qa-send {
   width: 44px;
   height: 44px;
@@ -284,6 +408,30 @@
   place-items: center;
   border: 1px solid transparent;
   border-radius: 7px;
+}
+
+.report-qa-web-toggle {
+  width: auto;
+  min-width: 62px;
+  display: inline-flex;
+  gap: 5px;
+  padding: 0 9px;
+  color: var(--muted-strong);
+  background: var(--surface-subtle);
+  border-color: var(--border);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.report-qa-web-toggle.is-active {
+  color: #087d76;
+  background: #e3f3ef;
+  border-color: #a9d5ce;
+}
+
+.report-qa-web-toggle:hover:not(:disabled) {
+  color: var(--primary-strong);
+  border-color: #86c1ba;
 }
 
 .report-qa-attach {
@@ -307,6 +455,7 @@
 
 .report-qa-send:disabled,
 .report-qa-attach:disabled,
+.report-qa-web-toggle:disabled,
 .report-qa-suggestions button:disabled {
   cursor: not-allowed;
   opacity: 0.48;
@@ -376,7 +525,7 @@
 
   .report-qa-composer {
     min-height: 58px;
-    grid-template-columns: 44px minmax(0, 1fr) 44px;
+    grid-template-columns: 44px auto minmax(0, 1fr) 44px;
     gap: 4px;
     padding: 5px;
   }
@@ -385,6 +534,21 @@
   .report-qa-send {
     width: 44px;
     height: 44px;
+  }
+
+  .report-qa-web-toggle {
+    min-width: 44px;
+    padding-inline: 0;
+  }
+
+  .report-qa-web-toggle span {
+    display: none;
+  }
+
+  .report-qa-web-summary {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
   }
 
   .report-qa-composer textarea {
@@ -397,6 +561,7 @@
 @media (prefers-reduced-motion: reduce) {
   .report-qa-message,
   .report-qa-references,
+  .report-qa-web-evidence,
   .report-qa-stream-cursor {
     animation: none;
   }

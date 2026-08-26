@@ -1170,13 +1170,38 @@ test("登录用户可以围绕当前检测报告连续提问", async ({ page }) 
         ? JSON.parse(init.body) as Record<string, unknown>
         : {};
       state.__reportQaStreamRequests!.push(payload);
-      const firstRequest = state.__reportQaStreamRequests!.length === 1;
+      const requestNumber = state.__reportQaStreamRequests!.length;
+      const firstRequest = requestNumber === 1;
+      const webRequest = requestNumber === 3;
       const answer = firstRequest
         ? "报告在右下角定位到平台水印，并与生成痕迹相互印证。"
-        : "这里的 91% 是本次报告的风险分，不代表绝对事实。";
-      const firstDelta = firstRequest ? "报告在右下角定位到" : "这里的 91% 是本次报告的";
+        : webRequest
+          ? "图片本身的检测结论不变；公开报道显示，这段配文属于网友恶搞，目前没有可靠来源支持该事件。[1]"
+          : "这里的 91% 是本次报告的风险分，不代表绝对事实。";
+      const firstDelta = firstRequest
+        ? "报告在右下角定位到"
+        : webRequest
+          ? "图片本身的检测结论不变；"
+          : "这里的 91% 是本次报告的";
       const secondDelta = answer.slice(firstDelta.length);
       const evidenceRefs = firstRequest ? ["平台水印"] : ["视觉线索 1"];
+      const webSearch = webRequest ? {
+        attempted: true,
+        used: true,
+        status: "success",
+        claim: "特朗普爱上高市早苗",
+        query: "特朗普 高市早苗 恶搞",
+        contentVerdict: "satire_likely",
+        sourceRefs: [1],
+        sources: [{
+          index: 1,
+          title: "官方活动记录未支持相关配文",
+          url: "https://example.com/fact-check",
+          siteName: "示例事实核查",
+          domain: "example.com",
+          quality: "major",
+        }],
+      } : undefined;
       const encoder = new TextEncoder();
       const event = (name: string, data: Record<string, unknown>) => (
         `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`
@@ -1186,22 +1211,30 @@ test("登录用户可以围绕当前检测报告连续提问", async ({ page }) 
       const body = new ReadableStream<Uint8Array>({
         start(controller) {
           controller.enqueue(encoder.encode(event("start", { grounded: true })));
+          if (webSearch) {
+            controller.enqueue(encoder.encode(event("status", {
+              stage: "claim",
+              message: "正在识别图片中需要核验的公开信息",
+            })));
+            controller.enqueue(encoder.encode(event("sources", { webSearch })));
+          }
           timers.push(window.setTimeout(() => {
             controller.enqueue(encoder.encode(event("delta", { text: firstDelta })));
-          }, 50));
+          }, webRequest ? 30 : 50));
           timers.push(window.setTimeout(() => {
             controller.enqueue(encoder.encode(event("delta", { text: secondDelta })));
-          }, 750));
+          }, webRequest ? 80 : 750));
           timers.push(window.setTimeout(() => {
             controller.enqueue(encoder.encode(event("done", {
               answer,
               evidenceRefs,
               suggestedQuestions: ["这个风险分应该怎么理解？"],
               grounded: true,
+              webSearch,
               usage: { totalTokens: 80 },
             })));
             controller.close();
-          }, 900));
+          }, webRequest ? 120 : 900));
         },
         cancel() {
           timers.forEach((timer) => window.clearTimeout(timer));
@@ -1274,6 +1307,21 @@ test("登录用户可以围绕当前检测报告连续提问", async ({ page }) 
     { role: "user", content: "为什么判断为 AI 生成？" },
     { role: "assistant", content: "报告在右下角定位到平台水印，并与生成痕迹相互印证。" },
   ]);
+
+  await composer.fill("请联网核验：特朗普爱上高市早苗是真的吗？");
+  await composer.press("Enter");
+  await expect(qa.getByText("更像戏仿或恶搞", { exact: true })).toBeVisible();
+  const source = qa.getByRole("link", { name: /官方活动记录未支持相关配文/ });
+  await expect(source).toBeVisible();
+  await expect(source).toHaveAttribute("href", "https://example.com/fact-check");
+  const webRequests = await page.evaluate(() => (
+    (window as typeof window & { __reportQaStreamRequests?: Array<Record<string, unknown>> })
+      .__reportQaStreamRequests || []
+  ));
+  expect(webRequests).toHaveLength(3);
+  expect(webRequests[2].webSearch).toEqual({ mode: "auto" });
+  const webMedia = webRequests[2].media as Record<string, unknown>;
+  expect(String(webMedia.searchImage || "")).toMatch(/^data:image\/jpeg;base64,/);
   expect(await readableTextOffenders(page, ".report-qa")).toEqual([]);
   expect(await readableTextOffenders(page, ".composer-dock")).toEqual([]);
   await expectNoHorizontalOverflow(page);
