@@ -1987,6 +1987,8 @@ async def _process_document_task(task_id: str) -> None:
                 "pdfColorSpace": extracted.pdf_color_space,
                 "pdfBitsPerComponent": extracted.pdf_bits_per_component,
                 "pdfFilters": list(extracted.pdf_filters),
+                "pdfPageImageCount": extracted.pdf_page_image_count,
+                "pdfFigureCaptionCount": extracted.pdf_figure_caption_count,
                 "router": router_decisions[int(extracted.ordinal)].public_payload(),
             }
             duplicate = results_by_sha.get(extracted.sha256)
@@ -2140,6 +2142,8 @@ async def preview_document_router(
             "pdfColorSpace": asset.pdf_color_space,
             "pdfBitsPerComponent": asset.pdf_bits_per_component,
             "pdfFilters": list(asset.pdf_filters),
+            "pdfPageImageCount": asset.pdf_page_image_count,
+            "pdfFigureCaptionCount": asset.pdf_figure_caption_count,
             "preview": _image_data_uri(asset.data, "image", max_side=520, quality=72),
             "router": decision.public_payload(),
         })

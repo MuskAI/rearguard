@@ -24,6 +24,8 @@ class RoutableDocumentAsset(Protocol):
     pdf_is_image_mask: bool
     pdf_color_space: str | None
     pdf_bits_per_component: int | None
+    pdf_page_image_count: int
+    pdf_figure_caption_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +158,8 @@ def route_document_asset(asset: RoutableDocumentAsset) -> RouterDecision:
         "pdfSoftMaskObjectId": asset.pdf_smask_object_id,
         "pdfColorSpace": asset.pdf_color_space,
         "pdfBitsPerComponent": asset.pdf_bits_per_component,
+        "pdfPageImageCount": asset.pdf_page_image_count,
+        "pdfFigureCaptionCount": asset.pdf_figure_caption_count,
     }
 
     if asset.pdf_is_soft_mask or asset.pdf_is_image_mask:
@@ -176,6 +180,25 @@ def route_document_asset(asset: RoutableDocumentAsset) -> RouterDecision:
             "duplicate",
             "重复图片",
             [f"与图片 {asset.duplicate_of} 的文件哈希完全一致", "可复用首次出现图片的路由或检测结果"],
+            structural,
+        )
+
+    if (
+        str(asset.source_kind) == "pdf_embedded"
+        and int(asset.pdf_page_image_count or 0) >= 8
+        and int(asset.pdf_figure_caption_count or 0) >= 1
+    ):
+        image_count = int(asset.pdf_page_image_count)
+        caption_count = int(asset.pdf_figure_caption_count)
+        return _decision(
+            "skip",
+            0.985,
+            "compound_figure_component",
+            "复合论文插图的子图",
+            [
+                f"本页包含 {image_count} 个图片对象，并识别到 {caption_count} 处 Figure 图注",
+                "这些对象共同组成论文插图，不应被当作彼此独立的待鉴伪照片",
+            ],
             structural,
         )
 

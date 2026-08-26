@@ -58,6 +58,8 @@ function featureLabel(key: string) {
     pdfSoftMaskObjectId: "透明蒙版对象",
     pdfColorSpace: "颜色空间",
     pdfBitsPerComponent: "通道位深",
+    pdfPageImageCount: "本页图片对象",
+    pdfFigureCaptionCount: "Figure 图注",
     sourceKind: "文档来源",
   };
   return labels[key] || key;
@@ -242,7 +244,7 @@ export default function DocumentRouterLab({ onHome, onWorkspace }: Props) {
                           {Object.entries(asset.router.features).filter(([key]) => [
                             "entropy", "luminanceStd", "edgeDensity", "colorfulness", "dominantColorRatio",
                             "transparentRatio", "aspectRatio", "pixelCount", "pdfObjectId", "pdfSoftMaskObjectId",
-                            "pdfColorSpace", "pdfBitsPerComponent", "sourceKind",
+                            "pdfColorSpace", "pdfBitsPerComponent", "pdfPageImageCount", "pdfFigureCaptionCount", "sourceKind",
                           ].includes(key)).map(([key, value]) => (
                             <div key={key}><dt>{featureLabel(key)}</dt><dd>{featureValue(key, value)}</dd></div>
                           ))}

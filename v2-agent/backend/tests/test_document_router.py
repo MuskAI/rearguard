@@ -29,6 +29,8 @@ class Asset:
     pdf_is_image_mask: bool = False
     pdf_color_space: str | None = "/DeviceRGB"
     pdf_bits_per_component: int | None = 8
+    pdf_page_image_count: int = 0
+    pdf_figure_caption_count: int = 0
 
 
 def _png(array: np.ndarray, mode: str = "RGB") -> bytes:
@@ -77,6 +79,42 @@ def test_duplicates_do_not_consume_another_model_call():
     assert decision.route == "skip"
     assert decision.category == "duplicate"
     assert decision.confidence == 1
+
+
+def test_compound_academic_figure_components_are_not_independent_photos():
+    random = np.random.default_rng(17)
+    pixels = random.integers(0, 256, size=(240, 360, 3), dtype=np.uint8)
+    decision = route_document_asset(
+        Asset(
+            _png(pixels),
+            360,
+            240,
+            pdf_page_image_count=15,
+            pdf_figure_caption_count=1,
+        )
+    )
+
+    assert decision.route == "skip"
+    assert decision.should_detect is False
+    assert decision.category == "compound_figure_component"
+    assert decision.features["pdfPageImageCount"] == 15
+
+
+def test_many_pdf_images_without_a_figure_caption_still_fail_open():
+    random = np.random.default_rng(18)
+    pixels = random.integers(0, 256, size=(240, 360, 3), dtype=np.uint8)
+    decision = route_document_asset(
+        Asset(
+            _png(pixels),
+            360,
+            240,
+            pdf_page_image_count=15,
+            pdf_figure_caption_count=0,
+        )
+    )
+
+    assert decision.should_detect is True
+    assert decision.category == "photo_or_artwork"
 
 
 def test_broken_feature_read_fails_open():

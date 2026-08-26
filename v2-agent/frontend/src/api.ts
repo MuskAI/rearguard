@@ -861,6 +861,8 @@ export interface DocumentDetectionAsset {
   pdfColorSpace?: string | null;
   pdfBitsPerComponent?: number | null;
   pdfFilters?: string[];
+  pdfPageImageCount?: number;
+  pdfFigureCaptionCount?: number;
 }
 
 export interface DocumentDetectionTask {
@@ -981,6 +983,8 @@ export interface DocumentRouterAsset {
   pdfColorSpace?: string | null;
   pdfBitsPerComponent?: number | null;
   pdfFilters?: string[];
+  pdfPageImageCount?: number;
+  pdfFigureCaptionCount?: number;
   preview: string;
   router: DocumentRouterDecision;
 }

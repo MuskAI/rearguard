@@ -164,6 +164,32 @@ def test_pdf_alpha_image_retains_soft_mask_relationship_metadata():
     assert asset.pdf_bits_per_component == 8
 
 
+def test_pdf_assets_include_page_image_density_and_figure_caption_context():
+    output = io.BytesIO()
+    document = canvas.Canvas(output, pagesize=(360, 260))
+    document.drawString(24, 24, "Figure 1: Composite examples used by the method.")
+    for index in range(8):
+        image = _image_bytes(
+            "PNG",
+            ((index * 31) % 255, (index * 67) % 255, (index * 97) % 255),
+            size=(32 + index, 28 + index),
+        )
+        document.drawImage(
+            ImageReader(io.BytesIO(image)),
+            20 + (index % 4) * 82,
+            70 + (index // 4) * 82,
+            width=64,
+            height=58,
+        )
+    document.save()
+
+    extracted = extract_document_images("compound-figure.pdf", output.getvalue())
+
+    assert len(extracted.assets) == 8
+    assert {asset.pdf_page_image_count for asset in extracted.assets} == {8}
+    assert {asset.pdf_figure_caption_count for asset in extracted.assets} == {1}
+
+
 def test_pdf_rejects_malformed_encrypted_and_oversized_inputs(monkeypatch):
     _assert_error("invalid", "broken.pdf", b"%PDF-1.7\nnot a PDF")
 

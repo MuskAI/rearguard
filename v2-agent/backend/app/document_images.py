@@ -7,6 +7,7 @@ import multiprocessing
 import os
 import posixpath
 from pathlib import PurePosixPath
+import re
 import sys
 import time
 from typing import Literal
@@ -76,6 +77,9 @@ _RASTER_SUFFIXES = {
     ".webp",
 }
 _ALLOWED_ZIP_COMPRESSION = {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
+_PDF_FIGURE_CAPTION_RE = re.compile(
+    r"(?im)^\s*(?:figure|fig\.)\s*(?:\d+|[ivxlcdm]+)\s*[:.]"
+)
 
 
 class DocumentImageError(ValueError):
@@ -108,6 +112,8 @@ class DocumentImageAsset:
     pdf_color_space: str | None = None
     pdf_bits_per_component: int | None = None
     pdf_filters: tuple[str, ...] = ()
+    pdf_page_image_count: int = 0
+    pdf_figure_caption_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,6 +226,8 @@ class _AssetCollector:
         pdf_color_space: str | None = None,
         pdf_bits_per_component: int | None = None,
         pdf_filters: tuple[str, ...] = (),
+        pdf_page_image_count: int = 0,
+        pdf_figure_caption_count: int = 0,
     ) -> None:
         _check_deadline(self.deadline)
         if len(self.assets) >= self.limits.max_images:
@@ -252,6 +260,8 @@ class _AssetCollector:
                 pdf_color_space=pdf_color_space,
                 pdf_bits_per_component=pdf_bits_per_component,
                 pdf_filters=pdf_filters,
+                pdf_page_image_count=pdf_page_image_count,
+                pdf_figure_caption_count=pdf_figure_caption_count,
             )
         )
         self.total_bytes = next_total
@@ -342,6 +352,14 @@ def _extract_pdf_untrusted(filename: str, data: bytes, limits: _Limits) -> Docum
                 f"PDF page {page_number} image resources could not be inspected",
             )
             continue
+        page_image_count = len(image_entries)
+        figure_caption_count = 0
+        if page_image_count >= 8:
+            try:
+                page_text = page.extract_text() or ""
+            except (PdfReadError, ValueError, TypeError, KeyError, OSError, AttributeError, RecursionError):
+                page_text = ""
+            figure_caption_count = len(_PDF_FIGURE_CAPTION_RE.findall(page_text))
         soft_mask_object_ids: set[int] = set()
         for _image_key, image_file in image_entries:
             reference = getattr(image_file, "indirect_reference", None)
@@ -381,6 +399,8 @@ def _extract_pdf_untrusted(filename: str, data: bytes, limits: _Limits) -> Docum
                 page_number=page_number,
                 part_path=None,
                 occurrence_index=occurrence_index,
+                pdf_page_image_count=page_image_count,
+                pdf_figure_caption_count=figure_caption_count,
                 **_pdf_image_metadata(image_file, soft_mask_object_ids),
             )
         if failed_objects:
