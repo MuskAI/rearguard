@@ -213,11 +213,11 @@ export default function Playground({ authReady, user, onHome, onWorkspace, onDev
   const playerRank = submittedId ? leaderboard.findIndex((entry) => entry.id === submittedId) + 1 : 0;
 
   return (
-    <div className="playground-page">
+    <div className="playground-page h-dvh min-h-0 w-full min-w-0 overflow-x-clip overflow-y-auto overscroll-y-contain">
       <header className="playground-header">
         <HuijianBrand onClick={onHome} />
         <nav className="playground-nav" aria-label="Playground 页面导航"><button type="button" onClick={onHome}><House size={16} />官网首页</button><button type="button" className="is-active" aria-current="page"><Sparkles size={16} />小游戏</button><button type="button" onClick={onDeveloper}>开发者平台</button></nav>
-        <div className="playground-header-actions">{authReady && (user ? <AccountMenu compact user={user} onWorkspace={onWorkspace} onDeveloper={onDeveloper} onLogout={onLogout} /> : <button type="button" className="playground-login" aria-label="登录账号" onClick={onLogin}><LogIn size={16} /><span>登录</span></button>)}<button type="button" className="playground-workspace" onClick={onWorkspace}>开始鉴伪<ArrowRight size={16} /></button></div>
+        <div className="playground-header-actions">{authReady && (user ? <AccountMenu compact user={user} onWorkspace={onWorkspace} onDeveloper={onDeveloper} onLogout={onLogout} /> : <button type="button" className="playground-login max-[620px]:!h-11 max-[620px]:!min-h-11 max-[620px]:!w-auto max-[620px]:!min-w-11 max-[620px]:!px-2.5" aria-label="登录账号" onClick={onLogin}><LogIn size={16} /><span className="max-[620px]:!inline">登录</span></button>)}<button type="button" className="playground-workspace max-[620px]:!min-h-11" onClick={onWorkspace}>开始鉴伪<ArrowRight size={16} /></button></div>
       </header>
 
       <main className="playground-main">

@@ -675,6 +675,52 @@ test("Playground 手机端保持双列布局并正确扣减机会", async ({ pag
   await expectNoHorizontalOverflow(page);
 });
 
+test("移动端一级页面拥有独立滚动容器并可到达末尾操作", async ({ page }) => {
+  await installBaseMocks(page);
+  const cases = [
+    { url: "/?playground=1", root: ".playground-page", last: ".simple-hint" },
+    { url: "/?about=1", root: ".about-site", last: ".about-footer" },
+  ];
+  const viewports = [
+    { width: 320, height: 568 },
+    { width: 844, height: 390 },
+  ];
+
+  for (const viewport of viewports) {
+    await page.setViewportSize(viewport);
+    for (const item of cases) {
+      await page.goto(item.url);
+      const root = page.locator(item.root);
+      await expect(root).toBeVisible();
+      const before = await root.evaluate((element) => ({
+        clientHeight: element.clientHeight,
+        scrollHeight: element.scrollHeight,
+        overflowY: getComputedStyle(element).overflowY,
+      }));
+      expect(before.overflowY).toBe("auto");
+      expect(before.scrollHeight).toBeGreaterThan(before.clientHeight);
+      await root.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
+      await expect.poll(() => root.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+      await expect(page.locator(item.last)).toBeVisible();
+      await expectNoHorizontalOverflow(page);
+    }
+  }
+});
+
+test("Playground 紧凑手机顶栏保留可识别登录入口", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  await installBaseMocks(page);
+  await page.goto("/?playground=1");
+
+  const login = page.getByRole("button", { name: "登录账号" });
+  await expect(login).toBeVisible();
+  await expect(login).toContainText("登录");
+  await expect(page.locator(".playground-header .brand-copy small")).toBeHidden();
+  await expectTouchTargets(page, [".playground-login", ".playground-workspace"]);
+  await expectNoInternalOverflow(page, [".playground-header", ".playground-header-actions"]);
+  await expectNoHorizontalOverflow(page);
+});
+
 test("深色工作方式区块的文字、图标与按钮保持可读对比度", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await installBaseMocks(page);
@@ -1497,6 +1543,9 @@ test("手机工作台在 320 至 430px 间保持连续布局且首屏可上传",
     const layout = await page.evaluate(() => {
       const upload = document.querySelector<HTMLElement>(".upload-stage")!.getBoundingClientRect();
       const action = document.querySelector<HTMLElement>(".upload-button")!.getBoundingClientRect();
+      const avatarFrame = document.querySelector<HTMLElement>(".upload-stage-icon")!.getBoundingClientRect();
+      const avatar = document.querySelector<HTMLElement>(".upload-stage-icon .brand-agent-avatar")!.getBoundingClientRect();
+      const uploadTitle = document.querySelector<HTMLElement>(".upload-stage h3")!.getBoundingClientRect();
       const capabilities = Array.from(document.querySelectorAll<HTMLElement>(".compact-capability-strip > div"), (element) => {
         const bounds = element.getBoundingClientRect();
         return { top: bounds.top, left: bounds.left, right: bounds.right };
@@ -1504,6 +1553,9 @@ test("手机工作台在 320 至 430px 间保持连续布局且首屏可上传",
       return {
         uploadHeight: upload.height,
         actionBottom: action.bottom,
+        avatarFrame: { width: avatarFrame.width, height: avatarFrame.height },
+        avatar: { width: avatar.width, height: avatar.height, bottom: avatar.bottom },
+        uploadTitleTop: uploadTitle.top,
         capabilities,
       };
     });
@@ -1513,6 +1565,9 @@ test("手机工作台在 320 至 430px 间保持连续布局且首屏可上传",
     expect(Math.max(...layout.capabilities.map((item) => item.top)) - Math.min(...layout.capabilities.map((item) => item.top))).toBeLessThanOrEqual(1);
     expect(layout.capabilities[0].right).toBeLessThanOrEqual(layout.capabilities[1].left + 1);
     expect(layout.capabilities[1].right).toBeLessThanOrEqual(layout.capabilities[2].left + 1);
+    expect(layout.avatar.width, `${viewport.width}px 上传头像横向溢出`).toBeLessThanOrEqual(layout.avatarFrame.width + 1);
+    expect(layout.avatar.height, `${viewport.width}px 上传头像纵向溢出`).toBeLessThanOrEqual(layout.avatarFrame.height + 1);
+    expect(layout.avatar.bottom, `${viewport.width}px 上传头像压住标题`).toBeLessThanOrEqual(layout.uploadTitleTop);
     await expectNoHorizontalOverflow(page);
   }
 });

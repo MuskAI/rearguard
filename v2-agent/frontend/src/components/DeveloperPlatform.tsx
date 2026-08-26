@@ -593,12 +593,12 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
   }
 
   if (!authReady) {
-    return <div className="developer-gate"><LoaderCircle className="spin" size={24} /><span>正在确认登录状态</span></div>;
+    return <div className="developer-gate h-dvh min-h-0 w-full overflow-x-clip overflow-y-auto"><LoaderCircle className="spin" size={24} /><span>正在确认登录状态</span></div>;
   }
 
   if (!user) {
     return (
-      <div className="developer-gate developer-login-gate">
+      <div className="developer-gate developer-login-gate h-dvh min-h-0 w-full overflow-x-clip overflow-y-auto">
         <div className="developer-gate-panel">
           <span className="developer-gate-icon"><LockKeyhole size={28} /></span>
           <HuijianBrand onClick={onHome} />
@@ -611,7 +611,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
   }
 
   return (
-    <div className="developer-shell">
+    <div className="developer-shell h-dvh min-h-0 w-full min-w-0 overflow-x-clip">
       <aside className="developer-sidebar">
         <button type="button" className="developer-brand" onClick={onHome} aria-label="返回慧鉴AI官网">
           <HuijianBrand compact />

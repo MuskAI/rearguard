@@ -75,6 +75,7 @@ import "./playground.css";
 import "./report-qa.css";
 import "./about.css";
 import "./router-lab.css";
+import "./responsive.css";
 
 const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 256 * 1024 * 1024;
@@ -1344,7 +1345,7 @@ export default function App() {
           onLogout={() => void logout()}
         />
       ) : (
-      <div className={`agent-app ${historyLayoutClass} ${user ? "is-authenticated" : "is-guest"}`}>
+      <div className={`agent-app h-dvh min-h-0 w-full min-w-0 overflow-x-clip ${historyLayoutClass} ${user ? "is-authenticated" : "is-guest"}`}>
       {historyAvailable && <AgentHistory
         entries={history}
         activeKey={activeKey}

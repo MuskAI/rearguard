@@ -221,7 +221,7 @@ export default function OfficialHome({
   }
 
   return (
-    <div ref={siteRef} className="official-site home-vnext home-v3">
+    <div ref={siteRef} className="official-site home-vnext home-v3 h-dvh min-h-0 w-full min-w-0 overflow-x-clip overflow-y-auto overscroll-y-contain">
       <header className="home-header">
         <a className="home-brand-link" href="#home" aria-label="返回慧鉴AI官网首页"><HuijianBrand /></a>
 

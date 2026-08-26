@@ -187,7 +187,7 @@ export default function AboutCooperation({
   }
 
   return (
-    <div ref={pageRef} className="about-site home-v3">
+    <div ref={pageRef} className="about-site home-v3 h-dvh min-h-0 w-full min-w-0 overflow-x-clip overflow-y-auto overscroll-y-contain">
       <header className="home-header about-header">
         <a className="home-brand-link" href="/" aria-label="返回慧鉴AI官网首页" onClick={(event) => { event.preventDefault(); onHome(); }}>
           <HuijianBrand />

@@ -1,0 +1,31 @@
+/* Final mobile adaptations. Layout breakpoints follow Tailwind's mobile-first
+   scale; this file only resolves legacy selectors that still carry inline or
+   higher-specificity sizing. */
+@media (max-width: 640px) {
+  .about-site .home-header .brand-copy small,
+  .playground-header .brand-copy small {
+    display: none !important;
+  }
+
+  .about-site .home-header .brand-lockup,
+  .playground-header .brand-lockup {
+    min-width: 0;
+  }
+
+  .agent-app .upload-stage-icon .brand-agent-avatar {
+    width: 64px !important;
+    height: 64px !important;
+  }
+
+  .agent-app .upload-stage-icon .brand-agent-portrait {
+    width: 100%;
+    height: 100%;
+  }
+}
+
+@media (max-width: 360px) {
+  .agent-app .upload-stage-icon .brand-agent-avatar {
+    width: 60px !important;
+    height: 60px !important;
+  }
+}

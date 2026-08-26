@@ -246,7 +246,7 @@ export default function DocumentRouterLab({ onHome, onWorkspace }: Props) {
   }
 
   return (
-    <div className="router-lab-page">
+    <div className="router-lab-page h-dvh min-h-0 w-full min-w-0 overflow-x-clip overflow-y-auto overscroll-y-contain">
       <header className="router-lab-header">
         <button type="button" className="router-lab-brand" onClick={onHome} aria-label="返回慧鉴AI首页">
           <HuijianBrand compact />
