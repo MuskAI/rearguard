@@ -1932,9 +1932,13 @@ async def _process_document_task(task_id: str) -> None:
             str(task.get("filename") or "document"),
             data,
         )
+        routed_batch = await run_in_threadpool(
+            document_router.route_document_assets,
+            extraction.assets,
+        )
         router_decisions = {
-            int(asset.ordinal): await run_in_threadpool(document_router.route_document_asset, asset)
-            for asset in extraction.assets
+            int(asset.ordinal): decision
+            for asset, decision in zip(extraction.assets, routed_batch, strict=True)
         }
         router_counts = {
             route: sum(1 for decision in router_decisions.values() if decision.route == route)
@@ -1951,7 +1955,7 @@ async def _process_document_task(task_id: str) -> None:
             discovered=len(extraction.assets),
             warnings=list(extraction.warnings),
             routerSummary={
-                "version": "document-router-rules-v1",
+                "version": document_router.ROUTER_VERSION,
                 "detect": router_counts["detect"],
                 "skip": router_counts["skip"],
                 "uncertain": router_counts["uncertain"],
@@ -2121,9 +2125,12 @@ async def preview_document_router(
         status = 415 if exc.code == "unsupported" else 413 if exc.code == "limit" else 400
         raise HTTPException(status_code=status, detail=str(exc)) from exc
 
+    decisions = await run_in_threadpool(
+        document_router.route_document_assets,
+        extraction.assets,
+    )
     routed_assets = []
-    for asset in extraction.assets:
-        decision = await run_in_threadpool(document_router.route_document_asset, asset)
+    for asset, decision in zip(extraction.assets, decisions, strict=True):
         routed_assets.append({
             "ordinal": int(asset.ordinal),
             "pageNumber": asset.page_number,
@@ -2159,7 +2166,8 @@ async def preview_document_router(
         "sha256": hashlib.sha256(data).hexdigest(),
         "pageCount": extraction.page_count,
         "warnings": extraction.warnings,
-        "routerVersion": "document-router-rules-v1",
+        "routerVersion": document_router.ROUTER_VERSION,
+        "semanticRuntime": document_router.semantic_runtime_status(),
         "elapsedMs": int((time.perf_counter() - started) * 1000),
         "summary": {
             "extracted": len(routed_assets),

@@ -2,14 +2,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import io
+import logging
 import math
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, Sequence
 
 import numpy as np
 from PIL import Image, ImageOps
 
+from .document_router_semantic import (
+    MEANINGFUL_CATEGORIES,
+    SemanticPrediction,
+    default_semantic_classifier,
+)
+
 
 RouteName = Literal["detect", "skip", "uncertain"]
+ROUTER_VERSION = "document-router-hybrid-v2"
+logger = logging.getLogger(__name__)
 
 
 class RoutableDocumentAsset(Protocol):
@@ -47,7 +56,7 @@ class RouterDecision:
             "categoryLabel": self.category_label,
             "reasons": list(self.reasons),
             "features": self.features,
-            "version": "document-router-rules-v1",
+            "version": ROUTER_VERSION,
         }
 
 
@@ -138,6 +147,77 @@ def _decision(
         category_label=category_label,
         reasons=tuple(reasons[:4]),
         features=features,
+    )
+
+
+def _fuse_semantic(
+    decision: RouterDecision,
+    prediction: SemanticPrediction | None,
+) -> RouterDecision:
+    if prediction is None or not decision.should_detect:
+        return decision
+
+    meaningful = float(prediction.meaningful_score)
+    skip_score = max(0.0, 1.0 - meaningful)
+    top_is_meaningful = prediction.category in MEANINGFUL_CATEGORIES
+    features = {
+        **decision.features,
+        "semanticModel": prediction.model,
+        "semanticCategory": prediction.category,
+        "semanticCategoryLabel": prediction.category_label,
+        "semanticConfidence": round(float(prediction.confidence), 4),
+        "semanticMeaningfulScore": round(meaningful, 4),
+        "semanticScores": prediction.scores,
+    }
+
+    if meaningful >= 0.62 or (
+        top_is_meaningful and prediction.confidence >= 0.34 and meaningful >= 0.55
+    ):
+        confidence = min(0.98, 0.76 + max(0.0, meaningful - 0.55) * 0.48)
+        return _decision(
+            "detect",
+            confidence,
+            "semantic_visual_work",
+            prediction.category_label,
+            [
+                f"轻量语义模型认为它更接近{prediction.category_label}",
+                f"值得鉴伪的完整视觉内容概率为 {meaningful:.1%}",
+                "该类图片的真假或生成来源具有实际判断意义",
+            ],
+            features,
+        )
+
+    if (
+        not top_is_meaningful
+        and skip_score >= 0.72
+        and prediction.confidence >= 0.38
+        and skip_score - meaningful >= 0.25
+    ):
+        confidence = min(0.97, 0.73 + max(0.0, skip_score - 0.72) * 0.6)
+        return _decision(
+            "skip",
+            confidence,
+            f"semantic_{prediction.category}",
+            prediction.category_label,
+            [
+                f"轻量语义模型识别为{prediction.category_label}",
+                f"非独立照片或视觉作品的综合概率为 {skip_score:.1%}",
+                "对这类版式对象给出真假结论通常没有实际意义",
+            ],
+            features,
+        )
+
+    return _decision(
+        "uncertain",
+        min(0.79, 0.54 + abs(meaningful - 0.5) * 0.4),
+        "semantic_ambiguous",
+        "语义边界项",
+        [
+            f"语义模型最接近{prediction.category_label}，但证据不够集中",
+            f"值得鉴伪的完整视觉内容概率为 {meaningful:.1%}",
+            "为避免漏掉真实照片或生成作品，正式流程默认继续送检",
+        ],
+        features,
     )
 
 
@@ -334,3 +414,42 @@ def route_document_asset(asset: RoutableDocumentAsset) -> RouterDecision:
         ],
         features,
     )
+
+
+class SemanticClassifier(Protocol):
+    def classify(
+        self, assets: Sequence[RoutableDocumentAsset]
+    ) -> list[SemanticPrediction | None]: ...
+
+
+def route_document_assets(
+    assets: Sequence[RoutableDocumentAsset],
+    classifier: SemanticClassifier | None = None,
+) -> list[RouterDecision]:
+    """Route a document batch, applying semantic inference only to viable assets."""
+
+    base_decisions = [route_document_asset(asset) for asset in assets]
+    candidate_indexes = [
+        index for index, decision in enumerate(base_decisions) if decision.should_detect
+    ]
+    if not candidate_indexes:
+        return base_decisions
+
+    runtime = classifier or default_semantic_classifier()
+    candidates = [assets[index] for index in candidate_indexes]
+    try:
+        predictions = runtime.classify(candidates)
+    except Exception as exc:
+        logger.warning("document router semantic inference unavailable: %s", exc)
+        return base_decisions
+    if len(predictions) != len(candidates):
+        return base_decisions
+
+    decisions = list(base_decisions)
+    for index, prediction in zip(candidate_indexes, predictions, strict=True):
+        decisions[index] = _fuse_semantic(decisions[index], prediction)
+    return decisions
+
+
+def semantic_runtime_status() -> dict[str, Any]:
+    return default_semantic_classifier().status

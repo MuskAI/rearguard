@@ -2,3 +2,6 @@
 .env
 __pycache__/
 *.pyc
+models/document-router/
+*.sqlite3-shm
+*.sqlite3-wal

@@ -1,5 +1,20 @@
 # Third-Party Notices
 
+## Document Image Router
+
+- `wkcn/TinyCLIP-ViT-8M-16-Text-3M-YFCC15M`
+  - Official implementation: Microsoft Cream / TinyCLIP
+  - License: MIT
+  - https://github.com/microsoft/Cream/tree/main/TinyCLIP
+  - https://huggingface.co/wkcn/TinyCLIP-ViT-8M-16-Text-3M-YFCC15M
+- ONNX conversion used by the deployment helper:
+  - https://huggingface.co/twn39/TinyCLIP-ViT-8M-16-Text-3M-YFCC15M-ONNX
+
+The router uses the INT8 ONNX model only for broad semantic categories such as
+photograph, artwork, logo, icon, chart, diagram, interface screenshot, and
+document decoration. It does not use this model to decide whether an image is
+real or AI-generated.
+
 ## Visible Watermark Detection Assets and Algorithm
 
 The V2 visible watermark detector uses only detection/localization logic and

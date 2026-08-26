@@ -997,6 +997,13 @@ export interface DocumentRouterPreview {
   pageCount?: number | null;
   warnings: string[];
   routerVersion: string;
+  semanticRuntime?: {
+    state: "ready" | "available" | "missing";
+    model: string;
+    runtime: string;
+    modelDir?: string;
+    error?: string | null;
+  };
   elapsedMs: number;
   summary: {
     extracted: number;

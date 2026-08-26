@@ -24,9 +24,16 @@ def document_client(monkeypatch, tmp_path):
     monkeypatch.setenv("JIANZHEN_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("JIANZHEN_DOCUMENT_JOB_DIR", str(tmp_path / "document-jobs"))
     monkeypatch.setenv("JIANZHEN_ALLOW_ANONYMOUS_DETECT", "true")
+    monkeypatch.setenv("JIANZHEN_DOCUMENT_ROUTER_MODEL_DIR", str(tmp_path / "missing-router-model"))
     monkeypatch.setenv("JIANZHEN_CONSENT_AUDIT_SALT", "document-consent-audit-secret-32")
     monkeypatch.setenv("JIANZHEN_EVIDENCE_SIGNING_PRIVATE_KEY", "base64:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
-    for module_name in ("app.storage", "app.document_jobs", "app.main"):
+    for module_name in (
+        "app.storage",
+        "app.document_jobs",
+        "app.document_router_semantic",
+        "app.document_router",
+        "app.main",
+    ):
         sys.modules.pop(module_name, None)
     import app.storage as storage  # noqa: WPS433
     import app.document_jobs as document_jobs  # noqa: WPS433
@@ -35,6 +42,10 @@ def document_client(monkeypatch, tmp_path):
     importlib.reload(storage)
     importlib.reload(document_jobs)
     importlib.reload(main)
+    from app.document_router_semantic import TinyClipSemanticClassifier
+
+    missing_router = TinyClipSemanticClassifier(tmp_path / "missing-router-model")
+    monkeypatch.setattr(main.document_router, "default_semantic_classifier", lambda: missing_router)
     monkeypatch.setattr(main, "_session_auth_reachable", lambda: True)
     with TestClient(main.app, client=("127.0.0.1", 50100)) as client:
         yield main, client

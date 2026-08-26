@@ -13,7 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.document_router import route_document_asset
+from app.document_router import ROUTER_VERSION, route_document_asset, route_document_assets
+from app.document_router_semantic import SemanticPrediction
 
 
 @dataclass
@@ -123,3 +124,99 @@ def test_broken_feature_read_fails_open():
     assert decision.route == "uncertain"
     assert decision.should_detect is True
     assert decision.category == "unreadable"
+
+
+class FakeSemanticClassifier:
+    def __init__(self, predictions):
+        self.predictions = predictions
+        self.received = []
+
+    def classify(self, assets):
+        self.received = list(assets)
+        return self.predictions
+
+
+def _semantic(
+    category: str,
+    confidence: float,
+    meaningful_score: float,
+) -> SemanticPrediction:
+    return SemanticPrediction(
+        category=category,
+        category_label={
+            "photograph": "自然照片",
+            "chart": "图表或数据图",
+            "interface": "软件或网页截图",
+        }[category],
+        confidence=confidence,
+        meaningful_score=meaningful_score,
+        scores={category: confidence},
+        model="tinyclip-test",
+    )
+
+
+def test_semantic_router_skips_a_chart_that_looks_textured():
+    random = np.random.default_rng(91)
+    pixels = random.integers(0, 256, size=(240, 360, 3), dtype=np.uint8)
+    asset = Asset(_png(pixels), 360, 240)
+    classifier = FakeSemanticClassifier([_semantic("chart", 0.62, 0.12)])
+
+    decision = route_document_assets([asset], classifier)[0]
+
+    assert decision.route == "skip"
+    assert decision.category == "semantic_chart"
+    assert decision.features["semanticMeaningfulScore"] == 0.12
+    assert decision.public_payload()["version"] == ROUTER_VERSION
+
+
+def test_semantic_router_sends_a_natural_photo():
+    random = np.random.default_rng(92)
+    pixels = random.integers(0, 256, size=(240, 360, 3), dtype=np.uint8)
+    asset = Asset(_png(pixels), 360, 240)
+    classifier = FakeSemanticClassifier([_semantic("photograph", 0.68, 0.88)])
+
+    decision = route_document_assets([asset], classifier)[0]
+
+    assert decision.route == "detect"
+    assert decision.category == "semantic_visual_work"
+    assert decision.should_detect is True
+
+
+def test_semantic_boundary_fails_open():
+    random = np.random.default_rng(93)
+    pixels = random.integers(0, 256, size=(240, 360, 3), dtype=np.uint8)
+    classifier = FakeSemanticClassifier([_semantic("interface", 0.31, 0.44)])
+
+    decision = route_document_assets([Asset(_png(pixels), 360, 240)], classifier)[0]
+
+    assert decision.route == "uncertain"
+    assert decision.should_detect is True
+    assert decision.category == "semantic_ambiguous"
+
+
+def test_semantic_failure_preserves_conservative_rule_result():
+    random = np.random.default_rng(94)
+    pixels = random.integers(0, 256, size=(240, 360, 3), dtype=np.uint8)
+
+    class BrokenClassifier:
+        def classify(self, _assets):
+            raise RuntimeError("model unavailable")
+
+    decision = route_document_assets(
+        [Asset(_png(pixels), 360, 240)], BrokenClassifier()
+    )[0]
+
+    assert decision.should_detect is True
+    assert "semanticModel" not in decision.features
+
+
+def test_semantic_model_is_not_called_for_structural_skips():
+    pixels = np.full((240, 320, 3), 148, dtype=np.uint8)
+    classifier = FakeSemanticClassifier([])
+
+    decision = route_document_assets(
+        [Asset(_png(pixels), 320, 240)], classifier
+    )[0]
+
+    assert decision.route == "skip"
+    assert classifier.received == []

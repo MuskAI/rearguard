@@ -1,13 +1,14 @@
 import {
   ArrowLeft,
   Check,
+  Download,
   FileImage,
   RefreshCw,
   ShieldCheck,
   Upload,
   X,
 } from "lucide-react";
-import { ChangeEvent, DragEvent, useMemo, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   DocumentRouterAsset,
   DocumentRouterPreview,
@@ -23,6 +24,8 @@ interface Props {
 }
 
 type Filter = "all" | DocumentRouterRoute;
+type GroundTruth = "detect" | "skip" | "uncertain";
+type Annotations = Record<string, GroundTruth>;
 
 const MAX_BYTES = 25 * 1024 * 1024;
 
@@ -43,6 +46,10 @@ function locationLabel(asset: DocumentRouterAsset) {
   return `图片 ${asset.ordinal}`;
 }
 
+function assetKey(asset: DocumentRouterAsset) {
+  return `${asset.sha256}:${asset.pageNumber || 0}:${asset.occurrenceIndex}`;
+}
+
 function featureLabel(key: string) {
   const labels: Record<string, string> = {
     entropy: "信息熵",
@@ -61,6 +68,9 @@ function featureLabel(key: string) {
     pdfPageImageCount: "本页图片对象",
     pdfFigureCaptionCount: "Figure 图注",
     sourceKind: "文档来源",
+    semanticCategoryLabel: "语义类别",
+    semanticConfidence: "语义类别置信度",
+    semanticMeaningfulScore: "值得鉴伪概率",
   };
   return labels[key] || key;
 }
@@ -68,7 +78,7 @@ function featureLabel(key: string) {
 function featureValue(key: string, value: string | number | boolean | null) {
   if (value == null || value === "") return "-";
   if (typeof value === "boolean") return value ? "是" : "否";
-  if (typeof value === "number" && ["dominantColorRatio", "transparentRatio", "semitransparentRatio", "edgeDensity"].includes(key)) {
+  if (typeof value === "number" && ["dominantColorRatio", "transparentRatio", "semitransparentRatio", "edgeDensity", "semanticConfidence", "semanticMeaningfulScore"].includes(key)) {
     return `${(value * 100).toFixed(1)}%`;
   }
   return String(value);
@@ -76,6 +86,7 @@ function featureValue(key: string, value: string | number | boolean | null) {
 
 export default function DocumentRouterLab({ onHome, onWorkspace }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const annotationInputRef = useRef<HTMLInputElement>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [result, setResult] = useState<DocumentRouterPreview | null>(null);
@@ -83,15 +94,65 @@ export default function DocumentRouterLab({ onHome, onWorkspace }: Props) {
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState("");
+  const [annotations, setAnnotations] = useState<Annotations>({});
 
   const filtered = useMemo(() => {
     if (!result) return [];
     return filter === "all" ? result.assets : result.assets.filter((asset) => asset.router.route === filter);
   }, [filter, result]);
 
+  const evaluation = useMemo(() => {
+    if (!result) return null;
+    let tp = 0;
+    let tn = 0;
+    let fp = 0;
+    let fn = 0;
+    let uncertain = 0;
+    for (const asset of result.assets) {
+      const truth = annotations[assetKey(asset)];
+      if (!truth) continue;
+      if (truth === "uncertain") {
+        uncertain += 1;
+        continue;
+      }
+      const predictsDetect = asset.router.shouldDetect;
+      if (truth === "detect" && predictsDetect) tp += 1;
+      if (truth === "detect" && !predictsDetect) fn += 1;
+      if (truth === "skip" && predictsDetect) fp += 1;
+      if (truth === "skip" && !predictsDetect) tn += 1;
+    }
+    const scored = tp + tn + fp + fn;
+    return {
+      labeled: scored,
+      uncertain,
+      accuracy: scored ? (tp + tn) / scored : null,
+      recall: tp + fn ? tp / (tp + fn) : null,
+      precision: tp + fp ? tp / (tp + fp) : null,
+      falseSkips: fn,
+      tp,
+      tn,
+      fp,
+      fn,
+    };
+  }, [annotations, result]);
+
+  useEffect(() => {
+    if (!result) {
+      setAnnotations({});
+      return;
+    }
+    try {
+      const stored = localStorage.getItem(`huijian-router-labels:${result.sha256}`);
+      setAnnotations(stored ? JSON.parse(stored) as Annotations : {});
+    } catch {
+      setAnnotations({});
+    }
+  }, [result]);
+
   function selectFile(next: File | null) {
     setError("");
     setResult(null);
+    setAnnotations({});
     setFilter("all");
     if (!next) {
       setFile(null);
@@ -108,6 +169,51 @@ export default function DocumentRouterLab({ onHome, onWorkspace }: Props) {
       return;
     }
     setFile(next);
+  }
+
+  function annotate(asset: DocumentRouterAsset, truth: GroundTruth) {
+    setAnnotations((current) => {
+      const next = { ...current, [assetKey(asset)]: truth };
+      if (result) localStorage.setItem(`huijian-router-labels:${result.sha256}`, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  function exportAnnotations() {
+    if (!result) return;
+    const payload = {
+      schema: "huijian-document-router-eval-v1",
+      document: { filename: result.filename, sha256: result.sha256 },
+      routerVersion: result.routerVersion,
+      annotations,
+      exportedAt: new Date().toISOString(),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${result.filename.replace(/\.[^.]+$/, "")}-router-eval.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function importAnnotations(event: ChangeEvent<HTMLInputElement>) {
+    const selected = event.target.files?.[0];
+    event.target.value = "";
+    if (!selected || !result) return;
+    try {
+      const payload = JSON.parse(await selected.text()) as { document?: { sha256?: string }; annotations?: Annotations };
+      if (payload.document?.sha256 && payload.document.sha256 !== result.sha256) {
+        setError("标注文件属于另一份文档，未导入");
+        return;
+      }
+      if (!payload.annotations || typeof payload.annotations !== "object") throw new Error();
+      setAnnotations(payload.annotations);
+      localStorage.setItem(`huijian-router-labels:${result.sha256}`, JSON.stringify(payload.annotations));
+      setError("");
+    } catch {
+      setError("无法读取这份 Router 标注文件");
+    }
   }
 
   function onInput(event: ChangeEvent<HTMLInputElement>) {
@@ -201,7 +307,12 @@ export default function DocumentRouterLab({ onHome, onWorkspace }: Props) {
                 <h2>{result.filename}</h2>
                 <p>{result.pageCount ? `${result.pageCount} 页 · ` : ""}{formatBytes(result.size)} · Router 用时 {result.elapsedMs} ms</p>
               </div>
-              <strong>减少 {result.summary.modelCallsAvoided} 次模型调用</strong>
+              <div className="router-lab-result-actions">
+                <span className={`router-lab-runtime is-${result.semanticRuntime?.state || "missing"}`}>
+                  {result.semanticRuntime?.state === "ready" ? "TinyCLIP 已运行" : result.semanticRuntime?.state === "available" ? "TinyCLIP 已安装" : "语义模型未安装"}
+                </span>
+                <strong>减少 {result.summary.modelCallsAvoided} 次模型调用</strong>
+              </div>
             </header>
 
             <div className="router-lab-metrics">
@@ -213,6 +324,26 @@ export default function DocumentRouterLab({ onHome, onWorkspace }: Props) {
             </div>
 
             {result.warnings.length > 0 && <p className="router-lab-warning">{result.warnings.join("；")}</p>}
+
+            <section className="router-lab-evaluation" aria-label="人工标注评测">
+              <div className="router-lab-evaluation-copy">
+                <small>HUMAN-IN-THE-LOOP EVALUATION</small>
+                <h3>用人工标注验证 Router，而不是凭感觉调阈值</h3>
+                <p>逐张标记“应该送检”或“应该跳过”。应送检召回率优先，任何误跳过都会单独计数。</p>
+              </div>
+              <div className="router-lab-evaluation-metrics">
+                <article><span>已计分</span><strong>{evaluation?.labeled || 0}</strong></article>
+                <article><span>准确率</span><strong>{evaluation?.accuracy == null ? "-" : `${Math.round(evaluation.accuracy * 100)}%`}</strong></article>
+                <article className={(evaluation?.falseSkips || 0) > 0 ? "is-danger" : ""}><span>应送检召回率</span><strong>{evaluation?.recall == null ? "-" : `${Math.round(evaluation.recall * 100)}%`}</strong></article>
+                <article><span>送检精确率</span><strong>{evaluation?.precision == null ? "-" : `${Math.round(evaluation.precision * 100)}%`}</strong></article>
+                <article className={(evaluation?.falseSkips || 0) > 0 ? "is-danger" : ""}><span>错误跳过</span><strong>{evaluation?.falseSkips || 0}</strong></article>
+              </div>
+              <div className="router-lab-evaluation-actions">
+                <button type="button" onClick={() => annotationInputRef.current?.click()}><Upload size={16} /> 导入标注</button>
+                <button type="button" onClick={exportAnnotations}><Download size={16} /> 导出标注</button>
+                <input ref={annotationInputRef} type="file" accept="application/json,.json" onChange={(event) => void importAnnotations(event)} hidden />
+              </div>
+            </section>
 
             <div className="router-lab-toolbar">
               <div>
@@ -238,6 +369,19 @@ export default function DocumentRouterLab({ onHome, onWorkspace }: Props) {
                       <h3>{asset.router.categoryLabel}</h3>
                       <p>{asset.width}×{asset.height} · 决策置信度 {Math.round(asset.router.confidence * 100)}%</p>
                       <ul>{asset.router.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
+                      <div className="router-lab-annotation" aria-label={`${locationLabel(asset)}人工标注`}>
+                        <span>人工判断</span>
+                        {(["detect", "skip", "uncertain"] as const).map((truth) => (
+                          <button
+                            key={truth}
+                            type="button"
+                            className={annotations[assetKey(asset)] === truth ? "is-active" : ""}
+                            onClick={() => annotate(asset, truth)}
+                          >
+                            {{ detect: "应该送检", skip: "应该跳过", uncertain: "不确定" }[truth]}
+                          </button>
+                        ))}
+                      </div>
                       <details>
                         <summary>查看结构与统计特征</summary>
                         <dl>
@@ -245,6 +389,7 @@ export default function DocumentRouterLab({ onHome, onWorkspace }: Props) {
                             "entropy", "luminanceStd", "edgeDensity", "colorfulness", "dominantColorRatio",
                             "transparentRatio", "aspectRatio", "pixelCount", "pdfObjectId", "pdfSoftMaskObjectId",
                             "pdfColorSpace", "pdfBitsPerComponent", "pdfPageImageCount", "pdfFigureCaptionCount", "sourceKind",
+                            "semanticCategoryLabel", "semanticConfidence", "semanticMeaningfulScore",
                           ].includes(key)).map(([key, value]) => (
                             <div key={key}><dt>{featureLabel(key)}</dt><dd>{featureValue(key, value)}</dd></div>
                           ))}
