@@ -57,6 +57,27 @@ CREATE TABLE IF NOT EXISTS `admin_accounts` (
   KEY `idx_admin_accounts_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='后台管理员账号';
 
+CREATE TABLE IF NOT EXISTS `admin_registration_requests` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
+  `username` VARCHAR(64) NOT NULL,
+  `phone` VARCHAR(20) NOT NULL,
+  `password_hash` VARCHAR(255) NOT NULL,
+  `application_note` VARCHAR(512) NULL DEFAULT NULL,
+  `status` VARCHAR(16) NOT NULL DEFAULT 'pending',
+  `requested_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `reviewed_at` DATETIME NULL DEFAULT NULL,
+  `reviewed_by_admin_id` INT NULL DEFAULT NULL,
+  `reviewed_by_username` VARCHAR(64) NULL DEFAULT NULL,
+  `review_note` VARCHAR(512) NULL DEFAULT NULL,
+  `source_ip_hash` CHAR(64) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_admin_registration_username` (`username`),
+  UNIQUE KEY `uniq_admin_registration_phone` (`phone`),
+  KEY `idx_admin_registration_status_requested` (`status`, `requested_at`),
+  KEY `idx_admin_registration_source_requested` (`source_ip_hash`, `requested_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='后台管理员注册申请';
+
 CREATE TABLE IF NOT EXISTS `data` (
   `itemid` INT NOT NULL AUTO_INCREMENT,
   `createtime` DATETIME NULL,

@@ -50,6 +50,26 @@ PREPARE rg_role_status_index_stmt FROM @rg_role_status_index_sql;
 EXECUTE rg_role_status_index_stmt;
 DEALLOCATE PREPARE rg_role_status_index_stmt;
 
+CREATE TABLE IF NOT EXISTS admin_registration_requests (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  username VARCHAR(64) NOT NULL,
+  phone VARCHAR(20) NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  application_note VARCHAR(512) NULL,
+  status VARCHAR(16) NOT NULL DEFAULT 'pending',
+  requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  reviewed_at DATETIME NULL,
+  reviewed_by_admin_id INT NULL,
+  reviewed_by_username VARCHAR(64) NULL,
+  review_note VARCHAR(512) NULL,
+  source_ip_hash CHAR(64) NOT NULL,
+  UNIQUE KEY uniq_admin_registration_username (username),
+  UNIQUE KEY uniq_admin_registration_phone (phone),
+  KEY idx_admin_registration_status_requested (status, requested_at),
+  KEY idx_admin_registration_source_requested (source_ip_hash, requested_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS admin_login_attempts (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   identity_hash CHAR(64) NOT NULL,

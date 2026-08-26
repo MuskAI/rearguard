@@ -8,6 +8,7 @@ import time
 from types import SimpleNamespace
 
 import pytest
+from werkzeug.security import generate_password_hash
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -855,52 +856,62 @@ def test_admin_logout_requires_csrf_post_and_clears_session(client, monkeypatch)
     assert audit == [("admin.logout", "1")]
 
 
-def test_admin_register_requires_existing_admin_session(client, monkeypatch):
-    monkeypatch.setattr(admin, "_admin_account_count", lambda: 0)
+def test_admin_register_accepts_public_application_for_review(client, monkeypatch):
     monkeypatch.setattr(admin, "_audit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(admin, "_admin_application_rate_limited", lambda: False)
+    submitted = {}
 
-    created = {}
-
-    def fake_create(username, phone, password, role="admin"):
-        created.update({"username": username, "phone": phone, "password": password, "role": role})
+    def fake_submit(username, phone, password, application_note=""):
+        submitted.update({
+            "username": username,
+            "phone": phone,
+            "password": password,
+            "application_note": application_note,
+        })
         return True, ""
 
-    monkeypatch.setattr(admin, "_create_admin_account", fake_create)
-    monkeypatch.setattr(
-        admin,
-        "_find_admin_account",
-        lambda identity: {
-            "id": 4,
-            "username": "ops",
-            "phone": "13329825566",
-            "password_hash": "unused",
-            "role": "admin",
-            "status": "active",
-        } if identity == "ops" else None,
-    )
+    monkeypatch.setattr(admin, "_submit_admin_application", fake_submit)
 
-    get_denied = client.get("/admin/register")
-    denied = client.post("/admin/register", data={
+    page = client.get("/admin/register")
+    allowed = client.post("/admin/register", data={
+        "csrf_token": _csrf_headers(client)["X-CSRF-Token"],
         "username": "ops",
         "phone": "13329825566",
+        "application_note": "负责模型服务运维",
         "password": "StrongPass123",
         "password_confirm": "StrongPass123",
     })
-    with client.session_transaction() as sess:
-        sess["admin_user"] = {"Userid": "admin:1", "adminId": 1, "username": "root", "role": "super_admin"}
-    allowed = client.post("/admin/register", data={
+
+    assert page.status_code == 200
+    assert "申请管理员账号" in page.get_data(as_text=True)
+    assert allowed.status_code == 302
+    assert "/admin/login?applied=1" in allowed.headers["Location"]
+    assert submitted == {
         "username": "ops",
         "phone": "13329825566",
         "password": "StrongPass123",
-        "password_confirm": "StrongPass123",
-    }, headers=_csrf_headers(client))
+        "application_note": "负责模型服务运维",
+    }
 
-    assert get_denied.status_code == 403
-    assert denied.status_code == 403
-    assert allowed.status_code == 302
-    assert created["username"] == "ops"
-    with client.session_transaction() as sess:
-        assert sess["admin_user"]["adminId"] == 1
+
+def test_pending_admin_application_cannot_login(client, monkeypatch):
+    password_hash = generate_password_hash("StrongPass123")
+    monkeypatch.setattr(admin, "_find_admin_account", lambda _identity: None)
+    monkeypatch.setattr(admin, "_find_admin_application", lambda _identity: {
+        "username": "ops",
+        "phone": "13329825566",
+        "password_hash": password_hash,
+        "status": "pending",
+    })
+
+    response = client.post("/admin/login", data={
+        "csrf_token": _csrf_headers(client)["X-CSRF-Token"],
+        "identity": "ops",
+        "password": "StrongPass123",
+    })
+
+    assert response.status_code == 403
+    assert "申请正在审核" in response.get_data(as_text=True)
 
 
 def test_empty_admin_allowlist_never_bootstraps_from_normal_login(client, monkeypatch):
@@ -1836,6 +1847,99 @@ def test_admin_accounts_can_be_listed_and_updated(client, monkeypatch):
     assert updated.get_json()["admin"]["role"] == "operator"
 
 
+def test_super_admin_can_list_pending_registration_requests(client, monkeypatch):
+    with client.session_transaction() as sess:
+        sess["admin_user"] = {
+            "Userid": "admin:1",
+            "adminId": 1,
+            "username": "root",
+            "role": "super_admin",
+            "authType": "admin_account",
+        }
+    monkeypatch.setattr(admin, "_ensure_admin_application_table", lambda: True)
+    monkeypatch.setattr(admin, "_scalar", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(admin, "excute_sql", lambda *args, **kwargs: [{
+        "id": 8,
+        "username": "ops",
+        "phone": "13329825566",
+        "application_note": "负责模型服务运维",
+        "status": "pending",
+        "requested_at": "2026-08-26 10:00:00",
+        "reviewed_at": None,
+        "reviewed_by_username": None,
+        "review_note": None,
+    }])
+
+    response = client.get("/api/admin/admin-applications?status=pending")
+
+    assert response.status_code == 200
+    assert response.get_json()["summary"]["pending"] == 1
+    assert response.get_json()["applications"][0]["applicationNote"] == "负责模型服务运维"
+
+
+def test_super_admin_can_approve_registration_request(client, monkeypatch):
+    with client.session_transaction() as sess:
+        sess["admin_user"] = {
+            "Userid": "admin:1",
+            "adminId": 1,
+            "username": "root",
+            "role": "super_admin",
+            "authType": "admin_account",
+        }
+    monkeypatch.setattr(admin, "_audit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        admin,
+        "_review_admin_application_atomic",
+        lambda application_id, action, role, actor, review_note="": (
+            {
+                "id": application_id,
+                "username": "ops",
+                "phone": "13329825566",
+                "application_note": "负责模型服务运维",
+                "status": "pending",
+            },
+            {
+                "id": application_id,
+                "username": "ops",
+                "phone": "13329825566",
+                "application_note": "负责模型服务运维",
+                "status": "approved",
+                "reviewed_by_username": actor["username"],
+            },
+            "",
+        ),
+    )
+
+    response = client.post(
+        "/api/admin/admin-applications/8/review",
+        json={"action": "approve", "role": "operator", "reviewNote": "身份已核验"},
+        headers=_csrf_headers(client),
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["application"]["status"] == "approved"
+
+
+def test_normal_admin_cannot_review_registration_request(client):
+    with client.session_transaction() as sess:
+        sess["admin_user"] = {
+            "Userid": "admin:2",
+            "adminId": 2,
+            "username": "ops",
+            "role": "admin",
+            "authType": "admin_account",
+        }
+
+    response = client.post(
+        "/api/admin/admin-applications/8/review",
+        json={"action": "approve", "role": "operator"},
+        headers=_csrf_headers(client),
+    )
+
+    assert response.status_code == 403
+    assert "admin.manage" in response.get_json()["message"]
+
+
 def test_admin_cannot_disable_self(client, monkeypatch):
     with client.session_transaction() as sess:
         sess["admin_user"] = {
@@ -2294,6 +2398,7 @@ def test_admin_security_sql_upgrades_existing_tables_idempotently():
     assert "information_schema.COLUMNS" in sql
     assert "ALTER TABLE admin_accounts ADD COLUMN session_version" in sql
     assert "CREATE TABLE IF NOT EXISTS admin_login_attempts" in sql
+    assert "CREATE TABLE IF NOT EXISTS admin_registration_requests" in sql
     assert "idx_admin_accounts_role_status" in sql
 
 

@@ -226,6 +226,17 @@
     .inquiry-actions{display:grid;align-content:start;gap:8px;padding-left:18px;border-left:1px solid var(--line-soft)}
     .inquiry-actions label{display:grid;gap:6px;color:var(--muted);font-size:12px;font-weight:700}
     .inquiry-actions .select,.inquiry-actions .btn{width:100%}
+    .admin-review-list{display:grid;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:#fff}
+    .admin-review-item{display:grid;grid-template-columns:minmax(0,1fr) 220px;gap:20px;padding:16px;border-bottom:1px solid var(--line-soft)}
+    .admin-review-item:last-child{border-bottom:0}
+    .admin-review-copy{min-width:0}
+    .admin-review-title{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+    .admin-review-title strong{font-size:15px}
+    .admin-review-meta{display:flex;gap:10px;flex-wrap:wrap;color:var(--muted);font-size:12px;margin-top:7px}
+    .admin-review-note{margin:11px 0 0!important;color:#344054!important;white-space:pre-wrap;overflow-wrap:anywhere}
+    .admin-review-actions{display:grid;align-content:start;gap:8px;padding-left:18px;border-left:1px solid var(--line-soft)}
+    .admin-review-actions .select,.admin-review-actions .btn{width:100%}
+    .admin-review-actions .action-row{display:grid;grid-template-columns:1fr 1fr}
     .compact-table table{min-width:560px;table-layout:fixed}
     .compact-table th,.compact-table td{padding:10px}
     .compact-table th:nth-child(1){width:118px}
@@ -477,6 +488,8 @@
       .operation-value{grid-column:auto;text-align:right}
       .inquiry-item{grid-template-columns:1fr;gap:14px}
       .inquiry-actions{padding:12px 0 0;border-left:0;border-top:1px solid var(--line-soft)}
+      .admin-review-item{grid-template-columns:1fr;gap:14px}
+      .admin-review-actions{padding:12px 0 0;border-left:0;border-top:1px solid var(--line-soft)}
       #view-testing .workspace-heading{display:block}
       #view-testing .workspace-heading>.action-row{width:auto;margin-top:12px}
       #view-testing .workspace-heading>.action-row .btn{width:auto}
@@ -552,7 +565,7 @@
           <summary><span><i class="nav-icon fa fa-sliders"></i><span class="nav-text">平台设置</span></span><i class="nav-section-chevron fa fa-angle-down"></i></summary>
           <div class="nav-children">
             {% if "api_key.view" in admin_permissions %}<a class="nav-item" href="#keys" data-route="keys"><i class="nav-icon fa fa-key"></i><span class="nav-text">API 凭证</span></a>{% endif %}
-            {% if can_manage_admins %}<a class="nav-item" href="#admins" data-route="admins"><i class="nav-icon fa fa-users"></i><span class="nav-text">管理员</span></a>{% endif %}
+            {% if can_manage_admins %}<a class="nav-item" href="#admins" data-route="admins"><i class="nav-icon fa fa-users"></i><span class="nav-text">账号与审核</span></a>{% endif %}
           </div>
         </details>
         {% endif %}
@@ -874,11 +887,22 @@
         </section>
 
         {% if can_manage_admins %}
-        <section class="view" id="view-admins" data-title="管理员">
+        <section class="view" id="view-admins" data-title="账号与审核">
           <section class="panel">
             <div class="panel-head">
-              <div><h2>管理员账号</h2><p>独立后台账号、角色权限、登录状态和密码重置。建议逐步替代手机号白名单。</p></div>
-              <a class="btn green" href="/admin/register">注册管理员</a>
+              <div><h2>注册申请</h2><p>核对申请人的身份与职责，再授予满足工作需要的最小权限。</p></div>
+              <span class="role-badge" id="adminApplicationCount">0 项待审核</span>
+            </div>
+            <div class="toolbar">
+              <input class="input" id="adminApplicationQuery" placeholder="搜索申请账号、手机号或说明">
+              <select class="select" id="adminApplicationStatus"><option value="pending">待审核</option><option value="">全部申请</option><option value="approved">已通过</option><option value="rejected">未通过</option></select>
+              <button class="btn" onclick="loadAdminApplications()">查询</button>
+            </div>
+            <div id="adminApplications"></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <div><h2>管理员账号</h2><p>查看角色、启用状态和最近登录；权限调整会立即使旧会话失效。</p></div>
             </div>
             <div class="toolbar">
               <input class="input" id="adminQuery" placeholder="搜索账号 / 手机号 / 角色 / 状态">
@@ -995,7 +1019,7 @@
     const CAN_MANAGE_ADMINS = {{ can_manage_admins|tojson }};
     const ADMIN_ROLE_LABELS = {{ role_options|default({}, true)|tojson }};
     const SERVER_INITIAL_ROUTE = {{ initial_admin_route|default('dashboard')|tojson }};
-    const titles = {dashboard:'总览',assurance:'在线保障',models:'模型管理',swarm:'Swarm 模式',system:'服务健康',testing:'内部测试平台',governance:'审计与告警',admins:'管理员',users:'用户',conversations:'用户对话',collaborations:'合作意向',detections:'检测记录',keys:'API 凭证'};
+    const titles = {dashboard:'总览',assurance:'在线保障',models:'模型管理',swarm:'Swarm 模式',system:'服务健康',testing:'内部测试平台',governance:'审计与告警',admins:'账号与审核',users:'用户',conversations:'用户对话',collaborations:'合作意向',detections:'检测记录',keys:'API 凭证'};
     const routePermissions = {assurance:'topology.view',models:'topology.view',swarm:'topology.view',system:'topology.view',testing:'testing.view',governance:['alerts.manage','audit.view'],admins:'admin.manage',users:'user.view',conversations:'conversation.view',collaborations:'collaboration.view',detections:'detection.view',keys:'api_key.view'};
     const routeAllowed = (route) => {
       const required = routePermissions[route];
@@ -1009,7 +1033,7 @@
     let lastAdminSessionCheck = 0;
     const COLLABORATION_STATUS_LABELS = {new:'待处理',contacted:'已联系',qualified:'推进中',closed:'已结束'};
     const COLLABORATION_TYPE_LABELS = {research:'联合研究',governance:'真实性治理',dataset:'数据与基准',integration:'产品接入',other:'其他合作'};
-    let state = {metrics:null, models:[], routing:{}, routingHistory:[], detections:[], users:[], conversations:[], conversationTotal:0, collaborations:[], collaborationReady:null, collaborationTotal:0, collaborationSummary:{new:0,contacted:0,qualified:0,closed:0}, admins:[], keys:[], services:[], host:null, serviceSummary:null, performance:null, assurance:null, swarm:null, alerts:null, alertDeliveries:[], audit:[], testing:null, testingDetail:null, testingImportId:'', testingImportedPaths:new Set(), testingRejectedPaths:new Set(), testingPendingChunks:new Map(), testingUploadActive:false, testingUploadPaused:false, testingResumeAfterSelection:false, testingFolderFiles:[], testingExtraFiles:[], testingFolderScanning:false, testingFolderName:'', pages:{}, selectedUser:null, selectedDetection:null};
+    let state = {metrics:null, models:[], routing:{}, routingHistory:[], detections:[], users:[], conversations:[], conversationTotal:0, collaborations:[], collaborationReady:null, collaborationTotal:0, collaborationSummary:{new:0,contacted:0,qualified:0,closed:0}, admins:[], adminApplications:[], adminApplicationSummary:{pending:0}, keys:[], services:[], host:null, serviceSummary:null, performance:null, assurance:null, swarm:null, alerts:null, alertDeliveries:[], audit:[], testing:null, testingDetail:null, testingImportId:'', testingImportedPaths:new Set(), testingRejectedPaths:new Set(), testingPendingChunks:new Map(), testingUploadActive:false, testingUploadPaused:false, testingResumeAfterSelection:false, testingFolderFiles:[], testingExtraFiles:[], testingFolderScanning:false, testingFolderName:'', pages:{}, selectedUser:null, selectedDetection:null};
     const testingRelativePaths = new WeakMap();
     const TESTING_IMPORT_STORAGE_KEY='realguard.testing.import.v1';
     let testingRefreshTimer = null;
@@ -1112,7 +1136,7 @@
       const dialog = $('actionDialog');
       const form = $('actionDialogForm');
       $('dialogTitle').textContent = title;
-      $('dialogBody').innerHTML = `${message ? `<p>${esc(message)}</p>` : ''}${warning ? `<div class="warning-band">${esc(warning)}</div>` : ''}${fields.map((field) => `<label class="dialog-field">${esc(field.label)}<input class="input" name="${esc(field.name)}" type="${esc(field.type || 'text')}" value="${esc(field.value ?? '')}" ${field.required ? 'required' : ''} ${field.min !== undefined ? `min="${esc(field.min)}"` : ''} ${field.max !== undefined ? `max="${esc(field.max)}"` : ''} ${field.step !== undefined ? `step="${esc(field.step)}"` : ''} autocomplete="${esc(field.autocomplete || 'off')}"></label>`).join('')}<div class="dialog-error" id="dialogError"></div>`;
+      $('dialogBody').innerHTML = `${message ? `<p>${esc(message)}</p>` : ''}${warning ? `<div class="warning-band">${esc(warning)}</div>` : ''}${fields.map((field) => `<label class="dialog-field">${esc(field.label)}<input class="input" name="${esc(field.name)}" type="${esc(field.type || 'text')}" value="${esc(field.value ?? '')}" ${field.placeholder ? `placeholder="${esc(field.placeholder)}"` : ''} ${field.required ? 'required' : ''} ${field.min !== undefined ? `min="${esc(field.min)}"` : ''} ${field.max !== undefined ? `max="${esc(field.max)}"` : ''} ${field.step !== undefined ? `step="${esc(field.step)}"` : ''} autocomplete="${esc(field.autocomplete || 'off')}"></label>`).join('')}<div class="dialog-error" id="dialogError"></div>`;
       const confirmButton = $('dialogConfirm');
       confirmButton.textContent = info ? '关闭' : confirmText;
       confirmButton.className = `btn ${danger ? 'red' : ''}`;
@@ -1313,7 +1337,7 @@
       if(route === 'system' && can('topology.view')) loadSystem();
       if(route === 'testing' && can('testing.view')) loadTesting(true);
       if(route === 'governance') { if(can('alerts.manage')) loadAlerts(); if(can('audit.view')) loadAudit(); }
-      if(route === 'admins' && CAN_MANAGE_ADMINS) loadAdmins();
+      if(route === 'admins' && CAN_MANAGE_ADMINS) loadAdminWorkspace();
       if(route === 'users') loadUsers();
       if(route === 'conversations') loadConversations();
       if(route === 'collaborations') loadCollaborations();
@@ -1727,6 +1751,33 @@
     function roleOptions(selected){
       return Object.entries(ADMIN_ROLE_LABELS || {}).map(([role, label]) => `<option value="${esc(role)}" ${role === selected ? 'selected' : ''}>${esc(label)}</option>`).join('');
     }
+    function adminApplicationPill(status){
+      const states={pending:['amber','待审核'],approved:['green','已通过'],rejected:['red','未通过']};
+      const [tone,label]=states[status]||['',status||'未知'];
+      return `<span class="pill ${tone}">${esc(label)}</span>`;
+    }
+    function renderAdminApplications(){
+      const target=$('adminApplications');
+      if(!target) return;
+      const pending=Number(state.adminApplicationSummary?.pending||0);
+      if($('adminApplicationCount')) $('adminApplicationCount').textContent=`${pending} 项待审核`;
+      target.innerHTML=`<div class="admin-review-list">${state.adminApplications.map(application=>{
+        const waiting=application.status==='pending';
+        const reviewMeta=application.reviewedAt?`<span>审核于 ${esc(application.reviewedAt)}</span><span>审核人 ${esc(application.reviewedBy||'-')}</span>`:'';
+        return `<article class="admin-review-item">
+          <div class="admin-review-copy">
+            <div class="admin-review-title"><strong>${esc(application.username)}</strong>${adminApplicationPill(application.status)}</div>
+            <div class="admin-review-meta"><span>${esc(application.phone)}</span><span>申请于 ${esc(application.requestedAt||'-')}</span>${reviewMeta}</div>
+            <p class="admin-review-note">${esc(application.applicationNote||'未填写申请说明')}</p>
+            ${application.reviewNote?`<p class="admin-review-note"><strong>审核备注：</strong>${esc(application.reviewNote)}</p>`:''}
+          </div>
+          <div class="admin-review-actions">
+            ${waiting?`<select class="select" id="adminApplicationRole-${Number(application.id)}" aria-label="批准后的管理员角色">${roleOptions('operator')}</select>
+            <div class="action-row"><button class="btn green" type="button" onclick="reviewAdminApplication(${Number(application.id)},'approve')">通过</button><button class="btn secondary" type="button" onclick="reviewAdminApplication(${Number(application.id)},'reject')">拒绝</button></div>`:'<span class="role-badge">审核已完成</span>'}
+          </div>
+        </article>`;
+      }).join('')||'<div class="empty">当前没有符合条件的注册申请</div>'}</div>`;
+    }
     function renderAdmins(){
       const target = $('admins');
       if(!target) return;
@@ -1852,6 +1903,22 @@
         if(append&&state.pages.admins?.nextCursor) params.set('cursor',state.pages.admins.nextCursor);
         const data=await api(`/api/admin/admins?${params}`); state.admins=append?[...state.admins,...(data.admins||[])]:data.admins||[]; state.pages.admins=data.page||{}; renderAdmins();
       });
+    }
+    async function loadAdminApplications(append=false){
+      if(!CAN_MANAGE_ADMINS) return;
+      return panelLoad(['adminApplications'],'loadAdminApplications',async()=>{
+        const params=new URLSearchParams({limit:'80',q:$('adminApplicationQuery')?.value||'',status:$('adminApplicationStatus')?.value||''});
+        if(append&&state.pages.adminApplications?.nextCursor) params.set('cursor',state.pages.adminApplications.nextCursor);
+        const data=await api(`/api/admin/admin-applications?${params}`);
+        state.adminApplications=append?[...state.adminApplications,...(data.applications||[])]:data.applications||[];
+        state.adminApplicationSummary=data.summary||{pending:0};
+        state.pages.adminApplications=data.page||{};
+        renderAdminApplications();
+      });
+    }
+    async function loadAdminWorkspace(){
+      if(!CAN_MANAGE_ADMINS) return;
+      await Promise.all([loadAdminApplications(),loadAdmins()]);
     }
     async function loadDetections(append=false){
       return panelLoad(['detections'],'loadDetections',async()=>{
@@ -2025,6 +2092,29 @@
       values.operationId=(globalThis.crypto?.randomUUID?.() || `quota-${Date.now()}-${Math.random().toString(36).slice(2)}`);
       const data=await api(`/api/admin/developer/accounts/${encodeURIComponent(id)}/quota`,{method:'POST',body:JSON.stringify(values)});
       state.selectedUser.developerAccount=data.account;renderUserDetail();toast(`剩余调用次数已设置为 ${data.account.freeRemaining}`);await loadAudit();
+    }
+    async function reviewAdminApplication(id,action){
+      if(!can('admin.manage')){ toast('当前角色无管理员审核权限'); return; }
+      const application=state.adminApplications.find(item=>Number(item.id)===Number(id))||{};
+      const role=$(`adminApplicationRole-${id}`)?.value||'operator';
+      const approving=action==='approve';
+      const values=await requestAction({
+        title:approving?'通过管理员申请':'拒绝管理员申请',
+        message:approving
+          ? `${application.username||`申请 #${id}`} 将以“${ADMIN_ROLE_LABELS[role]||role}”身份进入后台。`
+          : `${application.username||`申请 #${id}`} 本次不会获得后台访问权限。`,
+        warning:approving?'请确认申请人的真实身份，并遵循最小权限原则。':'申请人可修改说明后重新提交。',
+        confirmText:approving?'确认通过':'确认拒绝',
+        danger:!approving,
+        fields:[{name:'reviewNote',label:'审核备注',required:!approving,placeholder:approving?'可选：记录授权依据':'请简要说明未通过原因'}],
+      });
+      if(!values) return;
+      await api(`/api/admin/admin-applications/${encodeURIComponent(id)}/review`,{
+        method:'POST',
+        body:JSON.stringify({action,role,reviewNote:values.reviewNote||''}),
+      });
+      toast(approving?'管理员申请已通过':'管理员申请已拒绝');
+      await Promise.all([loadAdminApplications(),loadAdmins(),loadAudit()]);
     }
     async function saveAdminAccount(id){
       if(!can('admin.manage')){ toast('当前角色无管理员管理权限'); return; }
@@ -2975,7 +3065,7 @@
       if(can('api_key.view')) tasks.push(loadApiKeys());
       if(can('alerts.manage')) tasks.push(loadAlerts());
       if(can('audit.view')) tasks.push(loadAudit());
-      if(CAN_MANAGE_ADMINS) tasks.push(loadAdmins());
+      if(CAN_MANAGE_ADMINS) tasks.push(loadAdminWorkspace());
       await Promise.allSettled(tasks);
     }
     document.querySelectorAll('[data-route]').forEach(el => el.addEventListener('click', e => { e.preventDefault(); switchRoute(el.dataset.route); closeMobileNav(); }));

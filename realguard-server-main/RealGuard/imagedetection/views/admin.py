@@ -58,6 +58,7 @@ ADMIN_CSRF_SESSION_KEY = "admin_csrf_token"
 ADMIN_SCREEN_SESSION_KEY = "admin_screen_access_digest"
 ADMIN_SCREEN_SESSION_ISSUED_KEY = "admin_screen_access_issued_at"
 ADMIN_USERNAME_RE = re.compile(r"^[a-zA-Z0-9_.-]{3,64}$")
+ADMIN_PHONE_RE = re.compile(r"^1[3-9]\d{9}$")
 INTERNAL_TEST_OWNER_SQL = "COALESCE(openid, '') <> '__realguard_internal_test__'"
 ADMIN_PASSWORD_MIN_LENGTH = int(os.environ.get("REALGUARD_ADMIN_PASSWORD_MIN_LENGTH", "10"))
 ADMIN_LOGIN_MAX_ATTEMPTS = int(os.environ.get("REALGUARD_ADMIN_LOGIN_MAX_ATTEMPTS", "5"))
@@ -65,6 +66,7 @@ ADMIN_LOGIN_IP_MAX_ATTEMPTS = int(os.environ.get("REALGUARD_ADMIN_LOGIN_IP_MAX_A
 ADMIN_LOGIN_WINDOW_SECONDS = int(os.environ.get("REALGUARD_ADMIN_LOGIN_WINDOW_SECONDS", "900"))
 ADMIN_LOGIN_LOCK_SECONDS = int(os.environ.get("REALGUARD_ADMIN_LOGIN_LOCK_SECONDS", "600"))
 ADMIN_SESSION_MAX_AGE_SECONDS = int(os.environ.get("REALGUARD_ADMIN_SESSION_MAX_AGE_SECONDS", "28800"))
+ADMIN_APPLICATION_HOURLY_LIMIT = int(os.environ.get("REALGUARD_ADMIN_APPLICATION_HOURLY_LIMIT", "5"))
 ADMIN_SCHEMA_SQL = (
     """
     CREATE TABLE IF NOT EXISTS admin_accounts (
@@ -81,6 +83,27 @@ ADMIN_SCHEMA_SQL = (
         KEY idx_admin_accounts_status (status),
         KEY idx_admin_accounts_role_status (role, status),
         KEY idx_admin_accounts_phone (phone)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS admin_registration_requests (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        username VARCHAR(64) NOT NULL,
+        phone VARCHAR(20) NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        application_note VARCHAR(512) NULL,
+        status VARCHAR(16) NOT NULL DEFAULT 'pending',
+        requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        reviewed_at DATETIME NULL,
+        reviewed_by_admin_id INT NULL,
+        reviewed_by_username VARCHAR(64) NULL,
+        review_note VARCHAR(512) NULL,
+        source_ip_hash CHAR(64) NOT NULL,
+        UNIQUE KEY uniq_admin_registration_username (username),
+        UNIQUE KEY uniq_admin_registration_phone (phone),
+        KEY idx_admin_registration_status_requested (status, requested_at),
+        KEY idx_admin_registration_source_requested (source_ip_hash, requested_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """,
     """
@@ -850,6 +873,10 @@ def _ensure_admin_account_table():
     return _table_exists("admin_accounts")
 
 
+def _ensure_admin_application_table():
+    return _table_exists("admin_registration_requests")
+
+
 def _admin_account_count():
     if not _ensure_admin_account_table():
         return 0
@@ -916,6 +943,88 @@ def _admin_password_error(password):
     if not any(ch.isalpha() for ch in value) or not any(ch.isdigit() for ch in value):
         return "管理员密码需同时包含字母和数字"
     return ""
+
+
+def _find_admin_application(identity):
+    if not identity or not _ensure_admin_application_table():
+        return None
+    rows = excute_sql(
+        """
+        SELECT id, username, phone, password_hash, application_note, status,
+               requested_at, updated_at, reviewed_at, reviewed_by_admin_id,
+               reviewed_by_username, review_note
+        FROM admin_registration_requests
+        WHERE username = %s OR phone = %s
+        LIMIT 1
+        """,
+        (identity, identity),
+    ) or []
+    return rows[0] if rows else None
+
+
+def _admin_application_rate_limited():
+    if not _ensure_admin_application_table():
+        return False
+    source_ip_hash = _security_hash(_client_ip() or "unknown")
+    count = _scalar(
+        """
+        SELECT COUNT(*) AS count
+        FROM admin_registration_requests
+        WHERE source_ip_hash = %s AND requested_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)
+        """,
+        (source_ip_hash,),
+        default=0,
+    )
+    return int(count or 0) >= max(1, ADMIN_APPLICATION_HOURLY_LIMIT)
+
+
+def _submit_admin_application(username, phone, password, application_note=""):
+    if not _ensure_admin_application_table():
+        return False, "管理员申请服务尚未初始化，请稍后重试"
+    username = str(username or "").strip()
+    phone = str(phone or "").strip()
+    application_note = str(application_note or "").strip()[:512]
+    if not ADMIN_USERNAME_RE.match(username):
+        return False, "账号只能包含字母、数字、下划线、点和短横线，长度 3-64"
+    if not ADMIN_PHONE_RE.match(phone):
+        return False, "请输入 11 位中国大陆手机号"
+    password_error = _admin_password_error(password)
+    if password_error:
+        return False, password_error
+    if _find_admin_account(username) or _find_admin_account(phone):
+        return False, "该账号或手机号已经是管理员，请直接登录"
+    existing = _find_admin_application(username) or _find_admin_application(phone)
+    password_hash = generate_password_hash(password)
+    source_ip_hash = _security_hash(_client_ip() or "unknown")
+    if existing:
+        if existing.get("status") == "pending":
+            return False, "该账号或手机号已有待审核申请，请耐心等待"
+        if existing.get("status") == "approved":
+            return False, "该申请已经通过，请直接登录"
+        updated = excute_sql(
+            """
+            UPDATE admin_registration_requests
+            SET username = %s, phone = %s, password_hash = %s,
+                application_note = %s, status = 'pending', requested_at = NOW(),
+                reviewed_at = NULL, reviewed_by_admin_id = NULL,
+                reviewed_by_username = NULL, review_note = NULL,
+                source_ip_hash = %s
+            WHERE id = %s AND status = 'rejected'
+            """,
+            (username, phone, password_hash, application_note or None, source_ip_hash, existing.get("id")),
+            fetch=False,
+        )
+        return (True, "") if updated is not None else (False, "申请提交失败，请稍后重试")
+    created = excute_sql(
+        """
+        INSERT INTO admin_registration_requests
+            (username, phone, password_hash, application_note, status, source_ip_hash)
+        VALUES (%s, %s, %s, %s, 'pending', %s)
+        """,
+        (username, phone, password_hash, application_note or None, source_ip_hash),
+        fetch=False,
+    )
+    return (True, "") if created is not None else (False, "申请提交失败，请检查账号或手机号是否已被使用")
 
 
 def _admin_registration_allowed():
@@ -1111,18 +1220,20 @@ def _safe_admin_next(value):
     return raw if raw in {"/admin", "/admin/testing", "/admin/screen"} else "/admin"
 
 
-def _admin_auth_context(mode="login", error="", message="", next_path="/admin"):
-    can_register = _admin_registration_allowed()
+def _admin_auth_context(mode="login", error="", message="", next_path="/admin", form_values=None):
+    can_create_admin = _admin_registration_allowed()
     return {
-        "mode": mode if mode != "register" or can_register else "login",
+        "mode": mode if mode in {"login", "register"} else "login",
         "error": error,
         "message": message,
         "csrf_token": _csrf_token(),
         "legacy_admin_allowed": bool(_is_legacy_admin(_current_user())),
-        "can_register": can_register,
-        "admin_account_count": _admin_account_count() if can_register else None,
+        "can_register": True,
+        "can_create_admin": can_create_admin,
+        "admin_account_count": _admin_account_count() if can_create_admin else None,
         "role_options": ADMIN_ROLE_LABELS,
         "next_path": _safe_admin_next(next_path),
+        "form_values": form_values or {},
     }
 
 
@@ -1170,6 +1281,97 @@ def _admin_account_payload(row):
         "lastLoginAt": format_createtime(row.get("last_login_at")),
         "lastLoginIp": row.get("last_login_ip") or "",
     }
+
+
+def _admin_application_payload(row):
+    return {
+        "id": row.get("id"),
+        "username": row.get("username") or "",
+        "phone": row.get("phone") or "",
+        "applicationNote": row.get("application_note") or "",
+        "status": row.get("status") or "pending",
+        "requestedAt": format_createtime(row.get("requested_at")),
+        "reviewedAt": format_createtime(row.get("reviewed_at")),
+        "reviewedBy": row.get("reviewed_by_username") or "",
+        "reviewNote": row.get("review_note") or "",
+    }
+
+
+def _review_admin_application_atomic(application_id, action, role, actor, review_note=""):
+    conn = None
+    try:
+        conn = get_db_connection()
+        conn.begin()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id, username, phone, password_hash, application_note, status,
+                       requested_at, updated_at, reviewed_at, reviewed_by_admin_id,
+                       reviewed_by_username, review_note
+                FROM admin_registration_requests
+                WHERE id = %s
+                LIMIT 1
+                FOR UPDATE
+                """,
+                (application_id,),
+            )
+            before = cursor.fetchone()
+            if not before:
+                conn.rollback()
+                return None, None, "not_found"
+            if before.get("status") != "pending":
+                conn.rollback()
+                return before, None, "already_reviewed"
+            if action == "approve":
+                cursor.execute(
+                    """
+                    SELECT id FROM admin_accounts
+                    WHERE username = %s OR phone = %s
+                    LIMIT 1
+                    FOR UPDATE
+                    """,
+                    (before.get("username"), before.get("phone")),
+                )
+                if cursor.fetchone():
+                    conn.rollback()
+                    return before, None, "account_exists"
+                cursor.execute(
+                    """
+                    INSERT INTO admin_accounts
+                        (username, phone, password_hash, role, status)
+                    VALUES (%s, %s, %s, %s, 'active')
+                    """,
+                    (before.get("username"), before.get("phone"), before.get("password_hash"), role),
+                )
+                status = "approved"
+            else:
+                status = "rejected"
+            cursor.execute(
+                """
+                UPDATE admin_registration_requests
+                SET status = %s, reviewed_at = NOW(), reviewed_by_admin_id = %s,
+                    reviewed_by_username = %s, review_note = %s
+                WHERE id = %s
+                """,
+                (
+                    status,
+                    actor.get("adminId"),
+                    actor.get("username") or "",
+                    str(review_note or "").strip()[:512] or None,
+                    application_id,
+                ),
+            )
+            after = {**before, "status": status, "reviewed_by_username": actor.get("username") or ""}
+        conn.commit()
+        return before, after, ""
+    except Exception as exc:
+        print(f"[ADMIN APPLICATION REVIEW ERROR] {exc}")
+        if conn:
+            conn.rollback()
+        return None, None, "database_error"
+    finally:
+        if conn:
+            conn.close()
 
 
 def _update_admin_account_atomic(admin_id, role, status, actor_admin_id=None):
@@ -2967,6 +3169,19 @@ def admin_login():
             ), 429
         account = _find_admin_account(identity)
         if not account or account.get("status") != "active" or not check_password_hash(str(account.get("password_hash") or ""), password):
+            application = _find_admin_application(identity) if not account else None
+            if application and check_password_hash(str(application.get("password_hash") or ""), password):
+                application_status = application.get("status")
+                if application_status == "pending":
+                    return render_template(
+                        "admin_auth.html",
+                        **_admin_auth_context("login", error="管理员申请正在审核，请等待超级管理员处理", next_path=next_path),
+                    ), 403
+                if application_status == "rejected":
+                    return render_template(
+                        "admin_auth.html",
+                        **_admin_auth_context("login", error="管理员申请未通过，你可以修改申请说明后重新提交", next_path=next_path),
+                    ), 403
             _record_admin_login_failure(identity)
             return render_template(
                 "admin_auth.html",
@@ -2982,35 +3197,31 @@ def admin_login():
         session.pop(ADMIN_SCREEN_SESSION_ISSUED_KEY, None)
         _audit(admin_user, "admin.login", str(account.get("id") or identity), meta={"ip": _client_ip()})
         return redirect(next_path)
-    return render_template("admin_auth.html", **_admin_auth_context("login", next_path=next_path))
+    message = "申请已提交，超级管理员审核通过后即可登录" if request.args.get("applied") == "1" else ""
+    return render_template("admin_auth.html", **_admin_auth_context("login", message=message, next_path=next_path))
 
 
 @admin_blueprint.route("/admin/register", methods=["GET", "POST"])
 def admin_register():
-    user, permission_error = _admin_required("admin.manage")
-    if permission_error and _is_legacy_admin(_current_user()) and _admin_account_count() == 0:
-        user = _legacy_admin_payload(_current_user())
-        permission_error = None
-    if permission_error:
-        return render_template(
-            "admin_auth.html",
-            **_admin_auth_context("login", error="管理员注册需要已有管理员或后台白名单账号授权"),
-        ), 403
     if request.method == "POST":
         username = request.form.get("username") or ""
         phone = request.form.get("phone") or ""
         password = request.form.get("password") or ""
         password_confirm = request.form.get("password_confirm") or ""
-        role = request.form.get("role") or "operator"
+        application_note = request.form.get("application_note") or ""
+        form_values = {"username": username, "phone": phone, "application_note": application_note}
+        if _admin_application_rate_limited():
+            return render_template(
+                "admin_auth.html",
+                **_admin_auth_context("register", error="申请提交过于频繁，请一小时后再试", form_values=form_values),
+            ), 429
         if password != password_confirm:
-            return render_template("admin_auth.html", **_admin_auth_context("register", error="两次输入的密码不一致")), 400
-        ok, message = _create_admin_account(username, phone, password, role=role)
+            return render_template("admin_auth.html", **_admin_auth_context("register", error="两次输入的密码不一致", form_values=form_values)), 400
+        ok, message = _submit_admin_application(username, phone, password, application_note)
         if not ok:
-            return render_template("admin_auth.html", **_admin_auth_context("register", error=message)), 400
-        account = _find_admin_account(username)
-        if account:
-            _audit(user, "admin_account.create", username, after={"username": username, "phone": phone, "role": role})
-        return redirect(url_for("admin_blueprint.admin_console"))
+            return render_template("admin_auth.html", **_admin_auth_context("register", error=message, form_values=form_values)), 400
+        _audit(None, "admin_application.submit", username, after={"username": username, "phone": phone})
+        return redirect(url_for("admin_blueprint.admin_login", applied="1"))
     return render_template("admin_auth.html", **_admin_auth_context("register"))
 
 
@@ -3932,6 +4143,93 @@ def admin_accounts():
         "roles": ADMIN_ROLE_LABELS,
         "currentAdminId": (_current_admin_user() or {}).get("adminId"),
     })
+
+
+@admin_blueprint.route("/api/admin/admin-applications")
+def admin_applications():
+    _, error = _admin_required("admin.manage")
+    if error:
+        return error
+    if not _ensure_admin_application_table():
+        return jsonify({"status": "success", "applications": [], "summary": {"pending": 0}})
+    limit = _limit_arg(80, 200)
+    cursor = _cursor_arg()
+    query = _search_term()
+    requested_status = str(request.args.get("status") or "").strip()
+    filters = []
+    params = []
+    if query:
+        like = f"%{query}%"
+        filters.append("(username LIKE %s OR phone LIKE %s OR application_note LIKE %s)")
+        params.extend([like, like, like])
+    if requested_status in {"pending", "approved", "rejected"}:
+        filters.append("status = %s")
+        params.append(requested_status)
+    if cursor:
+        filters.append("id < %s")
+        params.append(cursor)
+    where = f"WHERE {' AND '.join(filters)}" if filters else ""
+    params.append(limit + 1)
+    rows = excute_sql(
+        f"""
+        SELECT id, username, phone, application_note, status, requested_at,
+               reviewed_at, reviewed_by_username, review_note
+        FROM admin_registration_requests
+        {where}
+        ORDER BY CASE WHEN status = 'pending' THEN 0 ELSE 1 END, id DESC
+        LIMIT %s
+        """,
+        tuple(params),
+    ) or []
+    items, page = _page_payload([_admin_application_payload(row) for row in rows], limit)
+    pending_count = _scalar(
+        "SELECT COUNT(*) AS count FROM admin_registration_requests WHERE status = 'pending'",
+        default=0,
+    )
+    return jsonify({
+        "status": "success",
+        "applications": items,
+        "summary": {"pending": int(pending_count or 0)},
+        "page": page,
+    })
+
+
+@admin_blueprint.route("/api/admin/admin-applications/<int:application_id>/review", methods=["POST"])
+def admin_review_application(application_id):
+    actor, error = _admin_required("admin.manage")
+    if error:
+        return error
+    payload = request.get_json(silent=True) or {}
+    action = str(payload.get("action") or "").strip()
+    role = str(payload.get("role") or "operator").strip()
+    review_note = str(payload.get("reviewNote") or "").strip()
+    if action not in {"approve", "reject"}:
+        return jsonify({"status": "error", "message": "审核操作只能为通过或拒绝"}), 400
+    if action == "approve" and role not in ADMIN_ROLE_LABELS:
+        return jsonify({"status": "error", "message": "管理员角色无效"}), 400
+    before, after, review_error = _review_admin_application_atomic(
+        application_id,
+        action,
+        role,
+        actor,
+        review_note,
+    )
+    if review_error == "not_found":
+        return jsonify({"status": "error", "message": "管理员申请不存在"}), 404
+    if review_error == "already_reviewed":
+        return jsonify({"status": "error", "message": "该申请已经审核，请刷新页面"}), 409
+    if review_error == "account_exists":
+        return jsonify({"status": "error", "message": "账号或手机号已经存在，无法重复批准"}), 409
+    if review_error:
+        return jsonify({"status": "error", "message": "管理员申请审核失败"}), 500
+    _audit(
+        actor,
+        f"admin_application.{action}",
+        str(application_id),
+        before=_admin_application_payload(before),
+        after={**_admin_application_payload(after), "role": role if action == "approve" else None},
+    )
+    return jsonify({"status": "success", "application": _admin_application_payload(after)})
 
 
 @admin_blueprint.route("/api/admin/admins/<int:admin_id>", methods=["PATCH", "POST"])
