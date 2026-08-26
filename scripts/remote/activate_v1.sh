@@ -548,8 +548,9 @@ test "$(stat -c '%a' /opt/realguard-data/evidence-manifests)" = "700"
 test "$(stat -c '%a' /opt/realguard-data/admin_state.json)" = "600"
 curl -fsS http://127.0.0.1:5000/admin/login | grep -q '慧鉴AI 管理员认证'
 admin_register_code="$(curl -sS -o /tmp/realguard-admin-register.html -w '%{http_code}' http://127.0.0.1:5000/admin/register)"
-test "$admin_register_code" = "403"
-! grep -q '注册管理员' /tmp/realguard-admin-register.html
+test "$admin_register_code" = "200"
+grep -q '申请管理员账号' /tmp/realguard-admin-register.html
+grep -q '提交审核' /tmp/realguard-admin-register.html
 big_screen_code="$(curl -sS -o /tmp/realguard-big-screen.json -w '%{http_code}' http://127.0.0.1:5000/api/admin/big-screen)"
 test "$big_screen_code" = "401"
 
