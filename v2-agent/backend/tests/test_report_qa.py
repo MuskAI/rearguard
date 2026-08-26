@@ -664,7 +664,7 @@ def test_strong_content_verdict_is_downgraded_without_reliable_sources(monkeypat
     }
     monkeypatch.setattr(report_qa.report_web_search, "lookup", lambda *_args, **_kwargs: web_result)
     client, completions = fake_client(json.dumps({
-        "answer": "这个说法已经被否定。[1]",
+        "answer": "这个说法是网络恶搞内容，不是真实事件。真实情况是另一场会谈。[1]",
         "sourceRefs": [1],
         "contentVerdict": "contradicted",
         "suggestedQuestions": [],
@@ -678,9 +678,47 @@ def test_strong_content_verdict_is_downgraded_without_reliable_sources(monkeypat
 
     assert response["webSearch"]["contentVerdict"] == "unverified"
     assert "公开来源不足以确认或否定" in response["answer"]
-    assert "已经被否定" not in response["answer"]
+    assert "网络恶搞内容" not in response["answer"]
+    assert "真实情况是" not in response["answer"]
     assert response["webSearch"]["sourceRefs"] == []
     assert '"strongVerdictAllowed":false' in completions.calls[0]["messages"][1]["content"]
+
+
+def test_reliable_but_unrelated_source_does_not_authorize_a_satire_verdict(monkeypatch):
+    web_result = {
+        "attempted": True,
+        "used": True,
+        "status": "success",
+        "claim": "公开主张",
+        "query": "公开主张",
+        "summary": "双方举行了一次正式会谈。[1]",
+        "sources": [{
+            "index": 1,
+            "title": "双方举行正式会谈",
+            "url": "https://www.reuters.com/world/meeting",
+            "siteName": "Reuters",
+            "domain": "www.reuters.com",
+            "quality": "major",
+        }],
+        "usage": {"totalTokens": 0, "searchCount": 1},
+    }
+    monkeypatch.setattr(report_qa.report_web_search, "lookup", lambda *_args, **_kwargs: web_result)
+    client, _ = fake_client(json.dumps({
+        "answer": "这条配文是网络恶搞内容。[1]",
+        "sourceRefs": [1],
+        "contentVerdict": "satire_likely",
+        "suggestedQuestions": [],
+    }, ensure_ascii=False))
+    monkeypatch.setattr(report_qa.detector, "_get_client", lambda: client)
+
+    response = report_qa.answer(
+        {"verdict": "real", "explanation": "未见明显异常"},
+        "请联网查证这个事件",
+    )
+
+    assert response["webSearch"]["contentVerdict"] == "unverified"
+    assert response["webSearch"]["sourceRefs"] == []
+    assert "公开来源不足以确认或否定" in response["answer"]
 
 
 @pytest.mark.parametrize("question", ["", "   ", "问" * (report_qa.REPORT_QA_MAX_QUESTION_CHARS + 1)])

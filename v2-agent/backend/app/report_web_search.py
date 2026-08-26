@@ -26,7 +26,7 @@ WEB_SEARCH_ENABLED = os.getenv("JIANZHEN_REPORT_QA_WEB_SEARCH_ENABLED", "1").str
     "0", "false", "no", "off",
 }
 WEB_SEARCH_MODEL = os.getenv("JIANZHEN_REPORT_QA_SEARCH_MODEL", "qwen-plus").strip() or "qwen-plus"
-WEB_SEARCH_STRATEGY = os.getenv("JIANZHEN_REPORT_QA_SEARCH_STRATEGY", "turbo").strip() or "turbo"
+WEB_SEARCH_STRATEGY = os.getenv("JIANZHEN_REPORT_QA_SEARCH_STRATEGY", "max").strip() or "max"
 WEB_SEARCH_TIMEOUT_SECONDS = max(
     5.0,
     min(float(os.getenv("JIANZHEN_REPORT_QA_SEARCH_TIMEOUT_SECONDS", "22")), 60.0),
@@ -412,7 +412,7 @@ def _remap_provider_citations(value: Any, citation_map: dict[int, int]) -> str:
         return f"[{mapped}]" if mapped else ""
 
     supported: list[str] = []
-    for chunk in re.findall(r"[^。！？!?\n]+[。！？!?]?", text):
+    for chunk in re.findall(r"[^。！？!?\n]+[。！？!?]?(?:\[\d{1,3}\])*", text):
         if not re.search(r"\[\d{1,3}\]", chunk):
             continue
         remapped = re.sub(r"\[(\d{1,3})\]", replace, chunk)
