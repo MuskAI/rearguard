@@ -910,7 +910,7 @@ def _supported_verdict_answer(
         "confirmed": "多条可靠且直接相关的来源相互印证，公开信息支持这项主张。",
         "contradicted": "可靠且直接相关的来源明确否定了这项主张。",
         "misleading": "相关来源表明，素材背景与当前配文并不一致，存在误导性表达。",
-        "satire_likely": "直接相关页面使用了明显的娱乐化或戏仿叙事，权威来源只支持公开背景，因此这更像网络戏仿或夸张包装。",
+        "satire_likely": "已核对的公开信息包含明确的调侃、戏仿或娱乐化标识，因此这项说法更像对公开素材的夸张包装，而不是已经得到可靠新闻证实的事实。",
     }
     evidence = f"检索结果中，{summary}" if summary else ""
     conclusion_refs = "".join(
@@ -950,7 +950,10 @@ def _guard_unverified_web_answer(
         refs = {int(value) for value in re.findall(r"\[(\d{1,2})\]", chunk)}
         cited = [source_by_index[index] for index in refs if index in source_by_index]
         if not any(
-            source.get("quality") in {"primary", "major"}
+            (
+                source.get("quality") in {"primary", "major"}
+                or source.get("evidenceBasis") in {"page", "platform_metadata"}
+            )
             and source.get("matchLevel") in {"direct", "context"}
             for source in cited
         ):
@@ -966,10 +969,35 @@ def _guard_unverified_web_answer(
     background = f"相关公开资料显示：{''.join(context)}" if context else ""
     if background and not background.endswith(("。", "！", "？")):
         background += "。"
+    entertainment_context = any(
+        source.get("evidenceBasis") in {"page", "platform_metadata"}
+        and re.search(
+            r"(?:梗图|梗圖|玩梗|调侃|調侃|戏仿|戲仿|恶搞|惡搞|笑死|娱乐化|娛樂化)",
+            _text(source.get("evidenceQuote"), 600),
+            re.IGNORECASE,
+        )
+        for source in source_by_index.values()
+    )
+    synthetic_context = any(
+        source.get("evidenceBasis") == "platform_metadata"
+        and re.search(
+            r"(?:疑似使用\s*AI|(?:AI|AIGC|人工智能).{0,8}(?:合成|生成))",
+            _text(source.get("evidenceQuote"), 600),
+            re.IGNORECASE,
+        )
+        for source in source_by_index.values()
+    )
+    if entertainment_context:
+        distinction = "这说明网上存在围绕相关人物的梗图或调侃，但不能证明待核验的具体说法。"
+    elif synthetic_context:
+        distinction = "平台提示相关内容可能经过 AI 合成，因此它不能作为待核验事件真实发生的可靠证明。"
+    else:
+        distinction = ""
     return (
         f"图片本身的检测结论仍是{image_label}。"
         f"{background}"
-        f"{subject}这些资料还不足以直接证实或否定该主张，所以目前只能视为未证实。"
+        f"{distinction}"
+        f"{subject}当前仍未找到可以直接支持或明确否定该主张的网页正文，因此目前只能视为未证实。"
     )
 
 

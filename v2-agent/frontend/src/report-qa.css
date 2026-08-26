@@ -287,6 +287,24 @@
   white-space: nowrap;
 }
 
+.report-qa-web-sources q {
+  display: -webkit-box;
+  margin-top: 5px;
+  overflow: hidden;
+  color: var(--muted-strong);
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.55;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.report-qa-web-sources q::before,
+.report-qa-web-sources q::after {
+  color: var(--muted);
+}
+
 .report-qa-web-sources strong {
   color: var(--ink);
   font-size: 12px;

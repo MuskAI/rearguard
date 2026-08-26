@@ -590,6 +590,15 @@ def put_report_qa_turn(
                 if str(value.get("matchLevel") or "weak").strip() in {"direct", "context", "weak"}
                 else "weak"
             ),
+            "contentStatus": str(value.get("contentStatus") or "").strip()[:24],
+            "evidenceRole": str(value.get("evidenceRole") or "irrelevant").strip()[:32],
+            "evidenceQuote": str(value.get("evidenceQuote") or "").strip()[:360],
+            "evidenceReason": str(value.get("evidenceReason") or "").strip()[:220],
+            "evidenceBasis": (
+                value.get("evidenceBasis")
+                if value.get("evidenceBasis") in {"page", "platform_metadata"}
+                else "none"
+            ),
         })
         if len(web_sources) >= 10:
             break
@@ -600,8 +609,11 @@ def put_report_qa_turn(
         "claim": str(web.get("claim") or "").strip()[:320],
         "query": str(web.get("query") or "").strip()[:180],
         "strategy": str(web.get("strategy") or "").strip()[:24],
+        "candidateSourceCount": max(0, _safe_int(web.get("candidateSourceCount"))),
+        "verifiedSourceCount": max(0, _safe_int(web.get("verifiedSourceCount"))),
         "matchedSourceCount": max(0, _safe_int(web.get("matchedSourceCount"))),
         "directSourceCount": max(0, _safe_int(web.get("directSourceCount"))),
+        "backgroundSourceCount": max(0, _safe_int(web.get("backgroundSourceCount"))),
         "contentVerdict": str(web.get("contentVerdict") or "not_applicable").strip()[:32],
         "sourceRefs": [
             int(value)

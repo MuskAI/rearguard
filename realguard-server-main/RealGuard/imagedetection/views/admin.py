@@ -1392,6 +1392,15 @@ def _conversation_json_object(value):
                 if str(item.get("matchLevel") or "weak") in {"direct", "context", "weak"}
                 else "weak"
             ),
+            "contentStatus": str(item.get("contentStatus") or "")[:24],
+            "evidenceRole": str(item.get("evidenceRole") or "irrelevant")[:32],
+            "evidenceQuote": str(item.get("evidenceQuote") or "")[:360],
+            "evidenceReason": str(item.get("evidenceReason") or "")[:220],
+            "evidenceBasis": (
+                item.get("evidenceBasis")
+                if item.get("evidenceBasis") in {"page", "platform_metadata"}
+                else "none"
+            ),
         })
         if len(sources) >= 10:
             break
@@ -1411,14 +1420,29 @@ def _conversation_json_object(value):
         direct_source_count = max(0, int(parsed.get("directSourceCount") or 0))
     except (TypeError, ValueError):
         direct_source_count = 0
+    try:
+        candidate_source_count = max(0, int(parsed.get("candidateSourceCount") or 0))
+    except (TypeError, ValueError):
+        candidate_source_count = 0
+    try:
+        verified_source_count = max(0, int(parsed.get("verifiedSourceCount") or 0))
+    except (TypeError, ValueError):
+        verified_source_count = 0
+    try:
+        background_source_count = max(0, int(parsed.get("backgroundSourceCount") or 0))
+    except (TypeError, ValueError):
+        background_source_count = 0
     return {
         "attempted": bool(parsed.get("attempted")),
         "used": bool(parsed.get("used") and sources),
         "status": str(parsed.get("status") or "not_requested")[:32],
         "claim": str(parsed.get("claim") or "")[:320],
         "strategy": str(parsed.get("strategy") or "")[:24],
+        "candidateSourceCount": candidate_source_count,
+        "verifiedSourceCount": verified_source_count,
         "matchedSourceCount": matched_source_count,
         "directSourceCount": direct_source_count,
+        "backgroundSourceCount": background_source_count,
         "contentVerdict": str(parsed.get("contentVerdict") or "not_applicable")[:32],
         "sourceRefs": source_refs[:5],
         "sources": sources,

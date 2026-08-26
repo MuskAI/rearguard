@@ -311,6 +311,7 @@
     .conversation-web-source-index{font-family:"IBM Plex Mono",monospace;color:var(--muted)}
     .conversation-web-title{overflow-wrap:anywhere}
     .conversation-web-site{display:block;color:var(--muted);font-size:12px;margin-top:1px}
+    .conversation-web-quote{display:block;margin-top:3px;color:var(--ink);font-size:12px;line-height:1.55}
     .conversation-web-empty{margin-top:7px;color:var(--muted);font-size:12px}
     .btn.mini{height:27px;padding:0 8px;font-size:12px}
     .action-row{display:flex;flex-wrap:wrap;gap:6px}
@@ -1606,13 +1607,14 @@
       const labels={confirmed:'公开信息支持',contradicted:'公开信息反驳',misleading:'存在误导性表述',satire_likely:'可能为戏仿恶搞',unverified:'公开信息不足',not_applicable:'未形成内容判断'};
       const verdict=labels[web.contentVerdict] || '联网核验';
       const matchLabels={direct:'直接相关',context:'背景信息',weak:'弱匹配'};
+      const roleLabels={direct_support:'正文支持',direct_refute:'正文否定',satire_origin:'娱乐化表达',misleading_origin:'原始语境',background_only:'仅作背景'};
       const cited=new Set(Array.isArray(web.sourceRefs)?web.sourceRefs.map(Number):[]);
       const sources=(Array.isArray(web.sources)?web.sources:[]).filter(source=>safeExternalUrl(source.url));
       const visible=sources.filter(source=>!cited.size || cited.has(Number(source.index))).slice(0,5);
       return `<section class="conversation-web">
         <div class="conversation-web-head"><strong><i class="fa fa-globe"></i> 联网核验依据</strong><span class="pill">${esc(verdict)}</span></div>
         ${web.claim?`<p class="conversation-web-claim">核验内容：${esc(web.claim)}</p>`:''}
-        ${visible.length?`<div class="conversation-web-sources">${visible.map(source=>`<a class="conversation-web-source" href="${esc(safeExternalUrl(source.url))}" target="_blank" rel="noopener noreferrer"><span class="conversation-web-source-index">[${Number(source.index)}]</span><span><span class="conversation-web-title">${esc(source.title || '公开来源')}</span><span class="conversation-web-site">${esc(source.siteName || '')}${source.matchLevel?` · ${esc(matchLabels[source.matchLevel] || '相关来源')}`:''}</span></span></a>`).join('')}</div>`:'<div class="conversation-web-empty">本轮没有取得足够的可核验公开来源。</div>'}
+        ${visible.length?`<div class="conversation-web-sources">${visible.map(source=>`<a class="conversation-web-source" href="${esc(safeExternalUrl(source.url))}" target="_blank" rel="noopener noreferrer"><span class="conversation-web-source-index">[${Number(source.index)}]</span><span><span class="conversation-web-title">${esc(source.title || '公开来源')}</span><span class="conversation-web-site">${esc(source.siteName || '')}${source.evidenceRole?` · ${esc(roleLabels[source.evidenceRole] || matchLabels[source.matchLevel] || '已核验正文')}`:''}${source.evidenceBasis==='platform_metadata'?' · 平台信息':''}</span>${source.evidenceQuote?`<span class="conversation-web-quote">“${esc(source.evidenceQuote)}”</span>`:''}</span></a>`).join('')}</div>`:'<div class="conversation-web-empty">本轮没有取得足够的可核验公开来源。</div>'}
       </section>`;
     }
     async function openConversation(id){

@@ -78,6 +78,22 @@ def test_search_claim_uses_native_dashscope_sources(monkeypatch):
         }
 
     monkeypatch.setattr(report_web_search, "_post_search", fake_post)
+    monkeypatch.setattr(report_web_search, "_collect_verified_evidence", lambda _claim, _sources: {
+        1: {
+            "contentStatus": "verified",
+            "evidenceRole": "satire_origin",
+            "evidenceQuote": "该说法属于网络搞笑戏仿",
+            "evidenceReason": "正文明确标注为搞笑戏仿",
+            "evidenceBasis": "page",
+        },
+        2: {
+            "contentStatus": "verified",
+            "evidenceRole": "background_only",
+            "evidenceQuote": "特朗普与高市早苗出席公开活动",
+            "evidenceReason": "正文只记录公开活动",
+            "evidenceBasis": "page",
+        },
+    })
     monkeypatch.setattr(report_web_search, "WEB_SEARCH_CACHE_SECONDS", 0)
     monkeypatch.setattr(report_web_search, "WEB_SEARCH_STRATEGY", "max")
     result = report_web_search.search_claim({
@@ -93,8 +109,9 @@ def test_search_claim_uses_native_dashscope_sources(monkeypatch):
     assert result["status"] == "success"
     assert result["used"] is True
     assert [source["quality"] for source in result["sources"]] == ["major", "primary"]
-    assert "事实核查：特朗普爱上高市早苗属于网络戏仿》[1]" in result["summary"]
-    assert "特朗普与高市早苗公开活动记录》[2]" in result["summary"]
+    assert "正文明确标注为搞笑戏仿" not in result["summary"]
+    assert "该说法属于网络搞笑戏仿" in result["summary"]
+    assert "特朗普与高市早苗出席公开活动" in result["summary"]
     assert "未找到可靠报道" not in result["summary"]
     assert result["usage"]["searchCount"] == 1
     assert result["usage"]["totalTokens"] == 920
@@ -243,7 +260,158 @@ def test_source_ranking_separates_direct_context_and_weak_matches():
     assert next(source for source in sources if "对台军售" in source["title"])["matchLevel"] == "weak"
 
 
-def test_satire_can_use_a_direct_parody_origin_plus_reliable_context():
+def test_evidence_candidates_require_entities_and_core_relation():
+    sources = report_web_search._normalize_sources(
+        [
+            {"index": 1, "title": "特朗普与高市早苗举行会谈", "url": "https://news.example.com/meeting"},
+            {"index": 2, "title": "特朗普与高市早苗的新 CP 搞笑视频", "url": "https://video.example.org/parody"},
+            {"index": 3, "title": "特朗普恋爱史", "url": "https://history.example.net/history"},
+        ],
+        claim="特朗普爱上高市早苗",
+        queries=["特朗普 高市早苗 恋爱"],
+    )
+
+    candidates = report_web_search._evidence_candidates("特朗普爱上高市早苗", sources)
+
+    assert candidates[0]["title"] == "特朗普与高市早苗的新 CP 搞笑视频"
+    assert {source["title"] for source in candidates} == {
+        "特朗普与高市早苗的新 CP 搞笑视频",
+        "特朗普与高市早苗举行会谈",
+    }
+
+
+def test_extractor_output_uses_evidence_section_and_ignores_summary():
+    url = "https://example.com/story"
+    parsed = report_web_search._parse_extractor_output(
+        f"""The useful information in {url} for user goal 核验 as follows:
+
+Evidence in page:
+正文明确写着这是特朗普与高市早苗的新 CP 搞笑段子。
+
+Summary:
+这里是模型自己生成的错误总结。
+"""
+    )
+
+    assert parsed[url]["available"] is True
+    assert "新 CP 搞笑段子" in parsed[url]["text"]
+    assert "错误总结" not in parsed[url]["text"]
+
+
+def test_bilibili_official_metadata_is_verified_as_entertainment_origin(monkeypatch):
+    response = SimpleNamespace(
+        raise_for_status=lambda: None,
+        json=lambda: {
+            "code": 0,
+            "data": {
+                "title": "【特朗普x高市早苗】特高磕 好喜欢你",
+                "owner": {"name": "测试发布者"},
+                "desc": "-",
+                "argue_info": {"argue_msg": "作者声明：该内容仅供娱乐，请勿过分解读"},
+            },
+        },
+    )
+    monkeypatch.setattr(report_web_search.httpx, "get", lambda *_args, **_kwargs: response)
+    monkeypatch.setattr(report_web_search.detector, "_get_client", lambda: None)
+    url = "https://www.bilibili.com/video/BV1qcybBnEST/"
+
+    page = report_web_search._bilibili_metadata_page(url)
+    result = report_web_search._classify_page_evidence(
+        "特朗普爱上高市早苗",
+        [{"index": 1, "title": "相关视频", "url": url}],
+        {url: page},
+    )
+
+    assert page["basis"] == "platform_metadata"
+    assert "仅供娱乐" in page["text"]
+    assert result[1]["evidenceRole"] == "satire_origin"
+    assert result[1]["evidenceBasis"] == "platform_metadata"
+    assert "平台公开信息" in result[1]["evidenceReason"]
+
+
+def test_platform_title_alone_cannot_become_factual_support(monkeypatch):
+    monkeypatch.setattr(report_web_search.detector, "_get_client", lambda: None)
+    url = "https://www.bilibili.com/video/BV1qcybBnEST/"
+    page = {
+        "available": True,
+        "basis": "platform_metadata",
+        "text": "平台公开元数据：视频标题：特朗普爱上高市早苗",
+    }
+
+    result = report_web_search._classify_page_evidence(
+        "特朗普爱上高市早苗",
+        [{"index": 1, "title": "相关视频", "url": url}],
+        {url: page},
+    )
+
+    assert result[1]["evidenceRole"] == "background_only"
+    assert "不能证明主张属实" in result[1]["evidenceReason"]
+
+
+def test_platform_ai_warning_is_preserved_but_does_not_alone_set_verdict(monkeypatch):
+    monkeypatch.setattr(report_web_search.detector, "_get_client", lambda: None)
+    url = "https://www.bilibili.com/video/BV1eP7y6FEYo/"
+    page = {
+        "available": True,
+        "basis": "platform_metadata",
+        "text": (
+            "平台公开元数据：视频标题：特朗普与高市早苗的爱情故事；"
+            "平台内容提示：该内容疑似使用AI技术合成，请谨慎甄别"
+        ),
+    }
+
+    result = report_web_search._classify_page_evidence(
+        "特朗普爱上高市早苗",
+        [{"index": 1, "title": "相关视频", "url": url}],
+        {url: page},
+    )
+    source = {
+        "index": 1,
+        "domain": "www.bilibili.com",
+        "quality": "other",
+        "matchLevel": "direct",
+        **result[1],
+    }
+
+    assert result[1]["evidenceRole"] == "misleading_origin"
+    assert "AI 合成" in result[1]["evidenceReason"]
+    assert report_web_search._derive_supported_verdicts("", [source]) == []
+
+
+def test_direct_refute_requires_quote_to_deny_the_claim_relation():
+    page = "特朗普曾在会谈中警告高市早苗不要添乱。"
+
+    assert report_web_search._validated_evidence_role(
+        "direct_refute",
+        page,
+        page,
+        "特朗普爱上高市早苗",
+    ) == "background_only"
+
+
+def test_classifier_rewrites_reason_when_model_role_fails_evidence_gate(monkeypatch):
+    response = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=(
+        '{"items":[{"index":1,"role":"satire_origin",'
+        '"quote":"真的会被特朗普和高市早苗的梗图笑死",'
+        '"reason":"这足以证明爱情说法是戏仿"}]}'
+    )))])
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+        create=lambda **_kwargs: response,
+    )))
+    monkeypatch.setattr(report_web_search.detector, "_get_client", lambda: client)
+    page_text = "真的会被特朗普和高市早苗的梗图笑死。"
+
+    result = report_web_search._classify_page_evidence(
+        "特朗普爱上高市早苗",
+        [{"index": 1, "title": "相关梗图", "url": "https://example.com/meme"}],
+        {"https://example.com/meme": {"available": True, "text": page_text}},
+    )
+
+    assert result[1]["evidenceRole"] == "background_only"
+    assert result[1]["evidenceReason"] == "正文只提供人物或事件背景，没有直接核验该主张"
+
+
+def test_title_only_parody_and_reliable_background_cannot_support_satire():
     sources = report_web_search._normalize_sources(
         [
             {"index": 1, "title": "特朗普高市早苗新CP？搞笑视频", "url": "https://example.com/parody"},
@@ -260,7 +428,24 @@ def test_satire_can_use_a_direct_parody_origin_plus_reliable_context():
     assert report_web_search._derive_supported_verdicts(
         "相关说法来自社交媒体调侃和二次创作。[1]特朗普确认日美密切关系并肯定友谊。[2]",
         sources,
-    ) == ["satire_likely"]
+    ) == []
+
+
+def test_verified_page_satire_can_support_satire_verdict():
+    sources = [{
+        "index": 1,
+        "title": "特朗普高市早苗新CP",
+        "url": "https://example.com/parody",
+        "domain": "example.com",
+        "quality": "other",
+        "matchLevel": "direct",
+        "contentStatus": "verified",
+        "evidenceRole": "satire_origin",
+        "evidenceQuote": "这是一个特朗普与高市早苗的新 CP 搞笑段子",
+        "evidenceBasis": "page",
+    }]
+
+    assert report_web_search._derive_supported_verdicts("", sources) == ["satire_likely"]
 
 
 def test_agent_search_uses_streaming_payload_and_keeps_match_metadata(monkeypatch):
@@ -289,6 +474,15 @@ def test_agent_search_uses_streaming_payload_and_keeps_match_metadata(monkeypatc
         }
 
     monkeypatch.setattr(report_web_search, "_request_search", fake_request)
+    monkeypatch.setattr(report_web_search, "_collect_verified_evidence", lambda _claim, _sources: {
+        1: {
+            "contentStatus": "verified",
+            "evidenceRole": "satire_origin",
+            "evidenceQuote": "特朗普高市早苗新 CP 搞笑视频",
+            "evidenceReason": "正文明确使用搞笑和 CP 表达",
+            "evidenceBasis": "page",
+        },
+    })
     monkeypatch.setattr(report_web_search, "WEB_SEARCH_CACHE_SECONDS", 0)
     monkeypatch.setattr(report_web_search, "WEB_SEARCH_STRATEGY", "agent")
     result = report_web_search.search_claim({"claim": "特朗普爱上高市早苗", "queries": []})
@@ -299,7 +493,8 @@ def test_agent_search_uses_streaming_payload_and_keeps_match_metadata(monkeypatc
     assert "enable_citation" not in options
     assert result["strategy"] == "agent"
     assert result["directSourceCount"] == 1
-    assert result["matchedSourceCount"] == 2
+    assert result["matchedSourceCount"] == 1
+    assert result["verifiedSourceCount"] == 1
     assert result["supportedVerdicts"] == ["satire_likely"]
 
 
@@ -323,6 +518,15 @@ def test_agent_search_falls_back_to_max_when_streaming_is_unavailable(monkeypatc
         }
 
     monkeypatch.setattr(report_web_search, "_request_search", fake_request)
+    monkeypatch.setattr(report_web_search, "_collect_verified_evidence", lambda _claim, _sources: {
+        1: {
+            "contentStatus": "verified",
+            "evidenceRole": "direct_support",
+            "evidenceQuote": "公开主张获得官方确认",
+            "evidenceReason": "正文直接确认该主张",
+            "evidenceBasis": "page",
+        },
+    })
     monkeypatch.setattr(report_web_search, "WEB_SEARCH_CACHE_SECONDS", 0)
     monkeypatch.setattr(report_web_search, "WEB_SEARCH_STRATEGY", "agent")
     monkeypatch.setattr(report_web_search, "WEB_SEARCH_FALLBACK_STRATEGY", "max")

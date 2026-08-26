@@ -73,6 +73,14 @@ const sourceMatchLabels: Record<string, string> = {
   weak: "弱匹配",
 };
 
+const evidenceRoleLabels: Record<string, string> = {
+  direct_support: "正文支持",
+  direct_refute: "正文否定",
+  satire_origin: "娱乐化表达",
+  misleading_origin: "原始语境",
+  background_only: "仅作背景",
+};
+
 function normalizeScore(value: unknown): number | null {
   const number = Number(value);
   if (!Number.isFinite(number)) return null;
@@ -447,8 +455,12 @@ function WebSearchEvidence({ value }: { value: ReportQaWebSearch }) {
                   <strong>{source.title}</strong>
                   <small>
                     {source.siteName || source.domain}
-                    <i className={`is-${source.matchLevel}`}>{sourceMatchLabels[source.matchLevel] || "相关来源"}</i>
+                    <i className={`is-${source.matchLevel}`}>
+                      {evidenceRoleLabels[source.evidenceRole] || sourceMatchLabels[source.matchLevel] || "已核验正文"}
+                      {source.evidenceBasis === "platform_metadata" ? " · 平台信息" : ""}
+                    </i>
                   </small>
+                  {source.evidenceQuote && <q>{source.evidenceQuote}</q>}
                 </span>
                 <ExternalLink size={13} aria-hidden="true" />
               </a>

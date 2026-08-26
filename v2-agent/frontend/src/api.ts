@@ -1738,6 +1738,11 @@ export interface ReportQaWebSource {
   domain: string;
   quality: "primary" | "major" | "other" | string;
   matchLevel: "direct" | "context" | "weak" | string;
+  contentStatus: string;
+  evidenceRole: string;
+  evidenceQuote: string;
+  evidenceReason: string;
+  evidenceBasis: "page" | "none" | string;
 }
 
 export interface ReportQaWebSearch {
@@ -1749,6 +1754,10 @@ export interface ReportQaWebSearch {
   contentVerdict: "confirmed" | "contradicted" | "misleading" | "satire_likely" | "unverified" | "not_applicable" | string;
   sourceRefs: number[];
   sources: ReportQaWebSource[];
+  candidateSourceCount?: number;
+  verifiedSourceCount?: number;
+  directSourceCount?: number;
+  backgroundSourceCount?: number;
   cached?: boolean;
 }
 
@@ -1833,6 +1842,11 @@ function parseReportQaWebSearch(value: unknown): ReportQaWebSearch | undefined {
         domain: errorText(source.domain),
         quality: errorText(source.quality) || "other",
         matchLevel: errorText(source.matchLevel) || "weak",
+        contentStatus: errorText(source.contentStatus),
+        evidenceRole: errorText(source.evidenceRole) || "irrelevant",
+        evidenceQuote: errorText(source.evidenceQuote),
+        evidenceReason: errorText(source.evidenceReason),
+        evidenceBasis: errorText(source.evidenceBasis) || "none",
       } satisfies ReportQaWebSource];
     })
     : [];
@@ -1848,6 +1862,10 @@ function parseReportQaWebSearch(value: unknown): ReportQaWebSearch | undefined {
     contentVerdict: errorText(record.contentVerdict) || "not_applicable",
     sourceRefs,
     sources,
+    candidateSourceCount: Number(record.candidateSourceCount) || 0,
+    verifiedSourceCount: Number(record.verifiedSourceCount) || 0,
+    directSourceCount: Number(record.directSourceCount) || 0,
+    backgroundSourceCount: Number(record.backgroundSourceCount) || 0,
     cached: record.cached === true,
   };
 }

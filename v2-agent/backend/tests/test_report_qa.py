@@ -513,7 +513,7 @@ def test_report_answer_separates_image_verdict_from_web_claim_verdict(monkeypatc
         "status": "success",
         "claim": "特朗普爱上高市早苗",
         "query": "特朗普 高市早苗 恋爱 新闻",
-        "summary": "公开活动报道没有证实恋爱说法，相关表达出现在戏仿内容中。[1][2]",
+        "summary": "只提供背景的正文：《公开活动记录》写道：“两人出席公开活动”[1]。带有调侃或戏仿表达的正文：《事实核查》写道：“这是一个特朗普与高市早苗的新 CP 搞笑段子”[2]。",
         "sources": [
             {
                 "index": 1,
@@ -522,6 +522,11 @@ def test_report_answer_separates_image_verdict_from_web_claim_verdict(monkeypatc
                 "siteName": "日本首相官邸",
                 "domain": "www.kantei.go.jp",
                 "quality": "primary",
+                "matchLevel": "context",
+                "contentStatus": "verified",
+                "evidenceRole": "background_only",
+                "evidenceQuote": "两人出席公开活动",
+                "evidenceBasis": "page",
             },
             {
                 "index": 2,
@@ -530,8 +535,14 @@ def test_report_answer_separates_image_verdict_from_web_claim_verdict(monkeypatc
                 "siteName": "Reuters",
                 "domain": "www.reuters.com",
                 "quality": "major",
+                "matchLevel": "direct",
+                "contentStatus": "verified",
+                "evidenceRole": "satire_origin",
+                "evidenceQuote": "这是一个特朗普与高市早苗的新 CP 搞笑段子",
+                "evidenceBasis": "page",
             },
         ],
+        "supportedVerdicts": ["satire_likely"],
         "usage": {"totalTokens": 600, "searchCount": 1},
     }
     monkeypatch.setattr(report_qa.report_web_search, "lookup", lambda *_args, **_kwargs: web_result)
@@ -553,7 +564,7 @@ def test_report_answer_separates_image_verdict_from_web_claim_verdict(monkeypatc
     )
 
     assert "图片本身的检测结论仍是真实图像" in response["answer"]
-    assert "更像网络戏仿或夸张包装" in response["answer"]
+    assert "更像对公开素材的夸张包装" in response["answer"]
     assert response["webSearch"]["contentVerdict"] == "satire_likely"
     assert response["webSearch"]["sourceRefs"] == [1, 2]
     assert len(response["webSearch"]["sources"]) == 2
@@ -581,6 +592,10 @@ def test_supported_search_verdict_is_not_lost_when_answer_model_defaults_to_unve
                 "siteName": "视频平台",
                 "quality": "other",
                 "matchLevel": "direct",
+                "contentStatus": "verified",
+                "evidenceRole": "satire_origin",
+                "evidenceQuote": "这是特朗普与高市早苗的爱情故事搞笑二创",
+                "evidenceBasis": "page",
             },
             {
                 "index": 2,
@@ -589,6 +604,10 @@ def test_supported_search_verdict_is_not_lost_when_answer_model_defaults_to_unve
                 "siteName": "社交平台",
                 "quality": "other",
                 "matchLevel": "direct",
+                "contentStatus": "verified",
+                "evidenceRole": "satire_origin",
+                "evidenceQuote": "东京爱情故事新 CP 搞笑视频",
+                "evidenceBasis": "page",
             },
             {
                 "index": 3,
@@ -597,6 +616,10 @@ def test_supported_search_verdict_is_not_lost_when_answer_model_defaults_to_unve
                 "siteName": "BBC",
                 "quality": "major",
                 "matchLevel": "context",
+                "contentStatus": "verified",
+                "evidenceRole": "background_only",
+                "evidenceQuote": "特朗普与高市早苗举行首脑会谈",
+                "evidenceBasis": "page",
             },
         ],
         "supportedVerdicts": ["satire_likely"],
@@ -617,7 +640,7 @@ def test_supported_search_verdict_is_not_lost_when_answer_model_defaults_to_unve
     )
 
     assert response["webSearch"]["contentVerdict"] == "satire_likely"
-    assert "更像网络戏仿或夸张包装" in response["answer"]
+    assert "更像对公开素材的夸张包装" in response["answer"]
     assert "爱情故事" in response["answer"]
     assert response["webSearch"]["sourceRefs"] == [1, 2, 3]
 
@@ -637,6 +660,11 @@ def test_report_answer_stream_emits_search_progress_and_sources(monkeypatch):
             "siteName": "Reuters",
             "domain": "www.reuters.com",
             "quality": "major",
+            "matchLevel": "context",
+            "contentStatus": "verified",
+            "evidenceRole": "background_only",
+            "evidenceQuote": "主流媒体记录了这场公开活动",
+            "evidenceBasis": "page",
         }],
         "usage": {"totalTokens": 200, "searchCount": 1},
     }
@@ -666,6 +694,60 @@ def test_report_answer_stream_emits_search_progress_and_sources(monkeypatch):
     assert "目前只能视为未证实" in events[-1]["answer"]
 
 
+def test_unverified_answer_separates_meme_spread_from_claim_proof():
+    public_web = {
+        "attempted": True,
+        "claim": "特朗普爱上高市早苗",
+        "sources": [{
+            "index": 1,
+            "quality": "other",
+            "matchLevel": "context",
+            "evidenceBasis": "page",
+            "evidenceQuote": "真的会被特朗普和高市早苗的梗图笑死",
+        }],
+    }
+    web_search = {
+        "summary": "与主张相关但未直接核验它的正文写道：“真的会被特朗普和高市早苗的梗图笑死”[1]。",
+    }
+
+    answer = report_qa._guard_unverified_web_answer(
+        {"verdict": "real"},
+        "",
+        "unverified",
+        public_web,
+        web_search,
+    )
+
+    assert "存在围绕相关人物的梗图或调侃" in answer
+    assert "不能证明待核验的具体说法" in answer
+    assert "目前只能视为未证实" in answer
+
+
+def test_unverified_answer_explains_platform_ai_warning():
+    public_web = {
+        "attempted": True,
+        "claim": "特朗普爱上高市早苗",
+        "sources": [{
+            "index": 1,
+            "quality": "other",
+            "matchLevel": "direct",
+            "evidenceBasis": "platform_metadata",
+            "evidenceQuote": "平台内容提示：该内容疑似使用AI技术合成，请谨慎甄别",
+        }],
+    }
+
+    answer = report_qa._guard_unverified_web_answer(
+        {"verdict": "real"},
+        "",
+        "unverified",
+        public_web,
+        {"summary": "平台公开信息提示该内容可能经过 AI 合成[1]。"},
+    )
+
+    assert "可能经过 AI 合成" in answer
+    assert "不能作为待核验事件真实发生的可靠证明" in answer
+
+
 def test_invalid_web_citation_is_removed(monkeypatch):
     web_result = {
         "attempted": True,
@@ -681,7 +763,13 @@ def test_invalid_web_citation_is_removed(monkeypatch):
             "siteName": "Reuters",
             "domain": "www.reuters.com",
             "quality": "major",
+            "matchLevel": "direct",
+            "contentStatus": "verified",
+            "evidenceRole": "direct_support",
+            "evidenceQuote": "官方核实确认这一点",
+            "evidenceBasis": "page",
         }],
+        "supportedVerdicts": ["confirmed"],
         "usage": {"totalTokens": 0, "searchCount": 1},
     }
     monkeypatch.setattr(report_qa.report_web_search, "lookup", lambda *_args, **_kwargs: web_result)
