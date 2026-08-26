@@ -604,7 +604,8 @@ def test_report_answer_stream_emits_search_progress_and_sources(monkeypatch):
     assert any(event["type"] == "delta" for event in events)
     assert events[-1]["type"] == "done"
     assert events[-1]["webSearch"]["sources"][0]["title"] == "公开核查"
-    assert events[-1]["webSearch"]["sourceRefs"] == [1]
+    assert events[-1]["webSearch"]["sourceRefs"] == []
+    assert "目前只能视为未证实" in events[-1]["answer"]
 
 
 def test_invalid_web_citation_is_removed(monkeypatch):
@@ -614,14 +615,14 @@ def test_invalid_web_citation_is_removed(monkeypatch):
         "status": "success",
         "claim": "公开主张",
         "query": "公开主张",
-        "summary": "一个来源。[1]",
+        "summary": "官方核实确认这一点。[1]",
         "sources": [{
             "index": 1,
             "title": "来源一",
-            "url": "https://example.com/one",
-            "siteName": "Example",
-            "domain": "example.com",
-            "quality": "other",
+            "url": "https://www.reuters.com/fact-check/one",
+            "siteName": "Reuters",
+            "domain": "www.reuters.com",
+            "quality": "major",
         }],
         "usage": {"totalTokens": 0, "searchCount": 1},
     }
@@ -629,7 +630,7 @@ def test_invalid_web_citation_is_removed(monkeypatch):
     client, _ = fake_client(json.dumps({
         "answer": "来源支持这一点。[1] 不存在的来源不能使用。[8]",
         "sourceRefs": [1, 8],
-        "contentVerdict": "unverified",
+        "contentVerdict": "confirmed",
         "suggestedQuestions": [],
     }, ensure_ascii=False))
     monkeypatch.setattr(report_qa.detector, "_get_client", lambda: client)
@@ -677,7 +678,7 @@ def test_strong_content_verdict_is_downgraded_without_reliable_sources(monkeypat
     )
 
     assert response["webSearch"]["contentVerdict"] == "unverified"
-    assert "公开来源不足以确认或否定" in response["answer"]
+    assert "目前只能视为未证实" in response["answer"]
     assert "网络恶搞内容" not in response["answer"]
     assert "真实情况是" not in response["answer"]
     assert response["webSearch"]["sourceRefs"] == []
@@ -718,7 +719,7 @@ def test_reliable_but_unrelated_source_does_not_authorize_a_satire_verdict(monke
 
     assert response["webSearch"]["contentVerdict"] == "unverified"
     assert response["webSearch"]["sourceRefs"] == []
-    assert "公开来源不足以确认或否定" in response["answer"]
+    assert "目前只能视为未证实" in response["answer"]
 
 
 @pytest.mark.parametrize("question", ["", "   ", "问" * (report_qa.REPORT_QA_MAX_QUESTION_CHARS + 1)])

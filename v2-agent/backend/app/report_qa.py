@@ -887,30 +887,21 @@ def _guard_unverified_web_answer(
     content_verdict: str,
     public_web: dict[str, Any],
 ) -> str:
-    if content_verdict != "unverified" or not public_web.get("used"):
+    if content_verdict != "unverified" or not public_web.get("attempted"):
         return answer_text
-    strong_claim = re.compile(
-        r"(?:(?:已经|已被|可以|足以|能够|明确|确定).{0,10}(?:证实|证伪|确认|否定))"
-        r"|(?:(?:说法|事件|配文|新闻|消息|网传内容).{0,10}(?:是假的|为假|不属实|属实))"
-        r"|(?:(?:是|属于).{0,8}(?:恶搞|戏仿))"
-        r"|(?:不是真实事件|并非真实事件|事件不真实|真实情况是)"
+    verdict = f"{report.get('verdict', '')}{report.get('verdictLabel', '')}".lower()
+    if any(marker in verdict for marker in ("fake", "suspect", "生成", "伪", "假")):
+        image_label = "AI 生成图像"
+    elif any(marker in verdict for marker in ("real", "真实")):
+        image_label = "真实图像"
+    else:
+        image_label = "原报告结论"
+    claim = _plain_language(public_web.get("claim"), 180)
+    subject = f"关于“{claim}”，" if claim else "关于图片表达的事件，"
+    return (
+        f"图片本身的检测结论仍是{image_label}。"
+        f"{subject}联网检索没有找到足以证实或否定它的可靠直接证据，所以目前只能视为未证实。"
     )
-    if strong_claim.search(answer_text):
-        verdict = f"{report.get('verdict', '')}{report.get('verdictLabel', '')}".lower()
-        if any(marker in verdict for marker in ("fake", "suspect", "生成", "伪", "假")):
-            image_label = "AI 生成图像"
-        elif any(marker in verdict for marker in ("real", "真实")):
-            image_label = "真实图像"
-        else:
-            image_label = "原报告结论"
-        return (
-            f"图片本身的检测结论仍是{image_label}；"
-            "但现有公开来源不足以确认或否定图片中的这项说法。"
-        )
-    if not re.search(r"(?:尚未|没有|未能).{0,8}证实|(?:公开来源|公开信息).{0,12}(?:不足|有限)|无法确认", answer_text):
-        separator = "" if answer_text.endswith(("。", "！", "？")) else "。"
-        return f"{answer_text}{separator}现有公开来源不足以确认或否定图片中的这项说法。"
-    return answer_text
 
 
 def _source_references(answer_text: str, source_count: int) -> list[int]:
