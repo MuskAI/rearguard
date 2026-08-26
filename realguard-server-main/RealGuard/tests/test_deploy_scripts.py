@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import subprocess
 
 
@@ -75,7 +76,14 @@ def test_document_detection_upload_uses_the_v2_upload_limit():
 
     for config in configs:
         body = config.read_text(encoding="utf-8")
-        location = body.split("location ~ ^/v2-api/(detect|forensics|provenance|document-detections)$", 1)[1].split("}", 1)[0]
+        match = re.search(
+            r"location\s+~\s+\^/v2-api/\([^\n)]*document-detections[^\n)]*\)\$\s*\{"
+            r"(?P<location>.*?)^\s*\}",
+            body,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        assert match, f"document upload location missing from {config}"
+        location = match.group("location")
         assert "client_max_body_size 26m;" in location
         assert "realguard-upload-proxy-security.conf" in location
 
