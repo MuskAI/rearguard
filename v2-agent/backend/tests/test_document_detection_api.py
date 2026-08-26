@@ -87,7 +87,11 @@ def test_document_router_preview_does_not_call_detection_model(document_client, 
     async def forbidden_model_call(*_args, **_kwargs):
         raise AssertionError("Router preview must not call the detection model")
 
+    async def forbidden_auth_call(*_args, **_kwargs):
+        raise AssertionError("The public Router Lab must not require authentication")
+
     monkeypatch.setattr(main, "_analyze_document_asset", forbidden_model_call)
+    monkeypatch.setattr(main, "_require_developer_access", forbidden_auth_call)
     response = client.post(
         "/api/document-router/preview",
         files={"file": ("router.pdf", b"%PDF-router-fixture", "application/pdf")},

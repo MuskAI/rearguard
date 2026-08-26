@@ -141,6 +141,14 @@ COLLABORATION_RATE_WINDOW_SECONDS = max(
 )
 _COLLABORATION_RATE_LOCK = asyncio.Lock()
 _COLLABORATION_REQUESTS: dict[str, list[float]] = {}
+DOCUMENT_ROUTER_PREVIEW_RATE_LIMIT = max(
+    1, int(os.getenv("JIANZHEN_DOCUMENT_ROUTER_PREVIEW_RATE_LIMIT", "20"))
+)
+DOCUMENT_ROUTER_PREVIEW_RATE_WINDOW_SECONDS = max(
+    10, int(os.getenv("JIANZHEN_DOCUMENT_ROUTER_PREVIEW_RATE_WINDOW_SECONDS", "60"))
+)
+_DOCUMENT_ROUTER_PREVIEW_RATE_LOCK = asyncio.Lock()
+_DOCUMENT_ROUTER_PREVIEW_REQUESTS: dict[str, list[float]] = {}
 COLLABORATION_TYPES = frozenset({"research", "governance", "dataset", "integration", "other"})
 
 
@@ -1247,6 +1255,39 @@ async def _enforce_collaboration_rate_limit(request: Request) -> None:
         _COLLABORATION_REQUESTS[key] = recent
 
 
+async def _enforce_document_router_preview_rate_limit(request: Request) -> None:
+    now = time.monotonic()
+    cutoff = now - DOCUMENT_ROUTER_PREVIEW_RATE_WINDOW_SECONDS
+    key = _client_ip(request) or "unknown"
+    async with _DOCUMENT_ROUTER_PREVIEW_RATE_LOCK:
+        if len(_DOCUMENT_ROUTER_PREVIEW_REQUESTS) > 2_048:
+            stale = [
+                candidate
+                for candidate, timestamps in _DOCUMENT_ROUTER_PREVIEW_REQUESTS.items()
+                if not timestamps or timestamps[-1] < cutoff
+            ]
+            for candidate in stale:
+                _DOCUMENT_ROUTER_PREVIEW_REQUESTS.pop(candidate, None)
+        recent = [
+            timestamp
+            for timestamp in _DOCUMENT_ROUTER_PREVIEW_REQUESTS.get(key, [])
+            if timestamp >= cutoff
+        ]
+        if len(recent) >= DOCUMENT_ROUTER_PREVIEW_RATE_LIMIT:
+            retry_after = max(
+                1,
+                math.ceil(recent[0] + DOCUMENT_ROUTER_PREVIEW_RATE_WINDOW_SECONDS - now),
+            )
+            _DOCUMENT_ROUTER_PREVIEW_REQUESTS[key] = recent
+            raise HTTPException(
+                status_code=429,
+                detail="Router Lab 请求较频繁，请稍后再试",
+                headers={"Retry-After": str(retry_after)},
+            )
+        recent.append(now)
+        _DOCUMENT_ROUTER_PREVIEW_REQUESTS[key] = recent
+
+
 def _collaboration_text(
     payload: dict,
     field: str,
@@ -2104,8 +2145,7 @@ async def preview_document_router(
     request: Request,
     file: UploadFile = File(...),
 ) -> dict:
-    actor = await _require_developer_access(request)
-    _require_session_csrf(request, actor)
+    await _enforce_document_router_preview_rate_limit(request)
     data = await _read_upload(file)
     if not data:
         raise HTTPException(status_code=400, detail="空文件")
