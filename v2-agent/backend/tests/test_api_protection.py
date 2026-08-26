@@ -2618,6 +2618,7 @@ def test_report_qa_stream_returns_sse_deltas_and_final_metadata(client, monkeypa
                     "url": "https://example.com/news",
                     "siteName": "示例媒体",
                     "quality": "other",
+                    "matchLevel": "direct",
                 }],
             },
             "usage": {"totalTokens": 12},
@@ -2672,6 +2673,7 @@ def test_report_qa_stream_returns_sse_deltas_and_final_metadata(client, monkeypa
     assert saved["question"] == "为什么判断为假？"
     assert saved["answer"] == "水印是主要依据。"
     assert json.loads(saved["web_search_json"])["sources"][0]["title"] == "公开来源"
+    assert json.loads(saved["web_search_json"])["sources"][0]["matchLevel"] == "direct"
 
 
 def test_report_qa_stream_reports_generation_failure_as_sse_event(client, monkeypatch):

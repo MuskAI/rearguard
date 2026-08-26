@@ -67,6 +67,12 @@ const contentVerdictLabels: Record<string, string> = {
   unverified: "公开信息尚不足",
 };
 
+const sourceMatchLabels: Record<string, string> = {
+  direct: "直接相关",
+  context: "背景信息",
+  weak: "弱匹配",
+};
+
 function normalizeScore(value: unknown): number | null {
   const number = Number(value);
   if (!Number.isFinite(number)) return null;
@@ -416,7 +422,12 @@ function WebSearchEvidence({ value }: { value: ReportQaWebSearch }) {
   if (!value.attempted && !value.used) return null;
   const selected = value.sourceRefs.length > 0
     ? value.sourceRefs.flatMap((index) => value.sources.find((source) => source.index === index) || [])
-    : value.sources.slice(0, 4);
+    : [...value.sources]
+      .sort((left, right) => {
+        const rank = { direct: 0, context: 1, weak: 2 } as Record<string, number>;
+        return (rank[left.matchLevel] ?? 3) - (rank[right.matchLevel] ?? 3);
+      })
+      .slice(0, 4);
   const verdict = contentVerdictLabels[value.contentVerdict]
     || (value.used ? "已检索公开来源" : "公开信息尚不足");
   return (
@@ -432,7 +443,13 @@ function WebSearchEvidence({ value }: { value: ReportQaWebSearch }) {
             <li key={`${source.index}:${source.url}`}>
               <a href={source.url} target="_blank" rel="noopener noreferrer">
                 <span className="report-qa-source-index">{source.index}</span>
-                <span><strong>{source.title}</strong><small>{source.siteName || source.domain}</small></span>
+                <span>
+                  <strong>{source.title}</strong>
+                  <small>
+                    {source.siteName || source.domain}
+                    <i className={`is-${source.matchLevel}`}>{sourceMatchLabels[source.matchLevel] || "相关来源"}</i>
+                  </small>
+                </span>
                 <ExternalLink size={13} aria-hidden="true" />
               </a>
             </li>

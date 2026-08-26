@@ -1387,8 +1387,13 @@ def _conversation_json_object(value):
             "url": raw_url[:2000],
             "siteName": str(item.get("siteName") or hostname)[:100],
             "quality": str(item.get("quality") or "other")[:20],
+            "matchLevel": (
+                str(item.get("matchLevel") or "weak")[:16]
+                if str(item.get("matchLevel") or "weak") in {"direct", "context", "weak"}
+                else "weak"
+            ),
         })
-        if len(sources) >= 6:
+        if len(sources) >= 10:
             break
     source_refs = []
     for value in parsed.get("sourceRefs") or []:
@@ -1398,11 +1403,22 @@ def _conversation_json_object(value):
             continue
         if 1 <= number <= len(sources) and number not in source_refs:
             source_refs.append(number)
+    try:
+        matched_source_count = max(0, int(parsed.get("matchedSourceCount") or 0))
+    except (TypeError, ValueError):
+        matched_source_count = 0
+    try:
+        direct_source_count = max(0, int(parsed.get("directSourceCount") or 0))
+    except (TypeError, ValueError):
+        direct_source_count = 0
     return {
         "attempted": bool(parsed.get("attempted")),
         "used": bool(parsed.get("used") and sources),
         "status": str(parsed.get("status") or "not_requested")[:32],
         "claim": str(parsed.get("claim") or "")[:320],
+        "strategy": str(parsed.get("strategy") or "")[:24],
+        "matchedSourceCount": matched_source_count,
+        "directSourceCount": direct_source_count,
         "contentVerdict": str(parsed.get("contentVerdict") or "not_applicable")[:32],
         "sourceRefs": source_refs[:5],
         "sources": sources,

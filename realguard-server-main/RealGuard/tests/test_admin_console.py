@@ -308,7 +308,12 @@ def test_admin_sanitizes_persisted_web_search_evidence():
         "contentVerdict": "misleading",
         "sourceRefs": [1, 99],
         "sources": [
-            {"title": "官方说明", "url": "https://example.gov.cn/notice", "siteName": "示例官网"},
+            {
+                "title": "官方说明",
+                "url": "https://example.gov.cn/notice",
+                "siteName": "示例官网",
+                "matchLevel": "direct",
+            },
             {"title": "危险链接", "url": "javascript:alert(1)"},
             {"title": "带凭据链接", "url": "https://user:secret@example.com/private"},
         ],
@@ -318,6 +323,7 @@ def test_admin_sanitizes_persisted_web_search_evidence():
     assert evidence["contentVerdict"] == "misleading"
     assert evidence["sourceRefs"] == [1]
     assert [source["title"] for source in evidence["sources"]] == ["官方说明"]
+    assert evidence["sources"][0]["matchLevel"] == "direct"
 
 
 def test_admin_can_review_persisted_user_conversations_and_bound_v2_image(client, monkeypatch, tmp_path):

@@ -517,7 +517,7 @@ def test_report_answer_separates_image_verdict_from_web_claim_verdict(monkeypatc
         "sources": [
             {
                 "index": 1,
-                "title": "公开活动记录",
+                "title": "特朗普与高市早苗公开活动记录",
                 "url": "https://www.kantei.go.jp/example",
                 "siteName": "日本首相官邸",
                 "domain": "www.kantei.go.jp",
@@ -525,7 +525,7 @@ def test_report_answer_separates_image_verdict_from_web_claim_verdict(monkeypatc
             },
             {
                 "index": 2,
-                "title": "Fact check",
+                "title": "事实核查：特朗普爱上高市早苗属于网络戏仿",
                 "url": "https://www.reuters.com/fact-check/example",
                 "siteName": "Reuters",
                 "domain": "www.reuters.com",
@@ -552,17 +552,74 @@ def test_report_answer_separates_image_verdict_from_web_claim_verdict(monkeypatc
         "特朗普爱上高市早苗是真的吗？请联网核实",
     )
 
-    assert "图片像素更偏向真实" in response["answer"]
-    assert "更像网友戏仿或恶搞" in response["answer"]
+    assert "图片本身的检测结论仍是真实图像" in response["answer"]
+    assert "更像网络戏仿或夸张包装" in response["answer"]
     assert response["webSearch"]["contentVerdict"] == "satire_likely"
     assert response["webSearch"]["sourceRefs"] == [1, 2]
     assert len(response["webSearch"]["sources"]) == 2
-    assert response["usage"]["totalTokens"] == 673
-    prompt = completions.calls[0]["messages"]
-    assert "图片本身是否为 AI 生成或篡改" in prompt[0]["content"]
-    assert "WEB_SEARCH_EVIDENCE" in prompt[1]["content"]
-    assert '"strongVerdictAllowed":true' in prompt[1]["content"]
-    assert "https://www.reuters.com/fact-check/example" in prompt[1]["content"]
+    assert response["usage"]["totalTokens"] == 600
+    assert completions.calls == []
+
+
+def test_supported_search_verdict_is_not_lost_when_answer_model_defaults_to_unverified(monkeypatch):
+    web_result = {
+        "attempted": True,
+        "used": True,
+        "status": "success",
+        "claim": "特朗普爱上高市早苗",
+        "query": "特朗普 高市早苗 恋爱",
+        "summary": (
+            "与待核验主张直接相关的检索结果：《特朗普与高市早苗的爱情故事》[1]、"
+            "《高市早苗看上特朗普？东京爱情故事新CP？》[2]。"
+            "可用于交叉核对的权威背景报道：《特朗普与高市早苗举行首脑会谈》[3]。"
+        ),
+        "sources": [
+            {
+                "index": 1,
+                "title": "特朗普与高市早苗的爱情故事",
+                "url": "https://example.com/parody-one",
+                "siteName": "视频平台",
+                "quality": "other",
+                "matchLevel": "direct",
+            },
+            {
+                "index": 2,
+                "title": "高市早苗看上特朗普？东京爱情故事新CP？",
+                "url": "https://example.com/parody-two",
+                "siteName": "社交平台",
+                "quality": "other",
+                "matchLevel": "direct",
+            },
+            {
+                "index": 3,
+                "title": "特朗普与高市早苗举行首脑会谈",
+                "url": "https://www.bbc.com/news/context",
+                "siteName": "BBC",
+                "quality": "major",
+                "matchLevel": "context",
+            },
+        ],
+        "supportedVerdicts": ["satire_likely"],
+        "usage": {"totalTokens": 200, "searchCount": 1},
+    }
+    monkeypatch.setattr(report_qa.report_web_search, "lookup", lambda *_args, **_kwargs: web_result)
+    client, _ = fake_client(json.dumps({
+        "answer": "目前只能视为未证实。",
+        "sourceRefs": [],
+        "contentVerdict": "unverified",
+        "suggestedQuestions": [],
+    }, ensure_ascii=False))
+    monkeypatch.setattr(report_qa.detector, "_get_client", lambda: client)
+
+    response = report_qa.answer(
+        {"verdict": "real", "explanation": "图像像素更偏向真实"},
+        "请联网核验：特朗普爱上高市早苗是真的吗？",
+    )
+
+    assert response["webSearch"]["contentVerdict"] == "satire_likely"
+    assert "更像网络戏仿或夸张包装" in response["answer"]
+    assert "爱情故事" in response["answer"]
+    assert response["webSearch"]["sourceRefs"] == [1, 2, 3]
 
 
 def test_report_answer_stream_emits_search_progress_and_sources(monkeypatch):
@@ -575,7 +632,7 @@ def test_report_answer_stream_emits_search_progress_and_sources(monkeypatch):
         "summary": "主流媒体未证实该说法。[1]",
         "sources": [{
             "index": 1,
-            "title": "公开核查",
+            "title": "图片中的事件公开核查",
             "url": "https://www.reuters.com/fact-check/example",
             "siteName": "Reuters",
             "domain": "www.reuters.com",
@@ -603,8 +660,9 @@ def test_report_answer_stream_emits_search_progress_and_sources(monkeypatch):
     assert any(event["type"] == "sources" for event in events)
     assert any(event["type"] == "delta" for event in events)
     assert events[-1]["type"] == "done"
-    assert events[-1]["webSearch"]["sources"][0]["title"] == "公开核查"
-    assert events[-1]["webSearch"]["sourceRefs"] == []
+    assert events[-1]["webSearch"]["sources"][0]["title"] == "图片中的事件公开核查"
+    assert events[-1]["webSearch"]["sourceRefs"] == [1]
+    assert "主流媒体未证实该说法" in events[-1]["answer"]
     assert "目前只能视为未证实" in events[-1]["answer"]
 
 
@@ -618,7 +676,7 @@ def test_invalid_web_citation_is_removed(monkeypatch):
         "summary": "官方核实确认这一点。[1]",
         "sources": [{
             "index": 1,
-            "title": "来源一",
+            "title": "事实核查：公开主张获得官方确认",
             "url": "https://www.reuters.com/fact-check/one",
             "siteName": "Reuters",
             "domain": "www.reuters.com",
@@ -682,7 +740,7 @@ def test_strong_content_verdict_is_downgraded_without_reliable_sources(monkeypat
     assert "网络恶搞内容" not in response["answer"]
     assert "真实情况是" not in response["answer"]
     assert response["webSearch"]["sourceRefs"] == []
-    assert '"strongVerdictAllowed":false' in completions.calls[0]["messages"][1]["content"]
+    assert completions.calls == []
 
 
 def test_reliable_but_unrelated_source_does_not_authorize_a_satire_verdict(monkeypatch):

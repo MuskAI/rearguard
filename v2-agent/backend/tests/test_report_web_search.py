@@ -50,7 +50,7 @@ def test_search_claim_uses_native_dashscope_sources(monkeypatch):
                     "search_results": [
                         {
                             "index": 1,
-                            "title": "当事人公开活动记录",
+                            "title": "特朗普与高市早苗公开活动记录",
                             "url": "https://www.kantei.go.jp/example",
                             "site_name": "日本首相官邸",
                         },
@@ -62,7 +62,7 @@ def test_search_claim_uses_native_dashscope_sources(monkeypatch):
                         },
                         {
                             "index": 3,
-                            "title": "Fact check report",
+                            "title": "事实核查：特朗普爱上高市早苗属于网络戏仿",
                             "url": "https://www.reuters.com/fact-check/example",
                             "site_name": "Reuters",
                         },
@@ -79,6 +79,7 @@ def test_search_claim_uses_native_dashscope_sources(monkeypatch):
 
     monkeypatch.setattr(report_web_search, "_post_search", fake_post)
     monkeypatch.setattr(report_web_search, "WEB_SEARCH_CACHE_SECONDS", 0)
+    monkeypatch.setattr(report_web_search, "WEB_SEARCH_STRATEGY", "max")
     result = report_web_search.search_claim({
         "claim": "特朗普爱上高市早苗",
         "queries": ["特朗普 高市早苗 恋爱 新闻", "特朗普 高市早苗 辟谣"],
@@ -91,8 +92,10 @@ def test_search_claim_uses_native_dashscope_sources(monkeypatch):
     assert options["enable_citation"] is True
     assert result["status"] == "success"
     assert result["used"] is True
-    assert [source["quality"] for source in result["sources"]] == ["primary", "major"]
-    assert result["summary"].endswith("[1][2]")
+    assert [source["quality"] for source in result["sources"]] == ["major", "primary"]
+    assert "事实核查：特朗普爱上高市早苗属于网络戏仿》[1]" in result["summary"]
+    assert "特朗普与高市早苗公开活动记录》[2]" in result["summary"]
+    assert "未找到可靠报道" not in result["summary"]
     assert result["usage"]["searchCount"] == 1
     assert result["usage"]["totalTokens"] == 920
 
@@ -198,10 +201,133 @@ def test_sources_prioritize_reliable_domains_and_limit_repeated_sites(monkeypatc
     assert [source["title"] for source in sources] == ["官方说明", "通讯社核查", "转载一", "转载二"]
 
 
-def test_search_summary_keeps_only_claims_with_retained_citations():
-    summary = report_web_search._remap_provider_citations(
-        "这句没有来源。官方记录支持这一点[3]。被过滤来源声称相反[9]。",
-        {3: 1},
+def test_stream_events_are_assembled_into_a_normal_response():
+    result = report_web_search._aggregate_stream_events([
+        {
+            "request_id": "req-1",
+            "output": {
+                "choices": [{"message": {"content": "先核对原始出处。"}}],
+                "search_info": {"search_results": [{
+                    "index": 1,
+                    "title": "原始出处",
+                    "url": "https://example.com/origin",
+                }]},
+            },
+        },
+        {
+            "request_id": "req-1",
+            "output": {"choices": [{"message": {"content": "再核对权威报道。[1]"}}]},
+            "usage": {"total_tokens": 321, "plugins": {"search": {"count": 2}}},
+        },
+    ])
+
+    assert result["output"]["choices"][0]["message"]["content"] == "先核对原始出处。再核对权威报道。[1]"
+    assert result["output"]["search_info"]["search_results"][0]["title"] == "原始出处"
+    assert result["usage"]["total_tokens"] == 321
+
+
+def test_source_ranking_separates_direct_context_and_weak_matches():
+    sources = report_web_search._normalize_sources(
+        [
+            {"index": 1, "title": "特朗普与习近平讨论对台军售", "url": "https://www.reuters.com/a"},
+            {"index": 2, "title": "特朗普高市早苗新CP？搞笑视频", "url": "https://example.com/parody"},
+            {"index": 3, "title": "特朗普与高市早苗举行会谈", "url": "https://www.bbc.com/news/b"},
+        ],
+        claim="特朗普爱上高市早苗",
+        queries=["特朗普 高市早苗 恋爱"],
     )
 
-    assert summary == "官方记录支持这一点[1]。"
+    assert sources[0]["title"] == "特朗普高市早苗新CP？搞笑视频"
+    assert sources[0]["matchLevel"] == "direct"
+    assert next(source for source in sources if "举行会谈" in source["title"])["matchLevel"] == "context"
+    assert next(source for source in sources if "对台军售" in source["title"])["matchLevel"] == "weak"
+
+
+def test_satire_can_use_a_direct_parody_origin_plus_reliable_context():
+    sources = report_web_search._normalize_sources(
+        [
+            {"index": 1, "title": "特朗普高市早苗新CP？搞笑视频", "url": "https://example.com/parody"},
+            {
+                "index": 2,
+                "title": "高市早苗：特朗普确认日美密切关系并肯定友谊",
+                "url": "https://www.bbc.com/news/b",
+            },
+        ],
+        claim="特朗普爱上高市早苗",
+        queries=["特朗普 高市早苗 恋爱"],
+    )
+
+    assert report_web_search._derive_supported_verdicts(
+        "相关说法来自社交媒体调侃和二次创作。[1]特朗普确认日美密切关系并肯定友谊。[2]",
+        sources,
+    ) == ["satire_likely"]
+
+
+def test_agent_search_uses_streaming_payload_and_keeps_match_metadata(monkeypatch):
+    captured = {}
+
+    def fake_request(payload, strategy):
+        captured["payload"] = payload
+        captured["strategy"] = strategy
+        return {
+            "output": {
+                "choices": [{"message": {"content": "该说法来自搞笑视频。[1]公开报道仅能提供背景。[2]"}}],
+                "search_info": {"search_results": [
+                    {
+                        "index": 1,
+                        "title": "特朗普高市早苗新CP？搞笑视频",
+                        "url": "https://example.com/parody",
+                    },
+                    {
+                        "index": 2,
+                        "title": "特朗普与高市早苗举行会谈",
+                        "url": "https://www.bbc.com/news/context",
+                    },
+                ]},
+            },
+            "usage": {"total_tokens": 500, "plugins": {"search": {"count": 2}}},
+        }
+
+    monkeypatch.setattr(report_web_search, "_request_search", fake_request)
+    monkeypatch.setattr(report_web_search, "WEB_SEARCH_CACHE_SECONDS", 0)
+    monkeypatch.setattr(report_web_search, "WEB_SEARCH_STRATEGY", "agent")
+    result = report_web_search.search_claim({"claim": "特朗普爱上高市早苗", "queries": []})
+
+    options = captured["payload"]["parameters"]["search_options"]
+    assert captured["strategy"] == "agent"
+    assert captured["payload"]["parameters"]["incremental_output"] is True
+    assert "enable_citation" not in options
+    assert result["strategy"] == "agent"
+    assert result["directSourceCount"] == 1
+    assert result["matchedSourceCount"] == 2
+    assert result["supportedVerdicts"] == ["satire_likely"]
+
+
+def test_agent_search_falls_back_to_max_when_streaming_is_unavailable(monkeypatch):
+    strategies = []
+
+    def fake_request(_payload, strategy):
+        strategies.append(strategy)
+        if strategy == "agent":
+            raise report_web_search.WebSearchUnavailableError("agent unavailable")
+        return {
+            "output": {
+                "choices": [{"message": {"content": "公开记录确认该主张。[1]"}}],
+                "search_info": {"search_results": [{
+                    "index": 1,
+                    "title": "公开主张获得官方确认",
+                    "url": "https://www.reuters.com/fact-check/claim",
+                }]},
+            },
+            "usage": {"total_tokens": 100, "plugins": {"search": {"count": 1}}},
+        }
+
+    monkeypatch.setattr(report_web_search, "_request_search", fake_request)
+    monkeypatch.setattr(report_web_search, "WEB_SEARCH_CACHE_SECONDS", 0)
+    monkeypatch.setattr(report_web_search, "WEB_SEARCH_STRATEGY", "agent")
+    monkeypatch.setattr(report_web_search, "WEB_SEARCH_FALLBACK_STRATEGY", "max")
+    result = report_web_search.search_claim({"claim": "公开主张", "queries": []})
+
+    assert strategies == ["agent", "max"]
+    assert result["strategy"] == "max"
+    assert result["status"] == "success"

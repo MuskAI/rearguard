@@ -585,6 +585,11 @@ def put_report_qa_turn(
             "siteName": str(value.get("siteName") or "").strip()[:100],
             "domain": str(value.get("domain") or hostname).strip()[:255],
             "quality": str(value.get("quality") or "other").strip()[:24],
+            "matchLevel": (
+                str(value.get("matchLevel") or "weak").strip()
+                if str(value.get("matchLevel") or "weak").strip() in {"direct", "context", "weak"}
+                else "weak"
+            ),
         })
         if len(web_sources) >= 10:
             break
@@ -594,6 +599,9 @@ def put_report_qa_turn(
         "status": str(web.get("status") or "not_requested").strip()[:32],
         "claim": str(web.get("claim") or "").strip()[:320],
         "query": str(web.get("query") or "").strip()[:180],
+        "strategy": str(web.get("strategy") or "").strip()[:24],
+        "matchedSourceCount": max(0, _safe_int(web.get("matchedSourceCount"))),
+        "directSourceCount": max(0, _safe_int(web.get("directSourceCount"))),
         "contentVerdict": str(web.get("contentVerdict") or "not_applicable").strip()[:32],
         "sourceRefs": [
             int(value)

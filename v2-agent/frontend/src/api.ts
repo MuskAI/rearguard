@@ -1737,6 +1737,7 @@ export interface ReportQaWebSource {
   siteName: string;
   domain: string;
   quality: "primary" | "major" | "other" | string;
+  matchLevel: "direct" | "context" | "weak" | string;
 }
 
 export interface ReportQaWebSearch {
@@ -1831,6 +1832,7 @@ function parseReportQaWebSearch(value: unknown): ReportQaWebSearch | undefined {
         siteName: errorText(source.siteName),
         domain: errorText(source.domain),
         quality: errorText(source.quality) || "other",
+        matchLevel: errorText(source.matchLevel) || "weak",
       } satisfies ReportQaWebSource];
     })
     : [];

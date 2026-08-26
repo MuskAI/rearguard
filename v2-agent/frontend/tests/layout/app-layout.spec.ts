@@ -1246,6 +1246,7 @@ test("登录用户可以围绕当前检测报告连续提问", async ({ page }) 
           siteName: "示例事实核查",
           domain: "example.com",
           quality: "major",
+          matchLevel: "direct",
         }],
       } : undefined;
       const encoder = new TextEncoder();
@@ -1360,6 +1361,7 @@ test("登录用户可以围绕当前检测报告连续提问", async ({ page }) 
   const source = qa.getByRole("link", { name: /官方活动记录未支持相关配文/ });
   await expect(source).toBeVisible();
   await expect(source).toHaveAttribute("href", "https://example.com/fact-check");
+  await expect(source.getByText("直接相关", { exact: true })).toBeVisible();
   const webRequests = await page.evaluate(() => (
     (window as typeof window & { __reportQaStreamRequests?: Array<Record<string, unknown>> })
       .__reportQaStreamRequests || []
