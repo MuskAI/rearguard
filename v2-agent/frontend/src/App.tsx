@@ -1,10 +1,12 @@
 import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from "react";
 import {
   Check,
+  FileCheck2,
   LogIn,
   PanelLeftOpen,
   Paperclip,
   RefreshCw,
+  ScanSearch,
   Send,
   ShieldCheck,
 } from "lucide-react";
@@ -1623,9 +1625,9 @@ function WelcomeWorkspace({
 function AgentProgressPanel({ progress, onStopWaiting }: { progress: AgentProgress | null; onStopWaiting?: () => void }) {
   const current = progress || { title: "正在准备鉴伪任务", detail: "请稍候", percent: 8, stage: "validate" as const };
   const stages = [
-    { key: "receive", label: "安全接收", note: "格式与权限", icon: "document" as const },
-    { key: "analyze", label: "真实性分析", note: current.analysisMode === "swarm" ? "多源并行复核" : "痕迹与水印", icon: current.analysisMode === "swarm" ? "swarm" as const : "fast" as const },
-    { key: "report", label: "证据成稿", note: "结论与依据", icon: "report" as const },
+    { key: "receive", label: "安全接收", note: "格式与权限", Icon: ShieldCheck },
+    { key: "analyze", label: "真实性分析", note: current.analysisMode === "swarm" ? "多源并行复核" : "痕迹与水印", Icon: ScanSearch },
+    { key: "report", label: "证据成稿", note: "结论与依据", Icon: FileCheck2 },
   ] as const;
   const stageIndex = current.stage === "report" ? 2 : current.stage === "evidence" ? 1 : 0;
   return (
@@ -1642,9 +1644,14 @@ function AgentProgressPanel({ progress, onStopWaiting }: { progress: AgentProgre
         <div className="progress-track" role="progressbar" aria-label={current.title} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(current.percent)}><i style={{ width: `${current.percent}%` }} /></div>
         <div className="progress-stages progress-system">
           {stages.map((stage, index) => {
+            const StageIcon = stage.Icon;
             return (
               <span key={stage.key} className={index < stageIndex ? "done" : index === stageIndex ? "active" : ""}>
-                <i>{index < stageIndex ? <Check size={16} /> : <BrandArtIcon name={stage.icon} />}</i>
+                <i aria-hidden="true">
+                  {index < stageIndex
+                    ? <Check className="progress-stage-glyph" size={18} strokeWidth={2.2} />
+                    : <StageIcon className="progress-stage-glyph" size={18} strokeWidth={1.8} />}
+                </i>
                 <b>{stage.label}</b>
                 <small>{stage.note}</small>
               </span>

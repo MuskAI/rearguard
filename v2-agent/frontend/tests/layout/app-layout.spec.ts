@@ -1423,6 +1423,31 @@ test("检测进度卡使用清晰的正文级字号", async ({ page }) => {
   expect((await scanArtwork.boundingBox())?.width).toBeGreaterThanOrEqual(32);
   await expect(panel.locator(".progress-heading .spin")).toHaveCount(0);
   await expect(panel.locator(".progress-heading .analysis-mode-mark")).toHaveCount(1);
+  const stageNodes = panel.locator(".progress-system > span > i");
+  const stageGlyphs = stageNodes.locator(":scope > .progress-stage-glyph");
+  await expect(stageNodes).toHaveCount(3);
+  await expect(stageGlyphs).toHaveCount(3);
+  await expect(panel.locator(".progress-system .brand-art-icon")).toHaveCount(0);
+  const stageGeometry = await stageNodes.evaluateAll((nodes) => nodes.map((node) => {
+    const nodeBox = node.getBoundingClientRect();
+    const glyphBox = node.querySelector<HTMLElement>(".progress-stage-glyph")!.getBoundingClientRect();
+    return {
+      nodeWidth: nodeBox.width,
+      nodeHeight: nodeBox.height,
+      glyphWidth: glyphBox.width,
+      glyphHeight: glyphBox.height,
+      centerDeltaX: Math.abs((nodeBox.left + nodeBox.width / 2) - (glyphBox.left + glyphBox.width / 2)),
+      centerDeltaY: Math.abs((nodeBox.top + nodeBox.height / 2) - (glyphBox.top + glyphBox.height / 2)),
+    };
+  }));
+  for (const geometry of stageGeometry) {
+    expect(geometry.nodeWidth).toBeGreaterThanOrEqual(36);
+    expect(geometry.nodeHeight).toBeGreaterThanOrEqual(36);
+    expect(geometry.glyphWidth).toBe(18);
+    expect(geometry.glyphHeight).toBe(18);
+    expect(geometry.centerDeltaX).toBeLessThanOrEqual(1);
+    expect(geometry.centerDeltaY).toBeLessThanOrEqual(2);
+  }
   const sizes = await panel.evaluate((element) => {
     const size = (selector: string) => Number.parseFloat(getComputedStyle(element.querySelector<HTMLElement>(selector)!).fontSize);
     return {

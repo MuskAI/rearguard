@@ -84,6 +84,7 @@ export const ExternalLink = createSystemIcon("external-link", "open_in_new");
 export const Eye = createSystemIcon("eye", "visibility");
 export const EyeOff = createSystemIcon("eye-off", "visibility_off");
 export const FileImage = createSystemIcon("file-image", "image");
+export const FileCheck2 = createSystemIcon("file-check-2", "task");
 export const FileJson = createSystemIcon("file-json", "data_object");
 export const FileSearch = createSystemIcon("file-search", "find_in_page");
 export const FileText = createSystemIcon("file-text", "description");
