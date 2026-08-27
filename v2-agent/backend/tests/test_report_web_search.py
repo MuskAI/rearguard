@@ -280,6 +280,29 @@ def test_evidence_candidates_require_entities_and_core_relation():
     }
 
 
+def test_distinct_platform_origin_pages_can_both_be_verified():
+    sources = report_web_search._normalize_sources(
+        [
+            {
+                "title": "特朗普与高市早苗的爱情故事",
+                "url": "https://www.bilibili.com/video/BV1eP7y6FEYo/",
+                "lane": "origin",
+            },
+            {
+                "title": "特朗普高市早苗新 CP 搞笑视频",
+                "url": "https://www.bilibili.com/video/BV1qcybBnEST/",
+                "lane": "origin",
+            },
+        ],
+        claim="特朗普爱上高市早苗",
+        queries=["特朗普 高市早苗 恋爱"],
+    )
+
+    candidates = report_web_search._evidence_candidates("特朗普爱上高市早苗", sources)
+
+    assert len(candidates) == 2
+
+
 def test_extractor_output_uses_evidence_section_and_ignores_summary():
     url = "https://example.com/story"
     parsed = report_web_search._parse_extractor_output(
@@ -602,6 +625,26 @@ def test_responses_ranker_only_accepts_urls_returned_by_search_tool():
         "title": "真实候选",
         "site_name": "",
         "lane": "exact",
+        "recall_basis": "tool_source",
+    }]
+
+
+def test_responses_ranker_can_fall_back_to_safe_candidates_when_provider_omits_source_list():
+    selected = report_web_search._parse_ranked_recall_lines(
+        '\n'.join([
+            '{"url":"https://www.bilibili.com/video/BV1qcybBnEST/","title":"原始视频","lane":"origin"}',
+            '{"url":"http://127.0.0.1/admin","title":"内网地址","lane":"official"}',
+            '{"url":"javascript:alert(1)","title":"脚本地址","lane":"official"}',
+        ]),
+        [],
+    )
+
+    assert selected == [{
+        "url": "https://www.bilibili.com/video/BV1qcybBnEST/",
+        "title": "原始视频",
+        "site_name": "",
+        "lane": "origin",
+        "recall_basis": "model_candidate",
     }]
 
 

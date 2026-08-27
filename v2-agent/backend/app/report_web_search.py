@@ -660,18 +660,22 @@ def _evidence_candidates(claim: str, sources: list[dict[str, Any]]) -> list[dict
         int(item[0].get("index") or 999),
     ))
     restricted_hosts = ("facebook.com", "youtube.com", "x.com", "twitter.com")
+    multi_origin_hosts = ("bilibili.com", "weibo.com", "weibo.cn", "douyin.com", "kuaishou.com")
     selected: list[dict[str, Any]] = []
-    selected_domains: set[str] = set()
+    selected_domain_counts: dict[str, int] = {}
     restricted_selected = False
     for source, _score in candidates:
         domain = str(source.get("domain") or "").lower()
-        if domain in selected_domains:
+        origin_limit = 2 if any(
+            domain == host or domain.endswith(f".{host}") for host in multi_origin_hosts
+        ) else 1
+        if selected_domain_counts.get(domain, 0) >= origin_limit:
             continue
         restricted = any(domain == host or domain.endswith(f".{host}") for host in restricted_hosts)
         if restricted and restricted_selected:
             continue
         selected.append(source)
-        selected_domains.add(domain)
+        selected_domain_counts[domain] = selected_domain_counts.get(domain, 0) + 1
         restricted_selected = restricted_selected or restricted
         if len(selected) >= WEB_EVIDENCE_MAX_URLS:
             break
@@ -731,11 +735,15 @@ def _bilibili_metadata_page(url: str) -> dict[str, Any] | None:
 
 def _extract_platform_evidence(sources: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     pages: dict[str, dict[str, Any]] = {}
-    for source in sources:
-        url = str(source.get("url") or "")
-        page = _bilibili_metadata_page(url)
-        if page:
-            pages[url] = page
+    source_urls = [str(source.get("url") or "") for source in sources if source.get("url")]
+    if not source_urls:
+        return pages
+    with ThreadPoolExecutor(max_workers=min(3, len(source_urls)), thread_name_prefix="platform-evidence") as executor:
+        futures = {executor.submit(_bilibili_metadata_page, url): url for url in source_urls}
+        for future in as_completed(futures):
+            page = future.result()
+            if page:
+                pages[futures[future]] = page
     return pages
 
 
@@ -1112,6 +1120,9 @@ def _normalize_sources(
                 "providers": [provider],
                 "providerRank": provider_rank,
                 "lane": lane,
+                "recallBasis": (
+                    "model_candidate" if row.get("recall_basis") == "model_candidate" else "tool_source"
+                ),
                 "factCheckClaim": _text(row.get("fact_check_claim"), 320),
                 "factCheckRating": _text(row.get("fact_check_rating"), 120),
                 "factCheckPublisher": _text(row.get("fact_check_publisher"), 100),
@@ -1131,6 +1142,8 @@ def _normalize_sources(
         existing_source["providerRank"] = min(existing_source["providerRank"], provider_rank)
         if lane_rank.get(lane, 9) < lane_rank.get(existing_source.get("lane"), 9):
             existing_source["lane"] = lane
+        if source["source"].get("recallBasis") == "tool_source":
+            existing_source["recallBasis"] = "tool_source"
         if match_score > float(existing_source.get("matchScore") or 0):
             for key in ("title", "siteName", "matchLevel", "matchScore", "provider"):
                 existing_source[key] = source["source"][key]
@@ -1454,6 +1467,7 @@ def _native_recall(claim: str, queries: list[str]) -> dict[str, Any]:
             "provider_rank": position,
             "preferred": provider_index in provider_refs,
             "lane": "general",
+            "recall_basis": "tool_source",
         })
     return {
         "provider": "qwen_native",
@@ -1500,6 +1514,7 @@ def _parse_ranked_recall_lines(
             allowed[key] = {**source, "url": url}
     selected: list[dict[str, Any]] = []
     seen: set[str] = set()
+    require_allowlist = bool(allowed)
     for line in str(value or "").replace("```jsonl", "").replace("```json", "").replace("```", "").splitlines():
         candidate = line.strip()
         start = candidate.find("{")
@@ -1510,8 +1525,9 @@ def _parse_ranked_recall_lines(
             row = _mapping(json.loads(candidate[start:end + 1]))
         except (json.JSONDecodeError, ValueError):
             continue
-        key = _canonical_url_key(row.get("url"))
-        source = allowed.get(key)
+        url = _safe_public_url(row.get("url"))
+        key = _canonical_url_key(url)
+        source = allowed.get(key) if require_allowlist else ({"url": url} if url else None)
         title = _text(row.get("title") or _mapping(source).get("title"), 240)
         if not source or not key or key in seen or not title:
             continue
@@ -1521,6 +1537,7 @@ def _parse_ranked_recall_lines(
             "title": title,
             "site_name": _text(source.get("site_name") or source.get("siteName"), 100),
             "lane": lane if lane in RECALL_LANES else "general",
+            "recall_basis": "tool_source" if require_allowlist else "model_candidate",
         })
         seen.add(key)
         if len(selected) >= 10:
@@ -1536,6 +1553,7 @@ def _parse_ranked_recall_lines(
             "title": title,
             "site_name": _text(source.get("site_name") or source.get("siteName"), 100),
             "lane": "general",
+            "recall_basis": "tool_source",
         })
         seen.add(key)
         if len(selected) >= 10:
@@ -1657,6 +1675,7 @@ def _google_factcheck_recall(claim: str, _queries: list[str]) -> dict[str, Any]:
                 "provider_rank": len(rows) + 1,
                 "preferred": True,
                 "lane": "fact_check",
+                "recall_basis": "tool_source",
                 "fact_check_claim": fact_claim,
                 "fact_check_rating": _text(item.get("textualRating"), 120),
                 "fact_check_publisher": _text(publisher.get("name"), 100),
@@ -1702,6 +1721,7 @@ def _brave_recall(claim: str, _queries: list[str]) -> dict[str, Any]:
                 "provider": "brave",
                 "provider_rank": len(rows) + 1,
                 "lane": "news" if container_name == "news" else "general",
+                "recall_basis": "tool_source",
             })
     return {
         "provider": "brave",
