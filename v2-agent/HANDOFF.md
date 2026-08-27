@@ -34,10 +34,12 @@ cd backend && uv run --with pytest pytest tests
 cd ../frontend && npm run lint && npm run build
 ```
 
-报告问答默认用 `qwen3-vl-flash` 解释检测报告；用户询问新闻、事件或配文是否属实时，
-`report_web_search.py` 会先提取公开主张，再用 `qwen-plus` 联网检索并返回可点击来源。
-联网证据只判断内容是否属实，不会改写图像鉴伪结论。相关开关和模型配置见
-`backend/.env.example` 中的 `JIANZHEN_REPORT_QA_*`。
+报告问答默认用 `qwen3-vl-flash` 解释检测报告。用户核验新闻、事件或配文时，
+`report_web_search.py` 按“主张提取 → 多通道召回 → URL 去重与分层排序 → 正文/官方元数据取证
+→ 来源分级与交叉裁决”执行。生产默认并行使用 Qwen Native Search 与 Qwen Responses；
+配置密钥后可增加 Google Fact Check 和 Brave Search。搜索标题、摘要及模型记忆都不能直接成为证据，
+只有读取到的网页正文、官方平台元数据或结构化事实核查记录可以参与裁决。联网结论只核验图片表达的
+公开事件，不会改写图像鉴伪结论。配置见 `backend/.env.example`。
 
 生产发布：
 

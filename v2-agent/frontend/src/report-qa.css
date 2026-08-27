@@ -231,6 +231,13 @@
   line-height: 1.55;
 }
 
+.report-qa-message .report-qa-web-coverage {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .report-qa-web-sources {
   display: grid;
   gap: 1px;

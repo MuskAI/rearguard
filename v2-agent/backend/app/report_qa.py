@@ -952,7 +952,7 @@ def _guard_unverified_web_answer(
         if not any(
             (
                 source.get("quality") in {"primary", "major"}
-                or source.get("evidenceBasis") in {"page", "platform_metadata"}
+                or source.get("evidenceBasis") in {"page", "platform_metadata", "fact_check_record"}
             )
             and source.get("matchLevel") in {"direct", "context"}
             for source in cited
@@ -970,7 +970,7 @@ def _guard_unverified_web_answer(
     if background and not background.endswith(("。", "！", "？")):
         background += "。"
     entertainment_context = any(
-        source.get("evidenceBasis") in {"page", "platform_metadata"}
+        source.get("evidenceBasis") in {"page", "platform_metadata", "fact_check_record"}
         and re.search(
             r"(?:梗图|梗圖|玩梗|调侃|調侃|戏仿|戲仿|恶搞|惡搞|笑死|娱乐化|娛樂化)",
             _text(source.get("evidenceQuote"), 600),

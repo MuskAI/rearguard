@@ -438,6 +438,11 @@ function WebSearchEvidence({ value }: { value: ReportQaWebSearch }) {
       .slice(0, 4);
   const verdict = contentVerdictLabels[value.contentVerdict]
     || (value.used ? "已检索公开来源" : "公开信息尚不足");
+  const coverage = [
+    value.retrievalProviderCount ? `${value.retrievalProviderCount} 路检索` : "",
+    value.retrievedSourceCount ? `${value.retrievedSourceCount} 个候选` : "",
+    value.verifiedSourceCount ? `${value.verifiedSourceCount} 个来源已核验` : "",
+  ].filter(Boolean);
   return (
     <aside className={`report-qa-web-evidence${value.used ? " has-sources" : " is-limited"}`} aria-label="联网核验来源">
       <div className="report-qa-web-summary">
@@ -445,6 +450,9 @@ function WebSearchEvidence({ value }: { value: ReportQaWebSearch }) {
         <strong>{verdict}</strong>
       </div>
       {value.claim && <p className="report-qa-web-claim">核验内容：{value.claim}</p>}
+      {coverage.length > 0 && (
+        <p className="report-qa-web-coverage" aria-label="核验覆盖范围">{coverage.join(" · ")}</p>
+      )}
       {selected.length > 0 && (
         <ol className="report-qa-web-sources">
           {selected.map((source) => (
@@ -458,6 +466,7 @@ function WebSearchEvidence({ value }: { value: ReportQaWebSearch }) {
                     <i className={`is-${source.matchLevel}`}>
                       {evidenceRoleLabels[source.evidenceRole] || sourceMatchLabels[source.matchLevel] || "已核验正文"}
                       {source.evidenceBasis === "platform_metadata" ? " · 平台信息" : ""}
+                      {source.evidenceBasis === "fact_check_record" ? " · 核查记录" : ""}
                     </i>
                   </small>
                   {source.evidenceQuote && <q>{source.evidenceQuote}</q>}

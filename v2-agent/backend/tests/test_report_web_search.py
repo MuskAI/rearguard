@@ -535,3 +535,91 @@ def test_agent_search_falls_back_to_max_when_streaming_is_unavailable(monkeypatc
     assert strategies == ["agent", "max"]
     assert result["strategy"] == "max"
     assert result["status"] == "success"
+
+
+def test_multi_provider_sources_are_canonicalized_merged_and_attributed():
+    sources = report_web_search._normalize_sources(
+        [
+            {
+                "title": "特朗普爱上高市早苗",
+                "url": "https://www.example.com/story?utm_source=test&id=7",
+                "provider": "qwen_native",
+                "lane": "exact",
+            },
+            {
+                "title": "事实核查：特朗普爱上高市早苗",
+                "url": "https://example.com/story?id=7&utm_medium=social",
+                "provider": "qwen_responses",
+                "lane": "fact_check",
+            },
+        ],
+        claim="特朗普爱上高市早苗",
+        queries=["特朗普 高市早苗 爱上"],
+    )
+
+    assert len(sources) == 1
+    assert sources[0]["url"] == "https://www.example.com/story?id=7"
+    assert sources[0]["providers"] == ["qwen_native", "qwen_responses"]
+    assert sources[0]["lane"] == "fact_check"
+
+
+def test_direct_evidence_requires_the_same_subject_object_and_relation():
+    wrong_people = "拜登爱上高市早苗，这段文字明确讨论两人的恋情。"
+
+    assert report_web_search._validated_evidence_role(
+        "direct_support",
+        wrong_people,
+        wrong_people,
+        "特朗普爱上高市早苗",
+    ) == "background_only"
+
+
+def test_structured_factcheck_record_maps_rating_without_using_search_snippets():
+    source = {
+        "factCheckClaim": "特朗普爱上高市早苗",
+        "factCheckRating": "False",
+        "factCheckPublisher": "Example Fact Check",
+    }
+
+    evidence = report_web_search._factcheck_record_evidence("特朗普爱上高市早苗", source)
+
+    assert evidence["evidenceRole"] == "direct_refute"
+    assert evidence["evidenceBasis"] == "fact_check_record"
+    assert "公开评级：False" in evidence["evidenceQuote"]
+
+
+def test_responses_ranker_only_accepts_urls_returned_by_search_tool():
+    selected = report_web_search._parse_ranked_recall_lines(
+        '\n'.join([
+            '1. {"url":"https://example.com/real","title":"真实候选","lane":"exact"}',
+            '{"url":"https://invented.example/fake","title":"模型编造地址","lane":"fact_check"}',
+        ]),
+        [{"url": "https://example.com/real", "title": "工具标题"}],
+    )
+
+    assert selected == [{
+        "url": "https://example.com/real",
+        "title": "真实候选",
+        "site_name": "",
+        "lane": "exact",
+    }]
+
+
+def test_recall_providers_run_as_independent_lanes(monkeypatch):
+    monkeypatch.setattr(report_web_search.detector, "API_KEY", "test-key")
+    monkeypatch.setattr(report_web_search, "QWEN_RESPONSES_RECALL_ENABLED", True)
+    monkeypatch.setattr(report_web_search, "GOOGLE_FACTCHECK_API_KEY", "")
+    monkeypatch.setattr(report_web_search, "BRAVE_SEARCH_API_KEY", "")
+    monkeypatch.setattr(report_web_search, "_native_recall", lambda *_args: {
+        "provider": "qwen_native",
+        "sources": [{"title": "原始出处", "url": "https://example.com/origin"}],
+    })
+    monkeypatch.setattr(report_web_search, "_qwen_responses_recall", lambda *_args: {
+        "provider": "qwen_responses",
+        "sources": [{"title": "事实核查", "url": "https://factcheck.org/check"}],
+    })
+
+    results, attempted = report_web_search._collect_recall_results("公开主张", ["公开主张"])
+
+    assert [result["provider"] for result in results] == ["qwen_native", "qwen_responses"]
+    assert attempted == ["qwen_native", "qwen_responses"]

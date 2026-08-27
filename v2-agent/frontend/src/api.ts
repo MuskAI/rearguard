@@ -1742,7 +1742,10 @@ export interface ReportQaWebSource {
   evidenceRole: string;
   evidenceQuote: string;
   evidenceReason: string;
-  evidenceBasis: "page" | "none" | string;
+  evidenceBasis: "page" | "platform_metadata" | "fact_check_record" | "none" | string;
+  provider: string;
+  providers: string[];
+  lane: string;
 }
 
 export interface ReportQaWebSearch {
@@ -1754,10 +1757,16 @@ export interface ReportQaWebSearch {
   contentVerdict: "confirmed" | "contradicted" | "misleading" | "satire_likely" | "unverified" | "not_applicable" | string;
   sourceRefs: number[];
   sources: ReportQaWebSource[];
+  retrievedSourceCount?: number;
   candidateSourceCount?: number;
   verifiedSourceCount?: number;
   directSourceCount?: number;
   backgroundSourceCount?: number;
+  sourceDiversityCount?: number;
+  retrievalProviderCount?: number;
+  attemptedProviderCount?: number;
+  retrievalProviders?: string[];
+  coverageStatus?: string;
   cached?: boolean;
 }
 
@@ -1847,6 +1856,11 @@ function parseReportQaWebSearch(value: unknown): ReportQaWebSearch | undefined {
         evidenceQuote: errorText(source.evidenceQuote),
         evidenceReason: errorText(source.evidenceReason),
         evidenceBasis: errorText(source.evidenceBasis) || "none",
+        provider: errorText(source.provider),
+        providers: Array.isArray(source.providers)
+          ? source.providers.filter((provider): provider is string => typeof provider === "string")
+          : [],
+        lane: errorText(source.lane) || "general",
       } satisfies ReportQaWebSource];
     })
     : [];
@@ -1862,10 +1876,18 @@ function parseReportQaWebSearch(value: unknown): ReportQaWebSearch | undefined {
     contentVerdict: errorText(record.contentVerdict) || "not_applicable",
     sourceRefs,
     sources,
+    retrievedSourceCount: Number(record.retrievedSourceCount) || 0,
     candidateSourceCount: Number(record.candidateSourceCount) || 0,
     verifiedSourceCount: Number(record.verifiedSourceCount) || 0,
     directSourceCount: Number(record.directSourceCount) || 0,
     backgroundSourceCount: Number(record.backgroundSourceCount) || 0,
+    sourceDiversityCount: Number(record.sourceDiversityCount) || 0,
+    retrievalProviderCount: Number(record.retrievalProviderCount) || 0,
+    attemptedProviderCount: Number(record.attemptedProviderCount) || 0,
+    retrievalProviders: Array.isArray(record.retrievalProviders)
+      ? record.retrievalProviders.filter((provider): provider is string => typeof provider === "string")
+      : [],
+    coverageStatus: errorText(record.coverageStatus) || "insufficient_recall",
     cached: record.cached === true,
   };
 }
