@@ -37,6 +37,10 @@ WEB_SEARCH_TIMEOUT_SECONDS = max(
     min(float(os.getenv("JIANZHEN_REPORT_QA_SEARCH_TIMEOUT_SECONDS", "42")), 60.0),
 )
 WEB_SEARCH_MAX_SOURCES = max(2, min(int(os.getenv("JIANZHEN_REPORT_QA_SEARCH_MAX_SOURCES", "10")), 10))
+WEB_RECALL_MAX_CANDIDATES = max(
+    WEB_SEARCH_MAX_SOURCES,
+    min(int(os.getenv("JIANZHEN_REPORT_QA_RECALL_MAX_CANDIDATES", "20")), 30),
+)
 WEB_SEARCH_CACHE_SECONDS = max(0, min(int(os.getenv("JIANZHEN_REPORT_QA_SEARCH_CACHE_SECONDS", "900")), 3600))
 WEB_SEARCH_MAX_PREVIEW_BYTES = max(
     128_000,
@@ -613,6 +617,9 @@ def _strict_title_candidate_score(source: dict[str, Any], claim: str) -> float:
         return 0.0
     if compact_claim in compact_title:
         return 1.0
+    retrieval_score = float(source.get("matchScore") or 0)
+    if source.get("lane") in {"fact_check", "origin", "exact"} and retrieval_score >= 0.22:
+        return min(0.82, retrieval_score + 0.24)
     subject = _compact_match_text(profile.get("subject"))
     object_value = _compact_match_text(profile.get("object"))
     if subject and object_value:
@@ -1072,9 +1079,11 @@ def _normalize_sources(
     claim: str = "",
     queries: list[str] | None = None,
     preferred_provider_indices: set[int] | None = None,
+    limit: int | None = None,
 ) -> list[dict[str, Any]]:
     query_values = queries or []
     preferred = preferred_provider_indices or set()
+    source_limit = max(1, min(int(limit or WEB_SEARCH_MAX_SOURCES), 30))
     candidate_by_url: dict[str, dict[str, Any]] = {}
     lane_rank = {
         "fact_check": 0, "exact": 1, "origin": 2, "official": 3,
@@ -1172,7 +1181,7 @@ def _normalize_sources(
             continue
         selected.append(candidate)
         domain_counts[domain] = domain_counts.get(domain, 0) + 1
-        if len(selected) >= WEB_SEARCH_MAX_SOURCES:
+        if len(selected) >= source_limit:
             break
 
     sources: list[dict[str, Any]] = []
@@ -1777,8 +1786,9 @@ def _cache_key(claim: str, queries: list[str]) -> str:
             "responsesModel": QWEN_RESPONSES_RECALL_MODEL,
             "googleFactcheck": bool(GOOGLE_FACTCHECK_API_KEY),
             "brave": bool(BRAVE_SEARCH_API_KEY),
+            "recallMaxCandidates": WEB_RECALL_MAX_CANDIDATES,
             "extractModel": WEB_EVIDENCE_EXTRACT_MODEL,
-            "evidenceVersion": 3,
+            "evidenceVersion": 4,
             "claim": claim,
             "queries": queries,
         },
@@ -1923,7 +1933,21 @@ def search_claim(claim_data: dict[str, Any]) -> dict[str, Any]:
         for result in recall_results
         for source in _sequence(_mapping(result).get("sources"))
     ]
-    sources = _normalize_sources(raw_sources, claim=claim, queries=queries)
+    ranking_queries = list(dict.fromkeys([
+        *queries,
+        *(
+            _sanitize_public_claim(query, 180)
+            for result in recall_results
+            for query in _sequence(_mapping(result).get("queries"))
+            if _sanitize_public_claim(query, 180)
+        ),
+    ]))[:16]
+    sources = _normalize_sources(
+        raw_sources,
+        claim=claim,
+        queries=ranking_queries,
+        limit=WEB_RECALL_MAX_CANDIDATES,
+    )
     retrieved_source_count = len(sources)
     evidence_candidates = _evidence_candidates(claim, sources)
     evidence_by_index = _collect_verified_evidence(claim, sources)

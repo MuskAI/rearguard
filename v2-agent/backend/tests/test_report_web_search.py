@@ -218,6 +218,20 @@ def test_sources_prioritize_reliable_domains_and_limit_repeated_sites(monkeypatc
     assert [source["title"] for source in sources] == ["官方说明", "通讯社核查", "转载一", "转载二"]
 
 
+def test_internal_recall_pool_can_exceed_public_source_limit(monkeypatch):
+    monkeypatch.setattr(report_web_search, "WEB_SEARCH_MAX_SOURCES", 2)
+    rows = [
+        {"title": f"公开主张来源 {index}", "url": f"https://source{index}.example/story"}
+        for index in range(1, 6)
+    ]
+
+    public_sized = report_web_search._normalize_sources(rows, claim="公开主张")
+    internal_pool = report_web_search._normalize_sources(rows, claim="公开主张", limit=5)
+
+    assert len(public_sized) == 2
+    assert len(internal_pool) == 5
+
+
 def test_stream_events_are_assembled_into_a_normal_response():
     result = report_web_search._aggregate_stream_events([
         {
@@ -301,6 +315,22 @@ def test_distinct_platform_origin_pages_can_both_be_verified():
     candidates = report_web_search._evidence_candidates("特朗普爱上高市早苗", sources)
 
     assert len(candidates) == 2
+
+
+def test_multilingual_origin_can_enter_body_verification_from_generated_query():
+    sources = report_web_search._normalize_sources(
+        [{
+            "title": "Trump and Takaichi: The Unexpected Love Affair",
+            "url": "https://example.com/love-affair",
+            "lane": "origin",
+        }],
+        claim="特朗普爱上高市早苗",
+        queries=["Trump Sanae Takaichi romance rumor"],
+    )
+
+    candidates = report_web_search._evidence_candidates("特朗普爱上高市早苗", sources)
+
+    assert candidates[0]["title"] == "Trump and Takaichi: The Unexpected Love Affair"
 
 
 def test_extractor_output_uses_evidence_section_and_ignores_summary():

@@ -93,6 +93,14 @@ if ! sudo grep -q '^JIANZHEN_DATA_DIR=' /etc/realguard/jianzhen-v2.env; then
   printf 'JIANZHEN_DATA_DIR=/opt/jianzhen-v2/data\n' \
     | sudo tee -a /etc/realguard/jianzhen-v2.env >/dev/null
 fi
+sudo sed -i \
+  -e '/^JIANZHEN_REPORT_QA_RECALL_MAX_CANDIDATES=/d' \
+  -e '/^JIANZHEN_REPORT_QA_WEB_EXTRACT_MAX_URLS=/d' \
+  /etc/realguard/jianzhen-v2.env
+printf 'JIANZHEN_REPORT_QA_RECALL_MAX_CANDIDATES=20\n' \
+  | sudo tee -a /etc/realguard/jianzhen-v2.env >/dev/null
+printf 'JIANZHEN_REPORT_QA_WEB_EXTRACT_MAX_URLS=5\n' \
+  | sudo tee -a /etc/realguard/jianzhen-v2.env >/dev/null
 detector_token="$(sudo awk -F= '/^REALGUARD_DETECTOR_INTERNAL_TOKEN=/{print substr($0, index($0, "=") + 1); exit}' /etc/realguard/realguard-backend.env)"
 if [[ ! "$detector_token" =~ ^[A-Za-z0-9_-]{32,256}$ ]]; then
   printf 'The primary detector token is missing or invalid. Deploy V1 first.\n' >&2
