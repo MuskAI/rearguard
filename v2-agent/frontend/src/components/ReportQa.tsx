@@ -256,6 +256,7 @@ function imageReportContext(outcome: Extract<AgentOutcome, { kind: "image" }>): 
 function videoReportContext(outcome: Extract<AgentOutcome, { kind: "video" }>): Record<string, unknown> {
   const result = outcome.result;
   const riskScore = normalizeScore(result.fake_percentage ?? result.confidence_score);
+  const evidence = result.evidence;
   return {
     kind: "video",
     mediaType: "video",
@@ -267,13 +268,20 @@ function videoReportContext(outcome: Extract<AgentOutcome, { kind: "video" }>): 
     decisionStatus: result.decisionStatus,
     decisionAuthority: result.decisionAuthority,
     explanation: result.explanation,
-    keyEvidence: [
-      {
-        label: "抽帧检测",
-        detail: result.frame_count ? `本次报告分析了 ${result.frame_count} 个采样帧。` : "报告未返回可用的抽帧数量。",
-      },
-    ],
-    limitations: ["视频报告未给出帧级定位时，不能据此指出具体画面区域。"],
+    keyEvidence: evidence?.keyEvidence || [{
+      label: "抽帧检测",
+      detail: result.frame_count ? `本次报告分析了 ${result.frame_count} 个采样帧。` : "报告未返回可用的抽帧数量。",
+    }],
+    sampledFrames: evidence?.sampledFrames || [],
+    sampleWindow: evidence?.sampleWindow,
+    technical: {
+      resolution: result.meta?.resolution,
+      duration: result.meta?.duration,
+      fps: result.meta?.fps,
+      codec: result.meta?.codec || result.meta?.video_format,
+      totalFrames: result.meta?.total_frames,
+    },
+    limitations: evidence?.limitations || ["视频报告未给出帧级定位时，不能据此指出具体画面区域。"],
     disclaimer: "自动化检测结论仅供专业复核参考，不构成司法鉴定结论。",
   };
 }

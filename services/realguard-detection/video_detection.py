@@ -8,6 +8,7 @@
 """
 
 import os
+import time
 import uuid
 import shutil
 import tempfile
@@ -29,6 +30,7 @@ video_blueprint = Blueprint('video_blueprint', __name__, static_folder='static')
 ALLOWED_EXTENSIONS = {'.mp4', '.mov', '.avi', '.mkv', '.webm', '.flv', '.wmv'}
 # 最大文件大小：200MB
 MAX_FILE_SIZE = 200 * 1024 * 1024
+MODEL_SAMPLE_TIMESTAMPS = (0.5, 1.0, 1.5)
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -40,7 +42,15 @@ def _allowed_video(filename: str) -> bool:
 
 def _get_video_meta(video_path: str) -> dict:
     """读取视频基础元信息（时长、分辨率、格式）。"""
-    meta = {"duration": None, "resolution": "", "video_format": ""}
+    meta = {
+        "duration": None,
+        "resolution": "",
+        "video_format": "",
+        "fps": None,
+        "total_frames": None,
+        "codec": "",
+    }
+    cap = None
     try:
         cap = cv2.VideoCapture(video_path)
         if cap.isOpened():
@@ -50,16 +60,95 @@ def _get_video_meta(video_path: str) -> dict:
             h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             meta["duration"] = round(total / fps, 2)
             meta["resolution"] = f"{w}x{h}" if w and h else ""
-            cap.release()
+            meta["fps"] = round(float(fps), 3)
+            meta["total_frames"] = max(0, int(total))
+            fourcc = int(cap.get(cv2.CAP_PROP_FOURCC))
+            meta["codec"] = "".join(
+                chr((fourcc >> (8 * index)) & 0xFF) for index in range(4)
+            ).strip("\x00 ")
         size_bytes = os.path.getsize(video_path)
         if size_bytes < 1024 * 1024:
             meta["file_size"] = f"{size_bytes / 1024:.1f} KB"
         else:
             meta["file_size"] = f"{size_bytes / 1024 / 1024:.1f} MB"
         meta["video_format"] = os.path.splitext(video_path)[1].lstrip('.').upper()
-    except Exception as e:
+    except Exception:
         meta["file_size"] = ""
+    finally:
+        if cap is not None:
+            cap.release()
     return meta
+
+
+def _build_video_evidence(result: dict, meta: dict, elapsed_ms: int) -> dict:
+    """Expose only auditable evidence produced by the current three-frame model."""
+    frame_count = max(0, int(result.get("frame_count") or 0))
+    sampled_frames = [
+        {
+            "index": index + 1,
+            "timestamp": timestamp,
+            "label": f"联合输入帧 {index + 1}",
+            "role": "temporal_model_input",
+        }
+        for index, timestamp in enumerate(MODEL_SAMPLE_TIMESTAMPS[:frame_count])
+    ]
+    timestamp_text = "、".join(f"{item['timestamp']:.1f}s" for item in sampled_frames)
+    duration = meta.get("duration")
+    file_profile = " / ".join(
+        value
+        for value in (
+            str(meta.get("resolution") or "").strip(),
+            str(meta.get("codec") or meta.get("video_format") or "").upper().strip(),
+            f"{meta.get('fps')} FPS" if meta.get("fps") else "",
+        )
+        if value
+    )
+    key_evidence = [
+        {
+            "kind": "model",
+            "label": "时序模型方向",
+            "detail": (
+                f"三帧联合分析的输出方向为“{result.get('final_label') or '未返回'}”，"
+                f"模型置信等级为{result.get('confidence') or '未标注'}。"
+            ),
+        },
+        {
+            "kind": "sampling",
+            "label": "实际分析画面",
+            "detail": (
+                f"模型联合读取 {frame_count} 帧"
+                f"{f'，时间点为 {timestamp_text}' if timestamp_text else ''}；"
+                "这些帧共同形成一次视频级判断，不是彼此独立的单帧结论。"
+            ),
+        },
+    ]
+    if file_profile:
+        key_evidence.append({
+            "kind": "file",
+            "label": "视频读取状态",
+            "detail": f"文件已成功解码：{file_profile}。",
+        })
+
+    limitations = ["当前模型输出视频级联合结论，不提供可验证的逐帧真假概率。"]
+    if duration and sampled_frames and float(duration) > sampled_frames[-1]["timestamp"] + 0.1:
+        limitations.append(
+            f"本次模型输入集中在前 {sampled_frames[-1]['timestamp']:.1f} 秒；"
+            f"视频总时长约 {float(duration):.2f} 秒，后续片段未直接进入本次三帧判断。"
+        )
+
+    return {
+        "schemaVersion": "video-evidence-v1",
+        "method": "three_frame_temporal_joint",
+        "sampledFrames": sampled_frames,
+        "sampleWindow": {
+            "start": sampled_frames[0]["timestamp"] if sampled_frames else None,
+            "end": sampled_frames[-1]["timestamp"] if sampled_frames else None,
+            "duration": duration,
+        },
+        "keyEvidence": key_evidence,
+        "limitations": limitations,
+        "processingMs": max(0, int(elapsed_ms)),
+    }
 
 
 @video_blueprint.route('/video', methods=['GET'])
@@ -123,6 +212,7 @@ def detect_video_api():
         return jsonify({"code": 400, "msg": "请上传视频文件或提供视频 URL", "data": None})
 
     # ── 3. D3 检测 ────────────────────────────────────────────────────────
+    analysis_started = time.perf_counter()
     try:
         from imagedetection.video_detector import detect_video
         result = detect_video(target_save_path)
@@ -135,6 +225,11 @@ def detect_video_api():
 
     # ── 4. 读取视频元信息 ─────────────────────────────────────────────────
     meta = _get_video_meta(target_save_path)
+    evidence = _build_video_evidence(
+        result,
+        meta,
+        round((time.perf_counter() - analysis_started) * 1000),
+    )
 
     result["explanation"] = public_video_explanation(
         result.get("explanation"),
@@ -197,11 +292,15 @@ def detect_video_api():
             "d3_std": result["d3_std"],
             "encoder": result["encoder"],
             "frame_count": result["frame_count"],
+            "evidence": evidence,
             "meta": {
                 "file_size": meta.get("file_size", ""),
                 "duration": meta.get("duration"),
                 "resolution": meta.get("resolution", ""),
                 "video_format": meta.get("video_format", ""),
+                "fps": meta.get("fps"),
+                "total_frames": meta.get("total_frames"),
+                "codec": meta.get("codec", ""),
                 # 前端 finishDetect 会自己补 width/height/size，这里留空兼容
                 "width": 0,
                 "height": 0,
@@ -295,6 +394,7 @@ def detect_video_api_v2():
             return jsonify({"code": 400, "msg": "请上传视频文件或提供视频 URL", "data": None})
 
         # ── 3. D3 检测 ───────────────────────────────────────────────────
+        analysis_started = time.perf_counter()
         try:
             from imagedetection.video_detector import detect_video
             result = detect_video(target_save_path)
@@ -311,6 +411,11 @@ def detect_video_api_v2():
 
         # ── 4. 读取视频元信息 ────────────────────────────────────────────
         meta = _get_video_meta(target_save_path)
+        evidence = _build_video_evidence(
+            result,
+            meta,
+            round((time.perf_counter() - analysis_started) * 1000),
+        )
 
         # ── 5. 返回结果（不入库）─────────────────────────────────────────
         return jsonify({
@@ -325,11 +430,15 @@ def detect_video_api_v2():
                 "d3_std": result["d3_std"],
                 "encoder": result["encoder"],
                 "frame_count": result["frame_count"],
+                "evidence": evidence,
                 "meta": {
                     "file_size": meta.get("file_size", ""),
                     "duration": meta.get("duration"),
                     "resolution": meta.get("resolution", ""),
                     "video_format": meta.get("video_format", ""),
+                    "fps": meta.get("fps"),
+                    "total_frames": meta.get("total_frames"),
+                    "codec": meta.get("codec", ""),
                 }
             }
         })

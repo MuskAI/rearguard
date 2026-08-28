@@ -412,6 +412,7 @@ sudo bash -lc '
   '"$release_root"'/.venv/bin/python -m flask --app run:app migrate-password-hashes
   '"$release_root"'/.venv/bin/python -m flask --app run:app admin-db-upgrade
   '"$release_root"'/.venv/bin/python -m flask --app run:app developer-db-upgrade
+  '"$release_root"'/.venv/bin/python -m flask --app run:app video-evidence-db-upgrade
   '"$release_root"'/.venv/bin/python -m flask --app run:app reconcile-detection-jobs
   audit_checkpoint=/opt/realguard-audit-checkpoint/checkpoint.json
   audit_bootstrap_marker=/etc/realguard/security-audit-bootstrap.once

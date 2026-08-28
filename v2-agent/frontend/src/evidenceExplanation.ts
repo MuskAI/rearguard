@@ -192,8 +192,54 @@ function evidenceExplanation(outcome: Extract<AgentOutcome, { kind: "evidence" }
   return points;
 }
 
+function videoExplanation(outcome: Extract<AgentOutcome, { kind: "video" }>, verdictLabel: string): ExplanationPoint[] {
+  const result = outcome.result;
+  const evidence = result.evidence;
+  const frames = evidence?.sampledFrames || [];
+  const timestamps = frames.map((frame) => `${Number(frame.timestamp).toFixed(1)} 秒`).join("、");
+  const technical = evidence?.technical;
+  const profile = [
+    result.meta?.resolution,
+    result.meta?.codec || result.meta?.video_format,
+    result.meta?.fps ? `${result.meta.fps} FPS` : "",
+  ].filter(Boolean).join(" / ");
+  const reviewOnly = result.decisionStatus !== "verdict" || result.reviewRequired === true;
+  const points: ExplanationPoint[] = [
+    {
+      label: "时序模型判断",
+      text: `模型对采样画面进行联合分析，输出方向为“${verdictLabel}”；置信等级为${result.confidence || "未标注"}。这是一条视频级结论，不表示每一帧都被单独判为真假。`,
+    },
+    {
+      label: "实际采样画面",
+      text: frames.length > 0
+        ? `本次实际读取 ${frames.length} 个模型输入帧，时间点为 ${timestamps}。可点击下方时间轴回到原视频逐一核对。`
+        : `服务返回分析帧数 ${result.frame_count || 0}，但未返回可核对的采样时间点。`,
+    },
+    {
+      label: "文件读取状态",
+      text: profile
+        ? `视频已成功解码（${profile}${technical?.totalFrames ? `，共 ${technical.totalFrames} 帧` : ""}），说明本次任务读取到了可分析的视频流。`
+        : "视频已完成模型分析，但服务未返回完整的编码、帧率或分辨率信息。",
+    },
+  ];
+  if (evidence?.limitations?.length) {
+    points.push({
+      label: "检测边界",
+      text: evidence.limitations.join(" "),
+    });
+  }
+  points.push({
+    label: "综合结论",
+    decisive: !reviewOnly,
+    text: reviewOnly
+      ? `最终仍给出二元结果“${verdictLabel}”，但当前证据只支持低置信等级；应结合采样时间点、未采样片段和原始来源复核。`
+      : `综合已授权的视频证据，本次结论为“${verdictLabel}”。`,
+  });
+  return points;
+}
+
 export function buildEvidenceExplanation(outcome: AgentOutcome, risk: number, verdictLabel: string): ExplanationPoint[] {
   if (outcome.kind === "image") return imageExplanation(outcome, risk, verdictLabel);
   if (outcome.kind === "evidence") return evidenceExplanation(outcome, risk, verdictLabel);
-  return [{ label: "模型分析", text: outcome.result.explanation || "本次未返回可展示的解释。" }];
+  return videoExplanation(outcome, verdictLabel);
 }

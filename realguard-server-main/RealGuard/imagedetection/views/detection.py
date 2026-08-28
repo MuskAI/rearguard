@@ -50,8 +50,10 @@ from imagedetection.views.utils import (
     excute_sql,
     get_file_size_str,
     get_image_info,
+    load_video_evidence,
     normalize_account_uuid,
     safe_truncate,
+    save_video_evidence,
 )
 
 image_upload_blueprint = Blueprint('image_upload_blueprint', __name__, static_folder='static')
@@ -4127,6 +4129,98 @@ def image_report_api():
     )
 
 
+def _normalize_video_evidence(value, source, meta):
+    raw = value if isinstance(value, dict) else {}
+    frame_count = max(0, int(_to_float((source or {}).get('frame_count'), 0)))
+    sampled_frames = []
+    for index, item in enumerate(raw.get('sampledFrames') or []):
+        if not isinstance(item, dict) or len(sampled_frames) >= 12:
+            continue
+        timestamp = _to_float(item.get('timestamp'), -1)
+        if timestamp < 0 or timestamp > 86400:
+            continue
+        sampled_frames.append({
+            'index': max(1, int(_to_float(item.get('index'), index + 1))),
+            'timestamp': round(timestamp, 3),
+            'label': safe_truncate(item.get('label') or f'联合输入帧 {index + 1}', 80),
+            'role': safe_truncate(item.get('role') or 'temporal_model_input', 48),
+        })
+    key_evidence = []
+    for item in raw.get('keyEvidence') or []:
+        if not isinstance(item, dict) or len(key_evidence) >= 8:
+            continue
+        detail = safe_truncate(item.get('detail'), 600)
+        if not detail:
+            continue
+        key_evidence.append({
+            'kind': safe_truncate(item.get('kind') or 'supporting', 32),
+            'label': safe_truncate(item.get('label') or '视频证据', 80),
+            'detail': detail,
+        })
+    if not key_evidence:
+        key_evidence = [
+            {
+                'kind': 'model',
+                'label': '时序模型方向',
+                'detail': (
+                    f"视频级联合分析输出“{binary_video_final_label((source or {}).get('final_label'), (source or {}).get('fake_percentage'))}”。"
+                    '该方向由采样帧共同形成，不代表每一帧都得到相同结论。'
+                ),
+            },
+            {
+                'kind': 'sampling',
+                'label': '实际分析画面',
+                'detail': (
+                    f'该任务记录了 {frame_count} 个模型输入帧；' if frame_count else '该任务未保存模型输入帧数量；'
+                ) + (
+                    '历史数据未留存精确采样时间，不能据此还原逐帧结论。'
+                ),
+            },
+        ]
+
+    limitations = []
+    for item in raw.get('limitations') or []:
+        text = safe_truncate(item, 500)
+        if text and text not in limitations and len(limitations) < 6:
+            limitations.append(text)
+    if not limitations:
+        limitations.append('当前模型输出视频级联合结论，不提供可验证的逐帧真假概率。')
+    if not sampled_frames:
+        limitations.append('该任务未保存可审计的采样时间点；重新检测后可在时间轴中回看实际输入画面。')
+
+    sample_window = raw.get('sampleWindow') if isinstance(raw.get('sampleWindow'), dict) else {}
+    duration = _to_float(sample_window.get('duration', meta.get('duration')), 0)
+    return {
+        'schemaVersion': 'video-evidence-v1',
+        'method': safe_truncate(raw.get('method') or 'three_frame_temporal_joint', 64),
+        'sampledFrames': sampled_frames,
+        'sampleWindow': {
+            'start': sampled_frames[0]['timestamp'] if sampled_frames else None,
+            'end': sampled_frames[-1]['timestamp'] if sampled_frames else None,
+            'duration': round(duration, 3) if duration > 0 else None,
+        },
+        'keyEvidence': key_evidence,
+        'limitations': limitations,
+        'processingMs': max(0, min(int(_to_float(raw.get('processingMs'), 0)), 3600000)),
+        'technical': {
+            'fps': _to_float(meta.get('fps'), 0) or None,
+            'totalFrames': max(0, int(_to_float(meta.get('total_frames'), 0))) or None,
+            'codec': safe_truncate(meta.get('codec'), 24),
+        },
+    }
+
+
+def _video_evidence_for_record(item):
+    stored = load_video_evidence((item or {}).get('itemid'))
+    meta = {
+        'duration': (item or {}).get('duration'),
+        'fps': (stored or {}).get('technical', {}).get('fps') if isinstance((stored or {}).get('technical'), dict) else None,
+        'total_frames': (stored or {}).get('technical', {}).get('totalFrames') if isinstance((stored or {}).get('technical'), dict) else None,
+        'codec': (stored or {}).get('technical', {}).get('codec') if isinstance((stored or {}).get('technical'), dict) else '',
+    }
+    return _normalize_video_evidence(stored, item or {}, meta)
+
+
 def _insert_remote_video_record(data, backend_openid, phone, user_info):
     """Mirror video metadata locally while the source media remains on the GPU server."""
     data = data or {}
@@ -4170,6 +4264,10 @@ def _insert_remote_video_record(data, backend_openid, phone, user_info):
     )
     if not itemid:
         raise RuntimeError('视频检测完成，但历史记录归档失败')
+    if isinstance(data.get('evidence'), dict) and data.get('evidence'):
+        evidence = _normalize_video_evidence(data.get('evidence'), data, meta)
+        if not save_video_evidence(itemid, evidence):
+            warnings.warn('video evidence persistence failed', RuntimeWarning)
     return itemid
 
 
@@ -4292,6 +4390,7 @@ def video_detect():
     )
     conf_level = '低'
     meta = data.get('meta') or {}
+    evidence = _normalize_video_evidence(data.get('evidence'), data, meta)
 
     duration = meta.get('duration', '')
     resolution = meta.get('resolution', '')
@@ -4326,11 +4425,15 @@ def video_detect():
             'd3_std': d3_std,
             'encoder': encoder,
             'frame_count': frame_count,
+            'evidence': evidence,
             'meta': {
                 'file_size': meta.get('file_size', ''),
                 'duration': duration,
                 'resolution': resolution,
                 'video_format': video_format,
+                'fps': meta.get('fps'),
+                'total_frames': meta.get('total_frames'),
+                'codec': meta.get('codec', ''),
             }
         }
     })
@@ -4346,6 +4449,8 @@ def video_result_api():
     if not item:
         return jsonify({'status': 'error', 'message': '未找到该视频检测记录'}), 404
     final_label = binary_video_final_label(item.get('final_label'), item.get('fake'))
+    evidence = _video_evidence_for_record(item)
+    technical = evidence.get('technical') or {}
     return jsonify({
         'status': 'success',
         'result': {
@@ -4367,11 +4472,15 @@ def video_result_api():
             'd3_std': item.get('d3_std'),
             'encoder': item.get('encoder', ''),
             'frame_count': item.get('frame_count', 0),
+            'evidence': evidence,
             'meta': {
                 'file_size': item.get('file_size', ''),
                 'duration': item.get('duration', ''),
                 'resolution': item.get('resolution', ''),
                 'video_format': item.get('video_format', ''),
+                'fps': technical.get('fps'),
+                'total_frames': technical.get('totalFrames'),
+                'codec': technical.get('codec', ''),
             }
         }
     })
@@ -4388,6 +4497,8 @@ def video_report_api():
         return jsonify({'status': 'error', 'message': '未找到该视频检测记录'}), 404
 
     final_label = binary_video_final_label(item.get('final_label'), item.get('fake'))
+    evidence = _video_evidence_for_record(item)
+    technical = evidence.get('technical') or {}
     result = {
         'itemid': item.get('itemid'),
         'filename': item.get('filename', ''),
@@ -4405,11 +4516,15 @@ def video_report_api():
         ),
         'frame_count': item.get('frame_count', 0),
         'encoder': item.get('encoder', ''),
+        'evidence': evidence,
         'meta': {
             'file_size': item.get('file_size', ''),
             'duration': item.get('duration', ''),
             'resolution': item.get('resolution', ''),
             'video_format': item.get('video_format', ''),
+            'fps': technical.get('fps'),
+            'total_frames': technical.get('totalFrames'),
+            'codec': technical.get('codec', ''),
         },
     }
     pdf = reporting.video_report_pdf(item, result)

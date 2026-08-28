@@ -153,6 +153,13 @@ def creat_app():
                 raise click.ClickException(f"developer schema upgrade failed: {label}")
             click.echo(f"developer schema ready: {label}")
 
+    @app.cli.command("video-evidence-db-upgrade")
+    def video_evidence_db_upgrade():
+        """Create the structured video evidence sidecar table."""
+        if not utils.apply_video_evidence_schema():
+            raise click.ClickException("video evidence schema upgrade failed")
+        click.echo("video evidence schema ready")
+
     @app.cli.command("reconcile-detection-jobs")
     def reconcile_detection_jobs():
         """Fail legacy in-process jobs while preserving durable queued work."""

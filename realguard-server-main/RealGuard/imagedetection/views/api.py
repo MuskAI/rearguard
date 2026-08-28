@@ -2929,6 +2929,8 @@ def _delete_owned_history_record(kind, itemid, actor):
 
             if kind == "image":
                 cursor.execute("DELETE FROM exif WHERE data_itemid = %s", (itemid,))
+            else:
+                cursor.execute("DELETE FROM video_evidence WHERE video_itemid = %s", (itemid,))
             cursor.execute(
                 f"DELETE FROM {table} WHERE itemid = %s AND ({owner_where})",
                 (itemid, *owner_params),

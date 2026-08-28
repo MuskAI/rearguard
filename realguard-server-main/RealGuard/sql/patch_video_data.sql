@@ -26,3 +26,12 @@ CREATE TABLE IF NOT EXISTS `video_data` (
   PRIMARY KEY (`itemid`),
   KEY `idx_video_data_phone_ct` (`phone`, `createtime`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='视频鉴伪检测记录';
+
+CREATE TABLE IF NOT EXISTS `video_evidence` (
+  `video_itemid` INT NOT NULL,
+  `schema_version` VARCHAR(32) NOT NULL,
+  `evidence_json` LONGTEXT NOT NULL,
+  `created_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `updated_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`video_itemid`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='视频鉴伪结构化采样与证据摘要';

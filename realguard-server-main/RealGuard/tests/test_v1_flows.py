@@ -2771,6 +2771,7 @@ def test_detector_backend_image_endpoint_returns_v1_contract(monkeypatch):
 def test_video_detect_logged_in_builds_public_media_url(client, monkeypatch):
     _login_session(client)
     requested_urls = []
+    saved_evidence = []
 
     def fake_video_backend(url, **kwargs):
         requested_urls.append(url)
@@ -2786,11 +2787,28 @@ def test_video_detect_logged_in_builds_public_media_url(client, monkeypatch):
                     "final_label": "fake",
                     "frame_count": 48,
                     "encoder": "h264",
+                    "evidence": {
+                        "schemaVersion": "video-evidence-v1",
+                        "method": "three_frame_temporal_joint",
+                        "sampledFrames": [
+                            {"index": 1, "timestamp": 0.5, "label": "联合输入帧 1", "role": "temporal_model_input"},
+                            {"index": 2, "timestamp": 1.0, "label": "联合输入帧 2", "role": "temporal_model_input"},
+                            {"index": 3, "timestamp": 1.5, "label": "联合输入帧 3", "role": "temporal_model_input"},
+                        ],
+                        "keyEvidence": [
+                            {"kind": "model", "label": "时序模型方向", "detail": "三帧联合输出 AI 生成方向。"},
+                        ],
+                        "limitations": ["当前模型不提供逐帧真假概率。"],
+                        "processingMs": 1830,
+                    },
                     "meta": {
                         "file_size": "2.5MB",
                         "duration": "8s",
                         "resolution": "1280x720",
                         "video_format": "mp4",
+                        "fps": 25,
+                        "total_frames": 200,
+                        "codec": "h264",
                     },
                 },
             }
@@ -2806,6 +2824,11 @@ def test_video_detect_logged_in_builds_public_media_url(client, monkeypatch):
         detection,
         "excute_detection_sql_lastid",
         lambda sql, params=None: 21,
+    )
+    monkeypatch.setattr(
+        detection,
+        "save_video_evidence",
+        lambda itemid, evidence: saved_evidence.append((itemid, evidence)) or True,
     )
     monkeypatch.setattr(
         detection,
@@ -2834,6 +2857,10 @@ def test_video_detect_logged_in_builds_public_media_url(client, monkeypatch):
     assert payload["decisionStatus"] == "review_only"
     assert payload["filename"] == "remote-video.mp4"
     assert payload["video_url"] == "/api/media/video/21"
+    assert payload["evidence"]["sampledFrames"][1]["timestamp"] == pytest.approx(1.0)
+    assert payload["meta"]["codec"] == "h264"
+    assert saved_evidence[0][0] == 21
+    assert saved_evidence[0][1]["technical"]["totalFrames"] == 200
 
 
 def test_video_detect_rejects_backend_without_remote_media_reference(client, monkeypatch):
@@ -2897,6 +2924,43 @@ def test_remote_video_result_is_archived_as_metadata_only(monkeypatch):
     assert params[3] == 17
     assert params[4] == ACCOUNT_UUID
     assert params[7] == "真实视频"
+
+
+def test_video_evidence_normalization_keeps_auditable_timeline():
+    evidence = detection._normalize_video_evidence(
+        {
+            "method": "three_frame_temporal_joint",
+            "sampledFrames": [
+                {"index": 1, "timestamp": 0.5, "label": "联合输入帧 1", "role": "temporal_model_input"},
+                {"index": 2, "timestamp": 1.0, "label": "联合输入帧 2", "role": "temporal_model_input"},
+                {"index": 3, "timestamp": 1.5, "label": "联合输入帧 3", "role": "temporal_model_input"},
+            ],
+            "keyEvidence": [
+                {"kind": "model", "label": "时序模型方向", "detail": "三帧共同形成视频级结论。"},
+            ],
+            "limitations": ["不提供逐帧真假概率。"],
+            "processingMs": 2345,
+        },
+        {"frame_count": 3, "final_label": "AI生成视频", "fake_percentage": 82},
+        {"duration": 10.0, "fps": 25, "total_frames": 250, "codec": "h264"},
+    )
+
+    assert evidence["sampleWindow"] == {"start": 0.5, "end": 1.5, "duration": 10.0}
+    assert evidence["sampledFrames"][2]["timestamp"] == pytest.approx(1.5)
+    assert evidence["technical"] == {"fps": 25.0, "totalFrames": 250, "codec": "h264"}
+    assert evidence["processingMs"] == 2345
+
+
+def test_legacy_video_evidence_does_not_invent_sample_timestamps():
+    evidence = detection._normalize_video_evidence(
+        None,
+        {"frame_count": 3, "final_label": "真实视频", "fake_percentage": 12},
+        {"duration": 8.0},
+    )
+
+    assert evidence["sampledFrames"] == []
+    assert evidence["sampleWindow"] == {"start": None, "end": None, "duration": 8.0}
+    assert any("未保存可审计的采样时间点" in item for item in evidence["limitations"])
 
 
 def test_video_media_uses_video_backend(monkeypatch):
@@ -3089,6 +3153,17 @@ def test_video_report_downloads_attachment_for_logged_user(client, monkeypatch):
         raise AssertionError(f"unexpected SQL: {sql}")
 
     monkeypatch.setattr(detection, "excute_detection_sql", fake_detection_sql)
+    monkeypatch.setattr(
+        detection,
+        "load_video_evidence",
+        lambda itemid: {
+            "schemaVersion": "video-evidence-v1",
+            "sampledFrames": [{"index": 1, "timestamp": 0.5, "label": "联合输入帧 1", "role": "temporal_model_input"}],
+            "keyEvidence": [{"kind": "model", "label": "时序模型方向", "detail": "视频级结论。"}],
+            "limitations": ["不提供逐帧概率。"],
+            "technical": {"fps": 25, "totalFrames": 250, "codec": "h264"},
+        },
+    )
 
     response = client.get("/video_upload/report?itemid=41")
 

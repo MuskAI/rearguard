@@ -1,6 +1,7 @@
 import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type RefCallback,
   type ReactNode,
   useCallback,
   useEffect,
@@ -26,6 +27,7 @@ import {
   Link2,
   LoaderCircle,
   MousePointer2,
+  Play,
   ScanSearch,
   ScanLine,
   ShieldCheck,
@@ -49,6 +51,7 @@ import {
   type SynthIDResult,
   type VisibleWatermarkHit,
   type VisibleWatermarkResult,
+  type VideoEvidence,
 } from "../api";
 import { buildEvidenceExplanation, hasDecisiveAiWatermark, localizedWatermarkHits } from "../evidenceExplanation";
 import { StatusIcon } from "./BrandSystem";
@@ -198,6 +201,147 @@ function AnnotatedImagePreview({
       )}
       {onOpen && <span className="result-preview-zoom" aria-hidden="true"><ZoomIn size={15} /></span>}
     </div>
+  );
+}
+
+function formatVideoTime(value: number) {
+  const safe = Math.max(0, Number(value) || 0);
+  const minutes = Math.floor(safe / 60);
+  const seconds = safe - minutes * 60;
+  return `${String(minutes).padStart(2, "0")}:${seconds.toFixed(1).padStart(4, "0")}`;
+}
+
+function VideoResultPreview({
+  src,
+  name,
+  videoRef,
+  onTimeChange,
+  onRetry,
+}: {
+  src: string;
+  name: string;
+  videoRef: RefCallback<HTMLVideoElement>;
+  onTimeChange: (time: number) => void;
+  onRetry: () => void;
+}) {
+  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+
+  useEffect(() => {
+    setState("loading");
+  }, [src]);
+
+  return (
+    <div className={`video-result-preview is-${state}`} aria-busy={state === "loading"}>
+      <video
+        key={src}
+        ref={videoRef}
+        src={src}
+        controls
+        playsInline
+        preload="metadata"
+        aria-label={`预览视频 ${name}`}
+        onLoadedMetadata={(event) => {
+          setState("ready");
+          onTimeChange(event.currentTarget.currentTime);
+        }}
+        onCanPlay={() => setState("ready")}
+        onTimeUpdate={(event) => onTimeChange(event.currentTarget.currentTime)}
+        onWaiting={() => setState((current) => current === "error" ? current : "loading")}
+        onPlaying={() => setState("ready")}
+        onError={() => setState("error")}
+      />
+      {state === "loading" && (
+        <span className="video-preview-status" role="status">
+          <LoaderCircle size={18} className="spin" />
+          <b>正在读取预览</b>
+        </span>
+      )}
+      {state === "error" && (
+        <div className="video-preview-error" role="alert">
+          <AlertTriangle size={19} />
+          <span><strong>当前浏览器无法播放</strong><small>可能是媒体暂不可用或编码不兼容</small></span>
+          <button type="button" onClick={() => {
+            setState("loading");
+            onRetry();
+          }}>重试</button>
+          <a href={src} target="_blank" rel="noreferrer">打开原视频</a>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VideoEvidenceSection({
+  evidence,
+  frameCount,
+  currentTime,
+  onSeek,
+}: {
+  evidence?: VideoEvidence;
+  frameCount?: number;
+  currentTime: number;
+  onSeek: (timestamp: number) => void;
+}) {
+  const frames = evidence?.sampledFrames || [];
+  const keyEvidence = evidence?.keyEvidence || [];
+  const limitations = evidence?.limitations || [];
+  const start = evidence?.sampleWindow?.start;
+  const end = evidence?.sampleWindow?.end;
+  const windowText = typeof start === "number" && typeof end === "number"
+    ? `${formatVideoTime(start)} - ${formatVideoTime(end)}`
+    : "未返回";
+
+  return (
+    <section className="result-band video-evidence-section">
+      <div className="section-title">
+        <Video size={18} />
+        <div>
+          <h3>视频采样与时序证据</h3>
+          <p>展示模型实际读取的时间点；点击时间点可跳到原视频核对。</p>
+        </div>
+      </div>
+      <dl className="video-evidence-facts">
+        <div><dt>联合分析帧</dt><dd>{frames.length || frameCount || "未返回"}</dd></div>
+        <div><dt>采样时间窗</dt><dd>{windowText}</dd></div>
+        <div><dt>处理耗时</dt><dd>{evidence?.processingMs ? `${(evidence.processingMs / 1000).toFixed(1)} 秒` : "未返回"}</dd></div>
+      </dl>
+      {frames.length > 0 && (
+        <div className="video-sample-timeline" aria-label="模型采样时间点">
+          {frames.map((frame) => {
+            const active = Math.abs(currentTime - frame.timestamp) < 0.35;
+            return (
+              <button
+                type="button"
+                className={active ? "is-active" : ""}
+                key={`${frame.index}-${frame.timestamp}`}
+                onClick={() => onSeek(frame.timestamp)}
+                aria-label={`跳转到采样帧 ${frame.index}，${formatVideoTime(frame.timestamp)}`}
+              >
+                <span><Play size={13} fill="currentColor" /></span>
+                <time>{formatVideoTime(frame.timestamp)}</time>
+                <small>{frame.label || `联合输入帧 ${frame.index}`}</small>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {keyEvidence.length > 0 && (
+        <div className="video-evidence-list">
+          {keyEvidence.map((item, index) => (
+            <div key={`${item.label}-${index}`}>
+              <span>{String(index + 1).padStart(2, "0")}</span>
+              <p><strong>{item.label}</strong>{publicCopy(item.detail)}</p>
+            </div>
+          ))}
+        </div>
+      )}
+      {limitations.length > 0 && (
+        <details className="video-evidence-limitations">
+          <summary>查看检测边界 <span>{limitations.length} 项</span><ChevronDown size={15} /></summary>
+          <ul>{limitations.map((item, index) => <li key={`${index}-${item}`}>{publicCopy(item)}</li>)}</ul>
+        </details>
+      )}
+    </section>
   );
 }
 
@@ -400,10 +544,11 @@ function verdictFor(outcome: AgentOutcome): VerdictView {
     const risk = clamp01(Number(outcome.result.fake_percentage ?? 0) / 100);
     const label = binaryVideoVerdictLabel(outcome.result.final_label, outcome.result.fake_percentage);
     const tone = isFakeVerdict(label) ? "fake" : "real";
+    const sampledCount = outcome.result.evidence?.sampledFrames?.length || outcome.result.frame_count || 0;
     return {
       label,
       description: reviewOnly
-        ? outcome.result.explanation || `系统给出“${label}”二元结论；当前置信度较低，建议结合原视频复核。`
+        ? `模型给出“${label}”二元结论${sampledCount ? `，本次联合分析了 ${sampledCount} 个采样帧` : ""}。当前置信等级较低，建议结合下方时间点与原视频核对。`
         : tone === "real"
           ? "抽帧与时序分析未发现明确的合成证据。"
           : "视频中存在需要人工复核的合成线索。",
@@ -833,6 +978,8 @@ export default function AgentResult(props: Props) {
   const [createdShareUrl, setCreatedShareUrl] = useState("");
   const [shares, setShares] = useState<ReportShareItem[]>([]);
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [videoCurrentTime, setVideoCurrentTime] = useState(0);
+  const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
   useEffect(() => {
     setTab("summary");
     setShareOpen(false);
@@ -840,6 +987,7 @@ export default function AgentResult(props: Props) {
     setCreatedShareUrl("");
     setShares([]);
     setLightboxOpen(false);
+    setVideoCurrentTime(0);
   }, [props.outcome.id]);
   const verdict = useMemo(() => verdictFor(props.outcome), [props.outcome]);
   const explanationPoints = useMemo(
@@ -951,10 +1099,28 @@ export default function AgentResult(props: Props) {
     }
   }
 
+  function seekVideo(timestamp: number) {
+    const video = videoElement;
+    if (!video) return;
+    try {
+      video.currentTime = Math.max(0, timestamp);
+      setVideoCurrentTime(Math.max(0, timestamp));
+      video.scrollIntoView({
+        block: "center",
+        behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+      });
+    } catch {
+      // The player will become seekable after metadata is available.
+    }
+  }
+
   const evidenceItems = props.outcome.kind === "image"
     ? [...(props.outcome.result.swarm?.evidence || []), ...(props.outcome.result.visual_issues || [])]
     : props.outcome.kind === "video"
-      ? [props.outcome.result.explanation].filter(Boolean)
+      ? [
+          ...(props.outcome.result.evidence?.keyEvidence || []).map((item) => `${item.label}：${item.detail}`),
+          props.outcome.result.explanation,
+        ].filter((item, index, items): item is string => Boolean(item) && items.indexOf(item) === index)
       : props.outcome.result.dimensions.map((item) => `${item.label}：${item.result}`);
 
   return (
@@ -962,7 +1128,13 @@ export default function AgentResult(props: Props) {
       <header className="result-hero">
         <div className="result-preview">
           {props.outcome.kind === "video" && preview ? (
-            <video src={preview} controls preload="metadata" />
+            <VideoResultPreview
+              src={preview}
+              name={fileName(props.outcome)}
+              videoRef={setVideoElement}
+              onTimeChange={setVideoCurrentTime}
+              onRetry={() => videoElement?.load()}
+            />
           ) : preview ? (
             <AnnotatedImagePreview src={preview} alt={fileName(props.outcome)} marks={previewWatermarkMarks} onOpen={() => setLightboxOpen(true)} />
           ) : (
@@ -1055,6 +1227,14 @@ export default function AgentResult(props: Props) {
               </details>
             )}
           </section>
+          {props.outcome.kind === "video" && (
+            <VideoEvidenceSection
+              evidence={props.outcome.result.evidence}
+              frameCount={props.outcome.result.frame_count}
+              currentTime={videoCurrentTime}
+              onSeek={seekVideo}
+            />
+          )}
           <div className="result-actions">
             <button type="button" className="primary-button" onClick={props.onDownload} disabled={props.downloadBusy}>
               {props.downloadBusy ? <LoaderCircle size={17} className="spin" /> : <Download size={17} />}
@@ -1157,10 +1337,20 @@ export default function AgentResult(props: Props) {
 
       {tab === "evidence" && (
         <div className="result-tab-panel" id="result-panel-evidence" role="tabpanel" aria-labelledby="result-tab-evidence" tabIndex={0}>
-          <section className="result-band">
-            <div className="section-title"><Layers3 size={18} /><div><h3>证据摘要</h3><p>证据条目用于解释模型判断，不应脱离原始文件单独使用。</p></div></div>
-            <EvidenceList items={evidenceItems} />
-          </section>
+          {props.outcome.kind !== "video" && (
+            <section className="result-band">
+              <div className="section-title"><Layers3 size={18} /><div><h3>证据摘要</h3><p>证据条目用于解释模型判断，不应脱离原始文件单独使用。</p></div></div>
+              <EvidenceList items={evidenceItems} />
+            </section>
+          )}
+          {props.outcome.kind === "video" && (
+            <VideoEvidenceSection
+              evidence={props.outcome.result.evidence}
+              frameCount={props.outcome.result.frame_count}
+              currentTime={videoCurrentTime}
+              onSeek={seekVideo}
+            />
+          )}
           <CaptureEvidenceSection report={captureEvidence} />
           {!verdict.reviewOnly && <ProbabilitySection model={probabilityModel} />}
           <SynthIDSection report={synthid} />
@@ -1203,7 +1393,16 @@ export default function AgentResult(props: Props) {
               <div><dt>文件名</dt><dd>{fileName(props.outcome)}</dd></div>
               <div><dt>内容类型</dt><dd>{props.outcome.kind === "image" ? "图像" : props.outcome.kind === "video" ? "视频" : props.outcome.result.fileMeta.type === "document" ? "文档" : "图像"}</dd></div>
               {props.outcome.kind === "image" && <><div><dt>文件大小</dt><dd>{props.outcome.result.file_size || "未返回"}</dd></div><div><dt>分辨率</dt><dd>{props.outcome.result.resolution || "未返回"}</dd></div><div><dt>格式</dt><dd>{props.outcome.result.img_format || "未返回"}</dd></div><div><dt>任务编号</dt><dd>{props.outcome.result.itemid}</dd></div></>}
-              {props.outcome.kind === "video" && <><div><dt>分辨率</dt><dd>{props.outcome.result.meta?.resolution || "未返回"}</dd></div><div><dt>时长</dt><dd>{props.outcome.result.meta?.duration || "未返回"}</dd></div><div><dt>抽帧数</dt><dd>{props.outcome.result.frame_count || "未返回"}</dd></div><div><dt>任务编号</dt><dd>{props.outcome.result.itemid}</dd></div></>}
+              {props.outcome.kind === "video" && <>
+                <div><dt>文件大小</dt><dd>{props.outcome.result.meta?.file_size || "未返回"}</dd></div>
+                <div><dt>分辨率</dt><dd>{props.outcome.result.meta?.resolution || "未返回"}</dd></div>
+                <div><dt>时长</dt><dd>{props.outcome.result.meta?.duration || "未返回"}</dd></div>
+                <div><dt>帧率</dt><dd>{props.outcome.result.meta?.fps ? `${props.outcome.result.meta.fps} FPS` : "未返回"}</dd></div>
+                <div><dt>视频编码</dt><dd>{props.outcome.result.meta?.codec || props.outcome.result.meta?.video_format || "未返回"}</dd></div>
+                <div><dt>总帧数</dt><dd>{props.outcome.result.meta?.total_frames || "未返回"}</dd></div>
+                <div><dt>模型输入帧</dt><dd>{props.outcome.result.frame_count || "未返回"}</dd></div>
+                <div><dt>任务编号</dt><dd>{props.outcome.result.itemid}</dd></div>
+              </>}
               {props.outcome.kind === "evidence" && <><div><dt>文件大小</dt><dd>{props.outcome.result.fileMeta.size}</dd></div><div><dt>分辨率</dt><dd>{props.outcome.result.fileMeta.resolution || "不适用"}</dd></div><div><dt>文件指纹</dt><dd className="mono-value">{props.outcome.result.fileMeta.sha256 || "未返回"}</dd></div><div><dt>报告编号</dt><dd>{props.outcome.result.reportId}</dd></div></>}
             </dl>
           </section>

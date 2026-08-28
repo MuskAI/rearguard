@@ -1,5 +1,11 @@
 import { expect, Page, test } from "@playwright/test";
 import { createServer } from "node:http";
+import { fileURLToPath } from "node:url";
+
+const videoFixture = fileURLToPath(new URL(
+  "../../../../realguard-server-main/RealGuard/imagedetection/static/system/video189.mp4",
+  import.meta.url,
+));
 
 const viewports = [
   { name: "mobile", width: 390, height: 844 },
@@ -1130,6 +1136,81 @@ test("结果页完整依据入口使用正文级字号", async ({ page }) => {
   expect(mobileResult.previewWidth).toBeLessThanOrEqual(96.5);
   expect(mobileResult.dockBottom).toBeLessThanOrEqual(569);
   await expectNoHorizontalOverflow(page);
+});
+
+test("视频结果可预览并按采样时间点回看证据", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await installBaseMocks(page);
+  await page.route("**/video_upload/detect", (route) => route.fulfill({
+    json: {
+      status: "success",
+      result: {
+        itemid: 963,
+        filename: "video189.mp4",
+        video_url: "/api/media/video/963",
+        fake_percentage: null,
+        real_percentage: null,
+        final_label: "AI生成视频",
+        confidence: "低",
+        decisionStatus: "review_only",
+        decisionAuthority: "none",
+        reviewRequired: true,
+        explanation: "三帧联合时序分析给出 AI 生成方向。",
+        frame_count: 3,
+        encoder: "video-analysis",
+        evidence: {
+          schemaVersion: "video-evidence-v1",
+          method: "three_frame_temporal_joint",
+          sampledFrames: [
+            { index: 1, timestamp: 0.5, label: "联合输入帧 1", role: "temporal_model_input" },
+            { index: 2, timestamp: 1.0, label: "联合输入帧 2", role: "temporal_model_input" },
+            { index: 3, timestamp: 1.5, label: "联合输入帧 3", role: "temporal_model_input" },
+          ],
+          sampleWindow: { start: 0.5, end: 1.5, duration: 10 },
+          keyEvidence: [
+            { kind: "model", label: "时序模型方向", detail: "三帧联合输出方向为 AI 生成视频。" },
+            { kind: "sampling", label: "实际分析画面", detail: "模型联合读取三个采样时间点。" },
+            { kind: "file", label: "视频读取状态", detail: "文件已成功解码。" },
+          ],
+          limitations: ["当前模型不提供可验证的逐帧真假概率。"],
+          processingMs: 2130,
+          technical: { fps: 25, totalFrames: 250, codec: "h264" },
+        },
+        meta: {
+          file_size: "2.1 MB",
+          duration: 10,
+          resolution: "320x240",
+          video_format: "MP4",
+          fps: 25,
+          total_frames: 250,
+          codec: "h264",
+        },
+      },
+    },
+  }));
+
+  await page.goto("/?workspace=1");
+  await page.locator(".guest-upload-consent input").check();
+  await page.locator('input[type="file"]').setInputFiles(videoFixture);
+
+  await expect(page.getByRole("heading", { name: "AI生成视频" })).toBeVisible();
+  const video = page.getByLabel("预览视频 video189.mp4");
+  await expect(video).toBeVisible();
+  await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.readyState)).toBeGreaterThan(0);
+  await expect(page.getByRole("heading", { name: "视频采样与时序证据" })).toBeVisible();
+  await expect(page.getByText("时序模型方向", { exact: true }).first()).toBeVisible();
+
+  await page.getByRole("button", { name: "跳转到采样帧 2，00:01.0" }).click();
+  await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.currentTime)).toBeGreaterThan(0.8);
+  await expect(page.locator(".video-preview-error")).toHaveCount(0);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectNoHorizontalOverflow(page);
+  await expectTouchTargets(page, [
+    '.video-sample-timeline button[aria-label*="采样帧 1"]',
+    '.video-sample-timeline button[aria-label*="采样帧 2"]',
+    '.video-sample-timeline button[aria-label*="采样帧 3"]',
+  ]);
 });
 
 test("登录用户可以围绕当前检测报告连续提问", async ({ page }) => {

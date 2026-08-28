@@ -37,6 +37,10 @@ DETECTION_DB_CONFIG = {
     'write_timeout': int(os.environ.get('REALGUARD_DETECTION_DB_WRITE_TIMEOUT', '30')),
 }
 
+VIDEO_EVIDENCE_SCHEMA_VERSION = 'video-evidence-v1'
+VIDEO_EVIDENCE_MAX_BYTES = 128 * 1024
+_VIDEO_EVIDENCE_SCHEMA_READY = False
+
 
 def _should_fetch(sql):
     first_token = (sql.strip().split(None, 1) or [''])[0].upper()
@@ -51,6 +55,84 @@ def get_db_connection():
 def get_detection_db_connection():
     """连接 /home/ymk/RealGuard 鉴伪后端使用的 image_detection 数据库。"""
     return pymysql.connect(**DETECTION_DB_CONFIG)
+
+
+def apply_video_evidence_schema():
+    """Create the structured evidence sidecar without altering legacy video rows."""
+    global _VIDEO_EVIDENCE_SCHEMA_READY
+    if _VIDEO_EVIDENCE_SCHEMA_READY:
+        return True
+    conn = get_detection_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS video_evidence (
+                  video_itemid INT NOT NULL,
+                  schema_version VARCHAR(32) NOT NULL,
+                  evidence_json LONGTEXT NOT NULL,
+                  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                    ON UPDATE CURRENT_TIMESTAMP(6),
+                  PRIMARY KEY (video_itemid)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                  COMMENT='视频鉴伪结构化采样与证据摘要'
+                """
+            )
+        conn.commit()
+        _VIDEO_EVIDENCE_SCHEMA_READY = True
+        return True
+    except Exception:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+def save_video_evidence(itemid, evidence):
+    if itemid in (None, '') or not isinstance(evidence, dict) or not evidence:
+        return False
+    encoded = json.dumps(evidence, ensure_ascii=False, separators=(',', ':'))
+    if len(encoded.encode('utf-8')) > VIDEO_EVIDENCE_MAX_BYTES:
+        raise ValueError('video evidence payload is too large')
+    if not apply_video_evidence_schema():
+        return False
+    changed = excute_detection_sql(
+        """
+        INSERT INTO video_evidence
+            (video_itemid, schema_version, evidence_json)
+        VALUES (%s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            schema_version = VALUES(schema_version),
+            evidence_json = VALUES(evidence_json),
+            updated_at = CURRENT_TIMESTAMP(6)
+        """,
+        (int(itemid), VIDEO_EVIDENCE_SCHEMA_VERSION, encoded),
+        fetch=False,
+    )
+    return changed is not None
+
+
+def load_video_evidence(itemid):
+    if itemid in (None, '') or not apply_video_evidence_schema():
+        return None
+    rows = excute_detection_sql(
+        """
+        SELECT schema_version, evidence_json
+        FROM video_evidence WHERE video_itemid = %s LIMIT 1
+        """,
+        (int(itemid),),
+    )
+    if not rows:
+        return None
+    try:
+        value = json.loads(rows[0].get('evidence_json') or '{}')
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, dict):
+        return None
+    value.setdefault('schemaVersion', rows[0].get('schema_version') or VIDEO_EVIDENCE_SCHEMA_VERSION)
+    return value
 
 
 def normalize_account_uuid(value):

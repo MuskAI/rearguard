@@ -126,6 +126,10 @@ def test_video_detection_returns_the_remote_media_reference():
 
     assert '"filename": filename' in video
     assert 'f"{folder_name}/video/{filename}"' in video
+    assert '"evidence": evidence' in video
+    assert '"sampledFrames": sampled_frames' in video
+    assert '"processingMs": max(0, int(elapsed_ms))' in video
+    assert '"codec": meta.get("codec", "")' in video
 
 
 def test_runtime_locks_are_complete_pinned_and_have_no_duplicate_packages():

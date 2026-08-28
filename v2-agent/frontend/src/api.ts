@@ -1244,6 +1244,38 @@ export interface ImageAgentJob {
   } | null;
 }
 
+export interface VideoEvidenceFrame {
+  index: number;
+  timestamp: number;
+  label: string;
+  role: string;
+}
+
+export interface VideoEvidenceItem {
+  kind: string;
+  label: string;
+  detail: string;
+}
+
+export interface VideoEvidence {
+  schemaVersion: string;
+  method: string;
+  sampledFrames: VideoEvidenceFrame[];
+  sampleWindow?: {
+    start?: number | null;
+    end?: number | null;
+    duration?: number | null;
+  };
+  keyEvidence: VideoEvidenceItem[];
+  limitations: string[];
+  processingMs?: number;
+  technical?: {
+    fps?: number | null;
+    totalFrames?: number | null;
+    codec?: string;
+  };
+}
+
 export interface VideoAgentResult {
   itemid: number;
   filename: string;
@@ -1260,7 +1292,17 @@ export interface VideoAgentResult {
   frame_count?: number;
   d3_std?: number;
   encoder?: string;
-  meta?: Record<string, string>;
+  evidence?: VideoEvidence;
+  meta?: {
+    file_size?: string;
+    duration?: string | number;
+    resolution?: string;
+    video_format?: string;
+    fps?: string | number | null;
+    total_frames?: string | number | null;
+    codec?: string;
+    [key: string]: unknown;
+  };
 }
 
 export interface ImageHistoryRecord {

@@ -330,6 +330,15 @@ def video_report_pdf(item: dict[str, Any], result: dict[str, Any]) -> bytes:
     confidence = "不适用"
     final_label = binary_final_label(result.get("final_label"), item.get("fake"))
     meta = result.get("meta") or {}
+    evidence = result.get("evidence") or {}
+    sampled_frames = evidence.get("sampledFrames") or []
+    sample_times = "、".join(
+        f"{float(frame.get('timestamp') or 0):.1f}s"
+        for frame in sampled_frames
+        if isinstance(frame, dict)
+    ) or "未返回"
+    limitations = evidence.get("limitations") or []
+    boundary = " ".join(_text(item) for item in limitations[:2]) or "未返回结构化检测边界"
     return _build_report(
         report_id=f"VID-{item.get('itemid')}",
         title="视频鉴伪报告",
@@ -341,6 +350,8 @@ def video_report_pdf(item: dict[str, Any], result: dict[str, Any]) -> bytes:
             ("检测时间", item.get("createtime")),
             ("时长", meta.get("duration")),
             ("分辨率", meta.get("resolution")),
+            ("视频编码", meta.get("codec") or meta.get("video_format")),
+            ("帧率", f"{meta.get('fps')} FPS" if meta.get("fps") else None),
             ("编码器", result.get("encoder")),
             ("任务编号", item.get("itemid")),
         ],
@@ -350,6 +361,8 @@ def video_report_pdf(item: dict[str, Any], result: dict[str, Any]) -> bytes:
             ["自动风险分数", "视频校准契约尚未完成", "未发布"],
             ["结论权限", "当前结果仅供人工复核", "review_only"],
             ["分析帧数", "返回的分析帧计数", _text(result.get("frame_count"))],
+            ["采样时间点", "模型实际读取的画面位置", sample_times],
+            ["检测边界", boundary, "需结合原视频复核"],
         ],
         decision_status="review_only",
     )
