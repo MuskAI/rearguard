@@ -951,7 +951,8 @@ export default function App() {
       name: file.name,
       size: file.size,
       typeLabel: kindLabel(kind),
-      previewUrl: kind === "image" ? previewUrl : undefined,
+      previewUrl,
+      previewKind: kind === "video" ? "video" : kind === "image" ? "image" : undefined,
       analysisMode: kind === "image" ? modeOverride : undefined,
     });
     setBusy(true);
@@ -1130,7 +1131,13 @@ export default function App() {
     setBusy(false);
     setMobileHistoryOpen(false);
     setActiveKey(entry.key);
-    setPendingFile({ name: entry.title, size: 0, typeLabel: entry.typeLabel, previewUrl: entry.thumbnail || undefined });
+    setPendingFile({
+      name: entry.title,
+      size: 0,
+      typeLabel: entry.typeLabel,
+      previewUrl: entry.thumbnail || undefined,
+      previewKind: entry.origin === "video" ? "video" : entry.origin === "image" ? "image" : undefined,
+    });
     setErrorMessage("");
     setProgress(null);
     setFallbackOffer(null);
@@ -1431,7 +1438,21 @@ export default function App() {
             <div className="conversation-flow">
               <div className="user-file-message">
                 <div className="file-message-copy"><span>请帮我鉴别这份内容</span><strong>{pendingFile.name}</strong><small>{pendingFile.typeLabel}{pendingFile.size ? ` · ${formatBytes(pendingFile.size)}` : " · 已归档任务"}{pendingFile.analysisMode ? <span className="pending-mode-chip">{pendingFile.analysisMode === "swarm" ? "Swarm 模式" : "快速检测"}</span> : null}</small></div>
-                {pendingFile.previewUrl ? <img src={pendingFile.previewUrl} alt="待检测文件预览" /> : <span className="file-message-icon"><Paperclip size={20} /></span>}
+                {pendingFile.previewUrl && pendingFile.previewKind === "video" ? (
+                  <video
+                    className="file-message-video"
+                    src={pendingFile.previewUrl}
+                    controls
+                    muted
+                    playsInline
+                    preload="metadata"
+                    aria-label={`预览待检测视频 ${pendingFile.name}`}
+                  />
+                ) : pendingFile.previewUrl ? (
+                  <img src={pendingFile.previewUrl} alt="待检测文件预览" />
+                ) : (
+                  <span className="file-message-icon"><Paperclip size={20} /></span>
+                )}
               </div>
               {(progress || busy) && !outcome && <AgentProgressPanel progress={progress} onStopWaiting={stopWaitingForTask} />}
               {historyDetailLoading && !outcome && (

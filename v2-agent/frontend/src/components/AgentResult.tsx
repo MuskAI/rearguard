@@ -2,6 +2,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type RefCallback,
+  type RefObject,
   type ReactNode,
   useCallback,
   useEffect,
@@ -26,6 +27,7 @@ import {
   Layers3,
   Link2,
   LoaderCircle,
+  Maximize2,
   MousePointer2,
   Play,
   ScanSearch,
@@ -212,28 +214,38 @@ function formatVideoTime(value: number) {
 }
 
 function VideoResultPreview({
-  src,
+  sources,
   name,
   videoRef,
+  openButtonRef,
   onTimeChange,
-  onRetry,
+  onOpen,
 }: {
-  src: string;
+  sources: string[];
   name: string;
   videoRef: RefCallback<HTMLVideoElement>;
+  openButtonRef: RefObject<HTMLButtonElement>;
   onTimeChange: (time: number) => void;
-  onRetry: () => void;
+  onOpen: (src: string) => void;
 }) {
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const [sourceIndex, setSourceIndex] = useState(0);
+  const [retryToken, setRetryToken] = useState(0);
+  const sourceSignature = sources.join("\n");
+  const src = sources[sourceIndex] || sources[0];
 
   useEffect(() => {
+    setSourceIndex(0);
+    setRetryToken(0);
     setState("loading");
-  }, [src]);
+  }, [sourceSignature]);
+
+  if (!src) return null;
 
   return (
     <div className={`video-result-preview is-${state}`} aria-busy={state === "loading"}>
       <video
-        key={src}
+        key={`${src}:${retryToken}`}
         ref={videoRef}
         src={src}
         controls
@@ -248,8 +260,25 @@ function VideoResultPreview({
         onTimeUpdate={(event) => onTimeChange(event.currentTarget.currentTime)}
         onWaiting={() => setState((current) => current === "error" ? current : "loading")}
         onPlaying={() => setState("ready")}
-        onError={() => setState("error")}
+        onError={() => {
+          if (sourceIndex + 1 < sources.length) {
+            setSourceIndex((current) => current + 1);
+            setState("loading");
+            return;
+          }
+          setState("error");
+        }}
       />
+      <button
+        ref={openButtonRef}
+        type="button"
+        className="video-preview-expand"
+        onClick={() => onOpen(src)}
+        aria-label={`放大预览视频 ${name}`}
+        title="放大预览"
+      >
+        <Maximize2 size={17} />
+      </button>
       {state === "loading" && (
         <span className="video-preview-status" role="status">
           <LoaderCircle size={18} className="spin" />
@@ -261,13 +290,73 @@ function VideoResultPreview({
           <AlertTriangle size={19} />
           <span><strong>当前浏览器无法播放</strong><small>可能是媒体暂不可用或编码不兼容</small></span>
           <button type="button" onClick={() => {
+            setSourceIndex(0);
+            setRetryToken((current) => current + 1);
             setState("loading");
-            onRetry();
           }}>重试</button>
           <a href={src} target="_blank" rel="noreferrer">打开原视频</a>
         </div>
       )}
     </div>
+  );
+}
+
+function VideoLightbox({ src, name, onClose }: { src: string; name: string; onClose: () => void }) {
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    closeRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(panelRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), video[controls], [href], [tabindex]:not([tabindex="-1"])',
+      ) || []);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+      previouslyFocused?.focus({ preventScroll: true });
+    };
+  }, []);
+
+  return createPortal(
+    <div className="video-lightbox" role="dialog" aria-modal="true" aria-label={`放大预览视频 ${name}`}>
+      <button type="button" tabIndex={-1} className="video-lightbox-backdrop" onClick={onClose} aria-label="关闭视频预览" />
+      <div ref={panelRef} className="video-lightbox-panel">
+        <header>
+          <div><span>视频预览</span><strong>{name}</strong></div>
+          <button ref={closeRef} type="button" className="video-lightbox-close" onClick={onClose} aria-label="关闭视频预览" title="关闭">
+            <X size={22} />
+          </button>
+        </header>
+        <video src={src} controls playsInline preload="auto" aria-label={`大画面预览 ${name}`} />
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -978,8 +1067,10 @@ export default function AgentResult(props: Props) {
   const [createdShareUrl, setCreatedShareUrl] = useState("");
   const [shares, setShares] = useState<ReportShareItem[]>([]);
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [videoLightboxSource, setVideoLightboxSource] = useState<string | null>(null);
   const [videoCurrentTime, setVideoCurrentTime] = useState(0);
   const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
+  const videoExpandButtonRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     setTab("summary");
     setShareOpen(false);
@@ -987,8 +1078,13 @@ export default function AgentResult(props: Props) {
     setCreatedShareUrl("");
     setShares([]);
     setLightboxOpen(false);
+    setVideoLightboxSource(null);
     setVideoCurrentTime(0);
   }, [props.outcome.id]);
+  const closeVideoLightbox = useCallback(() => {
+    setVideoLightboxSource(null);
+    window.requestAnimationFrame(() => videoExpandButtonRef.current?.focus({ preventScroll: true }));
+  }, []);
   const verdict = useMemo(() => verdictFor(props.outcome), [props.outcome]);
   const explanationPoints = useMemo(
     () => buildEvidenceExplanation(props.outcome, verdict.risk, verdict.label),
@@ -1008,7 +1104,12 @@ export default function AgentResult(props: Props) {
     const shown = new Set(keyExplanationPoints);
     return explanationPoints.filter((point) => !shown.has(point));
   }, [explanationPoints, keyExplanationPoints]);
-  const preview = filePreview(props.outcome);
+  const videoSources = props.outcome.kind === "video"
+    ? [props.outcome.previewUrl, props.outcome.result.video_url]
+        .filter((value): value is string => Boolean(value))
+        .filter((value, index, items) => items.indexOf(value) === index)
+    : [];
+  const preview = props.outcome.kind === "video" ? videoSources[0] : filePreview(props.outcome);
   const canDeepAnalyze = hasImageFile(props.outcome);
   const provenance = props.outcome.kind === "image" || props.outcome.kind === "evidence"
     ? props.outcome.provenance || (props.outcome.kind === "evidence" ? props.outcome.result.provenance || undefined : undefined)
@@ -1124,16 +1225,17 @@ export default function AgentResult(props: Props) {
       : props.outcome.result.dimensions.map((item) => `${item.label}：${item.result}`);
 
   return (
-    <article className={`agent-result tone-${verdict.tone}${verdict.reviewOnly ? " is-review-only" : ""}`} aria-labelledby="detection-result-title">
+    <article className={`agent-result tone-${verdict.tone}${verdict.reviewOnly ? " is-review-only" : ""}${props.outcome.kind === "video" ? " is-video" : ""}`} aria-labelledby="detection-result-title">
       <header className="result-hero">
         <div className="result-preview">
           {props.outcome.kind === "video" && preview ? (
             <VideoResultPreview
-              src={preview}
+              sources={videoSources}
               name={fileName(props.outcome)}
               videoRef={setVideoElement}
+              openButtonRef={videoExpandButtonRef}
               onTimeChange={setVideoCurrentTime}
-              onRetry={() => videoElement?.load()}
+              onOpen={setVideoLightboxSource}
             />
           ) : preview ? (
             <AnnotatedImagePreview src={preview} alt={fileName(props.outcome)} marks={previewWatermarkMarks} onOpen={() => setLightboxOpen(true)} />
@@ -1423,6 +1525,9 @@ export default function AgentResult(props: Props) {
       )}
       {lightboxOpen && preview && (
         <ImageLightbox src={preview} alt={fileName(props.outcome)} marks={previewWatermarkMarks} onClose={() => setLightboxOpen(false)} />
+      )}
+      {videoLightboxSource && props.outcome.kind === "video" && (
+        <VideoLightbox src={videoLightboxSource} name={fileName(props.outcome)} onClose={closeVideoLightbox} />
       )}
     </article>
   );

@@ -1,6 +1,156 @@
 /* Final mobile adaptations. Layout breakpoints follow Tailwind's mobile-first
    scale; this file only resolves legacy selectors that still carry inline or
    higher-specificity sizing. */
+.agent-app .user-file-message:has(.file-message-video) {
+  width: min(660px, 92%);
+}
+
+.agent-app .file-message-video {
+  width: min(260px, 42%);
+  height: auto;
+  aspect-ratio: 16 / 9;
+  flex: 0 0 min(260px, 42%);
+  object-fit: contain;
+  color: #fff;
+  background: #0d191d;
+  border: 1px solid rgba(54, 97, 109, 0.28);
+  border-radius: 6px;
+}
+
+.agent-app .agent-result.is-video .result-hero {
+  grid-template-columns: minmax(360px, 0.95fr) minmax(0, 1.05fr);
+  align-items: center;
+}
+
+.agent-app .agent-result.is-video .result-preview {
+  width: 100%;
+  height: auto;
+  min-height: 260px;
+  aspect-ratio: 16 / 9;
+}
+
+.video-preview-expand {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 4;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  color: #f4fbfb;
+  background: rgba(8, 24, 29, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  border-radius: 7px;
+  box-shadow: 0 8px 20px rgba(1, 17, 22, 0.22);
+  backdrop-filter: blur(10px);
+}
+
+.video-preview-expand:hover,
+.video-preview-expand:focus-visible {
+  color: #fff;
+  background: #0d7074;
+}
+
+.video-preview-expand:focus-visible,
+.video-lightbox-close:focus-visible {
+  outline: 3px solid #78d8d2;
+  outline-offset: 2px;
+}
+
+.video-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: clamp(16px, 3vw, 44px);
+}
+
+.video-lightbox-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  background: rgba(4, 15, 19, 0.86);
+  border: 0;
+  border-radius: 0;
+  backdrop-filter: blur(18px);
+}
+
+.video-lightbox-panel {
+  position: relative;
+  z-index: 1;
+  width: min(1180px, 94vw);
+  max-height: 92vh;
+  overflow: hidden;
+  background: #101d22;
+  border: 1px solid rgba(205, 234, 232, 0.28);
+  border-radius: 8px;
+  box-shadow: 0 28px 90px rgba(0, 8, 12, 0.48);
+}
+
+.video-lightbox-panel > header {
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 12px 14px 12px 20px;
+  color: #eff9f8;
+  border-bottom: 1px solid rgba(205, 234, 232, 0.18);
+}
+
+.video-lightbox-panel > header > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.video-lightbox-panel > header span {
+  color: #8fc9c5;
+  font-size: 12px;
+}
+
+.video-lightbox-panel > header strong {
+  overflow: hidden;
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.video-lightbox-close {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  display: grid;
+  place-items: center;
+  color: #eff9f8;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 7px;
+}
+
+.video-lightbox-panel > video {
+  width: 100%;
+  max-height: calc(92vh - 68px);
+  display: block;
+  object-fit: contain;
+  background: #050b0e;
+}
+
+@media (max-width: 960px) {
+  .agent-app .agent-result.is-video .result-hero {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agent-app .agent-result.is-video .result-preview {
+    min-height: 0;
+  }
+}
+
 @media (max-width: 640px) {
   .about-site .home-header .brand-copy small,
   .playground-header .brand-copy small {
@@ -20,6 +170,45 @@
   .agent-app .upload-stage-icon .brand-agent-portrait {
     width: 100%;
     height: 100%;
+  }
+
+  .agent-app .user-file-message:has(.file-message-video) {
+    width: 96%;
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .agent-app .user-file-message:has(.file-message-video) .file-message-copy {
+    text-align: left;
+  }
+
+  .agent-app .file-message-video {
+    width: 100%;
+    flex-basis: auto;
+  }
+
+  .agent-app .agent-result.is-video .result-hero {
+    display: grid;
+    padding: 12px;
+  }
+
+  .agent-app .agent-result.is-video .result-preview {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 16 / 9;
+  }
+
+  .video-lightbox {
+    padding: 10px;
+  }
+
+  .video-lightbox-panel {
+    width: 100%;
+    max-height: calc(100dvh - 20px);
+  }
+
+  .video-lightbox-panel > video {
+    max-height: calc(100dvh - 88px);
   }
 }
 

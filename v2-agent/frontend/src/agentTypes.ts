@@ -68,5 +68,6 @@ export interface PendingFile {
   size: number;
   typeLabel: string;
   previewUrl?: string;
+  previewKind?: "image" | "video";
   analysisMode?: ImageAnalysisMode;
 }

@@ -1141,7 +1141,11 @@ test("结果页完整依据入口使用正文级字号", async ({ page }) => {
 test("视频结果可预览并按采样时间点回看证据", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await installBaseMocks(page);
-  await page.route("**/video_upload/detect", (route) => route.fulfill({
+  let releaseDetection!: () => void;
+  const detectionGate = new Promise<void>((resolve) => { releaseDetection = resolve; });
+  await page.route("**/video_upload/detect", async (route) => {
+    await detectionGate;
+    await route.fulfill({
     json: {
       status: "success",
       result: {
@@ -1187,18 +1191,42 @@ test("视频结果可预览并按采样时间点回看证据", async ({ page }) 
         },
       },
     },
-  }));
+    });
+  });
 
   await page.goto("/?workspace=1");
   await page.locator(".guest-upload-consent input").check();
   await page.locator('input[type="file"]').setInputFiles(videoFixture);
 
+  const pendingVideo = page.getByLabel("预览待检测视频 video189.mp4");
+  await expect(pendingVideo).toBeVisible();
+  await expect.poll(() => pendingVideo.evaluate((element: HTMLVideoElement) => element.readyState)).toBeGreaterThan(0);
+  releaseDetection();
+
   await expect(page.getByRole("heading", { name: "AI生成视频" })).toBeVisible();
   await expect(page.locator(".agent-topbar")).not.toContainText("video189.mp4");
   await expect(page.locator(".workspace-developer-button")).toHaveCount(0);
-  const video = page.getByLabel("预览视频 video189.mp4");
+  const video = page.getByLabel("预览视频 video189.mp4", { exact: true });
   await expect(video).toBeVisible();
   await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.readyState)).toBeGreaterThan(0);
+  const desktopPreview = await page.locator(".agent-result.is-video .result-preview").boundingBox();
+  expect(desktopPreview?.width || 0).toBeGreaterThanOrEqual(360);
+  expect(desktopPreview?.height || 0).toBeGreaterThanOrEqual(200);
+
+  const expandVideo = page.getByRole("button", { name: "放大预览视频 video189.mp4" });
+  await expandVideo.click();
+  const dialog = page.getByRole("dialog", { name: "放大预览视频 video189.mp4" });
+  await expect(dialog).toBeVisible();
+  const largeVideo = page.getByLabel("大画面预览 video189.mp4");
+  await expect(largeVideo).toBeVisible();
+  await expect.poll(() => largeVideo.evaluate((element: HTMLVideoElement) => element.readyState)).toBeGreaterThan(0);
+  await page.locator(".video-lightbox-close").click();
+  await expect(dialog).toBeHidden();
+  await expect(expandVideo).toBeFocused();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobilePreview = await page.locator(".agent-result.is-video .result-preview").boundingBox();
+  expect(mobilePreview?.width || 0).toBeGreaterThanOrEqual(300);
   await expect(page.getByRole("heading", { name: "视频采样与时序证据" })).toBeVisible();
   await expect(page.getByText("时序模型方向", { exact: true }).first()).toBeVisible();
 
@@ -1213,6 +1241,65 @@ test("视频结果可预览并按采样时间点回看证据", async ({ page }) 
     '.video-sample-timeline button[aria-label*="采样帧 2"]',
     '.video-sample-timeline button[aria-label*="采样帧 3"]',
   ]);
+});
+
+test("历史视频通过受保护媒体地址直接预览", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await installBaseMocks(page, true);
+  await page.unroute("**/api/history/video-detections**");
+  await page.route("**/api/history/video-detections**", (route) => route.fulfill({
+    json: {
+      status: "success",
+      total: 1,
+      records: [{
+        itemid: 963,
+        filename: "history-video.mp4",
+        video_url: "/api/media/video/963",
+        final_label: "真实视频",
+        confidence: "低",
+        decision_status: "review_only",
+        review_required: true,
+        createtime: "2026-08-28 12:00:00",
+      }],
+    },
+  }));
+  await page.route("**/video_upload/result?itemid=963", (route) => route.fulfill({
+    json: {
+      status: "success",
+      result: {
+        itemid: 963,
+        filename: "history-video.mp4",
+        video_url: "/api/media/video/963",
+        fake_percentage: null,
+        real_percentage: null,
+        final_label: "真实视频",
+        confidence: "低",
+        decisionStatus: "review_only",
+        decisionAuthority: "none",
+        reviewRequired: true,
+        explanation: "历史视频已经读取，不重新检测。",
+        frame_count: 3,
+        encoder: "video-analysis",
+        evidence: { sampledFrames: [], keyEvidence: [], limitations: [] },
+        meta: { video_format: "MP4", codec: "h264", duration: 10 },
+      },
+    },
+  }));
+  let mediaRequests = 0;
+  await page.route("**/api/media/video/963", async (route) => {
+    mediaRequests += 1;
+    await route.fulfill({ path: videoFixture, contentType: "video/mp4" });
+  });
+
+  await page.goto("/?workspace=1");
+  await page.locator(".history-entry").filter({ hasText: "history-video.mp4" }).click();
+
+  const video = page.getByLabel("预览视频 history-video.mp4", { exact: true });
+  await expect(video).toBeVisible();
+  await expect(video).toHaveAttribute("src", "/api/media/video/963");
+  await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.readyState)).toBeGreaterThan(0);
+  expect(mediaRequests).toBeGreaterThan(0);
+  await expect(page.getByText("正在打开历史记录")).toHaveCount(0);
 });
 
 test("登录用户可以围绕当前检测报告连续提问", async ({ page }) => {
