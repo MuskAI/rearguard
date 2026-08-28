@@ -56,7 +56,7 @@ import AgentResult from "./components/AgentResult";
 import AboutCooperation from "./components/AboutCooperation";
 import AuthDialog from "./components/AuthDialog";
 import BrandArtIcon from "./components/BrandArtIcon";
-import { AgentAvatar, AnalysisModeMark, CapabilityIcon } from "./components/BrandSystem";
+import { AgentAvatar, AnalysisModeMark } from "./components/BrandSystem";
 import DeveloperPlatform from "./components/DeveloperPlatform";
 import DocumentRouterLab from "./components/DocumentRouterLab";
 import DocumentBatchResult from "./components/DocumentBatchResult";
@@ -1277,7 +1277,6 @@ export default function App() {
     fileInputRef.current?.click();
   }
 
-  const screenTitle = pendingFile?.name || "新建鉴伪任务";
   const historyAvailable = Boolean(user);
   const historyLayoutClass = !historyAvailable
     ? "history-unavailable"
@@ -1380,10 +1379,6 @@ export default function App() {
             )}
             <HuijianBrand compact onClick={() => navigateToView("home")} />
             <AnalysisModeSwitch mode={imageAnalysisMode} disabled={busy || historyDetailLoading} onChange={setImageAnalysisMode} />
-            <div>
-              <h1 tabIndex={-1}><span className="desktop-task-title">{screenTitle}</span><span className="mobile-task-title">{pendingFile?.name || "慧鉴AI"}</span></h1>
-              <p>{pendingFile ? "慧鉴AI 正在为这份内容整理可信证据" : "一个入口完成检测、取证、凭证核验与报告归档"}</p>
-            </div>
           </div>
           <div className="topbar-actions">
             {authReady && (user ? (
@@ -1391,10 +1386,6 @@ export default function App() {
             ) : (
               <button type="button" className="secondary-button topbar-login" onClick={() => setAuthOpen(true)}><LogIn size={16} /> 登录</button>
             ))}
-            <button type="button" className="workspace-developer-button" onClick={() => navigateToDeveloper("overview")} title="开发者平台">
-              <CapabilityIcon name="developer" size={32} className="workspace-developer-artwork" />
-              <span>开发者</span>
-            </button>
           </div>
         </header>
 

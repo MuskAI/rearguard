@@ -1194,6 +1194,8 @@ test("视频结果可预览并按采样时间点回看证据", async ({ page }) 
   await page.locator('input[type="file"]').setInputFiles(videoFixture);
 
   await expect(page.getByRole("heading", { name: "AI生成视频" })).toBeVisible();
+  await expect(page.locator(".agent-topbar")).not.toContainText("video189.mp4");
+  await expect(page.locator(".workspace-developer-button")).toHaveCount(0);
   const video = page.getByLabel("预览视频 video189.mp4");
   await expect(video).toBeVisible();
   await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.readyState)).toBeGreaterThan(0);
@@ -1643,7 +1645,6 @@ test("手机工作台在 320 至 430px 间保持连续布局且首屏可上传",
       ".agent-topbar .brand-home-button",
       ".analysis-model-trigger",
       ".topbar-login",
-      ".workspace-developer-button",
       ".upload-button",
       ".guest-upload-consent",
     ]);
@@ -1736,7 +1737,7 @@ test("手机登录弹窗保持清晰字号、完整主操作与触控尺寸", as
   }
 });
 
-test("登录态窄屏保留完整模型名称并移除重复开发者按钮", async ({ page }) => {
+test("登录态窄屏保留完整模型名称并移除开发者入口", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 568 });
   await installBaseMocks(page, true);
   await page.goto("/?workspace=1");
@@ -1830,7 +1831,7 @@ test("模型选择器完整加载统一矢量模式图标", async ({ page }) => 
   await expect(picker.locator(".brand-art-icon")).toHaveCount(0);
 });
 
-test("工作台账户使用明确的用户图标并与开发者入口保持统一风格", async ({ page }) => {
+test("工作台账户使用明确的用户图标且顶部不重复放置开发者入口", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await installBaseMocks(page, true);
   await page.goto("/?workspace=1");
@@ -1838,20 +1839,16 @@ test("工作台账户使用明确的用户图标并与开发者入口保持统�
   const accountButton = page.locator(".workspace-account-menu .account-menu-trigger");
   const accountArtwork = accountButton.locator(".account-control-artwork");
   const developerButton = page.locator(".workspace-developer-button");
-  const developerArtwork = developerButton.locator(".workspace-developer-artwork");
 
   await expect(accountArtwork).toBeVisible();
-  await expect(developerArtwork).toBeVisible();
+  await expect(developerButton).toHaveCount(0);
   await expect(accountArtwork).toHaveAttribute("role", "img");
   const accountAvatarImage = accountArtwork.locator(".brand-user-avatar-art");
   await expect(accountAvatarImage).toHaveCount(1);
   await expect(accountAvatarImage).toHaveAttribute("src", /^data:image\/svg\+xml/);
   await expect.poll(() => accountAvatarImage.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBeTruthy();
   await expect(accountArtwork.locator(".brand-user-avatar-letter")).toHaveCount(0);
-  await expect(developerArtwork).toHaveAttribute("viewBox", "0 0 24 24");
   await expect(accountButton.locator("svg")).toHaveCount(0);
-  await expect(developerButton.locator(".brand-art-icon")).toHaveCount(0);
-  await expect(developerButton).toContainText("开发者");
   const sidebarAvatar = page.locator(".sidebar-account .brand-user-avatar");
   await expect(sidebarAvatar).toHaveAttribute("role", "img");
   await expect(sidebarAvatar.locator(".brand-user-avatar-art")).toHaveAttribute("src", /^data:image\/svg\+xml/);
