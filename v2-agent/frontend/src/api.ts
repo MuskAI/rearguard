@@ -1380,7 +1380,14 @@ export function completeSmsPasswordSetup(secret: string, secretConfirm: string) 
 }
 
 export function sendSmsCode(phone: string, scene: "login" | "register" | "reset") {
-  return accountJson<{ success: boolean; message?: string; debug_code?: string; expires_in?: number }>(
+  return accountJson<{
+    success: boolean;
+    message?: string;
+    debug_code?: string;
+    delivery_status?: "conditional" | "submitted";
+    expires_in?: number;
+    resend_in?: number;
+  }>(
     "/sms/send_code",
     { method: "POST", body: JSON.stringify({ phone, scene }) },
     "验证码发送失败",

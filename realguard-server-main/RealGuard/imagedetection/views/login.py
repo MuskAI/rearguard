@@ -9,7 +9,7 @@ import re
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import quote
 
 import requests
@@ -998,6 +998,7 @@ def _send_sms_by_aliyun(phone, code, scene):
     if not all([access_key_id, access_key_secret, sign_name, template_code]):
         raise RuntimeError('短信服务未配置，请设置 ALIYUN_ACCESS_KEY_ID、ALIYUN_ACCESS_KEY_SECRET、ALIYUN_SMS_SIGN_NAME、ALIYUN_SMS_TEMPLATE_CODE')
 
+    out_id = f'rg{uuid.uuid4().hex}'
     params = {
         'Action': 'SendSmsVerifyCode',
         'Version': version,
@@ -1006,7 +1007,7 @@ def _send_sms_by_aliyun(phone, code, scene):
         'SignatureMethod': 'HMAC-SHA1',
         'SignatureNonce': str(uuid.uuid4()),
         'SignatureVersion': '1.0',
-        'Timestamp': datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'Timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
         'PhoneNumber': phone,
         'CountryCode': os.environ.get('ALIYUN_SMS_COUNTRY_CODE', '86'),
         'SignName': sign_name,
@@ -1022,13 +1023,13 @@ def _send_sms_by_aliyun(phone, code, scene):
         'Interval': str(SMS_INTERVAL),
         'CodeType': '1',
         'ReturnVerifyCode': 'false',
+        'AutoRetry': os.environ.get('ALIYUN_SMS_AUTO_RETRY', '1'),
+        'OutId': out_id,
     }
     scheme_name = (
         os.environ.get(f'ALIYUN_SMS_{scene.upper()}_SCHEME_NAME', '').strip()
         or os.environ.get('ALIYUN_SMS_SCHEME_NAME', '').strip()
     )
-    if not scheme_name:
-        scheme_name = '注册验证' if scene == 'register' else '登录验证'
     if scheme_name:
         params['SchemeName'] = scheme_name
     params['Signature'] = _aliyun_rpc_signature(params, access_key_secret)
@@ -1041,7 +1042,11 @@ def _send_sms_by_aliyun(phone, code, scene):
         payload = response.json()
     except ValueError:
         payload = {'Code': 'HTTP_ERROR', 'Message': response.text[:200]}
-    if response.status_code >= 400 or not payload.get('Success', False):
+    if (
+        response.status_code >= 400
+        or not payload.get('Success', False)
+        or str(payload.get('Code') or '').upper() != 'OK'
+    ):
         message = payload.get('Message') or payload.get('Code') or '短信发送失败'
         code = payload.get('Code')
         if code in ('biz.FREQUENCY', 'FREQUENCY_FAIL'):
@@ -1057,6 +1062,15 @@ def _send_sms_by_aliyun(phone, code, scene):
             detail_parts.append(f'Detail={denied_detail}')
         message = '；'.join(detail_parts)
         raise RuntimeError(message)
+    model = payload.get('Model') if isinstance(payload.get('Model'), dict) else {}
+    current_app.logger.info(
+        'SMS provider accepted scene=%s phone_tail=%s request_id=%s biz_id=%s out_id=%s',
+        scene,
+        str(phone)[-4:],
+        payload.get('RequestId') or model.get('RequestId') or '-',
+        model.get('BizId') or '-',
+        model.get('OutId') or out_id,
+    )
     return payload
 
 
@@ -1153,18 +1167,42 @@ def send_sms_code():
         or (scene == 'register' and not existing)
         or (scene == 'reset' and bool(existing))
     )
-    generic_message = '如手机号符合当前操作条件，验证码将发送，请留意短信'
+    generic_message = '如手机号符合当前操作条件，验证码会在 1 分钟内送达；否则请切换登录方式'
     if not eligible:
-        return jsonify({'success': True, 'message': generic_message, 'expires_in': SMS_CODE_TTL})
+        return jsonify({
+            'success': True,
+            'message': generic_message,
+            'delivery_status': 'conditional',
+            'expires_in': SMS_CODE_TTL,
+            'resend_in': SMS_INTERVAL,
+        })
 
     try:
         debug_code = _send_sms_code(phone, scene)
     except SmsStorageError:
         return jsonify({'success': False, 'message': '短信验证服务暂不可用，请稍后重试'}), 503
     except Exception as exc:
-        return jsonify({'success': False, 'message': str(exc)}), 500
+        current_app.logger.exception(
+            'SMS provider submission failed scene=%s phone_tail=%s: %s',
+            scene,
+            str(phone)[-4:],
+            exc,
+        )
+        response = jsonify({
+            'success': False,
+            'code': 'sms_submit_failed',
+            'message': '短信未能发送，请稍后重试；若持续失败，请联系管理员',
+        })
+        response.headers['Retry-After'] = str(SMS_INTERVAL)
+        return response, 502
 
-    data = {'success': True, 'message': generic_message, 'expires_in': SMS_CODE_TTL}
+    data = {
+        'success': True,
+        'message': generic_message,
+        'delivery_status': 'conditional',
+        'expires_in': SMS_CODE_TTL,
+        'resend_in': SMS_INTERVAL,
+    }
     if debug_code:
         data['debug_code'] = debug_code
         data['message'] = f'开发模式验证码：{debug_code}'

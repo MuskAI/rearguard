@@ -2,6 +2,7 @@ import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useS
 import { Check, ChevronDown, Eye, EyeOff, KeyRound, LoaderCircle, LockKeyhole, MessageSquareText, ShieldCheck, Smartphone, UserRound, X } from "lucide-react";
 import {
   AccountUser,
+  ApiRequestError,
   completeSmsPasswordSetup,
   loginByPassword,
   loginBySms,
@@ -18,6 +19,7 @@ interface Props {
 
 type Panel = "login" | "register" | "setup";
 type LoginMode = "password" | "sms";
+type MessageTone = "error" | "info" | "success";
 
 export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
   const [panel, setPanel] = useState<Panel>("login");
@@ -34,6 +36,11 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
   const [sending, setSending] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [message, setMessage] = useState("");
+  const [messageTone, setMessageTone] = useState<MessageTone>("info");
+  const [passwordTouched, setPasswordTouched] = useState(false);
+  const [passwordConfirmTouched, setPasswordConfirmTouched] = useState(false);
+  const [submitAttempted, setSubmitAttempted] = useState(false);
+  const [smsRequested, setSmsRequested] = useState(false);
   const dialogRef = useRef<HTMLElement>(null);
   const busyRef = useRef(busy);
   const onCloseRef = useRef(onClose);
@@ -91,18 +98,67 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
   const needsCode = panel === "register" || (panel === "login" && loginMode === "sms");
   const needsPassword = panel === "register" || panel === "setup" || (panel === "login" && loginMode === "password");
   const needsPasswordConfirm = panel === "register" || panel === "setup";
+  const enforcesPasswordPolicy = panel === "register" || panel === "setup";
+  const passwordRules = [
+    { label: "8 至 128 位", met: password.length >= 8 && password.length <= 128 },
+    { label: "包含字母", met: /[A-Za-z]/.test(password) },
+    { label: "包含数字", met: /\d/.test(password) },
+  ];
+  const passwordPolicyValid = passwordRules.every((rule) => rule.met);
+  const passwordError = !password
+    ? "请输入密码"
+    : password.length < 8
+      ? "密码还不到 8 位"
+      : password.length > 128
+        ? "密码不能超过 128 位"
+        : !/[A-Za-z]/.test(password)
+          ? "密码中还需要至少一个字母"
+          : !/\d/.test(password)
+            ? "密码中还需要至少一个数字"
+            : "";
+  const passwordConfirmError = !passwordConfirm
+    ? "请再次输入密码"
+    : password !== passwordConfirm
+      ? "两次输入的密码不一致"
+      : "";
+  const showPasswordError = needsPassword
+    && (passwordTouched || submitAttempted)
+    && (!password || (enforcesPasswordPolicy && !passwordPolicyValid));
+  const showPasswordConfirmError = needsPasswordConfirm
+    && (passwordConfirmTouched || submitAttempted)
+    && Boolean(passwordConfirmError);
   const maskedPhone = phone.replace(/^(\d{3})\d{4}(\d{4})$/, "$1****$2");
 
+  function showMessage(text: string, tone: MessageTone = "info") {
+    setMessage(text);
+    setMessageTone(tone);
+  }
+
   async function requestCode() {
-    if (!validPhone || sending || countdown > 0) return;
+    if (!validPhone) {
+      showMessage("请先输入正确的 11 位手机号", "error");
+      return;
+    }
+    if (sending || countdown > 0) return;
     setSending(true);
     setMessage("");
+    setSmsRequested(false);
     try {
       const response = await sendSmsCode(phone, panel === "register" ? "register" : "login");
-      setCountdown(60);
-      setMessage(response.debug_code ? `本地验证码：${response.debug_code}` : "验证码已发送，请留意短信");
+      if (!response.success) throw new Error(response.message || "验证码发送失败");
+      setCountdown(Math.max(1, Math.min(response.resend_in || 60, 300)));
+      setSmsRequested(true);
+      showMessage(
+        response.debug_code
+          ? `本地验证码：${response.debug_code}`
+          : response.message || "验证码请求已提交，通常会在 1 分钟内送达",
+        response.delivery_status === "conditional" ? "info" : "success",
+      );
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "验证码发送失败");
+      if (error instanceof ApiRequestError && error.retryAfterMs > 0) {
+        setCountdown(Math.max(1, Math.ceil(error.retryAfterMs / 1000)));
+      }
+      showMessage(error instanceof Error ? error.message : "验证码发送失败", "error");
     } finally {
       setSending(false);
     }
@@ -110,16 +166,33 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    setSubmitAttempted(true);
     if (panel !== "setup" && !accepted) {
-      setMessage("请先阅读并同意用户协议和隐私政策");
+      showMessage("请先阅读并同意用户协议和隐私政策", "error");
       return;
     }
-    if (needsPassword && (password.length < 8 || !/[A-Za-z]/.test(password) || !/\d/.test(password))) {
-      setMessage("密码至少 8 位，并同时包含字母和数字");
+    if (panel !== "setup" && !validPhone) {
+      showMessage("请输入正确的 11 位手机号", "error");
+      return;
+    }
+    if (panel === "register" && !username.trim()) {
+      showMessage("请输入昵称", "error");
+      return;
+    }
+    if (needsPassword && !password) {
+      showMessage("请输入密码", "error");
+      return;
+    }
+    if (enforcesPasswordPolicy && !passwordPolicyValid) {
+      showMessage(passwordError, "error");
       return;
     }
     if (needsPasswordConfirm && password !== passwordConfirm) {
-      setMessage(passwordConfirm ? "两次输入的密码不一致" : "请再次输入密码");
+      showMessage(passwordConfirmError, "error");
+      return;
+    }
+    if (needsCode && !/^\d{4,8}$/.test(code)) {
+      showMessage("请输入短信中的验证码", "error");
       return;
     }
     setBusy(true);
@@ -138,7 +211,10 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
         setLoginMode("password");
         setCode("");
         setPasswordConfirm("");
-        setMessage("注册成功，请使用刚才设置的密码登录");
+        setSubmitAttempted(false);
+        setPasswordTouched(false);
+        setPasswordConfirmTouched(false);
+        showMessage("注册成功，请使用刚才设置的密码登录", "success");
       } else if (panel === "setup") {
         const response = await completeSmsPasswordSetup(password, passwordConfirm);
         onAuthenticated(response.user);
@@ -157,7 +233,7 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
         onAuthenticated(response.user);
       }
     } catch (error) {
-      setMessage(
+      showMessage(
         error instanceof Error
           ? error.message
           : panel === "register"
@@ -165,6 +241,7 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
             : panel === "setup"
               ? "密码设置失败"
               : "登录失败",
+        "error",
       );
     } finally {
       setBusy(false);
@@ -179,6 +256,10 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
     setPasswordConfirm("");
     setPasswordVisible(false);
     setPasswordConfirmVisible(false);
+    setPasswordTouched(false);
+    setPasswordConfirmTouched(false);
+    setSubmitAttempted(false);
+    setSmsRequested(false);
   }
 
   function movePanelFocus(event: ReactKeyboardEvent<HTMLDivElement>) {
@@ -236,7 +317,7 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
             </div>
           )}
 
-          <form className="auth-form" onSubmit={submit}>
+          <form className="auth-form" onSubmit={submit} noValidate>
           {panel === "register" && (
             <label>
               <span>昵称</span>
@@ -254,15 +335,22 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
             <div className="field-shell"><Smartphone size={17} /><span className="country-code">+86</span><input inputMode="numeric" autoComplete="tel" value={phone} onChange={(event) => setPhone(event.target.value.replace(/\D/g, "").slice(0, 11))} placeholder="请输入手机号" required /></div>
           </label>}
           {needsPassword && (
-            <label>
+            <label className={showPasswordError ? "has-error" : ""}>
               <span>{panel === "setup" ? "设置密码" : "密码"}</span>
-              <div className="field-shell"><KeyRound size={18} /><input type={passwordVisible ? "text" : "password"} autoComplete={panel === "login" ? "current-password" : "new-password"} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 8 位，包含字母和数字" required minLength={8} maxLength={128} /><button className="password-visibility" type="button" onClick={() => setPasswordVisible((visible) => !visible)} aria-label={passwordVisible ? "隐藏密码" : "显示密码"} title={passwordVisible ? "隐藏密码" : "显示密码"}>{passwordVisible ? <EyeOff size={18} /> : <Eye size={18} />}</button></div>
+              <div className="field-shell"><KeyRound size={18} /><input type={passwordVisible ? "text" : "password"} autoComplete={panel === "login" ? "current-password" : "new-password"} value={password} onChange={(event) => setPassword(event.target.value)} onBlur={() => setPasswordTouched(true)} placeholder={enforcesPasswordPolicy ? "至少 8 位，包含字母和数字" : "请输入密码"} required minLength={enforcesPasswordPolicy ? 8 : undefined} maxLength={128} aria-invalid={showPasswordError} aria-describedby={enforcesPasswordPolicy ? `password-requirements${showPasswordError ? " password-error" : ""}` : showPasswordError ? "password-error" : undefined} /><button className="password-visibility" type="button" onClick={() => setPasswordVisible((visible) => !visible)} aria-label={passwordVisible ? "隐藏密码" : "显示密码"} title={passwordVisible ? "隐藏密码" : "显示密码"}>{passwordVisible ? <EyeOff size={18} /> : <Eye size={18} />}</button></div>
+              {enforcesPasswordPolicy && (
+                <div id="password-requirements" className="password-requirements" aria-label="密码要求">
+                  {passwordRules.map((rule) => <span key={rule.label} className={rule.met ? "met" : ""}><Check size={12} />{rule.label}</span>)}
+                </div>
+              )}
+              {showPasswordError && <p id="password-error" className="auth-field-error" role="alert">{passwordError}</p>}
             </label>
           )}
           {needsPasswordConfirm && (
-            <label>
+            <label className={showPasswordConfirmError ? "has-error" : ""}>
               <span>确认密码</span>
-              <div className="field-shell"><KeyRound size={18} /><input type={passwordConfirmVisible ? "text" : "password"} autoComplete="new-password" value={passwordConfirm} onChange={(event) => setPasswordConfirm(event.target.value)} placeholder="请再次输入相同密码" required minLength={8} maxLength={128} /><button className="password-visibility" type="button" onClick={() => setPasswordConfirmVisible((visible) => !visible)} aria-label={passwordConfirmVisible ? "隐藏确认密码" : "显示确认密码"} title={passwordConfirmVisible ? "隐藏确认密码" : "显示确认密码"}>{passwordConfirmVisible ? <EyeOff size={18} /> : <Eye size={18} />}</button></div>
+              <div className="field-shell"><KeyRound size={18} /><input type={passwordConfirmVisible ? "text" : "password"} autoComplete="new-password" value={passwordConfirm} onChange={(event) => setPasswordConfirm(event.target.value)} onBlur={() => setPasswordConfirmTouched(true)} placeholder="请再次输入相同密码" required minLength={8} maxLength={128} aria-invalid={showPasswordConfirmError} aria-describedby={showPasswordConfirmError ? "password-confirm-error" : undefined} /><button className="password-visibility" type="button" onClick={() => setPasswordConfirmVisible((visible) => !visible)} aria-label={passwordConfirmVisible ? "隐藏确认密码" : "显示确认密码"} title={passwordConfirmVisible ? "隐藏确认密码" : "显示确认密码"}>{passwordConfirmVisible ? <EyeOff size={18} /> : <Eye size={18} />}</button></div>
+              {showPasswordConfirmError && <p id="password-confirm-error" className="auth-field-error" role="alert">{passwordConfirmError}</p>}
             </label>
           )}
           {needsCode && (
@@ -274,6 +362,7 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
                   {sending ? <LoaderCircle size={16} className="spin" /> : countdown > 0 ? `${countdown}s` : "获取验证码"}
                 </button>
               </div>
+              {smsRequested && <p className="sms-delivery-help">还没收到？请检查短信拦截与手机号；倒计时结束后可以重新发送。</p>}
             </label>
           )}
 
@@ -294,7 +383,7 @@ export default function AuthDialog({ open, onClose, onAuthenticated }: Props) {
             </section>
           )}
 
-          {message && <div className="auth-message" role="status">{message}</div>}
+          {message && <div className={`auth-message ${messageTone}`} role={messageTone === "error" ? "alert" : "status"}>{message}</div>}
           <button className="primary-button auth-submit" type="submit" disabled={busy || !validPhone || (panel !== "setup" && !accepted)}>
             {busy && <LoaderCircle size={17} className="spin" />}
             {busy ? "处理中" : panel === "login" ? "安全登录" : panel === "register" ? "创建账号" : "设置密码并登录"}

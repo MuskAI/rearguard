@@ -1824,6 +1824,67 @@ test("手机登录弹窗保持清晰字号、完整主操作与触控尺寸", as
   }
 });
 
+test("注册页即时提示密码问题并展示真实短信提交状态", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installBaseMocks(page);
+  let smsCalls = 0;
+  await page.route("**/sms/send_code", async (route) => {
+    smsCalls += 1;
+    const payload = route.request().postDataJSON() as { phone: string; scene: string };
+    expect(payload).toEqual({ phone: "13800000000", scene: "register" });
+    if (smsCalls === 1) {
+      await route.fulfill({
+        status: 502,
+        json: {
+          success: false,
+          code: "sms_submit_failed",
+          message: "短信未能发送，请稍后重试；若持续失败，请联系管理员",
+        },
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      json: {
+        success: true,
+        delivery_status: "conditional",
+        message: "如手机号符合当前操作条件，验证码会在 1 分钟内送达；否则请切换登录方式",
+        expires_in: 300,
+        resend_in: 60,
+      },
+    });
+  });
+
+  await page.goto("/?workspace=1");
+  await page.locator(".topbar-login").click();
+  await page.getByRole("tab", { name: "注册" }).click();
+  await page.getByPlaceholder("怎么称呼你").fill("测试用户");
+  await page.getByPlaceholder("请输入手机号").fill("13800000000");
+  const passwordInputs = page.locator('input[autocomplete="new-password"]');
+  await passwordInputs.nth(0).fill("abcdefg");
+  await passwordInputs.nth(1).fill("abcdefh");
+  await page.locator(".terms-check input").check({ force: true });
+  await page.getByRole("button", { name: "创建账号" }).click();
+
+  await expect(page.locator("#password-error")).toContainText("不到 8 位");
+  await expect(page.locator("#password-confirm-error")).toHaveText("两次输入的密码不一致");
+  await expect(page.locator(".password-requirements .met")).toHaveCount(1);
+
+  await passwordInputs.nth(0).fill("Password123");
+  await passwordInputs.nth(1).fill("Password123");
+  await expect(page.locator("#password-error")).toHaveCount(0);
+  await expect(page.locator("#password-confirm-error")).toHaveCount(0);
+  await expect(page.locator(".password-requirements .met")).toHaveCount(3);
+
+  await page.getByRole("button", { name: "获取验证码" }).click();
+  await expect(page.locator(".auth-message.error")).toContainText("短信未能发送");
+  await page.getByRole("button", { name: "获取验证码" }).click();
+  await expect(page.locator(".auth-message.info")).toContainText("如手机号符合当前操作条件");
+  await expect(page.locator(".sms-delivery-help")).toContainText("还没收到");
+  await expect(page.getByRole("button", { name: "60s" })).toBeDisabled();
+  expect(smsCalls).toBe(2);
+});
+
 test("登录态窄屏保留完整模型名称并移除开发者入口", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 568 });
   await installBaseMocks(page, true);

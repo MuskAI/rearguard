@@ -1566,6 +1566,30 @@ def test_register_requires_matching_password_confirmation(client, monkeypatch):
     assert "不一致" in response.get_json()["message"]
 
 
+def test_register_rejects_weak_password_before_sms_consumption(client, monkeypatch):
+    monkeypatch.setattr(
+        api,
+        "_verify_sms_code",
+        lambda *args: pytest.fail("weak passwords must fail before SMS consumption"),
+    )
+
+    response = client.post(
+        "/api/register",
+        json={
+            "phone": "13800000000",
+            "secret": "abcdefgh",
+            "secret_confirm": "abcdefgh",
+            "username": "tester",
+            "sms_code": "123456",
+            "accepted_terms": True,
+            "terms_version": api.TERMS_VERSION,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "字母和数字" in response.get_json()["message"]
+
+
 def test_register_requires_terms_acceptance(client, monkeypatch):
     monkeypatch.setattr(api, "_verify_sms_code", lambda scene, phone, code: (True, ""))
 
@@ -1617,6 +1641,100 @@ def test_send_login_code_supports_first_use_without_enumerating_phone(client, mo
     assert response.get_json()["success"] is True
     assert "符合当前操作条件" in response.get_json()["message"]
     assert sent == [("13800000000", "login")]
+
+
+def test_aliyun_sms_submission_uses_retryable_default_scheme_and_trace_id(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+
+        @staticmethod
+        def json():
+            return {
+                "Success": True,
+                "Code": "OK",
+                "RequestId": "request-1",
+                "Model": {"BizId": "biz-1"},
+            }
+
+    class FakeSession:
+        trust_env = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def post(self, endpoint, data, timeout):
+            captured.update({"endpoint": endpoint, "data": data, "timeout": timeout})
+            return FakeResponse()
+
+    monkeypatch.setenv("ALIYUN_ACCESS_KEY_ID", "test-access-key")
+    monkeypatch.setenv("ALIYUN_ACCESS_KEY_SECRET", "test-access-secret")
+    monkeypatch.setenv("ALIYUN_SMS_SIGN_NAME", "system-sign")
+    monkeypatch.setenv("ALIYUN_SMS_TEMPLATE_CODE", "100001")
+    monkeypatch.delenv("ALIYUN_SMS_SCHEME_NAME", raising=False)
+    monkeypatch.delenv("ALIYUN_SMS_REGISTER_SCHEME_NAME", raising=False)
+    monkeypatch.setattr(login.requests, "Session", FakeSession)
+
+    app = creat_app()
+    with app.app_context():
+        payload = login._send_sms_by_aliyun("13800000000", "246810", "register")
+
+    assert payload["Code"] == "OK"
+    assert captured["data"]["AutoRetry"] == "1"
+    assert captured["data"]["OutId"].startswith("rg")
+    assert "SchemeName" not in captured["data"]
+    assert json.loads(captured["data"]["TemplateParam"])["code"] == "246810"
+
+
+def test_sms_provider_failure_is_actionable_without_leaking_provider_detail(client, monkeypatch):
+    monkeypatch.setattr(login, "excute_sql", lambda sql, params=None, fetch=True: [])
+    monkeypatch.setattr(login, "_reserve_sms_send", lambda scene, phone, client_ip: None)
+    monkeypatch.setattr(
+        login,
+        "_send_sms_code",
+        lambda phone, scene: (_ for _ in ()).throw(RuntimeError("RequestId=provider-secret-detail")),
+    )
+
+    response = client.post(
+        "/sms/send_code",
+        json={"phone": "13800000000", "scene": "register"},
+    )
+
+    assert response.status_code == 502
+    assert response.headers["Retry-After"] == str(login.SMS_INTERVAL)
+    assert response.get_json()["code"] == "sms_submit_failed"
+    assert "短信未能发送" in response.get_json()["message"]
+    assert "provider-secret-detail" not in response.get_data(as_text=True)
+
+
+def test_register_sms_response_does_not_reveal_account_existence(client, monkeypatch):
+    sent = []
+    monkeypatch.setattr(login, "_reserve_sms_send", lambda scene, phone, client_ip: None)
+    monkeypatch.setattr(login, "_send_sms_code", lambda phone, scene: sent.append((phone, scene)))
+
+    def fake_execute(sql, params=None, fetch=True):
+        assert "SELECT Userid FROM user" in sql
+        return [{"Userid": 1}] if params[0] == "13800000008" else []
+
+    monkeypatch.setattr(login, "excute_sql", fake_execute)
+    existing = client.post(
+        "/sms/send_code",
+        json={"phone": "13800000008", "scene": "register"},
+    )
+    unknown = client.post(
+        "/sms/send_code",
+        json={"phone": "13800000009", "scene": "register"},
+    )
+
+    assert existing.status_code == unknown.status_code == 200
+    assert existing.get_json()["message"] == unknown.get_json()["message"]
+    assert existing.get_json()["delivery_status"] == unknown.get_json()["delivery_status"] == "conditional"
+    assert sent == [("13800000009", "register")]
 
 
 def test_sms_code_locks_after_five_wrong_attempts(sms_database):

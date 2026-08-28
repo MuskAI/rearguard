@@ -2279,6 +2279,13 @@
   box-shadow: 0 0 0 4px rgba(49, 95, 169, 0.12);
 }
 
+.auth-form > label.has-error .field-shell {
+  color: #bd493f;
+  background: #fffafa;
+  border-color: #d96a60;
+  box-shadow: 0 0 0 3px rgba(217, 87, 77, 0.1);
+}
+
 .field-shell input {
   height: 52px;
   font-size: 16px;
@@ -2320,6 +2327,59 @@
 .password-visibility:hover {
   color: #244b89;
   background: #edf3fc;
+}
+
+.password-requirements {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 13px;
+  margin-top: 8px;
+  color: #778893;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.password-requirements span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: color 160ms ease;
+}
+
+.password-requirements :is(svg, .hj-system-icon) {
+  width: 12px;
+  height: 12px;
+  padding: 1px;
+  color: transparent;
+  background: #e5eaed;
+  border-radius: 50%;
+  transition: color 160ms ease, background 160ms ease;
+}
+
+.password-requirements span.met {
+  color: #087267;
+  font-weight: 700;
+}
+
+.password-requirements span.met :is(svg, .hj-system-icon) {
+  color: #fff;
+  background: #16805c;
+}
+
+.auth-field-error,
+.sms-delivery-help {
+  margin: 7px 2px 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.auth-field-error {
+  color: #aa3e35;
+  font-weight: 700;
+}
+
+.sms-delivery-help {
+  color: #5f707b;
 }
 
 .code-row {
@@ -2439,6 +2499,24 @@
   padding: 11px 12px;
   font-size: 13px;
   line-height: 1.55;
+}
+
+.auth-message.error {
+  color: #8d3029;
+  background: #fff0ee;
+  border-color: #efb9b4;
+}
+
+.auth-message.success {
+  color: #075f57;
+  background: #edf8f5;
+  border-color: #abd7ce;
+}
+
+.auth-message.info {
+  color: #274e7c;
+  background: #f0f5fc;
+  border-color: #bed0e7;
 }
 
 .auth-submit {
