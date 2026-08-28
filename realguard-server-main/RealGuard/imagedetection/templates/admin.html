@@ -170,6 +170,25 @@
     .dialog-body p{margin:0;color:var(--muted);line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere}
     .dialog-field{display:grid;gap:6px;font-size:13px;font-weight:700}
     .dialog-field .input{width:100%;min-width:0;font-weight:400}
+    .quota-limit-field{display:grid;gap:12px;padding:14px;border:1px solid var(--line-soft);border-radius:8px;background:#fbfdfc;transition:border-color .18s,background .18s}
+    .quota-limit-field:focus-within{border-color:#8db9ad;background:#fff}
+    .quota-limit-field.is-unlimited{background:#f3faf7;border-color:#b9d9cf}
+    .quota-limit-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+    .quota-limit-copy{display:grid;gap:3px;min-width:0}
+    .quota-limit-copy strong{font-size:14px;color:var(--ink)}
+    .quota-limit-copy small{color:var(--muted);font-size:12px;font-weight:500;line-height:1.45}
+    .quota-unlimited-toggle{display:inline-flex;align-items:center;gap:8px;min-height:30px;color:#344054;font-size:13px;font-weight:700;white-space:nowrap;cursor:pointer}
+    .quota-unlimited-toggle input{position:absolute;opacity:0;pointer-events:none}
+    .quota-unlimited-toggle .toggle{width:42px;height:24px;flex:0 0 auto}
+    .quota-unlimited-toggle .toggle:after{width:18px;height:18px}
+    .quota-unlimited-toggle input:checked+.toggle{background:var(--green)}
+    .quota-unlimited-toggle input:checked+.toggle:after{left:21px}
+    .quota-unlimited-toggle input:focus-visible+.toggle{outline:3px solid rgba(20,117,96,.18);outline-offset:2px}
+    .quota-limit-input{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:10px;transition:opacity .18s}
+    .quota-limit-input .input{width:100%;min-width:0;font-weight:500}
+    .quota-limit-input span{color:#667085;font-size:12px;font-weight:700}
+    .quota-limit-field.is-unlimited .quota-limit-input{opacity:.42}
+    .quota-limit-hint{font-size:12px!important;line-height:1.45!important;color:var(--muted)!important}
     .dialog-error{display:none;color:var(--red);font-size:13px}
     .dialog-actions{padding:14px 22px 20px;display:flex;justify-content:flex-end;gap:10px}
     body{background:var(--page)}
@@ -1064,11 +1083,41 @@
         targets.forEach((target) => target.removeAttribute('aria-busy'));
       }
     }
+    function renderDialogField(field){
+      if(field.type === 'quotaLimit'){
+        const unlimited=Boolean(field.unlimited);
+        const unlimitedName=`${field.name}Unlimited`;
+        return `<div class="quota-limit-field ${unlimited?'is-unlimited':''}" data-quota-field="${esc(field.name)}">
+          <div class="quota-limit-head">
+            <span class="quota-limit-copy"><strong>${esc(field.label)}</strong>${field.description?`<small>${esc(field.description)}</small>`:''}</span>
+            <label class="quota-unlimited-toggle"><input name="${esc(unlimitedName)}" type="checkbox" ${unlimited?'checked':''}><span class="toggle" aria-hidden="true"></span><span>${esc(field.unlimitedLabel || '不限量')}</span></label>
+          </div>
+          <label class="quota-limit-input"><input class="input" name="${esc(field.name)}" type="number" value="${esc(field.value ?? '')}" placeholder="${esc(field.placeholder || '输入调用次数')}" ${field.required&&!unlimited?'required':''} data-required="${field.required?'true':'false'}" ${field.min !== undefined ? `min="${esc(field.min)}"` : ''} ${field.max !== undefined ? `max="${esc(field.max)}"` : ''} ${field.step !== undefined ? `step="${esc(field.step)}"` : ''} ${unlimited?'disabled':''} autocomplete="off" aria-label="${esc(field.label)}"><span>${esc(field.unit || '次')}</span></label>
+          <p class="quota-limit-hint"><span data-limited-hint ${unlimited?'hidden':''}>${esc(field.limitHint || '输入此账号允许调用的次数')}</span><span data-unlimited-hint ${unlimited?'':'hidden'}>${esc(field.unlimitedHint || '该项不设置调用次数上限')}</span></p>
+        </div>`;
+      }
+      return `<label class="dialog-field">${esc(field.label)}<input class="input" name="${esc(field.name)}" type="${esc(field.type || 'text')}" value="${esc(field.value ?? '')}" ${field.required ? 'required' : ''} ${field.min !== undefined ? `min="${esc(field.min)}"` : ''} ${field.max !== undefined ? `max="${esc(field.max)}"` : ''} ${field.step !== undefined ? `step="${esc(field.step)}"` : ''} autocomplete="${esc(field.autocomplete || 'off')}"></label>`;
+    }
     function requestAction({title,message='',warning='',confirmText='确认',danger=false,fields=[],info=false}){
       const dialog = $('actionDialog');
       const form = $('actionDialogForm');
       $('dialogTitle').textContent = title;
-      $('dialogBody').innerHTML = `${message ? `<p>${esc(message)}</p>` : ''}${warning ? `<div class="warning-band">${esc(warning)}</div>` : ''}${fields.map((field) => `<label class="dialog-field">${esc(field.label)}<input class="input" name="${esc(field.name)}" type="${esc(field.type || 'text')}" value="${esc(field.value ?? '')}" ${field.required ? 'required' : ''} ${field.min !== undefined ? `min="${esc(field.min)}"` : ''} ${field.max !== undefined ? `max="${esc(field.max)}"` : ''} ${field.step !== undefined ? `step="${esc(field.step)}"` : ''} autocomplete="${esc(field.autocomplete || 'off')}"></label>`).join('')}<div class="dialog-error" id="dialogError"></div>`;
+      $('dialogBody').innerHTML = `${message ? `<p>${esc(message)}</p>` : ''}${warning ? `<div class="warning-band">${esc(warning)}</div>` : ''}${fields.map(renderDialogField).join('')}<div class="dialog-error" id="dialogError"></div>`;
+      dialog.querySelectorAll('[data-quota-field]').forEach((container) => {
+        const checkbox=container.querySelector('input[type="checkbox"]');
+        const input=container.querySelector('input[type="number"]');
+        const limitedHint=container.querySelector('[data-limited-hint]');
+        const unlimitedHint=container.querySelector('[data-unlimited-hint]');
+        const syncUnlimitedState=()=>{
+          const unlimited=Boolean(checkbox?.checked);
+          container.classList.toggle('is-unlimited',unlimited);
+          if(input){ input.disabled=unlimited; input.required=!unlimited&&input.dataset.required==='true'; }
+          if(limitedHint) limitedHint.hidden=unlimited;
+          if(unlimitedHint) unlimitedHint.hidden=!unlimited;
+        };
+        checkbox?.addEventListener('change',syncUnlimitedState);
+        syncUnlimitedState();
+      });
       const confirmButton = $('dialogConfirm');
       confirmButton.textContent = info ? '关闭' : confirmText;
       confirmButton.className = `btn ${danger ? 'red' : ''}`;
@@ -1680,7 +1729,7 @@
     }
     function renderApiKeys(){
       $('apiKeys').innerHTML = table(['名称','归属','Key','状态','配额','最后使用','操作'], state.keys.map(k => `
-        <tr><td>${esc(k.name)}</td><td>${esc(k.owner)}<br><span class="mono">${esc(k.phone)}</span></td><td class="mono">${esc(k.masked)}</td><td>${k.status === 'active' ? '<span class="pill green">启用</span>' : '<span class="pill red">已撤销</span>'}</td><td>${esc(k.quota?.dailyLimit ?? '不限')}/日<br><span class="mono">${esc(k.quota?.rateLimitPerMinute ?? '不限')}/分钟</span></td><td>${esc(k.lastUsedAt || '-')}</td><td>${can('quota.manage') ? `<button class="btn mini secondary" onclick="editQuota(${Number(k.id)})">配额</button>` : '-'}</td></tr>`)) + (state.pages.keys?.hasMore ? '<div class="load-more"><button class="btn secondary" onclick="loadApiKeys(true)">加载更多</button></div>' : '');
+        <tr><td>${esc(k.name)}</td><td>${esc(k.owner)}<br><span class="mono">${esc(k.phone)}</span></td><td class="mono">${esc(k.masked)}</td><td>${k.status === 'active' ? '<span class="pill green">启用</span>' : '<span class="pill red">已撤销</span>'}</td><td>${k.quota?.dailyLimit == null ? '<span class="pill green">每日不限量</span>' : `${esc(k.quota.dailyLimit)}/日`}<br>${k.quota?.rateLimitPerMinute == null ? '<span class="pill green">每分钟不限量</span>' : `<span class="mono">${esc(k.quota.rateLimitPerMinute)}/分钟</span>`}</td><td>${esc(k.lastUsedAt || '-')}</td><td>${can('quota.manage') ? `<button class="btn mini secondary" onclick="editQuota(${Number(k.id)})">配额</button>` : '-'}</td></tr>`)) + (state.pages.keys?.hasMore ? '<div class="load-more"><button class="btn secondary" onclick="loadApiKeys(true)">加载更多</button></div>' : '');
     }
     function adminBytes(value){
       const bytes = Number(value);
@@ -1979,18 +2028,23 @@
       if(!can('quota.manage')){ toast('当前角色无 API 配额管理权限'); return; }
       const key = state.keys.find(k => Number(k.id) === Number(id)) || {};
       const values=await requestAction({title:'调整 API 配额',message:`${key.name || `Key #${id}`} · ${key.masked || ''}`,confirmText:'保存配额',fields:[
-        {name:'dailyLimit',label:'账号每日调用上限（同账号 Token 共享）',type:'number',min:0,step:1,value:key.quota?.dailyLimit ?? ''},
-        {name:'rateLimitPerMinute',label:'账号每分钟限流（同账号 Token 共享）',type:'number',min:0,step:1,value:key.quota?.rateLimitPerMinute ?? ''},
+        {name:'dailyLimit',label:'每日调用上限',description:'同账号的所有 Token 共享',type:'quotaLimit',min:0,max:10000000,step:1,required:true,value:key.quota?.dailyLimit ?? '',unlimited:key.quota?.dailyLimit == null,unit:'次 / 日',limitHint:'输入 0 可暂停该账号当日调用',unlimitedHint:'不限制该账号每日调用次数'},
+        {name:'rateLimitPerMinute',label:'每分钟限流',description:'同账号的所有 Token 共享',type:'quotaLimit',min:0,max:100000,step:1,required:true,value:key.quota?.rateLimitPerMinute ?? '',unlimited:key.quota?.rateLimitPerMinute == null,unit:'次 / 分钟',limitHint:'输入 0 可暂停该账号发起新请求',unlimitedHint:'不限制该账号每分钟请求次数'},
       ]});
       if(!values) return;
       const parseLimit=value=>value === '' || value == null ? null : Number(value);
-      values.dailyLimit=parseLimit(values.dailyLimit);
-      values.rateLimitPerMinute=parseLimit(values.rateLimitPerMinute);
-      values.expectedDailyLimit=key.quota?.dailyLimit ?? null;
-      values.expectedRateLimitPerMinute=key.quota?.rateLimitPerMinute ?? null;
-      values.operationId=(globalThis.crypto?.randomUUID?.() || `request-quota-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-      await api(`/api/admin/api-keys/${encodeURIComponent(id)}/quota`, {method:'POST', body:JSON.stringify(values)});
-      toast('配额已保存'); await loadApiKeys(); await loadAudit();
+      const dailyLimit=values.dailyLimitUnlimited === 'on' ? null : parseLimit(values.dailyLimit);
+      const rateLimitPerMinute=values.rateLimitPerMinuteUnlimited === 'on' ? null : parseLimit(values.rateLimitPerMinute);
+      const payload={
+        dailyLimit,
+        rateLimitPerMinute,
+        expectedDailyLimit:key.quota?.dailyLimit ?? null,
+        expectedRateLimitPerMinute:key.quota?.rateLimitPerMinute ?? null,
+        operationId:(globalThis.crypto?.randomUUID?.() || `request-quota-${Date.now()}-${Math.random().toString(36).slice(2)}`),
+      };
+      await api(`/api/admin/api-keys/${encodeURIComponent(id)}/quota`, {method:'POST', body:JSON.stringify(payload)});
+      const summary=[dailyLimit == null?'每日不限量':`每日 ${dailyLimit} 次`,rateLimitPerMinute == null?'每分钟不限量':`每分钟 ${rateLimitPerMinute} 次`].join(' · ');
+      toast(`配额已保存：${summary}`); await loadApiKeys(); await loadAudit();
     }
     function testingPercent(value){
       return value == null || Number.isNaN(Number(value)) ? '--' : `${(Number(value) * 100).toFixed(1)}%`;

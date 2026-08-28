@@ -2053,6 +2053,15 @@ def test_request_rate_quota_rejects_stale_expected_values(client, monkeypatch):
     assert connection.rolled_back is True
 
 
+def test_request_quota_null_means_unlimited():
+    assert platform._strict_optional_quota_limit(
+        {"dailyLimit": None}, "dailyLimit", 10_000_000
+    ) is None
+    assert platform._strict_optional_quota_limit(
+        {"rateLimitPerMinute": None}, "rateLimitPerMinute", 100_000
+    ) is None
+
+
 def test_admin_account_adjustment_requires_idempotency_key(client, monkeypatch):
     _allow_financial_admin(monkeypatch)
 

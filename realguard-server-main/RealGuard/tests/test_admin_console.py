@@ -652,6 +652,21 @@ def test_admin_page_exposes_exact_developer_call_quota_control(client, monkeypat
     assert "remainingCalls" in html
 
 
+def test_admin_page_exposes_explicit_unlimited_request_quota_controls(client, monkeypatch):
+    monkeypatch.setenv("REALGUARD_ADMIN_USER_IDS", "1")
+    monkeypatch.setattr(admin, "_admin_account_count", lambda: 0)
+    _login_session(client)
+
+    html = client.get("/admin").get_data(as_text=True)
+
+    assert "dailyLimitUnlimited" in html
+    assert "rateLimitPerMinuteUnlimited" in html
+    assert "不限制该账号每日调用次数" in html
+    assert "不限制该账号每分钟请求次数" in html
+    assert "每日不限量" in html
+    assert "每分钟不限量" in html
+
+
 def test_admin_navigation_preserves_browser_history(client, monkeypatch):
     monkeypatch.setenv("REALGUARD_ADMIN_USER_IDS", "1")
     monkeypatch.setattr(admin, "_admin_account_count", lambda: 0)
