@@ -513,6 +513,43 @@ test("官网与统一鉴伪入口不存在低于 12px 的可见文字", async ({
   expect(await readableTextOffenders(page, ".agent-app")).toEqual([]);
 });
 
+test("核心交互动效短促稳定且从触发位置展开", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await installBaseMocks(page);
+  await page.goto("/");
+
+  const navLink = page.locator(".home-desktop-nav").getByRole("link", { name: "产品能力" });
+  await navLink.hover();
+  await expect.poll(() => navLink.evaluate((element) => getComputedStyle(element).transform)).toBe("none");
+  const heroMotion = await page.locator(".home-hero-visual-stage").evaluate((stage) => ({
+    imageAnimation: getComputedStyle(stage.querySelector("img")!).animationName,
+    tokenAnimation: getComputedStyle(stage.querySelector(".hero-art-token")!).animationName,
+  }));
+  expect(heroMotion).toEqual({ imageAnimation: "none", tokenAnimation: "none" });
+
+  await page.goto("/?workspace=1");
+  const uploadStage = page.locator(".upload-stage");
+  const uploadMotion = await uploadStage.evaluate((element) => ({
+    transform: getComputedStyle(element).transform,
+    cornerBefore: getComputedStyle(element, "::before").display,
+    cornerAfter: getComputedStyle(element, "::after").display,
+  }));
+  expect(uploadMotion).toEqual({ transform: "none", cornerBefore: "none", cornerAfter: "none" });
+
+  await page.getByRole("button", { name: "选择图片检测模型" }).click();
+  const menuMotion = await page.locator(".analysis-model-menu").evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      origin: style.transformOrigin,
+      durations: style.transitionDuration.split(",").map((value) => Number.parseFloat(value) * 1000),
+      timing: style.transitionTimingFunction,
+    };
+  });
+  expect(menuMotion.origin).toMatch(/^0px 0px/);
+  expect(Math.max(...menuMotion.durations)).toBeLessThanOrEqual(180);
+  expect(menuMotion.timing).toContain("cubic-bezier(0.23, 1, 0.32, 1)");
+});
+
 test("官网可以进入独立 Playground", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await installBaseMocks(page);
@@ -1101,6 +1138,9 @@ test("结果页以证据链清晰组织结论并保持正文级字号", async ({
   await expect(chain.locator(".evidence-chain-item")).toHaveCount(6);
   await expect(chain.locator('.evidence-chain-item[data-impact="fake"]')).toHaveCount(2);
   await expect(chain.locator(".evidence-chain-final")).toContainText("AI生成图像");
+  expect(await chain.locator(".evidence-chain-item").evaluateAll((items) => (
+    items.every((item) => getComputedStyle(item).animationName === "none" && getComputedStyle(item).opacity === "1")
+  ))).toBeTruthy();
   const sizes = await chain.locator(".evidence-chain-item").first().evaluate((item) => ({
     title: Number.parseFloat(getComputedStyle(item.querySelector("h4")!).fontSize),
     body: Number.parseFloat(getComputedStyle(item.querySelector("p")!).fontSize),
