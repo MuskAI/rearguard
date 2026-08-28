@@ -1,4 +1,5 @@
 import {
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type RefCallback,
@@ -34,7 +35,6 @@ import {
   ScanLine,
   ShieldCheck,
   ShieldOff,
-  Sparkles,
   Video,
   X,
   ZoomIn,
@@ -55,7 +55,12 @@ import {
   type VisibleWatermarkResult,
   type VideoEvidence,
 } from "../api";
-import { buildEvidenceExplanation, hasDecisiveAiWatermark, localizedWatermarkHits } from "../evidenceExplanation";
+import {
+  buildEvidenceExplanation,
+  hasDecisiveAiWatermark,
+  localizedWatermarkHits,
+  type ExplanationPoint,
+} from "../evidenceExplanation";
 import { StatusIcon } from "./BrandSystem";
 import WatermarkPipeline from "./WatermarkPipeline";
 
@@ -747,6 +752,100 @@ function ResultDisclosure({
   );
 }
 
+type EvidenceDirection = NonNullable<ExplanationPoint["direction"]>;
+
+const EVIDENCE_DIRECTION_LABELS: Record<EvidenceDirection, string> = {
+  fake: "支持 AI",
+  real: "支持实拍",
+  warning: "需谨慎",
+  neutral: "中性信息",
+};
+
+function EvidenceChainIcon({ label, final = false }: { label: string; final?: boolean }) {
+  if (final) return <ShieldCheck size={20} strokeWidth={1.9} aria-hidden="true" />;
+  if (/水印|标记/.test(label)) return <ScanSearch size={19} strokeWidth={1.8} aria-hidden="true" />;
+  if (/凭证|来源链/.test(label)) return <Fingerprint size={19} strokeWidth={1.8} aria-hidden="true" />;
+  if (/实拍|拍摄|相机/.test(label)) return <Camera size={19} strokeWidth={1.8} aria-hidden="true" />;
+  if (/视觉|画面/.test(label)) return <ScanLine size={19} strokeWidth={1.8} aria-hidden="true" />;
+  if (/视频|时序/.test(label)) return <Video size={19} strokeWidth={1.8} aria-hidden="true" />;
+  if (/采样|文件/.test(label)) return <FileSearch size={19} strokeWidth={1.8} aria-hidden="true" />;
+  if (/冲突|边界|异常/.test(label)) return <AlertTriangle size={19} strokeWidth={1.8} aria-hidden="true" />;
+  return <Gauge size={19} strokeWidth={1.8} aria-hidden="true" />;
+}
+
+function EvidenceChain({ points, verdict }: { points: ExplanationPoint[]; verdict: VerdictView }) {
+  const finalPoint = points.find((point) => point.label === "综合结论");
+  const evidencePoints = points.filter((point) => point !== finalPoint);
+  const finalDirection: EvidenceDirection = finalPoint?.direction
+    || (verdict.reviewOnly ? "warning" : verdict.tone === "fake" ? "fake" : "real");
+
+  return (
+    <section className="result-band evidence-chain-band" aria-labelledby="evidence-chain-title">
+      <div className="evidence-chain-heading">
+        <div className="section-title">
+          <Layers3 size={19} />
+          <div>
+            <h3 id="evidence-chain-title">结论证据链</h3>
+            <p>按判断顺序展示每条证据，以及它对最终结论的实际影响。</p>
+          </div>
+        </div>
+        <span className="evidence-chain-count">{evidencePoints.length} 项证据</span>
+      </div>
+
+      <ol className="evidence-chain-list">
+        {evidencePoints.map((point, index) => {
+          const direction: EvidenceDirection = point.direction || "neutral";
+          return (
+            <li
+              className={`evidence-chain-item is-${direction}`}
+              data-impact={direction}
+              key={`${point.label}-${index}`}
+              style={{ "--chain-index": index } as CSSProperties}
+            >
+              <span className="evidence-chain-node"><EvidenceChainIcon label={point.label} /></span>
+              <div className="evidence-chain-content">
+                <div className="evidence-chain-title-row">
+                  <span className="evidence-chain-step">证据 {String(index + 1).padStart(2, "0")}</span>
+                  <h4>{point.label}</h4>
+                  <span className="evidence-chain-impact">
+                    {point.decisive ? `关键证据 · ${EVIDENCE_DIRECTION_LABELS[direction]}` : EVIDENCE_DIRECTION_LABELS[direction]}
+                  </span>
+                </div>
+                <p>{publicCopy(point.text)}</p>
+              </div>
+            </li>
+          );
+        })}
+        <li
+          className={`evidence-chain-item evidence-chain-final is-${finalDirection}`}
+          data-impact={finalDirection}
+          style={{ "--chain-index": evidencePoints.length } as CSSProperties}
+        >
+          <span className="evidence-chain-node"><EvidenceChainIcon label="综合结论" final /></span>
+          <div className="evidence-chain-content">
+            <div className="evidence-chain-title-row">
+              <span className="evidence-chain-step">证据收束</span>
+              <h4>综合结论</h4>
+              <span className="evidence-chain-impact">{EVIDENCE_DIRECTION_LABELS[finalDirection]}</span>
+            </div>
+            <div className="evidence-chain-verdict">
+              <strong>{verdict.label}</strong>
+              <span>{verdict.reviewOnly ? `置信说明：${verdict.confidence}` : `${verdict.riskLabel} ${Math.round(verdict.risk * 100)}%`}</span>
+            </div>
+            <p>{publicCopy(finalPoint?.text || verdict.description)}</p>
+          </div>
+        </li>
+      </ol>
+
+      <div className="evidence-chain-legend" aria-label="证据方向图例">
+        {(Object.keys(EVIDENCE_DIRECTION_LABELS) as EvidenceDirection[]).map((direction) => (
+          <span className={`is-${direction}`} key={direction}><i />{EVIDENCE_DIRECTION_LABELS[direction]}</span>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function ProvenanceSection({ report }: { report?: ProvenanceReport }) {
   if (!report) return null;
   const validationState = report.validationState?.trim().toLowerCase();
@@ -1099,20 +1198,6 @@ export default function AgentResult(props: Props) {
     () => buildEvidenceExplanation(props.outcome, verdict.risk, verdict.label),
     [props.outcome, verdict.label, verdict.risk],
   );
-  const keyExplanationPoints = useMemo(() => {
-    const evidencePoints = explanationPoints.filter((point) => point.label !== "综合结论");
-    const decisive = evidencePoints.filter((point) => point.decisive);
-    const supporting = evidencePoints.filter((point) => !point.decisive);
-    const prioritized = [...decisive, ...supporting];
-    const fallback = explanationPoints.filter((point) => point.label === "综合结论");
-    return [...(prioritized.length > 0 ? prioritized : fallback)]
-      .filter((point, index, items) => items.findIndex((item) => item.label === point.label && item.text === point.text) === index)
-      .slice(0, 3);
-  }, [explanationPoints]);
-  const additionalExplanationPoints = useMemo(() => {
-    const shown = new Set(keyExplanationPoints);
-    return explanationPoints.filter((point) => !shown.has(point));
-  }, [explanationPoints, keyExplanationPoints]);
   const videoSources = props.outcome.kind === "video"
     ? [props.outcome.previewUrl, props.outcome.result.video_url]
         .filter((value): value is string => Boolean(value))
@@ -1289,31 +1374,9 @@ export default function AgentResult(props: Props) {
 
       {tab === "summary" && (
         <div className="result-tab-panel" id="result-panel-summary" role="tabpanel" aria-labelledby="result-tab-summary" tabIndex={0}>
-          <section className="result-band result-priority-band">
-            <div className="section-title"><Sparkles size={18} /><div><h3>关键依据</h3><p>优先展示对本次结论影响最大的证据。</p></div></div>
-            <div className="result-explanation result-rationale is-priority" role="list">
-              {keyExplanationPoints.map((point, index) => (
-                <div className={point.decisive ? "is-decisive" : ""} role="listitem" key={`${point.label}-${index}`}>
-                  <span className="rationale-rank" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
-                  <strong>{point.label}</strong>
-                  <p>{publicCopy(point.text)}</p>
-                </div>
-              ))}
-            </div>
-            {additionalExplanationPoints.length > 0 && (
-              <details className="rationale-disclosure">
-                <summary>查看完整判断依据 <span>{additionalExplanationPoints.length} 项</span><ChevronDown size={15} /></summary>
-                <div className="result-explanation result-rationale" role="list">
-                  {additionalExplanationPoints.map((point, index) => (
-                    <div className={point.decisive ? "is-decisive" : ""} role="listitem" key={`${point.label}-${index}`}>
-                      <strong>{point.label}</strong>
-                      <p>{publicCopy(point.text)}</p>
-                    </div>
-                  ))}
-                </div>
-              </details>
-            )}
-            {visualReview && (
+          <EvidenceChain points={explanationPoints} verdict={verdict} />
+          {visualReview && (
+            <section className="result-band result-priority-band">
               <details className="rationale-disclosure">
                 <summary>
                   {["queued", "running"].includes(visualReview.status)
@@ -1336,8 +1399,8 @@ export default function AgentResult(props: Props) {
                   ))}
                 </div>
               </details>
-            )}
-          </section>
+            </section>
+          )}
           {props.outcome.kind === "video" && (
             <VideoEvidenceSection
               evidence={props.outcome.result.evidence}

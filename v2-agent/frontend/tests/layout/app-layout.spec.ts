@@ -1039,7 +1039,7 @@ test("刷新工作台会恢复文档结果而不会重新上传", async ({ page 
   expect(queryCount).toBe(1);
 });
 
-test("结果页完整依据入口使用正文级字号", async ({ page }) => {
+test("结果页以证据链清晰组织结论并保持正文级字号", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await installBaseMocks(page);
   await page.route("**/image_upload/detect_async", (route) => route.fulfill({
@@ -1095,14 +1095,20 @@ test("结果页完整依据入口使用正文级字号", async ({ page }) => {
   });
 
   await expect(page.locator("#detection-result-title")).toBeVisible();
-  const disclosure = page.locator(".rationale-disclosure").first();
-  await expect(disclosure).toBeVisible();
-  const sizes = await disclosure.locator("summary").evaluate((summary) => ({
-    summary: Number.parseFloat(getComputedStyle(summary).fontSize),
-    count: Number.parseFloat(getComputedStyle(summary.querySelector("span")!).fontSize),
+  const chain = page.locator(".evidence-chain-band");
+  await expect(chain).toBeVisible();
+  await expect(chain.getByRole("heading", { name: "结论证据链" })).toBeVisible();
+  await expect(chain.locator(".evidence-chain-item")).toHaveCount(6);
+  await expect(chain.locator('.evidence-chain-item[data-impact="fake"]')).toHaveCount(2);
+  await expect(chain.locator(".evidence-chain-final")).toContainText("AI生成图像");
+  const sizes = await chain.locator(".evidence-chain-item").first().evaluate((item) => ({
+    title: Number.parseFloat(getComputedStyle(item.querySelector("h4")!).fontSize),
+    body: Number.parseFloat(getComputedStyle(item.querySelector("p")!).fontSize),
+    impact: Number.parseFloat(getComputedStyle(item.querySelector(".evidence-chain-impact")!).fontSize),
   }));
-  expect(sizes.summary).toBeGreaterThanOrEqual(17);
-  expect(sizes.count).toBeGreaterThanOrEqual(14);
+  expect(sizes.title).toBeGreaterThanOrEqual(15);
+  expect(sizes.body).toBeGreaterThanOrEqual(14);
+  expect(sizes.impact).toBeGreaterThanOrEqual(12);
   expect(await readableTextOffenders(page, ".agent-result")).toEqual([]);
 
   await page.setViewportSize({ width: 320, height: 568 });
