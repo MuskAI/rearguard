@@ -1853,8 +1853,8 @@ test("注册页即时提示密码问题并展示真实短信提交状态", async
       status: 200,
       json: {
         success: true,
-        delivery_status: "conditional",
-        message: "如手机号符合当前操作条件，验证码会在 1 分钟内送达；否则请切换登录方式",
+        delivery_status: "submitted",
+        message: "验证码已提交，通常会在 1 分钟内送达",
         expires_in: 300,
         resend_in: 60,
       },
@@ -1885,10 +1885,83 @@ test("注册页即时提示密码问题并展示真实短信提交状态", async
   await page.getByRole("button", { name: "获取验证码" }).click();
   await expect(page.locator(".auth-message.error")).toContainText("短信未能发送");
   await page.getByRole("button", { name: "获取验证码" }).click();
-  await expect(page.locator(".auth-message.info")).toContainText("如手机号符合当前操作条件");
+  await expect(page.locator(".auth-message.success")).toContainText("验证码已提交");
   await expect(page.locator(".sms-delivery-help")).toContainText("还没收到");
   await expect(page.getByRole("button", { name: "60s" })).toBeDisabled();
   expect(smsCalls).toBe(2);
+});
+
+test("已注册手机号在注册入口可切换验证码登录并完成密码重置", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installBaseMocks(page);
+  const smsScenes: string[] = [];
+  let resetPayload: Record<string, string> | null = null;
+  await page.route("**/sms/send_code", async (route) => {
+    const payload = route.request().postDataJSON() as { phone: string; scene: string };
+    smsScenes.push(payload.scene);
+    if (payload.scene === "register") {
+      await route.fulfill({
+        status: 409,
+        json: {
+          success: false,
+          code: "account_exists",
+          account_status: "registered",
+          message: "该手机号已注册，请切换到验证码登录；忘记密码可直接重置",
+          actions: ["sms_login", "reset_password"],
+        },
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      json: {
+        success: true,
+        delivery_status: "submitted",
+        message: "验证码已提交，通常会在 1 分钟内送达",
+        expires_in: 300,
+        resend_in: 60,
+      },
+    });
+  });
+  await page.route("**/api/password/reset", async (route) => {
+    resetPayload = route.request().postDataJSON() as Record<string, string>;
+    await route.fulfill({ status: 200, json: { status: "success", message: "密码已重置，请使用新密码登录" } });
+  });
+
+  await page.goto("/?workspace=1");
+  await page.locator(".topbar-login").click();
+  await page.getByRole("tab", { name: "注册" }).click();
+  await page.getByPlaceholder("请输入手机号").fill("19730015809");
+  await page.getByRole("button", { name: "获取验证码" }).click();
+
+  const guidance = page.locator(".auth-account-guidance");
+  await expect(guidance).toBeVisible();
+  await expect(guidance).toContainText("这个手机号已经注册");
+  await guidance.getByRole("button", { name: "验证码登录" }).click();
+  await expect(page.getByRole("button", { name: "验证码登录" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByPlaceholder("请输入手机号")).toHaveValue("19730015809");
+
+  await page.getByRole("tab", { name: "注册" }).click();
+  await page.getByRole("button", { name: "获取验证码" }).click();
+  await page.locator(".auth-account-guidance").getByRole("button", { name: "忘记密码" }).click();
+  await expect(page.getByRole("heading", { name: "重置登录密码" })).toBeVisible();
+  await page.getByRole("button", { name: "获取验证码" }).click();
+  const newPasswords = page.locator('input[autocomplete="new-password"]');
+  await newPasswords.nth(0).fill("NewPassword123");
+  await newPasswords.nth(1).fill("NewPassword123");
+  await page.getByPlaceholder("输入验证码").fill("246810");
+  await page.getByRole("button", { name: "确认修改密码" }).click();
+
+  await expect(page.getByRole("heading", { name: "欢迎回来" })).toBeVisible();
+  await expect(page.locator(".auth-message.success")).toContainText("密码已修改");
+  expect(smsScenes).toEqual(["register", "register", "reset"]);
+  expect(resetPayload).toEqual({
+    phone: "19730015809",
+    secret: "NewPassword123",
+    secret_confirm: "NewPassword123",
+    sms_code: "246810",
+  });
+  await expectNoHorizontalOverflow(page);
 });
 
 test("登录态窄屏保留完整模型名称并移除开发者入口", async ({ page }) => {

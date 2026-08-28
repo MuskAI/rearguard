@@ -1639,7 +1639,8 @@ def test_send_login_code_supports_first_use_without_enumerating_phone(client, mo
 
     assert response.status_code == 200
     assert response.get_json()["success"] is True
-    assert "符合当前操作条件" in response.get_json()["message"]
+    assert response.get_json()["delivery_status"] == "submitted"
+    assert "验证码已提交" in response.get_json()["message"]
     assert sent == [("13800000000", "login")]
 
 
@@ -1712,9 +1713,10 @@ def test_sms_provider_failure_is_actionable_without_leaking_provider_detail(clie
     assert "provider-secret-detail" not in response.get_data(as_text=True)
 
 
-def test_register_sms_response_does_not_reveal_account_existence(client, monkeypatch):
+def test_register_sms_response_guides_existing_account_without_consuming_send_limit(client, monkeypatch):
     sent = []
-    monkeypatch.setattr(login, "_reserve_sms_send", lambda scene, phone, client_ip: None)
+    reserved = []
+    monkeypatch.setattr(login, "_reserve_sms_send", lambda scene, phone, client_ip: reserved.append((scene, phone)))
     monkeypatch.setattr(login, "_send_sms_code", lambda phone, scene: sent.append((phone, scene)))
 
     def fake_execute(sql, params=None, fetch=True):
@@ -1731,9 +1733,13 @@ def test_register_sms_response_does_not_reveal_account_existence(client, monkeyp
         json={"phone": "13800000009", "scene": "register"},
     )
 
-    assert existing.status_code == unknown.status_code == 200
-    assert existing.get_json()["message"] == unknown.get_json()["message"]
-    assert existing.get_json()["delivery_status"] == unknown.get_json()["delivery_status"] == "conditional"
+    assert existing.status_code == 409
+    assert existing.get_json()["code"] == "account_exists"
+    assert existing.get_json()["account_status"] == "registered"
+    assert existing.get_json()["actions"] == ["sms_login", "reset_password"]
+    assert unknown.status_code == 200
+    assert unknown.get_json()["delivery_status"] == "submitted"
+    assert reserved == [("register", "13800000009")]
     assert sent == [("13800000009", "register")]
 
 
@@ -1987,7 +1993,12 @@ def test_reset_password_updates_hashed_secret(client, monkeypatch):
 
     response = client.post(
         "/api/password/reset",
-        json={"phone": "13800000000", "secret": "NewPassword123", "sms_code": "123456"},
+        json={
+            "phone": "13800000000",
+            "secret": "NewPassword123",
+            "secret_confirm": "NewPassword123",
+            "sms_code": "123456",
+        },
     )
 
     assert response.status_code == 200

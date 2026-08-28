@@ -2242,6 +2242,24 @@
   transform: scale(0.98);
 }
 
+.auth-recovery-back {
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 16px;
+  padding: 0 10px;
+  color: #315fa9;
+  background: transparent;
+  border-radius: 7px;
+  font-size: 14px;
+  font-weight: 720;
+}
+
+.auth-recovery-back:hover {
+  background: #edf3fc;
+}
+
 .auth-form {
   margin-top: 18px;
 }
@@ -2329,6 +2347,27 @@
   background: #edf3fc;
 }
 
+.auth-forgot-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.auth-forgot-row button {
+  min-height: 36px;
+  padding: 0 4px;
+  color: #315fa9;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.auth-forgot-row button:hover {
+  color: #173f7d;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .password-requirements {
   display: flex;
   flex-wrap: wrap;
@@ -2380,6 +2419,68 @@
 
 .sms-delivery-help {
   color: #5f707b;
+}
+
+.auth-account-guidance {
+  margin-top: 16px;
+  padding: 14px;
+  background: #f0f5fc;
+  border: 1px solid #aebfda;
+  border-left: 4px solid #315fa9;
+  border-radius: 8px;
+}
+
+.auth-account-guidance > div:first-child {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
+  color: #315fa9;
+}
+
+.auth-account-guidance > div:first-child > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.auth-account-guidance strong {
+  color: #1e365b;
+  font-size: 15px;
+}
+
+.auth-account-guidance small {
+  color: #576b85;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.auth-account-guidance-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.auth-account-guidance-actions button {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: #244b89;
+  background: #fff;
+  border: 1px solid #9fb4d5;
+  border-radius: 7px;
+  font-size: 14px;
+  font-weight: 740;
+}
+
+.auth-account-guidance-actions button:hover {
+  background: #e4edf9;
+  border-color: #718ebd;
+  transform: translateY(-1px);
 }
 
 .code-row {
@@ -2633,11 +2734,11 @@
   }
 
   .auth-heading {
-    margin-top: 12px;
+    margin-top: 8px;
   }
 
   .auth-panels {
-    margin-top: 12px;
+    margin-top: 8px;
   }
 
   .auth-panels button {
@@ -2645,7 +2746,7 @@
   }
 
   .auth-mode-switch {
-    margin-top: 8px;
+    margin-top: 4px;
   }
 
   .auth-mode-switch button {
@@ -2653,7 +2754,7 @@
   }
 
   .auth-form {
-    margin-top: 8px;
+    margin-top: 4px;
   }
 
   .auth-form > label:not(.terms-check) {
@@ -2684,7 +2785,7 @@
 
   .auth-submit {
     min-height: 50px;
-    margin-top: 10px;
+    margin-top: 8px;
   }
 }
 

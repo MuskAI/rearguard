@@ -1394,6 +1394,27 @@ export function sendSmsCode(phone: string, scene: "login" | "register" | "reset"
   );
 }
 
+export function resetAccountPassword(payload: {
+  phone: string;
+  secret: string;
+  secretConfirm: string;
+  smsCode: string;
+}) {
+  return accountJson<{ status: string; message: string }>(
+    "/api/password/reset",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        phone: payload.phone,
+        secret: payload.secret,
+        secret_confirm: payload.secretConfirm,
+        sms_code: payload.smsCode,
+      }),
+    },
+    "密码重置失败",
+  );
+}
+
 export function registerAccount(payload: {
   phone: string;
   secret: string;

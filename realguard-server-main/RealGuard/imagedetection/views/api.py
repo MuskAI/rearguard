@@ -2103,6 +2103,9 @@ def reset_password():
     payload = request.get_json(silent=True) or request.form
     phone = (payload.get("phone") or "").strip()
     secret = (payload.get("secret") or "").strip()
+    secret_confirm = str(
+        payload.get("secret_confirm") or payload.get("secretConfirm") or ""
+    )
     sms_code = (payload.get("sms_code") or "").strip()
 
     if not _is_valid_phone(phone):
@@ -2110,6 +2113,10 @@ def reset_password():
     password_error = _password_policy_error(secret)
     if password_error:
         return jsonify({"status": "error", "message": password_error}), 400
+    if not secret_confirm:
+        return jsonify({"status": "error", "message": "请再次输入新密码"}), 400
+    if not hmac.compare_digest(secret, secret_confirm):
+        return jsonify({"status": "error", "message": "两次输入的新密码不一致"}), 400
     ok, message = _verify_sms_code("reset", phone, sms_code)
     if not ok:
         return jsonify({"status": "error", "message": message}), 400

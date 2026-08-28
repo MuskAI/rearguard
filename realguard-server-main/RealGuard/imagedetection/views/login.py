@@ -1149,6 +1149,23 @@ def send_sms_code():
     if existing is None:
         return jsonify({'success': False, 'message': '短信验证服务暂不可用，请稍后重试'}), 503
 
+    if scene == 'register' and existing:
+        return jsonify({
+            'success': False,
+            'code': 'account_exists',
+            'account_status': 'registered',
+            'message': '该手机号已注册，请切换到验证码登录；忘记密码可直接重置',
+            'actions': ['sms_login', 'reset_password'],
+        }), 409
+    if scene == 'reset' and not existing:
+        return jsonify({
+            'success': False,
+            'code': 'account_not_found',
+            'account_status': 'unregistered',
+            'message': '该手机号尚未注册，请先创建账号',
+            'actions': ['register'],
+        }), 404
+
     try:
         _reserve_sms_send(scene, phone, _trusted_client_ip())
     except SmsRateLimitError as exc:
@@ -1162,20 +1179,7 @@ def send_sms_code():
     except SmsStorageError:
         return jsonify({'success': False, 'message': '短信验证服务暂不可用，请稍后重试'}), 503
 
-    eligible = (
-        scene == 'login'
-        or (scene == 'register' and not existing)
-        or (scene == 'reset' and bool(existing))
-    )
-    generic_message = '如手机号符合当前操作条件，验证码会在 1 分钟内送达；否则请切换登录方式'
-    if not eligible:
-        return jsonify({
-            'success': True,
-            'message': generic_message,
-            'delivery_status': 'conditional',
-            'expires_in': SMS_CODE_TTL,
-            'resend_in': SMS_INTERVAL,
-        })
+    submitted_message = '验证码已提交，通常会在 1 分钟内送达'
 
     try:
         debug_code = _send_sms_code(phone, scene)
@@ -1198,8 +1202,8 @@ def send_sms_code():
 
     data = {
         'success': True,
-        'message': generic_message,
-        'delivery_status': 'conditional',
+        'message': submitted_message,
+        'delivery_status': 'submitted',
         'expires_in': SMS_CODE_TTL,
         'resend_in': SMS_INTERVAL,
     }
