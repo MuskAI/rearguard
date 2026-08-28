@@ -6,6 +6,7 @@ import io
 import json
 import os
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -141,6 +142,98 @@ def test_c2pa_valid_signature_without_trusted_chain_stays_unverified():
 
     assert severity == "warning"
     assert any("信任链未建立" in item for item in issues)
+
+
+def test_c2pa_untrusted_failure_bucket_is_not_tamper_error():
+    severity, issues = swarm_c2pa_expert._validation_summary({
+        "_local_validation_state": "Valid",
+        "validation_results": {
+            "activeManifest": {
+                "failure": [{
+                    "code": "signingCredential.untrusted",
+                    "explanation": "signing certificate untrusted",
+                }],
+            },
+        },
+    })
+
+    assert severity == "warning"
+    assert any("信任链未建立" in item for item in issues)
+    assert not any("签名校验失败" in item for item in issues)
+
+
+def test_c2pa_reader_disables_all_network_fetches(monkeypatch):
+    seen = {}
+
+    class FakeContext:
+        @classmethod
+        def from_dict(cls, settings):
+            seen["settings"] = settings
+            return cls()
+
+        def close(self):
+            seen["contextClosed"] = True
+
+    class FakeReader:
+        def __init__(self, _mime, _stream, *, context):
+            seen["context"] = context
+
+        def json(self):
+            return json.dumps({"active_manifest": None, "manifests": {}})
+
+        def get_validation_state(self):
+            return "Valid"
+
+        def close(self):
+            seen["readerClosed"] = True
+
+    monkeypatch.setattr(
+        swarm_c2pa_expert,
+        "_c2pa_lib",
+        SimpleNamespace(Context=FakeContext, Reader=FakeReader),
+    )
+    monkeypatch.setattr(swarm_c2pa_expert, "_C2PA_AVAILABLE", True)
+
+    envelope, error = swarm_c2pa_expert._read_manifest(b"image", "image/jpeg")
+
+    assert error is None
+    assert envelope["_local_validation_state"] == "Valid"
+    assert seen["settings"]["verify"] == {
+        "remote_manifest_fetch": False,
+        "ocsp_fetch": False,
+    }
+    assert seen["settings"]["core"]["allowed_network_hosts"] == []
+    assert seen["readerClosed"] is True
+    assert seen["contextClosed"] is True
+
+
+def test_c2pa_remote_manifest_is_neutral_instead_of_failing_swarm(monkeypatch):
+    class FakeContext:
+        @classmethod
+        def from_dict(cls, _settings):
+            return cls()
+
+        def close(self):
+            pass
+
+    class RemoteManifestReader:
+        def __init__(self, *_args, **_kwargs):
+            raise RuntimeError("must fetch remote manifest before reading claim")
+
+    monkeypatch.setattr(
+        swarm_c2pa_expert,
+        "_c2pa_lib",
+        SimpleNamespace(Context=FakeContext, Reader=RemoteManifestReader),
+    )
+    monkeypatch.setattr(swarm_c2pa_expert, "_C2PA_AVAILABLE", True)
+
+    update = swarm_c2pa_expert.run_c2pa_expert(b"image", "remote.jpg", "image/jpeg")
+
+    _shape_ok(update)
+    assert update["status"] == "success"
+    assert update["score"] == 0.5
+    assert update["message"] == "remote_manifest_blocked"
+    assert update["content_claim"] == "unknown"
 
 
 def test_c2pa_minor_human_edits_is_not_camera_capture():
@@ -357,6 +450,17 @@ def test_c2pa_summarize_source_detects_ai():
                 "digitalSourceType": (
                     "http://cv.iptc.org/newscodes/digitalsourcetype/"
                     "compositewithtrainedalgorithmicmedia"
+                ),
+            },
+        }],
+    }) == "ai"
+    assert swarm_c2pa_expert._summarize_source({
+        "assertions": [{
+            "label": "c2pa.actions",
+            "data": {
+                "digitalSourceType": (
+                    "http://cv.iptc.org/newscodes/digitalsourcetype/"
+                    "algorithmicMedia"
                 ),
             },
         }],

@@ -96,7 +96,12 @@ def _local_factors(experts: Iterable[dict[str, Any]], occupied_groups: set[str])
         score = _clamp(expert.get("score"))
         expert_id = str(expert.get("id") or "")
         details = expert.get("details") if isinstance(expert.get("details"), dict) else {}
-        if expert_id == "watermark" and score >= 0.9 and details.get("attribution"):
+        if (
+            expert_id == "watermark"
+            and score >= 0.9
+            and details.get("attribution")
+            and "invisible_watermark" not in occupied_groups
+        ):
             factors.append({
                 "kind": "known_invisible_ai_watermark",
                 "label": f"已知生成器隐式水印：{details['attribution']}",
@@ -106,7 +111,11 @@ def _local_factors(experts: Iterable[dict[str, Any]], occupied_groups: set[str])
                 "effectiveLikelihoodRatio": 120.0,
                 "direction": "fake",
             })
-        elif expert_id == "metadata" and details.get("verifiedAiMetadata") is not True:
+        elif (
+            expert_id == "metadata"
+            and details.get("verifiedAiMetadata") is not True
+            and "camera_capture" not in occupied_groups
+        ):
             capture = details.get("captureEvidence") if isinstance(details.get("captureEvidence"), dict) else {}
             level = str(capture.get("level") or "")
             if capture.get("supportsRealCapture") is True and level in {"medium", "weak"}:
@@ -120,7 +129,7 @@ def _local_factors(experts: Iterable[dict[str, Any]], occupied_groups: set[str])
                     "effectiveLikelihoodRatio": ratio,
                     "direction": "real",
                 })
-        elif expert_id == "c2pa":
+        elif expert_id == "c2pa" and "camera_capture" not in occupied_groups:
             chain_sources = set(details.get("chain_sources") or [])
             if (
                 score <= 0.15

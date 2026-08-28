@@ -108,8 +108,27 @@ def test_jpeg_exif_rationals_flow_into_capture_evidence():
 
     capture = report["captureEvidence"]
     assert capture["level"] == "medium"
+    assert report["hasEmbeddedMetadata"] is True
+    assert report["aiDetection"]["score"] == 0
+    assert report["aiDetection"]["signals"] == []
     parameters = next(item for item in capture["evidence"] if item["key"] == "exposure")
     assert parameters["value"] == "1/250s · f/2.8 · ISO 200 · 50mm"
+
+
+def test_plain_jpeg_structure_is_not_reported_as_embedded_metadata():
+    image = Image.new("RGB", (32, 32), "white")
+    output = BytesIO()
+    image.save(output, format="JPEG")
+
+    report = metadata.inspect_metadata(
+        output.getvalue(),
+        filename="plain.jpg",
+        mime="image/jpeg",
+    )
+
+    assert report["hasMetadata"] is True
+    assert report["hasEmbeddedMetadata"] is False
+    assert report["metadataSummary"]["embeddedSectionCount"] == 0
 
 
 def test_html_report_redacts_sensitive_metadata_preview_values():

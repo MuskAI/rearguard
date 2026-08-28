@@ -145,7 +145,7 @@ def test_editable_metadata_alone_is_not_decisive():
     assert model["posterior"] < 0.2
 
 
-def test_coherent_camera_metadata_reduces_pixel_risk_modestly():
+def test_partial_editable_camera_metadata_does_not_change_pixel_verdict():
     model = evidence_probability.build_probability_model(
         _report(captureEvidence={
             "level": "medium",
@@ -159,16 +159,65 @@ def test_coherent_camera_metadata_reduces_pixel_risk_modestly():
         model,
     )
 
-    assert 0.45 < fused["confidence"] < 0.6
-    assert fused["probabilityModel"]["factors"][0]["direction"] == "real"
+    assert fused["confidence"] == 0.6
+    assert fused["verdict"] == "suspected_fake"
+    assert model["factors"][0]["direction"] == "real"
+    assert model["factors"][0]["decisionEligible"] is False
+    assert model["factors"][0]["effectiveLikelihoodRatio"] == 1.0
+
+
+def test_native_camera_chain_can_adjust_a_boundary_result():
+    model = evidence_probability.build_probability_model(
+        _report(captureEvidence={
+            "level": "medium",
+            "profile": "native_capture_chain",
+            "supportsRealCapture": True,
+            "adjustmentEligible": True,
+            "score": 0.82,
+            "likelihoodRatio": 0.45,
+        }),
+        [],
+    )
+    fused = evidence_probability.fuse_with_analysis(
+        {"confidence": 0.65, "verdict": "suspected_fake", "dimensions": [], "explanation": "像素模型处于边界区间。"},
+        model,
+    )
+
+    assert fused["confidence"] < 0.62
+    assert fused["verdict"] == "real"
+    assert fused["probabilityModel"]["factors"][0]["decisionEligible"] is True
     assert "适度下调" in fused["explanation"]
+
+
+def test_native_camera_chain_cannot_override_high_model_risk():
+    model = evidence_probability.build_probability_model(
+        _report(captureEvidence={
+            "level": "medium",
+            "profile": "native_capture_chain",
+            "supportsRealCapture": True,
+            "adjustmentEligible": True,
+            "score": 0.82,
+            "likelihoodRatio": 0.45,
+        }),
+        [],
+    )
+    fused = evidence_probability.fuse_with_analysis(
+        {"confidence": 0.9, "verdict": "suspected_fake", "dimensions": [], "explanation": "像素模型风险较高。"},
+        model,
+    )
+
+    assert fused["confidence"] == 0.9
+    assert fused["verdict"] == "suspected_fake"
 
 
 def test_camera_metadata_cannot_override_known_ai_watermark():
     model = evidence_probability.build_probability_model(
         _report(captureEvidence={
             "level": "medium",
+            "profile": "native_capture_chain",
             "supportsRealCapture": True,
+            "adjustmentEligible": True,
+            "score": 0.82,
             "likelihoodRatio": 0.65,
         }),
         [_known_hit(0.95)],

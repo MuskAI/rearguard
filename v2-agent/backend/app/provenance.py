@@ -14,9 +14,10 @@ from . import capture_evidence
 from . import metadata as metadata_reader
 
 try:
-    from c2pa import C2paError, Reader
+    from c2pa import C2paError, Context, Reader
 except Exception:
     C2paError = None
+    Context = None
     Reader = None
 
 EXT_TO_MIME = {
@@ -36,6 +37,25 @@ AI_SOURCE_TYPES = frozenset({
 DIRECT_CAMERA_SOURCE_TYPES = frozenset({"digitalcapture"})
 
 SYNTHID_NOTE = "SynthID 为 Google 专有隐形水印，无公开解码器，需 Google 授权，暂不支持检测。"
+
+SAFE_READER_SETTINGS = {
+    "verify": {
+        "remote_manifest_fetch": False,
+        "ocsp_fetch": False,
+    },
+    "core": {
+        "allowed_network_hosts": [],
+    },
+}
+
+
+def _is_remote_manifest_blocked(exc: BaseException) -> bool:
+    """Recognize the SDK error raised when a claim only references a remote manifest."""
+    message = str(exc or "").strip().lower()
+    return "remote manifest" in message and any(
+        marker in message
+        for marker in ("must fetch", "fetch disabled", "not fetch", "network")
+    )
 
 
 def _is_trusted_validation_state(value: object) -> bool:
@@ -57,6 +77,22 @@ def _classify_source(dst: str | None) -> bool | None:
     if token in DIRECT_CAMERA_SOURCE_TYPES:
         return False
     return None
+
+
+def _open_safe_reader(mime: str, data: bytes) -> tuple[object, object]:
+    """Open a Reader that cannot make network requests from uploaded metadata."""
+    if Reader is None or Context is None:
+        raise RuntimeError("c2pa_safe_context_unavailable")
+    context = Context.from_dict(SAFE_READER_SETTINGS)
+    try:
+        reader = Reader(mime, io.BytesIO(data), context=context)
+    except Exception:
+        try:
+            context.close()
+        except Exception:
+            pass
+        raise
+    return reader, context
 
 
 def _object(value: object, label: str) -> dict:
@@ -174,17 +210,20 @@ def read_provenance(data: bytes, mime: str, filename: str = "") -> dict:
         "error": None,
     }
 
-    if Reader is None:
+    if Reader is None or Context is None:
         report["error"] = "c2pa_unavailable"
         return report
 
+    reader_context = None
     try:
-        reader = Reader(mime, io.BytesIO(data))
+        reader, reader_context = _open_safe_reader(mime, data)
     except Exception as exc:
         if C2paError is not None and isinstance(exc, C2paError.ManifestNotFound):
             report["error"] = "no_manifest"
         elif C2paError is not None and isinstance(exc, C2paError.NotSupported):
             report["error"] = "unsupported_format"
+        elif _is_remote_manifest_blocked(exc):
+            report["error"] = "remote_manifest_blocked"
         else:
             report["error"] = f"c2pa_read_error:{type(exc).__name__}"
         return report
@@ -209,6 +248,11 @@ def read_provenance(data: bytes, mime: str, filename: str = "") -> dict:
     finally:
         try:
             reader.close()
+        except Exception:
+            pass
+        try:
+            if reader_context is not None:
+                reader_context.close()
         except Exception:
             pass
 

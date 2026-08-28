@@ -43,6 +43,45 @@ class _FakeC2paReader:
         pass
 
 
+def test_provenance_reader_disables_remote_network_fetches(monkeypatch):
+    seen = {}
+
+    class FakeContext:
+        @classmethod
+        def from_dict(cls, settings):
+            seen["settings"] = settings
+            return cls()
+
+        def close(self):
+            seen["contextClosed"] = True
+
+    class ContextAwareReader(_FakeC2paReader):
+        def __init__(self, *_args, context=None, **_kwargs):
+            seen["context"] = context
+
+        def close(self):
+            seen["readerClosed"] = True
+
+    monkeypatch.setattr(provenance, "Context", FakeContext)
+    monkeypatch.setattr(provenance, "Reader", ContextAwareReader)
+    monkeypatch.setattr(
+        provenance.metadata_reader,
+        "inspect_metadata",
+        lambda *_args, **_kwargs: {},
+    )
+
+    report = provenance.read_provenance(b"payload", "image/png", "sample.png")
+
+    assert report["validationState"] == "Valid"
+    assert seen["settings"]["verify"] == {
+        "remote_manifest_fetch": False,
+        "ocsp_fetch": False,
+    }
+    assert seen["settings"]["core"]["allowed_network_hosts"] == []
+    assert seen["readerClosed"] is True
+    assert seen["contextClosed"] is True
+
+
 def test_provenance_reader_marks_valid_signature_as_untrusted(monkeypatch):
     monkeypatch.setattr(provenance, "Reader", _FakeC2paReader)
     monkeypatch.setattr(
@@ -138,6 +177,24 @@ def test_corrupt_c2pa_reader_failure_is_not_downgraded_to_no_manifest(monkeypatc
 
     assert report["error"] == "c2pa_read_error:_C2paVerify"
     assert report["error"] != "no_manifest"
+
+
+def test_remote_manifest_is_reported_without_exposing_network_access(monkeypatch):
+    class RemoteManifestReader:
+        def __init__(self, *_args, **_kwargs):
+            raise RuntimeError("must fetch remote manifest before reading claim")
+
+    monkeypatch.setattr(provenance, "Reader", RemoteManifestReader)
+    monkeypatch.setattr(
+        provenance.metadata_reader,
+        "inspect_metadata",
+        lambda *_args, **_kwargs: {},
+    )
+
+    report = provenance.read_provenance(b"payload", "image/jpeg", "sample.jpg")
+
+    assert report["hasCredentials"] is False
+    assert report["error"] == "remote_manifest_blocked"
 
 
 @pytest.mark.parametrize("source_type", ["negativeFilm", "positiveFilm", "print"])

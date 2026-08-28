@@ -104,6 +104,28 @@ def test_report_context_excludes_images_urls_and_raw_metadata():
     assert "private-serial" not in encoded
 
 
+def test_low_confidence_metadata_signals_are_not_sent_to_qa():
+    compact = report_qa.compact_report({
+        "verdict": "real",
+        "explanation": "像素模型倾向真实。",
+        "provenance": {
+            "hasCredentials": False,
+            "metadataAiGenerated": False,
+            "aiMetadata": {
+                "confidence": "low",
+                "isAiLikely": False,
+                "signals": [
+                    {"label": "采样/种子/模型参数", "reason": "误命中相机型号"},
+                    {"label": "生成工具字段名", "reason": "误命中相机软件版本"},
+                ],
+            },
+        },
+    })
+
+    assert compact["provenance"]["aiMetadata"]["isAiLikely"] is False
+    assert compact["provenance"]["aiMetadata"]["signals"] == []
+
+
 def test_report_answer_is_grounded_and_filters_unknown_references(monkeypatch):
     client, completions = fake_client(json.dumps({
         "answer": "报告把频域特征列为主要依据，但没有给出可定位区域。",

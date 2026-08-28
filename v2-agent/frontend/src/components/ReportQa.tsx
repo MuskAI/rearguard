@@ -166,7 +166,7 @@ function compactProvenance(report?: ProvenanceReport) {
       confidence: report.aiMetadata.confidence,
       confidenceText: report.aiMetadata.confidenceText,
       isAiLikely: report.aiMetadata.isAiLikely,
-      signals: report.aiMetadata.signals.slice(0, 10).map((signal) => ({
+      signals: (report.aiMetadata.isAiLikely ? report.aiMetadata.signals : []).slice(0, 10).map((signal) => ({
         id: signal.id,
         label: signal.label,
         reason: signal.reason,

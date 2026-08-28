@@ -134,12 +134,31 @@ function c2paStatus(report?: ProvenanceReport | null) {
     return { label: "未读取", value: "尚未读取内容凭证", tone: "#7d6f5e" };
   }
   if (report.hasCredentials) {
-    const trusted = report.credentialTrusted === true || report.validationState?.toLowerCase() === "trusted";
+    const validationState = report.validationState?.trim().toLowerCase();
+    const trusted = report.credentialTrusted === true || validationState === "trusted";
     const aiClaim = report.isAiGenerated === true ? "声明 AI 生成" : report.isAiGenerated === false ? "声明真实拍摄" : "未声明内容类型";
+    if (validationState === "invalid") {
+      return {
+        label: "内容凭证校验失败",
+        value: `凭证完整性未通过 · ${report.generator || report.issuer || "来源待复核"}`,
+        tone: "#c43d2f",
+      };
+    }
     return {
-      label: trusted ? "内容凭证可信" : "凭证签名可读，信任链未建立",
+      label: trusted
+        ? "内容凭证可信"
+        : validationState === "valid"
+          ? "凭证签名有效，信任链未建立"
+          : "发现内容凭证，状态待确认",
       value: `${aiClaim} · ${report.generator || report.issuer || "已检测到内容凭证"}`,
       tone: trusted ? "#238f82" : "#c78324",
+    };
+  }
+  if (report.error === "remote_manifest_blocked") {
+    return {
+      label: "远程凭证未自动获取",
+      value: "文件引用了外置内容凭证；出于安全考虑未自动联网读取",
+      tone: "#c78324",
     };
   }
   return { label: "无凭证", value: report.error === "no_manifest" ? "未发现内容凭证清单" : "未发现内容凭证", tone: "#7d6f5e" };

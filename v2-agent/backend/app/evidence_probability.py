@@ -11,6 +11,8 @@ BASE_RATE = 0.10
 CORRELATED_EVIDENCE_EXPONENT = 0.65
 REPEATED_WATERMARK_EXPONENT = 0.35
 CROSS_MODAL_EXPONENT = 0.75
+CAPTURE_GUARDRAIL_MAX_MODEL_RISK = 0.82
+TRUSTED_CAPTURE_MAX_MODEL_RISK = 0.95
 KNOWN_VISIBLE_PROVIDERS = frozenset({"gemini", "doubao", "jimeng", "jimeng_pill", "samsung"})
 KNOWN_VISIBLE_MIN_CONFIDENCE = {
     "gemini": 0.72,
@@ -181,13 +183,27 @@ def build_probability_model(report: dict[str, Any], known_hits: list[dict[str, A
     if capture.get("supportsRealCapture") is True and capture_level in {"strong", "medium", "weak"}:
         default_ratio = {"strong": 0.08, "medium": 0.65, "weak": 0.84}[capture_level]
         ratio = min(max(float(capture.get("likelihoodRatio") or default_ratio), 0.05), 1.0)
-        factors.append(_factor(
+        decision_eligible = (
+            capture_level == "strong"
+            or (
+                capture_level == "medium"
+                and str(capture.get("profile") or "") == "native_capture_chain"
+                and capture.get("adjustmentEligible") is True
+                and float(capture.get("score") or 0.0) >= 0.70
+            )
+        )
+        factor = _factor(
             "valid_camera_c2pa" if capture_level == "strong" else "camera_capture_metadata",
             "通过校验的相机捕获内容凭证" if capture_level == "strong" else "一致的相机拍摄元数据" if capture_level == "medium" else "部分相机拍摄元数据",
             ratio,
             "camera_capture",
             source="c2pa" if capture_level == "strong" else "metadata",
-        ))
+        )
+        factor.update({
+            "decisionEligible": decision_eligible,
+            "captureProfile": str(capture.get("profile") or "none"),
+        })
+        factors.append(factor)
 
     grouped: dict[str, list[dict[str, Any]]] = {}
     for factor in factors:
@@ -202,6 +218,8 @@ def build_probability_model(report: dict[str, Any], known_hits: list[dict[str, A
             if index > 0:
                 exponent = REPEATED_WATERMARK_EXPONENT if group == "known_watermark" else CORRELATED_EVIDENCE_EXPONENT
             contribution = float(factor["likelihoodRatio"]) ** exponent
+            if factor.get("decisionEligible") is False:
+                contribution = 1.0
             effective_lr *= contribution
             effective_factors.append({
                 **factor,
@@ -228,20 +246,40 @@ def build_probability_model(report: dict[str, Any], known_hits: list[dict[str, A
         "corroborated": len(fake_groups) >= 2,
         "conflicting": bool(fake_groups and real_groups),
         "calibrationStatus": "policy_prior_pending_dataset_calibration",
-        "note": "可见标记只作诊断归属线索；只有通过校验的内容凭证可短路模型，所有融合权重仍需使用标注集校准。",
+        "note": "可见标记只作诊断归属线索；普通可编辑元数据不改变结论，只有完整原生拍摄链或可信内容凭证可参与概率校正。所有融合权重仍需使用标注集校准。",
     }
+
+
+def _decision_likelihood_ratio(probability_model: dict[str, Any], baseline: float) -> float:
+    factors = [item for item in probability_model.get("factors") or [] if isinstance(item, dict)]
+    if not factors:
+        return max(float(probability_model.get("effectiveLikelihoodRatio") or 1.0), 0.01)
+    ratio = 1.0
+    for factor in factors:
+        contribution = max(float(
+            factor.get("effectiveLikelihoodRatio")
+            or factor.get("likelihoodRatio")
+            or 1.0
+        ), 0.01)
+        if contribution < 1.0:
+            kind = str(factor.get("kind") or "")
+            max_risk = TRUSTED_CAPTURE_MAX_MODEL_RISK if kind == "valid_camera_c2pa" else CAPTURE_GUARDRAIL_MAX_MODEL_RISK
+            if factor.get("decisionEligible") is not True or baseline > max_risk:
+                contribution = 1.0
+        ratio *= contribution
+    return max(ratio, 0.01)
 
 
 def fuse_with_analysis(analysis: dict[str, Any], probability_model: dict[str, Any] | None) -> dict[str, Any]:
     """Fuse provenance likelihood ratios with a pixel-model baseline."""
     if not isinstance(probability_model, dict):
         return analysis
-    effective_lr = max(float(probability_model.get("effectiveLikelihoodRatio") or 1.0), 0.01)
+    baseline = clamp_probability(analysis.get("confidence"), 0.5)
+    effective_lr = _decision_likelihood_ratio(probability_model, baseline)
     if abs(effective_lr - 1.0) <= 0.0001:
         return analysis
 
     merged = copy.deepcopy(analysis)
-    baseline = clamp_probability(merged.get("confidence"), 0.5)
     if probability_model.get("corroborated"):
         baseline = max(baseline, 0.35)
     elif probability_model.get("decisive"):
@@ -256,6 +294,7 @@ def fuse_with_analysis(analysis: dict[str, Any], probability_model: dict[str, An
         **probability_model,
         "pixelBaseline": round(baseline, 4),
         "crossModalExponent": CROSS_MODAL_EXPONENT,
+        "decisionEffectiveLikelihoodRatio": round(effective_lr, 3),
         "posterior": round(fused, 4),
     }
     if kinds:

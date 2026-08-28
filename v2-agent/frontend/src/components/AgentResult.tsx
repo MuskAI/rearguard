@@ -749,9 +749,18 @@ function ResultDisclosure({
 
 function ProvenanceSection({ report }: { report?: ProvenanceReport }) {
   if (!report) return null;
-  const credentialLabel = report.hasCredentials
-    ? report.validationState === "valid" ? "凭证签名有效" : "发现内容凭证"
-    : report.metadataAiGenerated ? "发现 AI 元数据线索" : "未发现可验证凭证";
+  const validationState = report.validationState?.trim().toLowerCase();
+  const credentialLabel = !report.hasCredentials
+    ? report.error === "remote_manifest_blocked"
+      ? "远程凭证未自动获取"
+      : report.metadataAiGenerated ? "发现 AI 元数据线索" : "未发现可验证凭证"
+    : report.credentialTrusted || validationState === "trusted"
+      ? "内容凭证可信"
+      : validationState === "valid"
+        ? "凭证签名有效，信任链未建立"
+        : validationState === "invalid"
+          ? "内容凭证校验失败"
+          : "发现内容凭证，状态待确认";
   return (
     <section className="result-band provenance-band">
       <div className="section-title"><Fingerprint size={18} /><div><h3>内容凭证</h3><p>{credentialLabel}</p></div></div>

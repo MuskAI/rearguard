@@ -294,7 +294,11 @@ def _compact_provenance(value: Any) -> dict[str, Any] | None:
             "label": _text(_mapping(item).get("label") or _mapping(item).get("id"), 100),
             "reason": _text(_mapping(item).get("reason"), 300),
         }
-        for item in _sequence(ai_metadata.get("signals"))[:10]
+        for item in (
+            _sequence(ai_metadata.get("signals"))[:10]
+            if ai_metadata.get("isAiLikely") is True
+            else []
+        )
         if _mapping(item)
     ]
     actions = [

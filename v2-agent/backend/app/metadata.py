@@ -175,12 +175,6 @@ KEY_PATTERNS = [
             re.I,
         ),
     ),
-    SignalPattern(
-        "ai-key-tool",
-        "生成工具字段名",
-        16,
-        re.compile(r"(^|[.\[_ -])(creator[_ -]?tool|software|generator|source|application|producer)($|[\]._ -])", re.I),
-    ),
 ]
 
 CONFIDENCE_TEXT = {
@@ -381,13 +375,12 @@ def analyze_ai_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         if row["path"].lower().startswith("file."):
             continue
         value = row["value"]
-        searchable = f"{row['path']}\n{value}"
         lower_path = row["path"].lower()
         for pattern in TOOL_PATTERNS:
-            if pattern.regex.search(searchable):
+            if pattern.regex.search(value):
                 add_signal(pattern, row["path"], value, "命中已知 AI 生成工具或模型名称")
         for pattern in PARAMETER_PATTERNS:
-            if pattern.regex.search(searchable):
+            if pattern.regex.search(value):
                 add_signal(pattern, row["path"], value, "命中生成参数、prompt 或工作流结构")
         for pattern in KEY_PATTERNS:
             if pattern.regex.search(lower_path):
@@ -736,6 +729,45 @@ def _read_iso_bmff(data: bytes) -> dict[str, Any]:
     }
 
 
+def _embedded_section_names(metadata: dict[str, Any]) -> set[str]:
+    """Return sections that contain authored metadata, excluding container structure."""
+    names: set[str] = set()
+    image = metadata.get("image") if isinstance(metadata.get("image"), dict) else {}
+    if any(image.get(key) for key in ("exif", "exifDetails", "gps", "interop")):
+        names.add("image")
+    image_info = image.get("info") if isinstance(image.get("info"), dict) else {}
+    structural_info = {"jfif", "jfif_version", "jfif_unit", "jfif_density", "dpi"}
+    if any(key not in structural_info for key in image_info):
+        names.add("image")
+
+    png = metadata.get("png") if isinstance(metadata.get("png"), dict) else {}
+    if png.get("textChunks"):
+        names.add("png")
+
+    jpeg = metadata.get("jpeg") if isinstance(metadata.get("jpeg"), dict) else {}
+    if jpeg.get("comments") or jpeg.get("xmpPackets"):
+        names.add("jpeg")
+    elif any(
+        isinstance(segment, dict)
+        and segment.get("kind") in {"exif", "xmp", "icc", "photoshop-iptc", "comment"}
+        for segment in jpeg.get("segments") or []
+    ):
+        names.add("jpeg")
+
+    webp = metadata.get("webp") if isinstance(metadata.get("webp"), dict) else {}
+    if webp.get("metadataChunks"):
+        names.add("webp")
+
+    pdf = metadata.get("pdf") if isinstance(metadata.get("pdf"), dict) else {}
+    if pdf.get("info") or pdf.get("xmp"):
+        names.add("pdf")
+
+    iso_bmff = metadata.get("isoBmff") if isinstance(metadata.get("isoBmff"), dict) else {}
+    if iso_bmff.get("movieHeaders"):
+        names.add("isoBmff")
+    return names
+
+
 def inspect_metadata(data: bytes, filename: str = "", mime: str | None = None) -> dict[str, Any]:
     signature = _detect_signature(data, filename, mime)
     kind = signature["kind"]
@@ -828,7 +860,8 @@ def inspect_metadata(data: bytes, filename: str = "", mime: str | None = None) -
         for name, value in public_metadata.items()
         if value and (not isinstance(value, dict) or value)
     ]
-    embedded_sections = [section for section in sections if section["name"] not in {"file", "browser", "errors"}]
+    embedded_names = _embedded_section_names(public_metadata)
+    embedded_sections = [section for section in sections if section["name"] in embedded_names]
     field_count = _count_leaves(public_metadata)
 
     return {

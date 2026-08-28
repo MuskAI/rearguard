@@ -129,3 +129,45 @@ def test_non_aigc_experts_cannot_publish_ai_conclusion_without_source_evidence()
 
     assert result["baselineExperts"] == []
     assert result["publishable"] is False
+
+
+def test_precheck_camera_factor_is_not_counted_twice_by_metadata_expert():
+    precheck_factor = {
+        "kind": "camera_capture_metadata",
+        "label": "一致的相机拍摄元数据",
+        "group": "camera_capture",
+        "source": "metadata",
+        "likelihoodRatio": 0.45,
+        "effectiveLikelihoodRatio": 0.45,
+        "direction": "real",
+    }
+    experts = [
+        _expert("primary", 0.8),
+        {
+            "id": "visible_watermark",
+            "status": "success",
+            "score": None,
+            "probabilityModel": {
+                "effectiveLikelihoodRatio": 0.45,
+                "factors": [precheck_factor],
+            },
+        },
+        _expert(
+            "metadata",
+            0.25,
+            details={
+                "verifiedAiMetadata": False,
+                "captureEvidence": {
+                    "supportsRealCapture": True,
+                    "level": "medium",
+                    "likelihoodRatio": 0.45,
+                },
+            },
+        ),
+    ]
+
+    result = probability_fusion.fuse(experts)
+
+    assert result["effectiveLikelihoodRatio"] == 0.45
+    assert result["posterior"] > 0.62
+    assert [item["group"] for item in result["factors"]].count("camera_capture") == 1

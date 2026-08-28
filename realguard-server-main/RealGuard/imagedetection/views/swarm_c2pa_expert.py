@@ -58,15 +58,23 @@ AI_GENERATOR_PATTERNS = (
 )
 
 AI_DIGITAL_SOURCE_TYPES = {
-    "http://cv.iptc.org/newscodes/digitalsourcetype/trainedalgorithmicmedia",
-    "http://cv.iptc.org/newscodes/digitalsourcetype/algorithmicmedia",
-    "http://cv.iptc.org/newscodes/digitalsourcetype/compositesynthetic",
-    "http://cv.iptc.org/newscodes/digitalsourcetype/synthetic",
-    "http://cv.iptc.org/newscodes/digitalsourcetype/compositewithtrainedalgorithmicmedia",
+    "trainedalgorithmicmedia",
+    "algorithmicmedia",
+    "compositesynthetic",
+    "synthetic",
+    "compositewithtrainedalgorithmicmedia",
 }
 
-CAMERA_DIGITAL_SOURCE_TYPES = {
-    "http://cv.iptc.org/newscodes/digitalsourcetype/digitalcapture",
+CAMERA_DIGITAL_SOURCE_TYPES = {"digitalcapture"}
+
+SAFE_READER_SETTINGS = {
+    "verify": {
+        "remote_manifest_fetch": False,
+        "ocsp_fetch": False,
+    },
+    "core": {
+        "allowed_network_hosts": [],
+    },
 }
 
 
@@ -95,31 +103,65 @@ def _guess_mime(filename: Optional[str], fallback: Optional[str]) -> str:
     return "image/jpeg"
 
 
+def _source_type_token(value: Any) -> str:
+    return str(value or "").strip().rstrip("/").rsplit("/", 1)[-1].rsplit("#", 1)[-1].lower()
+
+
+def _is_remote_manifest_blocked(exc: BaseException) -> bool:
+    message = str(exc or "").strip().lower()
+    return "remote manifest" in message and any(
+        marker in message
+        for marker in ("must fetch", "fetch disabled", "not fetch", "network")
+    )
+
+
 def _read_manifest(image_bytes: bytes, mime: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """Returns (parsed_manifest_json, error_message). Either may be None."""
     if not _C2PA_AVAILABLE or _c2pa_lib is None:
         return None, _C2PA_IMPORT_ERROR or "c2pa-python 不可用"
+    reader = None
+    context = None
     try:
+        context = _c2pa_lib.Context.from_dict(SAFE_READER_SETTINGS)
         stream = io.BytesIO(image_bytes)
-        reader = _c2pa_lib.Reader(mime, stream)
+        reader = _c2pa_lib.Reader(mime, stream, context=context)
     except Exception as exc:
+        try:
+            if context is not None:
+                context.close()
+        except Exception:
+            pass
         # ManifestNotFound is the expected "no provenance" case
         name = type(exc).__name__
         if "NotFound" in name or "ManifestNotFound" in name:
             return None, "no_manifest"
+        if _is_remote_manifest_blocked(exc):
+            return None, "remote_manifest_blocked"
         return None, f"{name}: {_truncate(str(exc), 200)}"
     try:
         raw = reader.json()
+        try:
+            validation_state = str(reader.get_validation_state()).split(".")[-1]
+        except Exception:
+            validation_state = "Unknown"
     except Exception as exc:
         return None, f"reader.json failed: {_truncate(str(exc), 160)}"
+    finally:
+        try:
+            if reader is not None:
+                reader.close()
+        except Exception:
+            pass
+        try:
+            if context is not None:
+                context.close()
+        except Exception:
+            pass
     try:
         parsed = json.loads(raw)
     except Exception as exc:
         return None, f"manifest JSON 解析失败: {_truncate(str(exc), 160)}"
-    try:
-        parsed["_local_validation_state"] = str(reader.get_validation_state()).split(".")[-1]
-    except Exception:
-        parsed["_local_validation_state"] = "Unknown"
+    parsed["_local_validation_state"] = validation_state
     return parsed, None
 
 
@@ -184,7 +226,6 @@ def _validation_summary(manifest_envelope: Dict[str, Any]) -> Tuple[str, List[st
     results = manifest_envelope.get("validation_results") if isinstance(manifest_envelope, dict) else None
     issues: List[str] = []
     severity = "unknown"
-    saw_success = False
     if isinstance(results, dict):
         for bucket_name in ("activeManifest", "active_manifest", "ingredient_active_manifest"):
             bucket = results.get(bucket_name) if isinstance(results.get(bucket_name), dict) else None
@@ -197,22 +238,37 @@ def _validation_summary(manifest_envelope: Dict[str, Any]) -> Tuple[str, List[st
                         continue
                     code = item.get("code") or ""
                     explanation = item.get("explanation") or item.get("url") or code
-                    if level == "failure":
+                    issue_text = f"{code} {explanation}".lower()
+                    trust_only = any(marker in issue_text for marker in (
+                        "untrusted",
+                        "not trusted",
+                        "trust list",
+                        "unknown issuer",
+                    )) and not any(marker in issue_text for marker in (
+                        "revoked",
+                        "invalid",
+                        "expired",
+                        "mismatch",
+                        "tamper",
+                    ))
+                    if level == "failure" and trust_only:
+                        if severity != "error":
+                            severity = "warning"
+                        issues.append(f"信任链未建立: {_truncate(explanation, 80)}")
+                    elif level == "failure":
                         severity = "error"
                         issues.append(f"签名校验失败: {_truncate(explanation, 80)}")
                     elif level == "informational" and severity != "error":
-                        if any(k in code.lower() for k in ("trust", "untrusted", "revoked")):
+                        if trust_only:
                             severity = "warning"
                             issues.append(f"信任链警告: {_truncate(explanation, 80)}")
-                    elif level == "success":
-                        saw_success = True
     if validation_state == "invalid":
         severity = "error"
         issues.append("C2PA 本地验证状态为 Invalid。")
     elif validation_state != "trusted" and severity != "error":
         severity = "warning"
         issues.append("C2PA 签名结构可读，但本地信任链未建立。")
-    elif saw_success and severity == "unknown":
+    elif validation_state == "trusted" and severity == "unknown":
         severity = "ok"
     if severity == "unknown":
         issues.append("C2PA 未返回可验证的签名校验结果。")
@@ -323,9 +379,9 @@ def _summarize_source(manifest: Dict[str, Any]) -> str:
     gen_blob = " | ".join(generators).lower()
     if any(pat in gen_blob for pat in AI_GENERATOR_PATTERNS):
         return "ai"
-    if any(dst in AI_DIGITAL_SOURCE_TYPES for dst in dsts):
+    if any(_source_type_token(dst) in AI_DIGITAL_SOURCE_TYPES for dst in dsts):
         return "ai"
-    if any(dst in CAMERA_DIGITAL_SOURCE_TYPES for dst in dsts):
+    if any(_source_type_token(dst) in CAMERA_DIGITAL_SOURCE_TYPES for dst in dsts):
         return "camera"
     return "unknown"
 
@@ -341,8 +397,8 @@ def _decide_verdict(
     gen_blob = " | ".join(generators).lower()
 
     ai_gen_hits = [pat for pat in AI_GENERATOR_PATTERNS if pat in gen_blob]
-    ai_dst_hits = [dst for dst in digital_source_types if dst in AI_DIGITAL_SOURCE_TYPES]
-    cam_dst_hits = [dst for dst in digital_source_types if dst in CAMERA_DIGITAL_SOURCE_TYPES]
+    ai_dst_hits = [dst for dst in digital_source_types if _source_type_token(dst) in AI_DIGITAL_SOURCE_TYPES]
+    cam_dst_hits = [dst for dst in digital_source_types if _source_type_token(dst) in CAMERA_DIGITAL_SOURCE_TYPES]
 
     if validation_severity == "error":
         evidence.extend(validation_issues[:2])
@@ -421,6 +477,21 @@ def run_c2pa_expert(image_bytes: bytes, filename: Optional[str], mimetype: Optio
                 "未携带凭证不能证明真伪，仅作为辅助信号。",
             ],
             "message": "未发现内容凭证",
+        })
+
+    if err == "remote_manifest_blocked":
+        return _finish({
+            "status": "success",
+            "score": 0.5,
+            "verdict": "远程 C2PA 凭证未自动读取",
+            "confidence": "低",
+            "evidence": [
+                "文件引用了外置内容凭证；为防止上传文件触发任意网络请求，系统未自动访问该地址。",
+                "本项保持中性，不作为真实或 AI 生成的判断依据。",
+            ],
+            "message": "remote_manifest_blocked",
+            "content_claim": "unknown",
+            "integrity": "unknown",
         })
 
     if manifest_envelope is None:
