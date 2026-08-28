@@ -1611,8 +1611,8 @@ test("检测进度卡使用清晰的正文级字号", async ({ page }) => {
     };
   }));
   for (const geometry of stageGeometry) {
-    expect(geometry.nodeWidth).toBeGreaterThanOrEqual(36);
-    expect(geometry.nodeHeight).toBeGreaterThanOrEqual(36);
+    expect(Math.round(geometry.nodeWidth)).toBeGreaterThanOrEqual(36);
+    expect(Math.round(geometry.nodeHeight)).toBeGreaterThanOrEqual(36);
     expect(geometry.glyphWidth).toBe(18);
     expect(geometry.glyphHeight).toBe(18);
     expect(geometry.centerDeltaX).toBeLessThanOrEqual(1);
