@@ -1135,8 +1135,13 @@ test("结果页以证据链清晰组织结论并保持正文级字号", async ({
   const chain = page.locator(".evidence-chain-band");
   await expect(chain).toBeVisible();
   await expect(chain.getByRole("heading", { name: "结论证据链" })).toBeVisible();
-  await expect(chain.locator(".evidence-chain-item")).toHaveCount(6);
+  await expect(chain.getByText("2 项关键证据")).toBeVisible();
+  await expect(chain.locator(".evidence-chain-item")).toHaveCount(3);
   await expect(chain.locator('.evidence-chain-item[data-impact="fake"]')).toHaveCount(2);
+  await expect(chain.getByRole("heading", { name: "真实性分析" })).toBeVisible();
+  await expect(chain.getByRole("heading", { name: "视觉复核" })).toBeVisible();
+  await expect(chain.getByRole("heading", { name: "实拍来源证据" })).toHaveCount(0);
+  await expect(chain.locator(".evidence-chain-legend")).toHaveCount(0);
   await expect(chain.locator(".evidence-chain-final")).toContainText("AI生成图像");
   expect(await chain.locator(".evidence-chain-item").evaluateAll((items) => (
     items.every((item) => getComputedStyle(item).animationName === "none" && getComputedStyle(item).opacity === "1")

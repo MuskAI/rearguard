@@ -59,6 +59,7 @@ import {
   buildEvidenceExplanation,
   hasDecisiveAiWatermark,
   localizedWatermarkHits,
+  selectCriticalEvidence,
   type ExplanationPoint,
 } from "../evidenceExplanation";
 import { StatusIcon } from "./BrandSystem";
@@ -775,7 +776,7 @@ function EvidenceChainIcon({ label, final = false }: { label: string; final?: bo
 
 function EvidenceChain({ points, verdict }: { points: ExplanationPoint[]; verdict: VerdictView }) {
   const finalPoint = points.find((point) => point.label === "综合结论");
-  const evidencePoints = points.filter((point) => point !== finalPoint);
+  const evidencePoints = selectCriticalEvidence(points);
   const finalDirection: EvidenceDirection = finalPoint?.direction
     || (verdict.reviewOnly ? "warning" : verdict.tone === "fake" ? "fake" : "real");
 
@@ -786,10 +787,10 @@ function EvidenceChain({ points, verdict }: { points: ExplanationPoint[]; verdic
           <Layers3 size={19} />
           <div>
             <h3 id="evidence-chain-title">结论证据链</h3>
-            <p>按判断顺序展示每条证据，以及它对最终结论的实际影响。</p>
+            <p>仅展示对结论影响最大的证据，完整细节可在下方对应区域查看。</p>
           </div>
         </div>
-        <span className="evidence-chain-count">{evidencePoints.length} 项证据</span>
+        <span className="evidence-chain-count">{evidencePoints.length} 项关键证据</span>
       </div>
 
       <ol className="evidence-chain-list">
@@ -837,11 +838,6 @@ function EvidenceChain({ points, verdict }: { points: ExplanationPoint[]; verdic
         </li>
       </ol>
 
-      <div className="evidence-chain-legend" aria-label="证据方向图例">
-        {(Object.keys(EVIDENCE_DIRECTION_LABELS) as EvidenceDirection[]).map((direction) => (
-          <span className={`is-${direction}`} key={direction}><i />{EVIDENCE_DIRECTION_LABELS[direction]}</span>
-        ))}
-      </div>
     </section>
   );
 }
