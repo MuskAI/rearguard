@@ -29,6 +29,7 @@ import {
   SquareTerminal,
   Trash2,
   UploadCloud,
+  Video,
   WalletCards,
   X,
 } from "lucide-react";
@@ -52,6 +53,7 @@ import "./DeveloperPlatform.css";
 
 type DeveloperTab = "overview" | "keys" | "tester" | "docs" | "skill" | "usage";
 type CodeLanguage = "curl" | "python" | "typescript" | "java" | "go";
+type DeveloperMedia = "image" | "video";
 type CreateKeyPayload = Parameters<typeof createDeveloperKey>[0];
 type DeveloperResourceErrors = { account: string; keys: string; ledger: string };
 
@@ -176,8 +178,14 @@ function moveTabFocus(event: ReactKeyboardEvent<HTMLElement>) {
   tabs[next]?.click();
 }
 
-function integrationExamples(origin: string, mode: "fast" | "swarm"): Record<CodeLanguage, string> {
-  const endpoint = `${origin}/api/openapi/v1/image-detections`;
+function integrationExamples(origin: string, media: DeveloperMedia, mode: "fast" | "swarm"): Record<CodeLanguage, string> {
+  const isVideo = media === "video";
+  const resource = isVideo ? "video-detections" : "image-detections";
+  const endpoint = `${origin}/api/openapi/v1/${resource}`;
+  const field = isVideo ? "video" : "image";
+  const sample = isVideo ? "sample.mp4" : "sample.jpg";
+  const mimeType = isVideo ? "video/mp4" : "image/jpeg";
+  const pythonData = isVideo ? "{}" : `{"mode": "${mode}"}`;
   return {
     curl: [
       `ORIGIN="${origin}"`,
@@ -187,8 +195,8 @@ function integrationExamples(origin: string, mode: "fast" | "swarm"): Record<Cod
       `TASK=$(curl -sS -X POST "${endpoint}" \\`,
       '  -H "Authorization: Bearer $API_KEY" \\',
       '  -H "Idempotency-Key: $IDEMPOTENCY_KEY" \\',
-      `  -F "mode=${mode}" \\`,
-      '  -F "image=@./sample.jpg")',
+      ...(!isVideo ? [`  -F "mode=${mode}" \\`] : []),
+      `  -F "${field}=@./${sample}")`,
       "",
       'STATUS_URL="$ORIGIN$(echo "$TASK" | jq -r .links.self)"',
       'BODY_FILE="$(mktemp)"; HEADER_FILE="$(mktemp)"',
@@ -220,8 +228,8 @@ function integrationExamples(origin: string, mode: "fast" | "swarm"): Record<Cod
       'headers = {"Authorization": f"Bearer {API_KEY}"}',
       'create_headers = {**headers, "Idempotency-Key": str(uuid.uuid4())}',
       "",
-      'with open("sample.jpg", "rb") as image:',
-      `    response = requests.post(f"{ORIGIN}/api/openapi/v1/image-detections", headers=create_headers, data={"mode": "${mode}"}, files={"image": image}, timeout=30)`,
+      `with open("${sample}", "rb") as media_file:`,
+      `    response = requests.post(f"{ORIGIN}/api/openapi/v1/${resource}", headers=create_headers, data=${pythonData}, files={"${field}": media_file}, timeout=300)`,
       "response.raise_for_status()",
       "task = response.json()",
       "",
@@ -243,12 +251,12 @@ function integrationExamples(origin: string, mode: "fast" | "swarm"): Record<Cod
       `const origin = "${origin}";`,
       "const apiKey = process.env.HUIJIAN_API_KEY!;",
       "const body = new FormData();",
-      `body.set("mode", "${mode}");`,
-      'body.set("image", new Blob([await readFile("sample.jpg")]), "sample.jpg");',
+      ...(!isVideo ? [`body.set("mode", "${mode}");`] : []),
+      `body.set("${field}", new Blob([await readFile("${sample}")], { type: "${mimeType}" }), "${sample}");`,
       "",
       'const headers = { Authorization: `Bearer ${apiKey}` };',
       'const createHeaders = { ...headers, "Idempotency-Key": crypto.randomUUID() };',
-      'let response = await fetch(`${origin}/api/openapi/v1/image-detections`, { method: "POST", headers: createHeaders, body });',
+      `let response = await fetch(\`${"${origin}"}/api/openapi/v1/${resource}\`, { method: "POST", headers: createHeaders, body });`,
       'if (!response.ok) throw new Error(await response.text());',
       "let task = await response.json();",
       "const deadline = Date.now() + 300_000;",
@@ -269,10 +277,10 @@ function integrationExamples(origin: string, mode: "fast" | "swarm"): Record<Cod
       `String origin = "${origin}";`,
       'String apiKey = System.getenv("HUIJIAN_API_KEY");',
       "RequestBody body = new MultipartBody.Builder().setType(MultipartBody.FORM)",
-      `    .addFormDataPart("mode", "${mode}")`,
-      '    .addFormDataPart("image", "sample.jpg", RequestBody.create(new File("sample.jpg"), MediaType.get("image/jpeg")))',
+      ...(!isVideo ? [`    .addFormDataPart("mode", "${mode}")`] : []),
+      `    .addFormDataPart("${field}", "${sample}", RequestBody.create(new File("${sample}"), MediaType.get("${mimeType}")))`,
       "    .build();",
-      'Request request = new Request.Builder().url(origin + "/api/openapi/v1/image-detections")',
+      `Request request = new Request.Builder().url(origin + "/api/openapi/v1/${resource}")`,
       '    .header("Authorization", "Bearer " + apiKey).header("Idempotency-Key", UUID.randomUUID().toString())',
       "    .post(body).build();",
       "JSONObject task = new JSONObject(client.newCall(request).execute().body().string());",
@@ -292,10 +300,10 @@ function integrationExamples(origin: string, mode: "fast" | "swarm"): Record<Cod
       "func main() {",
       `  origin := "${origin}"`,
       '  var body bytes.Buffer; writer := multipart.NewWriter(&body)',
-      `  writer.WriteField("mode", "${mode}")`,
-      '  part, _ := writer.CreateFormFile("image", "sample.jpg")',
-      '  file, _ := os.Open("sample.jpg"); io.Copy(part, file); writer.Close()',
-      '  req, _ := http.NewRequest("POST", origin + "/api/openapi/v1/image-detections", &body)',
+      ...(!isVideo ? [`  writer.WriteField("mode", "${mode}")`] : []),
+      `  part, _ := writer.CreateFormFile("${field}", "${sample}")`,
+      `  file, _ := os.Open("${sample}"); io.Copy(part, file); writer.Close()`,
+      `  req, _ := http.NewRequest("POST", origin + "/api/openapi/v1/${resource}", &body)`,
       '  req.Header.Set("Authorization", "Bearer " + os.Getenv("HUIJIAN_API_KEY"))',
       '  req.Header.Set("Content-Type", writer.FormDataContentType())',
       '  req.Header.Set("Idempotency-Key", fmt.Sprintf("%d", time.Now().UnixNano()))',
@@ -327,11 +335,12 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
   const [revealedKey, setRevealedKey] = useState<{ value: string; title: string } | null>(null);
   const [copied, setCopied] = useState("");
   const [language, setLanguage] = useState<CodeLanguage>("curl");
+  const [docMedia, setDocMedia] = useState<DeveloperMedia>("image");
   const [docMode, setDocMode] = useState<"fast" | "swarm">("fast");
   const [testerKeySeed, setTesterKeySeed] = useState("");
   const [newKeyName, setNewKeyName] = useState("生产环境");
   const [newKeyExpiry, setNewKeyExpiry] = useState("90");
-  const [newKeyScopes, setNewKeyScopes] = useState({ fast: true, swarm: false, reports: true });
+  const [newKeyScopes, setNewKeyScopes] = useState({ fast: true, swarm: false, video: true, reports: true });
   const [newKeyIps, setNewKeyIps] = useState("");
   const loadGeneration = useRef(0);
   const createDialogRef = useRef<HTMLElement>(null);
@@ -467,7 +476,7 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
 
   const origin = window.location.origin;
   const endpoint = `${origin}/api/openapi/v1/image-detections`;
-  const examples = useMemo(() => integrationExamples(origin, docMode), [docMode, origin]);
+  const examples = useMemo(() => integrationExamples(origin, docMedia, docMode), [docMedia, docMode, origin]);
 
   async function copyText(value: string, token: string) {
     try {
@@ -489,10 +498,11 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
   }
 
   async function createKey() {
-    if (!newKeyName.trim() || (!newKeyScopes.fast && !newKeyScopes.swarm) || keyMutationInFlightRef.current) return;
+    if (!newKeyName.trim() || (!newKeyScopes.fast && !newKeyScopes.swarm && !newKeyScopes.video) || keyMutationInFlightRef.current) return;
     const scopes = [
       ...(newKeyScopes.fast ? ["image:fast"] : []),
       ...(newKeyScopes.swarm ? ["image:swarm"] : []),
+      ...(newKeyScopes.video ? ["video:detect"] : []),
       ...(newKeyScopes.reports ? ["reports"] : []),
     ];
     const ipAllowlist = newKeyIps.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean);
@@ -660,10 +670,12 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
           {tab === "docs" && (
             <DocsPanel
               endpoint={endpoint}
+              media={docMedia}
               mode={docMode}
               language={language}
               code={examples[language]}
               copied={copied}
+              onMediaChange={setDocMedia}
               onModeChange={setDocMode}
               onLanguageChange={setLanguage}
               onCopy={copyText}
@@ -685,12 +697,13 @@ export default function DeveloperPlatform({ authReady, user, onLogin, onHome, on
               <legend>检测权限</legend>
               <label className="developer-check-row"><input type="checkbox" checked={newKeyScopes.fast} onChange={(event) => setNewKeyScopes((value) => ({ ...value, fast: event.target.checked }))} /><span><strong>快速检测</strong><small>真实性分析与水印证据</small></span></label>
               <label className="developer-check-row"><input type="checkbox" checked={newKeyScopes.swarm} onChange={(event) => setNewKeyScopes((value) => ({ ...value, swarm: event.target.checked }))} /><span><strong>Swarm 多源复核</strong><small>多条独立证据交叉核验</small></span></label>
+              <label className="developer-check-row"><input type="checkbox" checked={newKeyScopes.video} onChange={(event) => setNewKeyScopes((value) => ({ ...value, video: event.target.checked }))} /><span><strong>视频鉴伪</strong><small>抽帧、时序证据与视频报告</small></span></label>
               <label className="developer-check-row"><input type="checkbox" checked={newKeyScopes.reports} onChange={(event) => setNewKeyScopes((value) => ({ ...value, reports: event.target.checked }))} /><span><strong>报告下载</strong><small>读取该 Key 创建任务的 PDF 报告</small></span></label>
             </fieldset>
             <label><span>有效期</span><select value={newKeyExpiry} onChange={(event) => setNewKeyExpiry(event.target.value)}><option value="30">30 天</option><option value="90">90 天</option><option value="365">1 年</option></select></label>
             <label><span>IP 白名单 <small>可选，每行一个 IP 或 CIDR</small></span><textarea value={newKeyIps} onChange={(event) => setNewKeyIps(event.target.value)} rows={3} placeholder="203.0.113.10&#10;10.0.0.0/24" /></label>
             {error && <p className="developer-modal-error" role="alert">{error}</p>}
-            <footer><button type="button" className="developer-secondary-action" onClick={closeCreateDialog}>取消</button><button type="button" className="developer-primary-action" onClick={() => void createKey()} disabled={keyBusy === "create" || !newKeyName.trim() || (!newKeyScopes.fast && !newKeyScopes.swarm)}>{keyBusy === "create" ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />} 创建 Key</button></footer>
+            <footer><button type="button" className="developer-secondary-action" onClick={closeCreateDialog}>取消</button><button type="button" className="developer-primary-action" onClick={() => void createKey()} disabled={keyBusy === "create" || !newKeyName.trim() || (!newKeyScopes.fast && !newKeyScopes.swarm && !newKeyScopes.video)}>{keyBusy === "create" ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />} 创建 Key</button></footer>
           </section>
         </div>
       )}
@@ -1033,7 +1046,7 @@ function Overview({ account, accountError, keysReady, endpoint, copied, onCopy, 
   ];
   return (
     <div className="developer-page developer-overview">
-      <section className="developer-section-heading"><div><p>开发者平台 <span><i /> 账号级权限与用量</span></p><h2>把慧鉴AI接入你的业务流程</h2><small>一期开放图像鉴伪；快速检测与 Swarm 复核共用异步接口。</small></div><button type="button" className="developer-primary-action" onClick={onOpenKeys} disabled={!keysReady} title={keysReady ? undefined : "API Key 状态尚未读取成功"}><KeyRound size={16} /> 创建 API Key</button></section>
+      <section className="developer-section-heading"><div><p>开发者平台 <span><i /> 账号级权限与用量</span></p><h2>把慧鉴AI接入你的业务流程</h2><small>开放图像快速检测、Swarm 复核与视频抽帧鉴伪，统一使用异步任务协议。</small></div><button type="button" className="developer-primary-action" onClick={onOpenKeys} disabled={!keysReady} title={keysReady ? undefined : "API Key 状态尚未读取成功"}><KeyRound size={16} /> 创建 API Key</button></section>
       <section className="developer-metric-strip" aria-label="开发者账户指标">
         {metrics.map((item) => { const Icon = item.icon; return <article key={item.label}><span><Icon size={18} /></span><div><small>{item.label}</small><strong>{item.value}</strong><p>{item.note}</p></div></article>; })}
       </section>
@@ -1082,26 +1095,39 @@ function KeysPanel({ keys, loadError, busy, loading, onCreate, onRotate, onRevok
       <section className="developer-section-heading"><div><p>凭据管理</p><h2>API 密钥</h2><small>按环境拆分 API Key，降低泄露后的影响范围。完整密钥仅在创建或轮换时展示一次。</small></div><button type="button" className="developer-primary-action" onClick={(event) => onCreate(event.currentTarget)} disabled={loading || Boolean(loadError) || activeCount >= 5 || busy !== null}><Plus size={16} /> 创建 API Key</button></section>
       <section className="developer-security-rail"><ShieldCheck size={19} /><div><strong>服务端只保存 Key 哈希</strong><span>建议设置有效期与 IP 白名单，并定期轮换生产密钥。</span></div><small>{loadError ? "状态未知" : `${activeCount} / 5 个 active`}</small></section>
       <section className="developer-table-section developer-key-table"><header><div><h3>密钥列表</h3><p>撤销后立即失效，不影响账号额度和历史账单。</p></div></header><div className="developer-table-wrap"><table><thead><tr><th>名称</th><th>Key</th><th>权限</th><th>限制</th><th>最后使用</th><th aria-label="操作" /></tr></thead><tbody>
-        {loadError ? <tr><td colSpan={6} className="developer-empty-cell developer-load-error">{loadError}，为避免重复创建，当前已暂停凭据操作</td></tr> : keys.length ? keys.map((key) => <tr key={`${key.id}-${key.status}`}><td><strong>{key.name}</strong><span className={`developer-key-state ${key.status}`}>{keyStatusLabel(key)}</span></td><td><code>{key.preview}</code></td><td><div className="developer-scope-list">{key.scopes.map((scope) => <span key={scope}>{scope === "image:fast" ? "快速" : scope === "image:swarm" ? "Swarm" : scope === "reports" ? "报告" : scope}</span>)}</div></td><td><small>{key.expiresAt ? `到期 ${compactDate(key.expiresAt)}` : "未设置到期时间"}</small><small>{key.ipAllowlist?.length ? `${key.ipAllowlist.length} 条 IP 规则` : "不限 IP"}</small></td><td>{compactDate(key.lastUsedAt)}</td><td><div className="developer-row-actions">{key.status === "active" && <><button type="button" title="轮换 Key" aria-label={`轮换 ${key.name}`} disabled={busy !== null} onClick={(event) => onRotate(key, event.currentTarget)}>{busy === key.id ? <LoaderCircle className="spin" size={16} /> : <RotateCw size={16} />}</button><button type="button" className="danger" title="撤销 Key" aria-label={`撤销 ${key.name}`} disabled={busy !== null} onClick={() => onRevoke(key)}><Trash2 size={16} /></button></>}</div></td></tr>) : <tr><td colSpan={6} className="developer-empty-cell">尚未创建 API Key</td></tr>}
+        {loadError ? <tr><td colSpan={6} className="developer-empty-cell developer-load-error">{loadError}，为避免重复创建，当前已暂停凭据操作</td></tr> : keys.length ? keys.map((key) => <tr key={`${key.id}-${key.status}`}><td><strong>{key.name}</strong><span className={`developer-key-state ${key.status}`}>{keyStatusLabel(key)}</span></td><td><code>{key.preview}</code></td><td><div className="developer-scope-list">{key.scopes.map((scope) => <span key={scope}>{scope === "image:fast" ? "快速" : scope === "image:swarm" ? "Swarm" : scope === "video:detect" ? "视频" : scope === "reports" ? "报告" : scope}</span>)}</div></td><td><small>{key.expiresAt ? `到期 ${compactDate(key.expiresAt)}` : "未设置到期时间"}</small><small>{key.ipAllowlist?.length ? `${key.ipAllowlist.length} 条 IP 规则` : "不限 IP"}</small></td><td>{compactDate(key.lastUsedAt)}</td><td><div className="developer-row-actions">{key.status === "active" && <><button type="button" title="轮换 Key" aria-label={`轮换 ${key.name}`} disabled={busy !== null} onClick={(event) => onRotate(key, event.currentTarget)}>{busy === key.id ? <LoaderCircle className="spin" size={16} /> : <RotateCw size={16} />}</button><button type="button" className="danger" title="撤销 Key" aria-label={`撤销 ${key.name}`} disabled={busy !== null} onClick={() => onRevoke(key)}><Trash2 size={16} /></button></>}</div></td></tr>) : <tr><td colSpan={6} className="developer-empty-cell">尚未创建 API Key</td></tr>}
       </tbody></table></div></section>
     </div>
   );
 }
 
-function DocsPanel({ endpoint, mode, language, code, copied, onModeChange, onLanguageChange, onCopy, onOpenSkill }: { endpoint: string; mode: "fast" | "swarm"; language: CodeLanguage; code: string; copied: string; onModeChange: (mode: "fast" | "swarm") => void; onLanguageChange: (language: CodeLanguage) => void; onCopy: (value: string, token: string) => void; onOpenSkill: () => void }) {
+function DocsPanel({ endpoint, media, mode, language, code, copied, onMediaChange, onModeChange, onLanguageChange, onCopy, onOpenSkill }: { endpoint: string; media: DeveloperMedia; mode: "fast" | "swarm"; language: CodeLanguage; code: string; copied: string; onMediaChange: (media: DeveloperMedia) => void; onModeChange: (mode: "fast" | "swarm") => void; onLanguageChange: (language: CodeLanguage) => void; onCopy: (value: string, token: string) => void; onOpenSkill: () => void }) {
+  const resource = media === "video" ? "video-detections" : "image-detections";
+  const selectedEndpoint = endpoint.replace("image-detections", resource);
+  const mediaLabel = media === "video" ? "视频" : "图像";
   return (
     <div className="developer-page developer-docs-page">
-      <section className="developer-section-heading"><div><p>API v1</p><h2>图像鉴伪接入</h2><small>统一异步任务接口，支持快速检测与 Swarm 多源复核。请求头使用 Bearer API Key。</small></div><a className="developer-secondary-action" href="/api/developer/openapi.json" target="_blank" rel="noreferrer"><FileJson size={16} /> OpenAPI JSON</a></section>
+      <section className="developer-section-heading"><div><p>API v1</p><h2>图像与视频鉴伪接入</h2><small>两类内容共用异步任务协议；创建后通过 links.self 查询状态，任务与媒体均按账号隔离。</small></div><a className="developer-secondary-action" href="/api/developer/openapi.json" target="_blank" rel="noreferrer"><FileJson size={16} /> OpenAPI JSON</a></section>
       <section className="developer-doc-callout"><LockKeyhole size={18} /><div><strong>请求认证</strong><code>Authorization: Bearer rg_sk_...</code></div><span>HTTPS only</span></section>
       <div className="developer-doc-layout">
-        <aside className="developer-doc-index"><strong>图像鉴伪</strong><a href="#create-task" className="is-active">创建任务</a><a href="#poll-task">查询状态</a><a href="#download-report">下载报告</a><strong>Agent</strong><a href="#agent-skill">慧鉴AI Skill</a></aside>
+        <aside className="developer-doc-index"><strong>{mediaLabel}鉴伪</strong><a href="#create-task" className="is-active">创建任务</a><a href="#poll-task">查询状态</a><a href="#download-report">下载报告</a><a href="#read-media">读取原文件</a><strong>Agent</strong><a href="#agent-skill">慧鉴AI Skill</a></aside>
         <div className="developer-doc-content">
-          <section id="create-task"><p className="developer-method-line"><span>POST</span><code>/api/openapi/v1/image-detections</code></p><h3>创建图像鉴伪任务</h3><p>使用 multipart/form-data 上传图片。相同的 Idempotency-Key 与文件可安全重试，不会重复扣费。</p><div className="developer-mode-selector" role="group" aria-label="示例检测模式"><button type="button" aria-pressed={mode === "fast"} className={mode === "fast" ? "is-active" : ""} onClick={() => onModeChange("fast")}><Gauge size={16} /><span><strong>快速检测</strong><small>真实性分析 + 水印证据</small></span></button><button type="button" aria-pressed={mode === "swarm"} className={mode === "swarm" ? "is-active" : ""} onClick={() => onModeChange("swarm")}><ShieldCheck size={16} /><span><strong>Swarm 多源复核</strong><small>API 参数：swarm</small></span></button></div></section>
+          <section id="create-task">
+            <div className="developer-mode-selector developer-media-selector" role="group" aria-label="示例内容类型">
+              <button type="button" aria-pressed={media === "image"} className={media === "image" ? "is-active" : ""} onClick={() => onMediaChange("image")}><ImageIcon size={17} /><span><strong>图像鉴伪</strong><small>快速 / Swarm</small></span></button>
+              <button type="button" aria-pressed={media === "video"} className={media === "video" ? "is-active" : ""} onClick={() => onMediaChange("video")}><Video size={17} /><span><strong>视频鉴伪</strong><small>抽帧与时序分析</small></span></button>
+            </div>
+            <p className="developer-method-line"><span>POST</span><code>/api/openapi/v1/{resource}</code></p>
+            <h3>创建{mediaLabel}鉴伪任务</h3>
+            <p>{media === "video" ? "使用 multipart/form-data 的 video 字段上传 MP4、MOV、AVI、MKV、WebM、FLV 或 WMV，单文件不超过 200 MB。" : "使用 multipart/form-data 的 image 字段上传图片。"}相同的 Idempotency-Key 与文件可安全重试，不会重复创建任务。</p>
+            {media === "image" && <div className="developer-mode-selector" role="group" aria-label="示例检测模式"><button type="button" aria-pressed={mode === "fast"} className={mode === "fast" ? "is-active" : ""} onClick={() => onModeChange("fast")}><Gauge size={16} /><span><strong>快速检测</strong><small>真实性分析 + 水印证据</small></span></button><button type="button" aria-pressed={mode === "swarm"} className={mode === "swarm" ? "is-active" : ""} onClick={() => onModeChange("swarm")}><ShieldCheck size={16} /><span><strong>Swarm 多源复核</strong><small>API 参数：swarm</small></span></button></div>}
+          </section>
           <section className="developer-code-section"><header><div className="developer-language-tabs" role="tablist" aria-label="示例代码语言" onKeyDown={moveTabFocus}>{(Object.keys(LANGUAGE_LABELS) as CodeLanguage[]).map((item) => <button id={`developer-language-${item}`} type="button" role="tab" aria-selected={language === item} aria-controls="developer-code-panel" tabIndex={language === item ? 0 : -1} key={item} className={language === item ? "is-active" : ""} onClick={() => onLanguageChange(item)}>{LANGUAGE_LABELS[item]}</button>)}</div><button type="button" onClick={() => void onCopy(code, "code")}>{copied === "code" ? <Check size={15} /> : <Copy size={15} />}{copied === "code" ? "已复制" : "复制"}</button></header><pre id="developer-code-panel" role="tabpanel" aria-labelledby={`developer-language-${language}`} tabIndex={0}><code>{code}</code></pre></section>
-          <section id="poll-task"><p className="developer-method-line"><span className="get">GET</span><code>/api/openapi/v1/image-detections/{'{task_id}'}</code></p><h3>查询任务状态</h3><p>建议从 1.5 秒间隔开始轮询，并逐步放慢；收到 429 时遵守 Retry-After。终态为 success、failed 或 rejected，只有 success 会完成额度结算。</p><div className="developer-response-grid"><div><small>status</small><code>queued · running · success · failed · rejected</code></div><div><small>billing.status</small><code>reserved · settled · released</code></div></div></section>
-          <section id="download-report"><p className="developer-method-line"><span className="get">GET</span><code>/api/openapi/v1/image-detections/{'{task_id}'}/report</code></p><h3>下载 PDF 报告</h3><p>任务成功后可下载报告。报告与任务都按开发者账号隔离，轮换 Key 后仍可使用同账号的新 Key 访问。</p></section>
+          <section id="poll-task"><p className="developer-method-line"><span className="get">GET</span><code>/api/openapi/v1/{resource}/{'{task_id}'}</code></p><h3>查询任务状态</h3><p>建议从 1.5 秒间隔开始轮询，并逐步放慢；收到 429 时遵守 Retry-After。终态为 success、failed 或 rejected，结果位于 result 字段。</p><div className="developer-response-grid"><div><small>status</small><code>queued · running · success · failed · rejected</code></div><div><small>{media === "video" ? "result.evidence" : "billing.status"}</small><code>{media === "video" ? "sampledFrames · keyEvidence · limitations" : "reserved · settled · released"}</code></div></div></section>
+          <section id="download-report"><p className="developer-method-line"><span className="get">GET</span><code>/api/openapi/v1/{resource}/{'{task_id}'}/report</code></p><h3>下载 PDF 报告</h3><p>任务成功后可下载{mediaLabel}报告。报告与任务均按开发者账号隔离，调用此接口还需要 reports 权限。</p></section>
+          <section id="read-media"><p className="developer-method-line"><span className="get">GET</span><code>/api/openapi/v1/{resource}/{'{task_id}'}/media</code></p><h3>读取原{mediaLabel}</h3><p>{media === "video" ? "支持 HTTP Range，可直接用于网页播放器预览或分段下载。" : "返回任务提交的原始图像，可用于结果复核与证据展示。"}必须使用创建任务账号下具备对应检测权限的 API Key。</p></section>
           <section id="agent-skill" className="developer-skill-section"><span><Sparkles size={22} /></span><div><h3>让 Agent 直接使用鉴伪能力</h3><p>复制一句安装指令，即可让 Claude Code、Codex、Cursor、OpenClaw 等 Agent 提交图片、解释证据并下载报告。</p><code>HUIJIAN_API_KEY=rg_sk_...</code></div><button type="button" onClick={onOpenSkill}>查看接入方式 <ChevronRight size={15} /></button></section>
-          <section className="developer-endpoint-note"><SquareTerminal size={18} /><div><strong>完整端点</strong><code>{endpoint}</code></div></section>
+          <section className="developer-endpoint-note"><SquareTerminal size={18} /><div><strong>当前创建端点</strong><code>{selectedEndpoint}</code></div></section>
         </div>
       </div>
     </div>

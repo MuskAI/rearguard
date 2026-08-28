@@ -107,7 +107,12 @@ DEVELOPER_API_KEY_MAX_TTL_SECONDS = max(
     int(os.environ.get("REALGUARD_DEVELOPER_API_KEY_MAX_TTL_SECONDS", str(365 * 86400))),
 )
 DEVELOPER_API_KEY_DEFAULT_SCOPES = "image:fast"
-DEVELOPER_API_KEY_ALLOWED_SCOPES = frozenset({"image:fast", "image:swarm", "reports"})
+DEVELOPER_API_KEY_ALLOWED_SCOPES = frozenset({
+    "image:fast",
+    "image:swarm",
+    "video:detect",
+    "reports",
+})
 DEVELOPER_AUTH_SECRET = os.environ.get("REALGUARD_DEVELOPER_AUTH_SECRET", "").strip()
 DEVELOPER_IDEMPOTENCY_SECRET = os.environ.get(
     "REALGUARD_DEVELOPER_IDEMPOTENCY_SECRET", ""
@@ -620,8 +625,8 @@ def _developer_key_options(payload, *, fallback_name="Default key", fallback_sco
     invalid_scopes = sorted(set(scopes) - DEVELOPER_API_KEY_ALLOWED_SCOPES)
     if invalid_scopes:
         return None, f"不支持的权限范围: {', '.join(invalid_scopes)}"
-    if not any(scope in {"image:fast", "image:swarm"} for scope in scopes):
-        return None, "请至少启用快速检测或 Swarm 检测权限"
+    if not any(scope in {"image:fast", "image:swarm", "video:detect"} for scope in scopes):
+        return None, "请至少启用一种图像或视频检测权限"
     expiry_raw = payload.get("expiresAt", payload.get("expires_at", fallback_expiry))
     expires_at, expiry_error = _normalize_developer_expiry(expiry_raw)
     if expiry_error:

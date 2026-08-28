@@ -118,6 +118,7 @@ CREATE TABLE IF NOT EXISTS `developer_detection_tasks` (
   `account_uuid` CHAR(36) NOT NULL,
   `key_id` BIGINT NOT NULL,
   `mode` VARCHAR(16) NOT NULL,
+  `media_type` VARCHAR(16) NOT NULL DEFAULT 'image',
   `filename` VARCHAR(255) NOT NULL,
   `mime_type` VARCHAR(127) NOT NULL DEFAULT 'application/octet-stream',
   `execution_filename` VARCHAR(255) NULL,

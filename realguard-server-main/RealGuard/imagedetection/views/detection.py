@@ -4221,7 +4221,7 @@ def _video_evidence_for_record(item):
     return _normalize_video_evidence(stored, item or {}, meta)
 
 
-def _insert_remote_video_record(data, backend_openid, phone, user_info):
+def _insert_remote_video_record(data, backend_openid, phone, user_info, developer_task_id=None):
     """Mirror video metadata locally while the source media remains on the GPU server."""
     data = data or {}
     raw_filename = str(data.get('filename') or '').strip()
@@ -4239,9 +4239,10 @@ def _insert_remote_video_record(data, backend_openid, phone, user_info):
         """
         INSERT INTO video_data
             (createtime, filename, openid, phone, Userid, owner_account_uuid,
+             developer_task_id,
              fake, d3_std, final_label, confidence, encoder, frame_count,
              explanation, file_size, duration, resolution, video_format)
-        VALUES (NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             filename,
@@ -4249,6 +4250,7 @@ def _insert_remote_video_record(data, backend_openid, phone, user_info):
             phone,
             _detection_database_user_id(phone, backend_openid),
             _account_uuid(user_info) or None,
+            str(developer_task_id or '').strip() or None,
             fake_pct,
             _to_float(d3_std, 0.0) if d3_std is not None else None,
             final_label,

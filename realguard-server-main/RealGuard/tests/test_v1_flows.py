@@ -2923,7 +2923,8 @@ def test_remote_video_result_is_archived_as_metadata_only(monkeypatch):
     assert params[0] == "8bd475f9f66c4b98a847.mp4"
     assert params[3] == 17
     assert params[4] == ACCOUNT_UUID
-    assert params[7] == "真实视频"
+    assert params[5] is None
+    assert params[8] == "真实视频"
 
 
 def test_video_evidence_normalization_keeps_auditable_timeline():

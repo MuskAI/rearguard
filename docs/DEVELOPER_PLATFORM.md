@@ -1,10 +1,11 @@
 # 慧鉴AI 开发者平台交接
 
-## 一期范围
+## 开放范围
 
-- 只开放图像鉴伪。
+- 开放图像与视频鉴伪。
 - `fast`：主鉴伪模型与可见水印检测。
 - `swarm`：多源专家交叉复核。
+- `video`：视频抽帧与时序联合分析，单文件不超过 200 MB。
 - 每个登录账号一次性赠送 100 次成功检测。
 - 快速与 Swarm 独立定价；一期仅支持管理员手工充值，不接在线支付。
 - cURL、Python、Node.js/TypeScript、Java、Go 示例在登录后的“接入文档”页提供。
@@ -15,7 +16,7 @@
 ```text
 第三方服务
   -> Nginx 上传限流
-  -> Flask /api/openapi/v1/image-detections
+  -> Flask /api/openapi/v1/{image|video}-detections
   -> API Key、有效期、IP 白名单、scope 校验
   -> 账号额度原子预占
   -> fast 或 swarm 检测
@@ -47,6 +48,17 @@ image=<binary>
 mode=fast|swarm
 ```
 
+视频任务：
+
+```http
+POST /api/openapi/v1/video-detections
+Content-Type: multipart/form-data
+
+video=<binary>
+```
+
+视频接口接受 `mp4`、`mov`、`avi`、`mkv`、`webm`、`flv` 和 `wmv`。API Key 需要 `video:detect` scope；下载任意 PDF 报告还需要 `reports` scope。
+
 必须提供请求头 `Idempotency-Key`，长度为 8 到 128 个可见 ASCII 字符。同一账号、模式和文件可安全重试；同一键用于不同内容返回 `409`。每个新的业务请求应生成一个 UUID，并在网络重试时复用它。
 
 查询与报告：
@@ -54,9 +66,14 @@ mode=fast|swarm
 ```text
 GET /api/openapi/v1/image-detections/{task_id}
 GET /api/openapi/v1/image-detections/{task_id}/report
+GET /api/openapi/v1/image-detections/{task_id}/media
+
+GET /api/openapi/v1/video-detections/{task_id}
+GET /api/openapi/v1/video-detections/{task_id}/report
+GET /api/openapi/v1/video-detections/{task_id}/media
 ```
 
-任务只对所属开发者账号可见。不同账号统一返回 `404`，不泄露任务是否存在。报告为 PDF。
+任务只对所属开发者账号可见。不同账号统一返回 `404`，不泄露任务是否存在。报告为 PDF；视频媒体接口支持 HTTP Range，可直接用于播放器预览。
 
 ## 状态与结算
 
@@ -130,7 +147,7 @@ POST /api/admin/developer/accounts/{user_id}/adjust
 - `402`：赠送额度耗尽且付费未启用，或余额不足。
 - `403`：scope 不足或来源 IP 不在白名单。
 - `409`：幂等键冲突，或任务尚未完成时请求报告。
-- `413`：图片超过 25 MB。
+- `413`：图片超过 25 MB，或视频超过 200 MB。
 - `429`：Nginx 上传限流；客户端应退避，不要重复创建任务。
 
 ## 发布验证
@@ -138,6 +155,7 @@ POST /api/admin/developer/accounts/{user_id}/adjust
 ```bash
 curl -sS -o /dev/null -w '%{http_code}\n' https://www.rrreal.cn/api/developer/account
 curl -sS -o /dev/null -w '%{http_code}\n' https://www.rrreal.cn/api/openapi/v1/image-detections
+curl -sS -o /dev/null -w '%{http_code}\n' https://www.rrreal.cn/api/openapi/v1/video-detections
 ```
 
-未登录/未携带 Key 时两项都应返回 `401`。之后使用测试账号创建临时 Key，分别完成一次 `fast` 与 `swarm`，确认任务成功、报告为 `application/pdf`、跨账号任务返回 `404`，最后撤销临时 Key。
+未登录/未携带 Key 时三项都应返回 `401`。之后使用测试账号创建临时 Key，分别完成一次 `fast`、`swarm` 与视频检测，确认任务成功、报告为 `application/pdf`、视频支持 Range、跨账号任务返回 `404`，最后撤销临时 Key。

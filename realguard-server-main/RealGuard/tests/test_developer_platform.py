@@ -181,12 +181,16 @@ class _BillingCursor:
         if normalized.startswith("SELECT balance_fen FROM developer_accounts"):
             self.row = {"balance_fen": self.store.account["balance_fen"]}
             return 1
-        if normalized.startswith("SELECT user_id, key_id, mode, status"):
+        if (
+            normalized.startswith("SELECT user_id, key_id, mode,")
+            and "FROM developer_detection_tasks" in normalized
+        ):
             reservation = self.store.reservations[params[0]]
             self.row = {
                 "user_id": reservation["user_id"],
                 "key_id": reservation["key_id"],
                 "mode": reservation["mode"],
+                "media_type": "image",
                 "status": "success",
                 "prompt_tokens": 0,
                 "completion_tokens": 0,
@@ -933,10 +937,11 @@ def test_concurrent_idempotent_detection_creates_and_reserves_once(client, monke
     def execute(statement, params=None, fetch=True):
         normalized = " ".join(statement.split())
         if normalized.startswith("INSERT INTO developer_detection_tasks"):
-            rows[params[12]] = {
+            rows[params[13]] = {
                 "task_id": params[0],
                 "mode": params[4],
-                "request_sha256": params[8],
+                "media_type": params[5],
+                "request_sha256": params[9],
                 "status": "preparing",
             }
             return 1
@@ -1035,7 +1040,11 @@ def test_finish_task_settles_success_and_releases_failure(monkeypatch):
         lambda task_id, message, lease_owner=None: terminalized.append((task_id, message, lease_owner)) or True,
     )
     monkeypatch.setattr(platform, "excute_sql", lambda statement, params=None, fetch=True: sql.append((statement, params)) or 1)
-    monkeypatch.setattr(platform, "_public_result_payload", lambda payload, mode: payload)
+    monkeypatch.setattr(
+        platform,
+        "_public_result_payload",
+        lambda payload, mode, media_type="image": payload,
+    )
 
     actor = {"id": 9, "user_id": 1}
     assert platform._finish_task("ok", actor, "fast", {"status": "success", "result": {"itemid": 2}}, 200) is True
@@ -1165,6 +1174,42 @@ def test_public_result_requires_explicit_boolean_true_to_bill():
     assert billable["billable"] is True
 
 
+def test_public_video_result_keeps_binary_label_without_uncalibrated_scores():
+    payload = platform._public_result_payload(
+        {
+            "status": "success",
+            "result": {
+                "itemid": 18,
+                "final_label": "AI生成视频",
+                "fake_percentage": 96.2,
+                "real_percentage": 3.8,
+                "confidence_score": 0.962,
+                "decisionStatus": "review_only",
+                "billable": False,
+            },
+        },
+        "fast",
+        "video",
+    )
+
+    assert payload["result"]["final_label"] == "AI生成视频"
+    assert payload["result"]["fake_percentage"] is None
+    assert payload["result"]["real_percentage"] is None
+    assert payload["result"]["confidence_score"] is None
+    assert payload["decisionStatus"] == "review_only"
+    assert payload["billable"] is False
+
+
+def test_video_usage_is_recorded_under_video_endpoint():
+    endpoint, model = platform._developer_task_usage_identity(
+        {"media_type": "video", "mode": "fast"},
+        review_only=True,
+    )
+
+    assert endpoint == "/api/openapi/v1/video-detections"
+    assert model == "huijian-video-temporal-review-only"
+
+
 def test_usage_and_ledger_storage_failures_never_look_like_zero_usage(client, monkeypatch):
     monkeypatch.setattr(
         platform,
@@ -1210,7 +1255,11 @@ def test_finish_task_reports_failed_billing_release(monkeypatch):
 def test_finish_task_reports_success_with_pending_settlement(monkeypatch):
     monkeypatch.setattr(platform, "_settle_billing", lambda task_id: False)
     monkeypatch.setattr(platform, "excute_sql", lambda *args, **kwargs: 1)
-    monkeypatch.setattr(platform, "_public_result_payload", lambda payload, mode: payload)
+    monkeypatch.setattr(
+        platform,
+        "_public_result_payload",
+        lambda payload, mode, media_type="image": payload,
+    )
 
     assert platform._finish_task(
         "success-pending-billing",
@@ -1470,7 +1519,11 @@ def test_finish_task_never_settles_before_success_is_persisted(monkeypatch):
     settled = []
     monkeypatch.setattr(platform, "_settle_billing", lambda task_id: settled.append(task_id) or True)
     monkeypatch.setattr(platform, "excute_sql", lambda *args, **kwargs: 0)
-    monkeypatch.setattr(platform, "_public_result_payload", lambda payload, mode: payload)
+    monkeypatch.setattr(
+        platform,
+        "_public_result_payload",
+        lambda payload, mode, media_type="image": payload,
+    )
 
     result = platform._finish_task(
         "not-persisted",
@@ -1493,7 +1546,11 @@ def test_finish_task_requires_the_same_unexpired_lease(monkeypatch):
         lambda statement, params=None, fetch=True: statements.append((statement, params)) or 0,
     )
     monkeypatch.setattr(platform, "_settle_billing", lambda task_id: settled.append(task_id) or True)
-    monkeypatch.setattr(platform, "_public_result_payload", lambda payload, mode: payload)
+    monkeypatch.setattr(
+        platform,
+        "_public_result_payload",
+        lambda payload, mode, media_type="image": payload,
+    )
 
     result = platform._finish_task(
         "stale-worker",
@@ -2553,6 +2610,42 @@ def test_task_payload_rewrites_browser_only_media_link(monkeypatch):
     assert payload["links"]["media"] == expected
 
 
+def test_video_task_payload_uses_video_resource_and_media_link(monkeypatch):
+    monkeypatch.setattr(platform.admin_state, "get_detection_job", lambda task_id: None)
+    monkeypatch.setattr(platform, "_reservation_payload", lambda task_id: {"status": "released"})
+    row = {
+        "task_id": "task-video",
+        "mode": "fast",
+        "media_type": "video",
+        "filename": "sample.mp4",
+        "status": "success",
+        "result_item_id": 84,
+        "result_json": {
+            "status": "success",
+            "decisionStatus": "review_only",
+            "billable": False,
+            "result": {
+                "itemid": 84,
+                "video_url": "/api/media/video/84",
+                "decisionStatus": "review_only",
+                "billable": False,
+            },
+        },
+    }
+
+    payload = platform._task_payload(row)
+
+    expected = "/api/openapi/v1/video-detections/task-video/media"
+    assert payload["object"] == "video_detection"
+    assert payload["mediaType"] == "video"
+    assert payload["result"]["video_url"] == expected
+    assert payload["links"] == {
+        "self": "/api/openapi/v1/video-detections/task-video",
+        "report": "/api/openapi/v1/video-detections/task-video/report",
+        "media": expected,
+    }
+
+
 def test_task_payload_hides_result_while_settlement_is_pending(monkeypatch):
     monkeypatch.setattr(platform.admin_state, "get_detection_job", lambda task_id: None)
     monkeypatch.setattr(platform, "_reservation_payload", lambda task_id: {"status": "reserved"})
@@ -2580,7 +2673,11 @@ def test_openapi_media_download_uses_api_key_owner_and_mode_scope(client, monkey
     monkeypatch.setattr(platform, "_developer_key_required", lambda: (actor, None))
     monkeypatch.setattr(platform, "_task_row_for_user", lambda task_id, user_id, account_uuid: row)
     monkeypatch.setattr(platform, "_task_settlement_error", lambda task_id, *_args: None)
-    monkeypatch.setattr(platform, "_owned_detection_item", lambda current_actor, item_id: item)
+    monkeypatch.setattr(
+        platform,
+        "_owned_detection_item",
+        lambda current_actor, item_id, media_type="image": item,
+    )
     monkeypatch.setattr(
         platform,
         "_serve_detection_media_item",
@@ -2592,6 +2689,50 @@ def test_openapi_media_download_uses_api_key_owner_and_mode_scope(client, monkey
 
     assert status == 200
     assert payload == {"kind": "image", "itemid": 42}
+
+
+def test_openapi_video_media_uses_video_scope_and_video_storage(client, monkeypatch):
+    actor = {
+        "user_id": 7,
+        "account_uuid": "00000000-0000-4000-8000-000000000007",
+        "phone": "13800000007",
+        "openid": "openid-7",
+        "scopes": "video:detect",
+    }
+    row = {
+        "task_id": "task-video-media",
+        "mode": "fast",
+        "media_type": "video",
+        "status": "success",
+        "result_item_id": 84,
+    }
+    item = {"itemid": 84, "filename": "sample.mp4", "phone": "13800000007"}
+    observed = {}
+    monkeypatch.setattr(platform, "_developer_key_required", lambda: (actor, None))
+    monkeypatch.setattr(platform, "_task_row_for_user", lambda *_args: row)
+    monkeypatch.setattr(platform, "_task_settlement_error", lambda *_args: None)
+    monkeypatch.setattr(
+        platform,
+        "_owned_detection_item",
+        lambda current_actor, item_id, media_type="image": observed.update(
+            {"media_type": media_type}
+        )
+        or item,
+    )
+    monkeypatch.setattr(
+        platform,
+        "_serve_detection_media_item",
+        lambda kind, current_item: ({"kind": kind, "itemid": current_item["itemid"]}, 200),
+    )
+
+    with client.application.test_request_context(
+        "/api/openapi/v1/video-detections/task-video-media/media"
+    ):
+        payload, status = platform.get_image_detection_media("task-video-media")
+
+    assert status == 200
+    assert observed["media_type"] == "video"
+    assert payload == {"kind": "video", "itemid": 84}
 
 
 def test_openapi_media_download_hides_foreign_task(client, monkeypatch):
@@ -2696,11 +2837,124 @@ def test_developer_request_reliably_enqueues_without_daemon_thread(client, monke
     assert response.status_code == 202
     assert response.get_json()["status"] == "queued"
     assert (platform.DEVELOPER_SPOOL_ROOT / "job_reliable.upload").is_file()
-    assert inserted_params[0][7] == "developer-job_reliable.png"
-    context = __import__("json").loads(inserted_params[0][11])
+    assert inserted_params[0][8] == "developer-job_reliable.png"
+    context = __import__("json").loads(inserted_params[0][12])
     assert context["actor"]["account_uuid"] == actor["account_uuid"]
     assert context["user_info"]["account_uuid"] == actor["account_uuid"]
     assert job_updates[-1][1]["status"] == "queued"
+
+
+def test_developer_video_request_streams_to_spool_and_enqueues(client, monkeypatch, tmp_path):
+    actor = {
+        "id": 12,
+        "user_id": 8,
+        "account_uuid": "83d77292-49e5-4f6d-b771-c525aa4d321f",
+        "scopes": ["video:detect"],
+        "username": "video-developer",
+        "phone": "13800000008",
+        "openid": "openid-8",
+    }
+    video_bytes = b"mock-mp4-payload" * 32
+    inserted_params = []
+    created_kinds = []
+    monkeypatch.setattr(platform, "DEVELOPER_SPOOL_ROOT", tmp_path / "spool")
+    monkeypatch.setattr(platform, "_developer_key_required", lambda: (actor, None))
+    monkeypatch.setattr(platform, "_ensure_developer_platform_tables", lambda: True)
+    monkeypatch.setattr(platform, "_maybe_reconcile_expired_tasks", lambda: 0)
+    monkeypatch.setattr(platform, "_idempotent_task", lambda *_: None)
+    monkeypatch.setattr(platform, "_queue_capacity_error", lambda *_: None)
+    monkeypatch.setattr(platform, "_queue_submission_guard", lambda *_: nullcontext())
+    monkeypatch.setattr(platform, "_reserve_task_daily_quota", lambda *_: (None, None, None))
+    monkeypatch.setattr(platform, "_reserve_billing", lambda *_: {"status": "reserved"})
+
+    def create_job(_user, _filename, *, kind, **_kwargs):
+        created_kinds.append(kind)
+        return {"id": "job_video_reliable"}
+
+    monkeypatch.setattr(platform.admin_state, "create_detection_job", create_job)
+    monkeypatch.setattr(platform.admin_state, "update_detection_job", lambda *_args: None)
+    monkeypatch.setattr(platform.admin_state, "get_detection_job", lambda *_: None)
+    monkeypatch.setattr(platform, "_reservation_payload", lambda *_: {"status": "reserved"})
+    monkeypatch.setattr(
+        platform,
+        "_task_row_for_user",
+        lambda *_: {
+            "task_id": "job_video_reliable",
+            "mode": "fast",
+            "media_type": "video",
+            "filename": "sample.mp4",
+            "status": "queued",
+        },
+    )
+
+    def execute(statement, params=None, fetch=True):
+        normalized = " ".join(statement.split())
+        if normalized.startswith("INSERT INTO developer_detection_tasks"):
+            inserted_params.append(params)
+            return 1
+        if normalized.startswith("UPDATE developer_detection_tasks SET status = 'queued'"):
+            return 1
+        raise AssertionError(f"unexpected SQL: {normalized}")
+
+    monkeypatch.setattr(platform, "excute_sql", execute)
+
+    response = client.post(
+        "/api/openapi/v1/video-detections",
+        headers={"Idempotency-Key": "video-enqueue-request"},
+        data={"video": (BytesIO(video_bytes), "sample.mp4")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 202
+    assert response.get_json()["object"] == "video_detection"
+    assert created_kinds == ["video"]
+    assert inserted_params[0][5] == "video"
+    assert inserted_params[0][8] == "developer-job_video_reliable.mp4"
+    assert inserted_params[0][11] == len(video_bytes)
+    assert (platform.DEVELOPER_SPOOL_ROOT / "job_video_reliable.upload").read_bytes() == video_bytes
+
+
+def test_video_task_is_hidden_on_image_route_and_visible_on_video_route(client, monkeypatch):
+    actor = {
+        "id": 12,
+        "user_id": 8,
+        "account_uuid": "83d77292-49e5-4f6d-b771-c525aa4d321f",
+        "scopes": ["video:detect"],
+    }
+    row = {
+        "task_id": "job_video_route",
+        "mode": "fast",
+        "media_type": "video",
+        "filename": "sample.mp4",
+        "status": "queued",
+    }
+    monkeypatch.setattr(platform, "_developer_key_required", lambda: (actor, None))
+    monkeypatch.setattr(platform, "_maybe_reconcile_expired_tasks", lambda: 0)
+    monkeypatch.setattr(platform, "_task_row_for_user", lambda *_args: row)
+    monkeypatch.setattr(platform.admin_state, "get_detection_job", lambda *_args: None)
+    monkeypatch.setattr(platform, "_reservation_payload", lambda *_args: {"status": "reserved"})
+
+    image_response = client.get("/api/openapi/v1/image-detections/job_video_route")
+    video_response = client.get("/api/openapi/v1/video-detections/job_video_route")
+
+    assert image_response.status_code == 404
+    assert video_response.status_code == 200
+    assert video_response.get_json()["object"] == "video_detection"
+
+
+def test_openapi_document_describes_video_upload_status_report_and_media(client):
+    with client.application.test_request_context("/api/developer/openapi.json"):
+        document = platform._openapi_document()
+
+    assert document["info"]["version"] == "1.1.0"
+    paths = document["paths"]
+    create_schema = paths["/video-detections"]["post"]["requestBody"]["content"]
+    create_schema = create_schema["multipart/form-data"]["schema"]
+    assert create_schema["required"] == ["video"]
+    assert create_schema["properties"]["video"] == {"type": "string", "format": "binary"}
+    assert "/video-detections/{task_id}" in paths
+    assert "/video-detections/{task_id}/report" in paths
+    assert "206" in paths["/video-detections/{task_id}/media"]["get"]["responses"]
 
 
 def test_worker_executes_verified_spool_and_cleans_terminal_file(monkeypatch, tmp_path):

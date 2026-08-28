@@ -2048,6 +2048,26 @@ test("开发者平台在手机横屏仍可滚动访问导航", async ({ page }) 
   await expectNoHorizontalOverflow(page);
 });
 
+test("开发者接入文档可切换视频接口并生成可复制示例", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await installBaseMocks(page, true);
+  await installDeveloperMocks(page);
+  await page.goto("/?developer=1&developerTab=docs");
+
+  await expect(page.getByRole("heading", { name: "图像与视频鉴伪接入" })).toBeVisible();
+  await page.getByRole("button", { name: /视频鉴伪/ }).click();
+  await expect(page.getByText("/api/openapi/v1/video-detections", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText(/单文件不超过 200 MB/)).toBeVisible();
+
+  const codePanel = page.getByRole("tabpanel");
+  await expect(codePanel).toContainText('-F "video=@./sample.mp4"');
+  await expect(codePanel).not.toContainText('-F "mode=');
+  await page.getByRole("tab", { name: "Python" }).click();
+  await expect(codePanel).toContainText("/api/openapi/v1/video-detections");
+  await expect(codePanel).toContainText('files={"video": media_file}');
+  await expectNoHorizontalOverflow(page);
+});
+
 test("Agent Skill 提供一句话接入、使用示例与完整客户端标识", async ({ page, request }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await installBaseMocks(page, true);

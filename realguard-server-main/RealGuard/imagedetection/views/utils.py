@@ -270,6 +270,15 @@ def apply_account_identity_schema():
                 cursor.execute(
                     "ALTER TABLE `data` ADD KEY `idx_data_developer_task` (`developer_task_id`)"
                 )
+            if not _column_exists(cursor, 'video_data', 'developer_task_id'):
+                cursor.execute(
+                    "ALTER TABLE `video_data` ADD COLUMN `developer_task_id` VARCHAR(64) NULL "
+                    "COMMENT '开发者任务结算可见性标识' AFTER `owner_account_uuid`"
+                )
+            if not _index_exists(cursor, 'video_data', 'idx_video_data_developer_task'):
+                cursor.execute(
+                    "ALTER TABLE `video_data` ADD KEY `idx_video_data_developer_task` (`developer_task_id`)"
+                )
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS `legacy_record_governance` (
@@ -365,6 +374,8 @@ def apply_account_identity_schema():
                     raise RuntimeError(f'image_detection.{table} 缺少属主索引')
             if not _column_exists(cursor, 'data', 'developer_task_id'):
                 raise RuntimeError('image_detection.data 缺少 developer_task_id')
+            if not _column_exists(cursor, 'video_data', 'developer_task_id'):
+                raise RuntimeError('image_detection.video_data 缺少 developer_task_id')
         detection_conn.commit()
         return changes
     except Exception:

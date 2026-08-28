@@ -197,9 +197,11 @@ CREATE TABLE IF NOT EXISTS `video_data` (
   `phone` VARCHAR(32) NULL,
   `Userid` INT NULL,
   `owner_account_uuid` CHAR(36) NULL COMMENT 'system.user不可变账号标识',
+  `developer_task_id` VARCHAR(64) NULL COMMENT '开发者任务结算可见性标识',
   PRIMARY KEY (`itemid`),
   KEY `idx_video_data_phone_ct` (`phone`, `createtime`),
-  KEY `idx_video_data_owner_uuid_ct` (`owner_account_uuid`, `createtime`)
+  KEY `idx_video_data_owner_uuid_ct` (`owner_account_uuid`, `createtime`),
+  KEY `idx_video_data_developer_task` (`developer_task_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='视频鉴伪检测记录';
 
 CREATE TABLE IF NOT EXISTS `video_evidence` (

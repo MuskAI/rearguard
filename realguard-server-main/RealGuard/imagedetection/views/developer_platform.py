@@ -18,7 +18,7 @@ import requests
 from PIL import Image, UnidentifiedImageError
 from flask import Blueprint, Response, g, has_request_context, jsonify, request
 
-from imagedetection.decision_labels import binary_final_label
+from imagedetection.decision_labels import binary_final_label, binary_video_final_label
 from imagedetection.views import admin_state, reporting
 from imagedetection.views.admin import _admin_required
 from imagedetection.views.api import (
@@ -67,6 +67,10 @@ DEVELOPER_MAX_IMAGE_BYTES = max(
 DEVELOPER_MAX_IMAGE_PIXELS = max(
     1_000_000,
     int(os.environ.get("REALGUARD_DEVELOPER_MAX_IMAGE_PIXELS", "24000000")),
+)
+DEVELOPER_MAX_VIDEO_BYTES = max(
+    1024 * 1024,
+    int(os.environ.get("REALGUARD_DEVELOPER_MAX_VIDEO_BYTES", str(200 * 1024 * 1024))),
 )
 DEVELOPER_FAST_PRICE_FEN = max(0, int(os.environ.get("REALGUARD_DEVELOPER_FAST_PRICE_FEN", "0")))
 DEVELOPER_SWARM_PRICE_FEN = max(0, int(os.environ.get("REALGUARD_DEVELOPER_SWARM_PRICE_FEN", "0")))
@@ -129,7 +133,7 @@ WEB_GUEST_DAILY_GLOBAL_LIMIT = max(
     int(os.environ.get("REALGUARD_WEB_GUEST_DAILY_GLOBAL_LIMIT", "500")),
 )
 DEVELOPER_SPOOL_MAX_BYTES = max(
-    DEVELOPER_MAX_IMAGE_BYTES,
+    max(DEVELOPER_MAX_IMAGE_BYTES, DEVELOPER_MAX_VIDEO_BYTES),
     int(os.environ.get("REALGUARD_DEVELOPER_SPOOL_MAX_BYTES", str(2 * 1024 * 1024 * 1024))),
 )
 DEVELOPER_SPOOL_ORPHAN_GRACE_SECONDS = max(
@@ -449,11 +453,80 @@ def _write_task_spool(task_id, image_bytes):
         raise TaskSpoolError(f"failed to persist task upload: {exc}") from exc
 
 
-def _read_task_spool(row):
+def _write_task_spool_stream(task_id, stream, expected_size, expected_digest):
+    """Persist a seekable large upload without loading it into Web-server memory."""
+    _ensure_spool_root()
+    spool_name = f"{task_id}.upload"
+    final_path = _spool_file_path(spool_name)
+    temp_path = _spool_file_path(f".{task_id}.{uuid.uuid4().hex}.tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = None
+    written = 0
+    digest = hashlib.sha256()
+    try:
+        stream.seek(0)
+        fd = os.open(temp_path, flags, 0o600)
+        while True:
+            chunk = stream.read(1024 * 1024)
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > DEVELOPER_MAX_VIDEO_BYTES:
+                raise TaskSpoolError("video upload exceeds the configured size limit")
+            digest.update(chunk)
+            view = memoryview(chunk)
+            offset = 0
+            while offset < len(view):
+                count = os.write(fd, view[offset:])
+                if count <= 0:
+                    raise OSError("short write while persisting task upload")
+                offset += count
+        if written != expected_size or digest.hexdigest() != expected_digest:
+            raise TaskSpoolError("video upload changed while it was being persisted")
+        os.fsync(fd)
+        os.close(fd)
+        fd = None
+        os.link(temp_path, final_path, follow_symlinks=False)
+        temp_path.unlink()
+        os.chmod(final_path, 0o600)
+        directory_fd = os.open(
+            DEVELOPER_SPOOL_ROOT,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+        )
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        stream.seek(0)
+        return spool_name
+    except Exception as exc:
+        if fd is not None:
+            os.close(fd)
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        try:
+            stream.seek(0)
+        except (OSError, ValueError):
+            pass
+        if isinstance(exc, TaskSpoolError):
+            raise
+        raise TaskSpoolError(f"failed to persist task upload: {exc}") from exc
+
+
+def _verified_task_spool_path(row):
     spool_path = _spool_file_path(row.get("spool_path"))
     expected_size = int(row.get("spool_size") or -1)
     expected_digest = str(row.get("request_sha256") or "").lower()
-    if expected_size < 1 or expected_size > DEVELOPER_MAX_IMAGE_BYTES:
+    max_bytes = (
+        DEVELOPER_MAX_VIDEO_BYTES
+        if str(row.get("media_type") or "image") == "video"
+        else DEVELOPER_MAX_IMAGE_BYTES
+    )
+    if expected_size < 1 or expected_size > max_bytes:
         raise TaskSpoolError("task spool size is invalid")
     if len(expected_digest) != 64:
         raise TaskSpoolError("task spool digest is invalid")
@@ -469,22 +542,29 @@ def _read_task_spool(row):
         _validate_private_spool_stat(file_stat, "task spool file")
         if file_stat.st_size != expected_size:
             raise TaskSpoolError("task spool size verification failed")
-        chunks = []
-        remaining = expected_size + 1
-        while remaining > 0:
+        digest = hashlib.sha256()
+        remaining = expected_size
+        while remaining:
             chunk = os.read(fd, min(1024 * 1024, remaining))
             if not chunk:
                 break
-            chunks.append(chunk)
+            digest.update(chunk)
             remaining -= len(chunk)
     finally:
         os.close(fd)
-    image_bytes = b"".join(chunks)
-    if len(image_bytes) != expected_size:
+    if remaining:
         raise TaskSpoolError("task spool length verification failed")
-    if hashlib.sha256(image_bytes).hexdigest() != expected_digest:
+    if digest.hexdigest() != expected_digest:
         raise TaskSpoolError("task spool SHA-256 verification failed")
-    return image_bytes
+    return spool_path
+
+
+def _read_task_spool(row):
+    spool_path = _verified_task_spool_path(row)
+    try:
+        return spool_path.read_bytes()
+    except OSError as exc:
+        raise TaskSpoolError(f"task spool file is unavailable: {exc}") from exc
 
 
 @contextmanager
@@ -1118,6 +1198,7 @@ def _ensure_developer_platform_tables():
               account_uuid CHAR(36) NOT NULL,
               key_id BIGINT NOT NULL,
               mode VARCHAR(16) NOT NULL,
+              media_type VARCHAR(16) NOT NULL DEFAULT 'image',
               filename VARCHAR(255) NOT NULL,
               mime_type VARCHAR(127) NOT NULL DEFAULT 'application/octet-stream',
               execution_filename VARCHAR(255) NULL,
@@ -1340,6 +1421,11 @@ def _ensure_task_lease_schema():
             )
             columns = {str(row.get("COLUMN_NAME") or "").lower() for row in cursor.fetchall()}
             additions = (
+                (
+                    "media_type",
+                    "ALTER TABLE developer_detection_tasks ADD COLUMN media_type VARCHAR(16) "
+                    "NOT NULL DEFAULT 'image' AFTER mode",
+                ),
                 (
                     "account_uuid",
                     "ALTER TABLE developer_detection_tasks ADD COLUMN account_uuid CHAR(36) NULL AFTER user_id",
@@ -2140,6 +2226,20 @@ def _reserve_billing(user_id, key_id, task_id, mode):
         conn.close()
 
 
+def _developer_task_usage_identity(task, *, review_only=False):
+    media_type = str((task or {}).get("media_type") or "image")
+    mode = str((task or {}).get("mode") or "fast")
+    if media_type == "video":
+        endpoint = "/api/openapi/v1/video-detections"
+        model_version = "huijian-video-temporal"
+    else:
+        endpoint = f"/api/openapi/v1/image-detections:{mode}"
+        model_version = f"huijian-image-{mode}"
+    if review_only:
+        model_version = f"{model_version}-review-only"
+    return endpoint, model_version
+
+
 def _settle_billing(task_id):
     if not _ensure_developer_platform_tables():
         return False
@@ -2171,7 +2271,7 @@ def _settle_billing(task_id):
             account = cursor.fetchone() or {"free_total": 0, "free_used": 0, "balance_fen": 0}
             cursor.execute(
                 """
-                SELECT user_id, key_id, mode, status,
+                SELECT user_id, key_id, mode, media_type, status,
                        prompt_tokens, completion_tokens, total_tokens,
                        task_id, daily_quota_reserved, daily_quota_day
                 FROM developer_detection_tasks
@@ -2200,6 +2300,7 @@ def _settle_billing(task_id):
                     code="billing_invariant_failed",
                     status_code=503,
                 )
+            usage_endpoint, model_version = _developer_task_usage_identity(usage)
             if reservation.get("source") == "free":
                 cursor.execute(
                     """
@@ -2300,8 +2401,8 @@ def _settle_billing(task_id):
                     task_id,
                     user_id,
                     reservation.get("key_id"),
-                    f"/api/openapi/v1/image-detections:{reservation.get('mode')}",
-                    f"huijian-image-{reservation.get('mode')}",
+                    usage_endpoint,
+                    model_version,
                     max(0, int(usage.get("prompt_tokens") or 0)),
                     max(0, int(usage.get("completion_tokens") or 0)),
                     max(0, int(usage.get("total_tokens") or 0)),
@@ -2418,7 +2519,7 @@ def _release_billing(
             if audit_entry_type:
                 cursor.execute(
                     """
-                    SELECT user_id, key_id, mode, status,
+                    SELECT user_id, key_id, mode, media_type, status,
                            prompt_tokens, completion_tokens, total_tokens,
                            task_id, daily_quota_reserved, daily_quota_day
                     FROM developer_detection_tasks
@@ -2444,6 +2545,10 @@ def _release_billing(
                     (reservation["user_id"],),
                 )
                 account = cursor.fetchone() or {"balance_fen": 0}
+                usage_endpoint, model_version = _developer_task_usage_identity(
+                    usage,
+                    review_only=True,
+                )
                 if not already_released:
                     cursor.execute(
                         """
@@ -2475,8 +2580,8 @@ def _release_billing(
                         task_id,
                         reservation["user_id"],
                         reservation.get("key_id"),
-                        f"/api/openapi/v1/image-detections:{reservation.get('mode')}",
-                        f"huijian-image-{reservation.get('mode')}-review-only",
+                        usage_endpoint,
+                        model_version,
                         max(0, int(usage.get("prompt_tokens") or 0)),
                         max(0, int(usage.get("completion_tokens") or 0)),
                         max(0, int(usage.get("total_tokens") or 0)),
@@ -3454,7 +3559,7 @@ def _task_row_for_user(task_id, user_id, account_uuid):
         return None
     rows = excute_sql(
         """
-        SELECT task_id, user_id, account_uuid, key_id, mode, filename, request_sha256, idempotency_key,
+        SELECT task_id, user_id, account_uuid, key_id, mode, media_type, filename, request_sha256, idempotency_key,
                status, result_item_id, result_json, error_message, created_at, updated_at, completed_at
         FROM developer_detection_tasks
         WHERE task_id = %s AND user_id = %s AND account_uuid = %s
@@ -3470,7 +3575,7 @@ def _idempotent_task(user_id, account_uuid, idempotency_key):
         return None
     rows = excute_sql(
         """
-        SELECT task_id, user_id, account_uuid, key_id, mode, filename, request_sha256, idempotency_key,
+        SELECT task_id, user_id, account_uuid, key_id, mode, media_type, filename, request_sha256, idempotency_key,
                status, result_item_id, result_json, error_message, created_at, updated_at, completed_at
         FROM developer_detection_tasks
         WHERE user_id = %s AND account_uuid = %s AND idempotency_key = %s
@@ -3481,21 +3586,32 @@ def _idempotent_task(user_id, account_uuid, idempotency_key):
     return rows[0] if rows else None
 
 
-def _public_result_payload(payload, mode):
+def _public_result_payload(payload, mode, media_type="image"):
     if not isinstance(payload, dict):
         return None
     public_payload = json.loads(json.dumps(payload, ensure_ascii=False, default=str))
-    if isinstance(public_payload.get("result"), dict):
+    if media_type == "image" and isinstance(public_payload.get("result"), dict):
         public_payload["result"] = detection._public_detection_result(
             public_payload["result"],
             swarm=mode == "swarm",
         )
     result = public_payload.get("result")
     if isinstance(result, dict):
-        result["final_label"] = binary_final_label(
-            result.get("final_label"),
-            result.get("probability", result.get("detector_probability")),
-        )
+        if media_type == "video":
+            result["final_label"] = binary_video_final_label(
+                result.get("final_label"),
+                result.get("fake_percentage"),
+            )
+            # The current video model is not independently calibrated. Keep its
+            # binary label while withholding percentages that look probabilistic.
+            result["fake_percentage"] = None
+            result["real_percentage"] = None
+            result["confidence_score"] = None
+        else:
+            result["final_label"] = binary_final_label(
+                result.get("final_label"),
+                result.get("probability", result.get("detector_probability")),
+            )
         explicit_status = result.get("decisionStatus")
         explicit_billable = result.get("billable")
         review_only = not (
@@ -3506,7 +3622,8 @@ def _public_result_payload(payload, mode):
         result["billable"] = not review_only
         public_payload["decisionStatus"] = decision_status
         public_payload["billable"] = not review_only
-        detection._suppress_review_only_scores(result)
+        if media_type == "image":
+            detection._suppress_review_only_scores(result)
     return public_payload
 
 
@@ -3550,22 +3667,31 @@ def _task_business_rows(task, user_info, *, item_id=None):
     openid = str(user_info.get("openid") or "").strip()
     account_uuid = user_info.get("account_uuid")
 
+    media_type = str(task.get("media_type") or "image")
+    table = "video_data" if media_type == "video" else "data"
+
     def query_rows(owner_where, owner_params):
         item_condition = ""
         params = tuple(owner_params)
         if item_id not in (None, ""):
             item_condition = "itemid = %s AND "
             params = (item_id, *params)
+        if media_type == "video":
+            task_condition = "developer_task_id = %s"
+            task_params = (task.get("task_id"),)
+        else:
+            task_condition = "RIGHT(filename, CHAR_LENGTH(%s)) = %s"
+            task_params = (execution_filename, execution_filename)
         return excute_detection_sql(
             f"""
             SELECT *
-            FROM data
+            FROM {table}
             WHERE {item_condition}({owner_where})
-              AND RIGHT(filename, CHAR_LENGTH(%s)) = %s
+              AND {task_condition}
             ORDER BY itemid ASC
             LIMIT 2
             """,
-            (*params, execution_filename, execution_filename),
+            (*params, *task_params),
         )
 
     owner_where, owner_params = detection._detection_owner_where(
@@ -3628,6 +3754,49 @@ def _recovered_business_payload(record):
     return {"status": "success", "result": result}
 
 
+def _recovered_video_business_payload(record):
+    item_id = record.get("itemid")
+    evidence = detection._video_evidence_for_record(record)
+    technical = evidence.get("technical") if isinstance(evidence, dict) else {}
+    final_label = binary_video_final_label(record.get("final_label"), record.get("fake"))
+    result = {
+        "itemid": item_id,
+        "filename": record.get("filename") or "",
+        "video_url": detection._backend_static_url("video", record),
+        "fake_percentage": None,
+        "real_percentage": None,
+        "final_label": final_label,
+        "confidence_score": None,
+        "confidence": "低",
+        "decisionStatus": "review_only",
+        "decisionAuthority": "none",
+        "reviewRequired": True,
+        "billable": False,
+        "explanation": str(record.get("explanation") or "").strip() or (
+            f"视频抽帧与时序分析给出二元结论“{final_label}”，当前结果仍需结合采样证据复核。"
+        ),
+        "d3_std": record.get("d3_std"),
+        "encoder": record.get("encoder") or "",
+        "frame_count": max(0, int(detection._to_float(record.get("frame_count"), 0))),
+        "evidence": evidence,
+        "meta": {
+            "file_size": record.get("file_size") or "",
+            "duration": record.get("duration"),
+            "resolution": record.get("resolution") or "",
+            "video_format": record.get("video_format") or "",
+            "fps": (technical or {}).get("fps"),
+            "total_frames": (technical or {}).get("totalFrames"),
+            "codec": (technical or {}).get("codec") or "",
+        },
+    }
+    return {
+        "status": "success",
+        "result": result,
+        "decisionStatus": "review_only",
+        "billable": False,
+    }
+
+
 def _normalize_task_result_filename(payload, task):
     if not isinstance(payload, dict):
         return payload
@@ -3651,9 +3820,10 @@ def _record_task_effect(task, user_info, payload):
             f"task {task.get('task_id')} business result cannot be verified by its idempotency key"
         )
     account_uuid = str(user_info.get("account_uuid") or "").strip()
+    table = "video_data" if str(task.get("media_type") or "image") == "video" else "data"
     visibility_updated = excute_detection_sql(
-        """
-        UPDATE data
+        f"""
+        UPDATE {table}
         SET developer_task_id = %s
         WHERE itemid = %s AND owner_account_uuid = %s
           AND (developer_task_id IS NULL OR developer_task_id = %s)
@@ -3663,8 +3833,8 @@ def _record_task_effect(task, user_info, payload):
     )
     if visibility_updated != 1:
         visibility_rows = excute_detection_sql(
-            """
-            SELECT itemid FROM data
+            f"""
+            SELECT itemid FROM {table}
             WHERE itemid = %s AND owner_account_uuid = %s AND developer_task_id = %s
             LIMIT 1
             """,
@@ -3731,7 +3901,8 @@ def _recover_task_effect(task, user_info):
     if effect_item_id not in (None, "") and str(record.get("itemid")) != str(effect_item_id):
         raise TaskRecoveryError(f"task {task.get('task_id')} business result journal is inconsistent")
     if (
-        task.get("mode") == "swarm"
+        str(task.get("media_type") or "image") == "image"
+        and task.get("mode") == "swarm"
         and effect_item_id in (None, "")
         and not str(record.get("explantation") or "").startswith("Swarm 专家会诊完成：")
     ):
@@ -3755,10 +3926,14 @@ def _recover_task_effect(task, user_info):
                 f"task {task.get('task_id')} stored business result is inconsistent"
             )
     if payload is None:
-        raise TaskRecoveryError(
-            f"task {task.get('task_id')} has a business result without a complete response journal; "
-            "automatic recovery is blocked to avoid publishing an ambiguous verdict"
-        )
+        if str(task.get("media_type") or "image") == "video":
+            payload = _recovered_video_business_payload(record)
+            _record_task_effect(task, user_info, payload)
+        else:
+            raise TaskRecoveryError(
+                f"task {task.get('task_id')} has a business result without a complete response journal; "
+                "automatic recovery is blocked to avoid publishing an ambiguous verdict"
+            )
     result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
     decision_status = payload.get("decisionStatus") or result.get("decisionStatus")
     billable = payload.get("billable")
@@ -3797,17 +3972,22 @@ def _task_payload(row):
     result = _stored_task_result(row) if status == "success" else None
     error_message = row.get("error_message") or ((public_job or {}).get("error") if status in {"failed", "rejected"} else "") or ""
     public_result = result.get("result") if isinstance(result, dict) and result.get("status") == "success" else None
-    media_link = f"/api/openapi/v1/image-detections/{task_id}/media"
+    media_type = str(row.get("media_type") or "image")
+    resource = "video-detections" if media_type == "video" else "image-detections"
+    media_link = f"/api/openapi/v1/{resource}/{task_id}/media"
     if isinstance(public_result, dict) and row.get("result_item_id"):
         public_result = json.loads(json.dumps(public_result, ensure_ascii=False, default=str))
-        public_result["image_url"] = media_link
-        if "imageUrl" in public_result:
-            public_result["imageUrl"] = media_link
+        url_field = "video_url" if media_type == "video" else "image_url"
+        public_result[url_field] = media_link
+        camel_url_field = "videoUrl" if media_type == "video" else "imageUrl"
+        if camel_url_field in public_result:
+            public_result[camel_url_field] = media_link
     return {
         "id": task_id,
-        "object": "image_detection",
+        "object": f"{media_type}_detection",
         "status": status,
         "mode": row.get("mode"),
+        "mediaType": media_type,
         "filename": row.get("filename"),
         "progress": max(0, min(progress, 100)),
         "summary": (
@@ -3821,11 +4001,11 @@ def _task_payload(row):
         "result": public_result,
         "decisionStatus": decision_status if status == "success" else None,
         "billable": billable if status == "success" else None,
-        "error": {"code": "detection_failed", "message": error_message} if status in {"failed", "rejected"} else None,
+        "error": {"code": f"{media_type}_detection_failed", "message": error_message} if status in {"failed", "rejected"} else None,
         "billing": billing,
         "links": {
-            "self": f"/api/openapi/v1/image-detections/{task_id}",
-            "report": f"/api/openapi/v1/image-detections/{task_id}/report",
+            "self": f"/api/openapi/v1/{resource}/{task_id}",
+            "report": f"/api/openapi/v1/{resource}/{task_id}/report",
             "media": media_link,
         },
     }
@@ -3922,7 +4102,7 @@ def _claim_next_task(worker_instance):
         return None
     rows = excute_sql(
         """
-        SELECT task_id, user_id, key_id, mode, filename, mime_type, execution_filename,
+        SELECT task_id, user_id, key_id, mode, media_type, filename, mime_type, execution_filename,
                request_sha256, spool_path, spool_size, request_context_json,
                status, lease_owner, lease_expires_at, attempt_count,
                effect_item_id, effect_result_json
@@ -4584,7 +4764,15 @@ def _task_heartbeat_loop(task_id, lease_owner, stop_event, lease_lost_event):
         return
 
 
-def _finish_task(task_id, actor, mode, payload, status_code, lease_owner=None):
+def _finish_task(
+    task_id,
+    actor,
+    mode,
+    payload,
+    status_code,
+    lease_owner=None,
+    media_type="image",
+):
     success = status_code < 400 and isinstance(payload, dict) and payload.get("status") == "success"
     lease_condition = ""
     lease_params = ()
@@ -4592,7 +4780,7 @@ def _finish_task(task_id, actor, mode, payload, status_code, lease_owner=None):
         lease_condition = " AND lease_owner = %s AND lease_expires_at > NOW(6)"
         lease_params = (lease_owner,)
     if success:
-        public_payload = _public_result_payload(payload, mode)
+        public_payload = _public_result_payload(payload, mode, media_type)
         result = (public_payload or {}).get("result") or {}
         item_id = result.get("itemid")
         prompt, completion, total = _token_usage(payload)
@@ -4674,11 +4862,125 @@ def _task_terminal_row(task_id):
     return rows[0] if rows[0].get("status") in {"success", "failed", "rejected"} else None
 
 
-def _execute_or_recover_task(task, user_info, image_bytes):
+def _run_video_detection_payload(task, user_info, spool_path):
+    backend_openid, phone = detection._backend_identity(user_info)
+    form_data = {
+        "openid": backend_openid,
+        "phone": phone,
+        "fast_mode": 1,
+    }
+    try:
+        with spool_path.open("rb") as video_stream:
+            response = detection._backend_post(
+                detection.VIDEO_DETECT_API,
+                data=form_data,
+                files={
+                    "video_file": (
+                        task.get("execution_filename") or task.get("filename") or "video.mp4",
+                        video_stream,
+                        task.get("mime_type") or "application/octet-stream",
+                    ),
+                },
+                timeout=detection.VIDEO_DETECT_TIMEOUT_NORMAL,
+            )
+        response.raise_for_status()
+        api_payload = response.json()
+    except requests.RequestException as exc:
+        return {"status": "error", "message": f"调用视频鉴伪服务失败: {exc}"}, 502
+    except (OSError, ValueError):
+        return {"status": "error", "message": "视频鉴伪服务返回了不可用数据"}, 502
+
+    if not isinstance(api_payload, dict):
+        return {"status": "error", "message": "视频鉴伪服务返回了不可用数据"}, 502
+    backend_code = int(detection._to_float(api_payload.get("code"), 500))
+    if backend_code != 200:
+        status_code = backend_code if 400 <= backend_code < 600 else 502
+        payload = {
+            "status": "error",
+            "message": api_payload.get("msg") or "视频鉴伪失败",
+        }
+        if status_code == 429:
+            payload["retryAfter"] = 5
+        return payload, status_code
+
+    data = api_payload.get("data") if isinstance(api_payload.get("data"), dict) else {}
+    try:
+        item_id = detection._insert_remote_video_record(
+            data,
+            backend_openid,
+            phone,
+            user_info,
+            developer_task_id=task.get("task_id"),
+        )
+    except RuntimeError as exc:
+        return {"status": "error", "message": str(exc)}, 502
+    record = detection._load_detection_record("video_data", item_id)
+    if not record:
+        return {
+            "status": "error",
+            "message": "视频检测完成，但结果归属校验失败",
+        }, 502
+
+    meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+    evidence = detection._normalize_video_evidence(data.get("evidence"), data, meta)
+    final_label = binary_video_final_label(
+        data.get("final_label"),
+        data.get("fake_percentage"),
+    )
+    result = {
+        "itemid": item_id,
+        "filename": task.get("filename") or "",
+        "video_url": detection._backend_static_url("video", record),
+        "fake_percentage": None,
+        "real_percentage": None,
+        "final_label": final_label,
+        "confidence_score": None,
+        "confidence": "低",
+        "decisionStatus": "review_only",
+        "decisionAuthority": "none",
+        "reviewRequired": True,
+        "billable": False,
+        "explanation": (
+            f"视频抽帧与时序分析给出二元结论“{final_label}”。"
+            "当前视频模型与聚合策略尚未通过独立签名校准，因此不发布概率分数，请结合采样证据复核。"
+        ),
+        "d3_std": data.get("d3_std"),
+        "encoder": data.get("encoder") or "",
+        "frame_count": max(0, int(detection._to_float(data.get("frame_count"), 0))),
+        "evidence": evidence,
+        "meta": {
+            "file_size": meta.get("file_size") or "",
+            "duration": meta.get("duration"),
+            "resolution": meta.get("resolution") or "",
+            "video_format": meta.get("video_format") or "",
+            "fps": meta.get("fps"),
+            "total_frames": meta.get("total_frames"),
+            "codec": meta.get("codec") or "",
+        },
+    }
+    return {
+        "status": "success",
+        "result": result,
+        "decisionStatus": "review_only",
+        "billable": False,
+    }, 200
+
+
+def _execute_or_recover_task(task, user_info, media_input):
     recovered = _recover_task_effect(task, user_info)
     if recovered is not None:
         return recovered, 200, True
 
+    media_type = str(task.get("media_type") or "image")
+    if media_type == "video":
+        payload, status_code = _run_video_detection_payload(task, user_info, media_input)
+        payload = _normalize_task_result_filename(payload, task)
+        if status_code < 400 and isinstance(payload, dict) and payload.get("status") == "success":
+            payload = _public_result_payload(payload, task.get("mode"), media_type)
+            _record_task_effect(task, user_info, payload)
+        return payload, status_code, False
+
+    image_bytes = media_input
     execution_filename = task.get("execution_filename") or _task_execution_filename(
         task.get("task_id"), task.get("filename")
     )
@@ -4704,7 +5006,7 @@ def _execute_or_recover_task(task, user_info, image_bytes):
         )
     payload = _normalize_task_result_filename(payload, task)
     if status_code < 400 and isinstance(payload, dict) and payload.get("status") == "success":
-        payload = _public_result_payload(payload, task.get("mode"))
+        payload = _public_result_payload(payload, task.get("mode"), media_type)
         _record_task_effect(task, user_info, payload)
     return payload, status_code, False
 
@@ -4713,10 +5015,15 @@ def _run_openapi_job(task):
     task_id = task["task_id"]
     lease_owner = task["lease_owner"]
     mode = task["mode"]
+    media_type = str(task.get("media_type") or "image")
     _update_job_cache(task_id, {
         "status": "running",
-        "progress": 8 if mode == "swarm" else 38,
-        "summary": "多源复核已开始" if mode == "swarm" else "主鉴伪模型正在 GPU 推理",
+        "progress": 8 if mode == "swarm" else 20 if media_type == "video" else 38,
+        "summary": (
+            "视频抽帧与时序分析已开始"
+            if media_type == "video"
+            else "多源复核已开始" if mode == "swarm" else "主鉴伪模型正在 GPU 推理"
+        ),
     })
     heartbeat_stop = threading.Event()
     lease_lost = threading.Event()
@@ -4734,11 +5041,15 @@ def _run_openapi_job(task):
     try:
         with _task_execution_lock(task):
             actor, user_info = _load_request_context(task)
-            image_bytes = _read_task_spool(task)
+            media_input = (
+                _verified_task_spool_path(task)
+                if media_type == "video"
+                else _read_task_spool(task)
+            )
             payload, status_code, recovered = _execute_or_recover_task(
                 task,
                 user_info,
-                image_bytes,
+                media_input,
             )
             heartbeat_stop.set()
             heartbeat.join(timeout=DEVELOPER_TASK_HEARTBEAT_SECONDS + 1)
@@ -4758,7 +5069,15 @@ def _run_openapi_job(task):
                     "summary": "GPU 队列繁忙，任务将在后台自动重试",
                 })
                 return
-            finished = _finish_task(task_id, actor, mode, payload, status_code, lease_owner=lease_owner)
+            finished = _finish_task(
+                task_id,
+                actor,
+                mode,
+                payload,
+                status_code,
+                lease_owner=lease_owner,
+                media_type=media_type,
+            )
             if finished:
                 _update_job_cache(task_id, {
                     "status": "success" if status_code < 400 and payload.get("status") == "success" else "failed",
@@ -4809,6 +5128,7 @@ def _run_openapi_job(task):
             {"status": "error", "message": message},
             500,
             lease_owner=lease_owner,
+            media_type=media_type,
         )
         _update_job_cache(task_id, {
             "status": "failed",
@@ -5051,19 +5371,36 @@ def _validate_image(image_bytes):
     return {"width": width, "height": height}, None
 
 
+@openapi_blueprint.post("/video-detections")
 @openapi_blueprint.post("/image-detections")
 def create_image_detection():
     actor, auth_error = _openapi_key_required()
     if auth_error:
         return auth_error
+    media_type = "video" if request.path.rstrip("/").endswith("video-detections") else "image"
+    max_upload_bytes = DEVELOPER_MAX_VIDEO_BYTES if media_type == "video" else DEVELOPER_MAX_IMAGE_BYTES
+    max_upload_mb = max_upload_bytes // (1024 * 1024)
+    media_label = "视频" if media_type == "video" else "图片"
     if request.content_length is None:
         return _error("上传请求必须提供 Content-Length", 411, "length_required")
-    if request.content_length > DEVELOPER_MAX_IMAGE_BYTES + (1024 * 1024):
-        return _error("图片不能超过 25 MB", 413, "image_too_large")
-    mode = str(request.form.get("mode") or request.args.get("mode") or "fast").strip().lower()
-    if mode not in {"fast", "swarm"}:
-        return _error("mode 仅支持 fast 或 swarm", 400, "invalid_mode")
-    scope_error = _require_scope(actor, f"image:{mode}")
+    if request.content_length > max_upload_bytes + (2 * 1024 * 1024):
+        return _error(
+            f"{media_label}不能超过 {max_upload_mb} MB",
+            413,
+            f"{media_type}_too_large",
+        )
+    requested_mode = str(request.form.get("mode") or request.args.get("mode") or "fast").strip().lower()
+    if media_type == "video":
+        if requested_mode not in {"", "fast", "video"}:
+            return _error("视频接口当前仅支持默认检测模式", 400, "invalid_mode")
+        mode = "fast"
+        required_scope = "video:detect"
+    else:
+        mode = requested_mode
+        if mode not in {"fast", "swarm"}:
+            return _error("mode 仅支持 fast 或 swarm", 400, "invalid_mode")
+        required_scope = f"image:{mode}"
+    scope_error = _require_scope(actor, required_scope)
     if scope_error:
         return scope_error
     idempotency_key = request.headers.get("Idempotency-Key", "").strip()
@@ -5089,32 +5426,60 @@ def create_image_detection():
     except TaskRecoveryError as exc:
         return _task_recovery_error_response(exc)
 
-    upload = request.files.get("image") or request.files.get("file")
+    upload_field = "video" if media_type == "video" else "image"
+    upload = request.files.get(upload_field) or request.files.get("file")
     if not upload or not upload.filename:
-        return _error("请使用 multipart/form-data 上传 image 文件", 400, "image_required")
-    if not detection.allowed_file(upload.filename):
-        return _error("不支持的图片格式", 415, "unsupported_media_type")
-    image_bytes = upload.stream.read(DEVELOPER_MAX_IMAGE_BYTES + 1)
-    if not image_bytes:
-        return _error("图片文件为空", 400, "empty_image")
-    if len(image_bytes) > DEVELOPER_MAX_IMAGE_BYTES:
-        return _error("图片不能超过 25 MB", 413, "image_too_large")
-    _, image_error = _validate_image(image_bytes)
-    if image_error:
-        return _error(image_error["message"], image_error["status"], image_error["code"])
-
-    digest = hashlib.sha256(image_bytes).hexdigest()
+        return _error(
+            f"请使用 multipart/form-data 上传 {upload_field} 文件",
+            400,
+            f"{media_type}_required",
+        )
+    if media_type == "video":
+        if not detection.allowed_video_file(upload.filename):
+            return _error("不支持的视频格式", 415, "unsupported_media_type")
+        upload_size = detection._seekable_upload_size(upload)
+        if upload_size is None:
+            return _error("无法校验上传视频，请重新选择文件", 400, "upload_validation_failed")
+        if upload_size <= 0:
+            return _error("视频文件为空", 400, "empty_video")
+        if upload_size > DEVELOPER_MAX_VIDEO_BYTES:
+            return _error(
+                f"视频不能超过 {max_upload_mb} MB",
+                413,
+                "video_too_large",
+            )
+        digest = detection._seekable_upload_sha256(upload)
+        if not digest:
+            return _error("无法校验上传视频，请重新选择文件", 400, "upload_validation_failed")
+        image_bytes = None
+    else:
+        if not detection.allowed_file(upload.filename):
+            return _error("不支持的图片格式", 415, "unsupported_media_type")
+        image_bytes = upload.stream.read(DEVELOPER_MAX_IMAGE_BYTES + 1)
+        if not image_bytes:
+            return _error("图片文件为空", 400, "empty_image")
+        if len(image_bytes) > DEVELOPER_MAX_IMAGE_BYTES:
+            return _error("图片不能超过 25 MB", 413, "image_too_large")
+        _, image_error = _validate_image(image_bytes)
+        if image_error:
+            return _error(image_error["message"], image_error["status"], image_error["code"])
+        upload_size = len(image_bytes)
+        digest = hashlib.sha256(image_bytes).hexdigest()
     account_uuid = str(actor.get("account_uuid") or "").strip()
     if not account_uuid:
         return _error("开发者账号缺少不可变身份标识，请重新登录", 401, "account_identity_required")
     existing = _idempotent_task(actor["user_id"], account_uuid, idempotency_key)
     if existing:
-        if existing.get("mode") != mode or existing.get("request_sha256") != digest:
+        if (
+            existing.get("mode") != mode
+            or str(existing.get("media_type") or "image") != media_type
+            or existing.get("request_sha256") != digest
+        ):
             return _error("该 Idempotency-Key 已用于其他请求", 409, "idempotency_conflict")
         return jsonify(_task_payload(existing)), 200
 
     try:
-        capacity_error = _queue_capacity_error(len(image_bytes))
+        capacity_error = _queue_capacity_error(upload_size)
     except TaskRecoveryError as exc:
         return _task_recovery_error_response(exc)
     if capacity_error:
@@ -5134,10 +5499,14 @@ def create_image_detection():
     spool_name = None
     inserted = None
     try:
-        with _queue_submission_guard(len(image_bytes)):
+        with _queue_submission_guard(upload_size):
             duplicate = _idempotent_task(actor["user_id"], account_uuid, idempotency_key)
             if duplicate:
-                if duplicate.get("mode") != mode or duplicate.get("request_sha256") != digest:
+                if (
+                    duplicate.get("mode") != mode
+                    or str(duplicate.get("media_type") or "image") != media_type
+                    or duplicate.get("request_sha256") != digest
+                ):
                     return _error(
                         "该 Idempotency-Key 已用于其他请求",
                         409,
@@ -5148,7 +5517,7 @@ def create_image_detection():
                 job = admin_state.create_detection_job(
                     user_info,
                     upload.filename,
-                    kind="swarm" if mode == "swarm" else "image",
+                    kind="video" if media_type == "video" else "swarm" if mode == "swarm" else "image",
                     mode=mode,
                     experts=experts,
                 )
@@ -5157,7 +5526,11 @@ def create_image_detection():
             task_id = job["id"]
             execution_filename = _task_execution_filename(task_id, upload.filename)
             try:
-                spool_name = _write_task_spool(task_id, image_bytes)
+                spool_name = (
+                    _write_task_spool_stream(task_id, upload.stream, upload_size, digest)
+                    if media_type == "video"
+                    else _write_task_spool(task_id, image_bytes)
+                )
             except TaskSpoolError as exc:
                 _update_job_cache(
                     task_id,
@@ -5169,9 +5542,9 @@ def create_image_detection():
             inserted = excute_sql(
                 """
                 INSERT INTO developer_detection_tasks
-                    (task_id, user_id, account_uuid, key_id, mode, filename, mime_type, execution_filename, request_sha256,
+                    (task_id, user_id, account_uuid, key_id, mode, media_type, filename, mime_type, execution_filename, request_sha256,
                      spool_path, spool_size, request_context_json, idempotency_key, status)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'preparing')
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'preparing')
                 """,
                 (
                     task_id,
@@ -5179,12 +5552,13 @@ def create_image_detection():
                     account_uuid,
                     actor["id"],
                     mode,
+                    media_type,
                     upload.filename[:255],
                     mimetype,
                     execution_filename,
                     digest,
                     spool_name,
-                    len(image_bytes),
+                    upload_size,
                     _request_context(actor, user_info),
                     idempotency_key,
                 ),
@@ -5212,7 +5586,12 @@ def create_image_detection():
     if inserted != 1:
         _remove_task_spool(task_id, spool_name)
         duplicate = _idempotent_task(actor["user_id"], account_uuid, idempotency_key)
-        if duplicate and duplicate.get("mode") == mode and duplicate.get("request_sha256") == digest:
+        if (
+            duplicate
+            and duplicate.get("mode") == mode
+            and str(duplicate.get("media_type") or "image") == media_type
+            and duplicate.get("request_sha256") == digest
+        ):
             return jsonify(_task_payload(duplicate)), 200
         _update_job_cache(task_id, {"status": "failed", "error": "任务写入失败", "progress": 100})
         return _error("任务创建失败，请稍后重试", 503, "task_create_failed")
@@ -5339,6 +5718,21 @@ def create_image_detection():
     return jsonify(_task_payload(row)), 202
 
 
+def _requested_openapi_media_type():
+    return "video" if "/video-detections/" in request.path else "image"
+
+
+def _task_scope(row):
+    if str((row or {}).get("media_type") or "image") == "video":
+        return "video:detect"
+    return f"image:{(row or {}).get('mode') or 'fast'}"
+
+
+def _task_matches_requested_media(row):
+    return str((row or {}).get("media_type") or "image") == _requested_openapi_media_type()
+
+
+@openapi_blueprint.get("/video-detections/<task_id>")
 @openapi_blueprint.get("/image-detections/<task_id>")
 def get_image_detection(task_id):
     actor, auth_error = _openapi_key_required()
@@ -5349,9 +5743,9 @@ def get_image_detection(task_id):
     except TaskRecoveryError as exc:
         return _task_recovery_error_response(exc)
     row = _task_row_for_user(task_id, actor["user_id"], actor.get("account_uuid"))
-    if not row:
+    if not row or not _task_matches_requested_media(row):
         return _error("任务不存在", 404, "task_not_found")
-    scope_error = _require_scope(actor, f"image:{row.get('mode') or 'fast'}")
+    scope_error = _require_scope(actor, _task_scope(row))
     if scope_error:
         return scope_error
     if row.get("status") == "success":
@@ -5362,20 +5756,22 @@ def get_image_detection(task_id):
     return jsonify(payload)
 
 
-def _owned_detection_item(actor, item_id):
+def _owned_detection_item(actor, item_id, media_type="image"):
     owner_where, owner_params = detection._detection_owner_where(
         actor.get("user_id"),
         str(actor.get("phone") or "").strip(),
         str(actor.get("openid") or "").strip(),
         actor.get("account_uuid"),
     )
+    table = "video_data" if media_type == "video" else "data"
     rows = excute_detection_sql(
-        f"SELECT * FROM data WHERE itemid = %s AND ({owner_where}) LIMIT 1",
+        f"SELECT * FROM {table} WHERE itemid = %s AND ({owner_where}) LIMIT 1",
         (item_id, *owner_params),
     )
     return rows[0] if rows else None
 
 
+@openapi_blueprint.get("/video-detections/<task_id>/report")
 @openapi_blueprint.get("/image-detections/<task_id>/report")
 def get_image_detection_report(task_id):
     actor, auth_error = _openapi_key_required()
@@ -5385,9 +5781,9 @@ def get_image_detection_report(task_id):
     if scope_error:
         return scope_error
     row = _task_row_for_user(task_id, actor["user_id"], actor.get("account_uuid"))
-    if not row:
+    if not row or not _task_matches_requested_media(row):
         return _error("任务不存在", 404, "task_not_found")
-    mode_scope_error = _require_scope(actor, f"image:{row.get('mode') or 'fast'}")
+    mode_scope_error = _require_scope(actor, _task_scope(row))
     if mode_scope_error:
         return mode_scope_error
     if row.get("status") != "success" or not row.get("result_item_id"):
@@ -5395,28 +5791,39 @@ def get_image_detection_report(task_id):
     settlement_error = _task_settlement_error(task_id, row)
     if settlement_error:
         return settlement_error
-    item = _owned_detection_item(actor, row["result_item_id"])
+    media_type = str(row.get("media_type") or "image")
+    item = _owned_detection_item(actor, row["result_item_id"], media_type)
     if not item:
         return _error("报告记录不存在", 404, "report_not_found")
     payload = _stored_task_result(row) or {}
     result = payload.get("result") or {}
-    pdf = reporting.image_report_pdf(item, result)
+    pdf = (
+        reporting.video_report_pdf(item, result)
+        if media_type == "video"
+        else reporting.image_report_pdf(item, result)
+    )
+    report_filename = (
+        reporting.video_report_filename(row["result_item_id"])
+        if media_type == "video"
+        else f"huijian-{task_id}.pdf"
+    )
     return Response(
         pdf,
         mimetype="application/pdf",
-        headers={"Content-Disposition": reporting.attachment_header(f"huijian-{task_id}.pdf")},
+        headers={"Content-Disposition": reporting.attachment_header(report_filename)},
     )
 
 
+@openapi_blueprint.get("/video-detections/<task_id>/media")
 @openapi_blueprint.get("/image-detections/<task_id>/media")
 def get_image_detection_media(task_id):
     actor, auth_error = _openapi_key_required()
     if auth_error:
         return auth_error
     row = _task_row_for_user(task_id, actor["user_id"], actor.get("account_uuid"))
-    if not row:
+    if not row or not _task_matches_requested_media(row):
         return _error("任务不存在", 404, "task_not_found")
-    scope_error = _require_scope(actor, f"image:{row.get('mode') or 'fast'}")
+    scope_error = _require_scope(actor, _task_scope(row))
     if scope_error:
         return scope_error
     if row.get("status") != "success" or not row.get("result_item_id"):
@@ -5424,10 +5831,11 @@ def get_image_detection_media(task_id):
     settlement_error = _task_settlement_error(task_id, row)
     if settlement_error:
         return settlement_error
-    item = _owned_detection_item(actor, row["result_item_id"])
+    media_type = str(row.get("media_type") or "image")
+    item = _owned_detection_item(actor, row["result_item_id"], media_type)
     if not item:
         return _error("媒体记录不存在", 404, "media_not_found")
-    return _serve_detection_media_item("image", item)
+    return _serve_detection_media_item(media_type, item)
 
 
 def _developer_usage(user_id, days):
@@ -5580,9 +5988,12 @@ def _openapi_document():
     return {
         "openapi": "3.1.0",
         "info": {
-            "title": "慧鉴AI 图像鉴伪 API",
-            "version": "1.0.0",
-            "description": "一期开放快速检测与 Swarm 多源复核。任务异步执行，仅成功任务结算额度。",
+            "title": "慧鉴AI 内容鉴伪 API",
+            "version": "1.1.0",
+            "description": (
+                "开放图像快速检测、Swarm 多源复核与视频抽帧鉴伪。"
+                "任务统一异步执行，仅形成可结算结论的成功任务消耗额度。"
+            ),
         },
         "servers": [{"url": f"{origin}/api/openapi/v1"}],
         "security": [{"bearerAuth": []}],
@@ -5629,6 +6040,59 @@ def _openapi_document():
                     "summary": "下载任务原图",
                     "parameters": [{"name": "task_id", "in": "path", "required": True, "schema": {"type": "string"}}],
                     "responses": {"200": {"description": "原始图像"}, "404": {"description": "任务或媒体不存在"}},
+                },
+            },
+            "/video-detections": {
+                "post": {
+                    "summary": "创建视频鉴伪任务",
+                    "description": "上传视频后异步执行抽帧与时序分析，当前最大 200 MB。",
+                    "parameters": [{
+                        "name": "Idempotency-Key",
+                        "in": "header",
+                        "required": True,
+                        "schema": {"type": "string", "minLength": 8, "maxLength": 128},
+                    }],
+                    "requestBody": {
+                        "required": True,
+                        "content": {"multipart/form-data": {"schema": {
+                            "type": "object",
+                            "required": ["video"],
+                            "properties": {
+                                "video": {"type": "string", "format": "binary"},
+                            },
+                        }}},
+                    },
+                    "responses": {
+                        "202": {"description": "任务已创建"},
+                        "413": {"description": "视频超过 200 MB"},
+                        "415": {"description": "视频格式不受支持"},
+                    },
+                },
+            },
+            "/video-detections/{task_id}": {
+                "get": {
+                    "summary": "查询视频任务状态",
+                    "parameters": [{"name": "task_id", "in": "path", "required": True, "schema": {"type": "string"}}],
+                    "responses": {"200": {"description": "任务状态"}, "404": {"description": "任务不存在或不属于当前账号"}},
+                },
+            },
+            "/video-detections/{task_id}/report": {
+                "get": {
+                    "summary": "下载视频鉴伪 PDF 报告",
+                    "parameters": [{"name": "task_id", "in": "path", "required": True, "schema": {"type": "string"}}],
+                    "responses": {"200": {"description": "PDF 报告", "content": {"application/pdf": {}}}},
+                },
+            },
+            "/video-detections/{task_id}/media": {
+                "get": {
+                    "summary": "读取任务原视频",
+                    "description": "支持 Range 请求，可用于播放器预览与断点读取。",
+                    "parameters": [{"name": "task_id", "in": "path", "required": True, "schema": {"type": "string"}}],
+                    "responses": {
+                        "200": {"description": "原始视频"},
+                        "206": {"description": "视频分段内容"},
+                        "404": {"description": "任务或媒体不存在"},
+                    },
                 },
             },
         },
