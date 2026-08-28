@@ -282,6 +282,32 @@ def test_expired_admin_session_returns_relogin_signal_even_when_site_session_is_
         assert "user_info" in sess
 
 
+def test_named_admin_accounts_disable_legacy_site_session_fallback(client, monkeypatch):
+    monkeypatch.setenv("REALGUARD_ADMIN_USER_IDS", "1")
+    monkeypatch.setattr(admin, "_admin_account_count", lambda: 2)
+    _login_session(client)
+
+    session_status = client.get("/api/admin/session")
+    console = client.get("/admin")
+
+    assert session_status.status_code == 401
+    assert session_status.get_json()["code"] == "admin_session_required"
+    assert "管理员账号" in session_status.get_json()["message"]
+    assert console.status_code == 302
+    assert console.headers["Location"].endswith(
+        "/admin/login?next=/admin&reason=required"
+    )
+
+
+def test_admin_login_explains_expired_session(client, monkeypatch):
+    monkeypatch.setattr(admin, "_admin_account_count", lambda: 1)
+
+    response = client.get("/admin/login?next=/admin&reason=expired")
+
+    assert response.status_code == 200
+    assert "后台会话已过期，请重新登录管理员账号" in response.get_data(as_text=True)
+
+
 def test_admin_page_revalidates_session_and_exposes_conversation_workspace(client):
     _login_session(client, admin_role="admin")
 
@@ -298,6 +324,10 @@ def test_admin_page_revalidates_session_and_exposes_conversation_workspace(clien
     assert "admin_session_expired" in html
     assert "window.addEventListener('pageshow'" in html
     assert "document.addEventListener('visibilitychange'" in html
+    assert "adminSessionCheckPromise" in html
+    assert "scheduleAdminSessionExpiry" in html
+    assert "await loadDashboard()" in html
+    assert "/api/admin/detections?limit=6" in html
 
 
 def test_admin_sanitizes_persisted_web_search_evidence():

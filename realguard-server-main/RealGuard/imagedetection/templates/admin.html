@@ -968,6 +968,11 @@
     const mutationRequests = new Map();
     let adminAuthRedirecting = false;
     let lastAdminSessionCheck = 0;
+    let adminSessionCheckPromise = null;
+    let adminSessionExpiryTimer = null;
+    let adminBootCompleted = false;
+    let lastDashboardLoad = 0;
+    let adminResumePromise = null;
     let state = {metrics:null, models:[], routing:{}, routingHistory:[], detections:[], users:[], conversations:[], conversationTotal:0, admins:[], keys:[], services:[], host:null, serviceSummary:null, performance:null, assurance:null, swarm:null, alerts:null, alertDeliveries:[], audit:[], testing:null, testingDetail:null, testingImportId:'', testingImportedPaths:new Set(), testingRejectedPaths:new Set(), testingPendingChunks:new Map(), testingUploadActive:false, testingUploadPaused:false, testingResumeAfterSelection:false, testingFolderFiles:[], testingExtraFiles:[], testingFolderScanning:false, testingFolderName:'', pages:{}, selectedUser:null, selectedDetection:null};
     const testingRelativePaths = new WeakMap();
     const TESTING_IMPORT_STORAGE_KEY='realguard.testing.import.v1';
@@ -1033,12 +1038,13 @@
     function redirectToAdminLogin(message='后台会话已过期，请重新登录'){
       if(adminAuthRedirecting) return;
       adminAuthRedirecting=true;
+      if(adminSessionExpiryTimer) clearTimeout(adminSessionExpiryTimer);
       try{ sessionStorage.setItem(ADMIN_RETURN_ROUTE_KEY,location.hash || '#dashboard'); }catch(_error){}
       updateSync(message);
       document.querySelector('.app')?.setAttribute('aria-busy','true');
       if(document.querySelector('.app')) document.querySelector('.app').inert=true;
       const next=location.pathname==='/admin/testing'?'/admin/testing':'/admin';
-      location.replace(`/admin/login?next=${encodeURIComponent(next)}`);
+      location.replace(`/admin/login?next=${encodeURIComponent(next)}&reason=expired`);
     }
     async function panelLoad(targetIds, retryName, work){
       const targets = targetIds.map($).filter(Boolean);
@@ -1566,8 +1572,8 @@
       const real = /真实|real/i.test(text);
       return `<span class="pill ${fake ? 'red' : real ? 'green' : 'amber'}">${esc(text)}</span>`;
     }
-    function renderDashboardDetections(){
-      const rows = state.detections.slice(0, 6).map(d => `<tr>
+    function renderDashboardDetections(detections=state.detections){
+      const rows = (detections || []).slice(0, 6).map(d => `<tr>
         <td>${esc(d.createdAt || '-')}</td>
         <td><span class="file-cell" title="${esc(d.filename || '')}">${esc(d.filename || '-')}</span></td>
         <td>${resultPill(d.label)}</td>
@@ -1763,6 +1769,16 @@
         const params=new URLSearchParams({limit:$('detectionLimit')?.value||'60',q:$('detectionQuery')?.value||'',label:$('detectionLabel')?.value||''});
         if(append&&state.pages.detections?.nextCursor) params.set('cursor',state.pages.detections.nextCursor);
         const data=await api(`/api/admin/detections?${params}`); state.detections=append?[...state.detections,...(data.detections||[])]:data.detections||[]; state.pages.detections=data.page||{}; renderDetections(); renderDashboardDetections();
+      });
+    }
+    async function loadDashboardDetections(){
+      if(!can('detection.view')){
+        $('dashboardDetections').innerHTML='<div class="empty">当前角色无权查看检测记录</div>';
+        return null;
+      }
+      return panelLoad(['dashboardDetections'],'loadDashboardDetections',async()=>{
+        const data=await api('/api/admin/detections?limit=6');
+        renderDashboardDetections(data.detections || []);
       });
     }
     async function loadApiKeys(append=false){
@@ -2853,19 +2869,40 @@
       $('testingDetailPanel').scrollIntoView({behavior:'smooth',block:'start'});
       if(['queued','running','cancel_requested'].includes(run.status)) setTimeout(()=>{ if(state.testingDetail?.data?.id===id) openTestingRun(id); },1200);
     }
+    function scheduleAdminSessionExpiry(expiresAt){
+      if(adminSessionExpiryTimer) clearTimeout(adminSessionExpiryTimer);
+      adminSessionExpiryTimer=null;
+      const expiry=Number(expiresAt || 0) * 1000;
+      if(!Number.isFinite(expiry) || expiry<=0) return;
+      const delay=Math.max(250,Math.min(expiry-Date.now()+500,2_147_000_000));
+      adminSessionExpiryTimer=setTimeout(()=>{ void validateAdminSession(true); },delay);
+    }
     async function validateAdminSession(force=false){
       const now=Date.now();
       if(!force && now-lastAdminSessionCheck<60_000) return true;
-      try{
-        const data=await api('/api/admin/session',{cache:'no-store'});
-        lastAdminSessionCheck=now;
-        if(data.authenticated!==true){ redirectToAdminLogin(); return false; }
-        return true;
-      }catch(error){
-        if(error?.status===401 || ADMIN_AUTH_ERROR_CODES.has(String(error?.code || ''))) return false;
-        updateSync('会话校验失败');
-        return false;
-      }
+      if(adminSessionCheckPromise) return adminSessionCheckPromise;
+      adminSessionCheckPromise=(async()=>{
+        try{
+          const data=await api('/api/admin/session',{cache:'no-store'});
+          lastAdminSessionCheck=Date.now();
+          if(data.authenticated!==true){ redirectToAdminLogin(); return false; }
+          scheduleAdminSessionExpiry(data.expiresAt);
+          return true;
+        }catch(error){
+          if(error?.status===401 || ADMIN_AUTH_ERROR_CODES.has(String(error?.code || ''))) return false;
+          updateSync('会话校验失败');
+          return false;
+        }
+      })();
+      try{ return await adminSessionCheckPromise; }
+      finally{ adminSessionCheckPromise=null; }
+    }
+    async function loadDashboard(){
+      const tasks=[loadOverview()];
+      if(can('detection.view')) tasks.push(loadDashboardDetections());
+      else $('dashboardDetections').innerHTML='<div class="empty">当前角色无权查看检测记录</div>';
+      await Promise.allSettled(tasks);
+      lastDashboardLoad=Date.now();
     }
     async function loadAll(){
       if(!await validateAdminSession(true)) return;
@@ -2887,9 +2924,20 @@
       const requested=(location.hash || '#dashboard').slice(1);
       switchRoute(requested,{historyMode:'none'});
     });
-    window.addEventListener('pageshow',(event)=>{ if(event.persisted) void validateAdminSession(true); });
-    window.addEventListener('focus',()=>{ void validateAdminSession(); });
-    document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible') void validateAdminSession(); });
+    async function resumeAdmin(){
+      if(!adminBootCompleted) return;
+      if(adminResumePromise) return adminResumePromise;
+      adminResumePromise=(async()=>{
+        if(!await validateAdminSession()) return;
+        const route=(location.hash || '#dashboard').slice(1);
+        if(route==='dashboard' && Date.now()-lastDashboardLoad>60_000) await loadDashboard();
+      })();
+      try{ await adminResumePromise; }
+      finally{ adminResumePromise=null; }
+    }
+    window.addEventListener('pageshow',(event)=>{ if(event.persisted) void resumeAdmin(); });
+    window.addEventListener('focus',()=>{ void resumeAdmin(); });
+    document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible') void resumeAdmin(); });
     async function bootAdmin(){
       if(!await validateAdminSession(true)) return;
       let rememberedRoute='';
@@ -2897,7 +2945,9 @@
       const initial = (location.hash || rememberedRoute || `#${SERVER_INITIAL_ROUTE}`).slice(1);
       const initialRoute = (titles[initial] && routeAllowed(initial)) ? initial : 'dashboard';
       switchRoute(initialRoute,{historyMode:'replace'});
-      await loadOverview();
+      if(initialRoute==='dashboard') await loadDashboard();
+      else await loadOverview();
+      adminBootCompleted=true;
     }
     void bootAdmin();
   </script>

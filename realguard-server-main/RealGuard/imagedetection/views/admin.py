@@ -406,6 +406,15 @@ def _admin_required(permission="view"):
             "code": "admin_access_denied",
             "message": "无后台管理权限",
         }), 403)
+    # The website-account allowlist only exists to bootstrap the first named
+    # administrator. Once a dedicated administrator account exists, silently
+    # falling back to this readonly identity leaves an expired admin tab looking
+    # signed in while every privileged panel fails.
+    if _admin_account_count() > 0:
+        return None, _admin_auth_error(
+            "请重新登录管理员账号后继续",
+            "admin_session_required",
+        )
     legacy = _legacy_admin_payload(user)
     if not _has_admin_permission(legacy, permission):
         return None, _permission_error(permission)
@@ -2966,7 +2975,14 @@ def _render_admin_console(initial_route="dashboard"):
     active_user, permission_error = _admin_required("view")
     if permission_error:
         if permission_error[1] == 401:
-            return redirect(url_for("admin_blueprint.admin_login", next=request.path))
+            response = permission_error[0]
+            payload = response.get_json(silent=True) if hasattr(response, "get_json") else {}
+            reason = "expired" if (payload or {}).get("code") == "admin_session_expired" else "required"
+            return redirect(url_for(
+                "admin_blueprint.admin_login",
+                next=request.path,
+                reason=reason,
+            ))
         return permission_error
     if not active_user:
         return redirect(url_for("admin_blueprint.admin_login", next=request.path))
@@ -3056,7 +3072,15 @@ def admin_login():
         session.pop(ADMIN_SCREEN_SESSION_ISSUED_KEY, None)
         _audit(admin_user, "admin.login", str(account.get("id") or identity), meta={"ip": _client_ip()})
         return redirect(next_path)
-    return render_template("admin_auth.html", **_admin_auth_context("login", next_path=next_path))
+    reason = str(request.args.get("reason") or "").strip()
+    message = {
+        "expired": "后台会话已过期，请重新登录管理员账号。",
+        "required": "请登录管理员账号后继续访问后台。",
+    }.get(reason, "")
+    return render_template(
+        "admin_auth.html",
+        **_admin_auth_context("login", message=message, next_path=next_path),
+    )
 
 
 @admin_blueprint.route("/admin/register", methods=["GET", "POST"])
