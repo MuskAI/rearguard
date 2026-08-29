@@ -4914,7 +4914,14 @@ def _run_video_detection_payload(task, user_info, spool_path):
         )
     except RuntimeError as exc:
         return {"status": "error", "message": str(exc)}, 502
-    record = detection._load_detection_record("video_data", item_id)
+    # Developer tasks run in a background worker without a Flask request
+    # context. Verify ownership from the persisted task actor instead of the
+    # browser session used by the interactive detection routes.
+    record = detection._load_detection_record_for_actor(
+        "video_data",
+        item_id,
+        user_info,
+    )
     if not record:
         return {
             "status": "error",

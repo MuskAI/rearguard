@@ -2923,6 +2923,88 @@ def test_developer_video_request_streams_to_spool_and_enqueues(client, monkeypat
     assert (platform.DEVELOPER_SPOOL_ROOT / "job_video_reliable.upload").read_bytes() == video_bytes
 
 
+def test_video_worker_payload_verifies_owner_without_request_context(monkeypatch, tmp_path):
+    video_path = tmp_path / "worker-video.mp4"
+    video_path.write_bytes(b"small-video-payload")
+    task = {
+        "task_id": "job_video_worker",
+        "filename": "sample.mp4",
+        "execution_filename": "job_video_worker.mp4",
+        "mime_type": "video/mp4",
+    }
+    user_info = {
+        "Userid": 7,
+        "phone": "13800000000",
+        "openid": "openid-video",
+        "account_uuid": "account-video",
+    }
+
+    class BackendResponse:
+        @staticmethod
+        def raise_for_status():
+            return None
+
+        @staticmethod
+        def json():
+            return {
+                "code": 200,
+                "data": {
+                    "filename": "stored-video.mp4",
+                    "final_label": "真实视频",
+                    "fake_percentage": 12.0,
+                    "frame_count": 3,
+                    "meta": {"duration": 1.5, "video_format": "mp4"},
+                },
+            }
+
+    monkeypatch.setattr(
+        platform.detection,
+        "_backend_post",
+        lambda *args, **kwargs: BackendResponse(),
+    )
+    monkeypatch.setattr(
+        platform.detection,
+        "_insert_remote_video_record",
+        lambda *args, **kwargs: 91,
+    )
+    monkeypatch.setattr(
+        platform.detection,
+        "_load_detection_record",
+        lambda *args, **kwargs: pytest.fail(
+            "background workers must not read browser session ownership"
+        ),
+    )
+
+    verified = {}
+
+    def load_for_actor(table, item_id, actor, *, is_guest=False):
+        verified.update({
+            "table": table,
+            "item_id": item_id,
+            "actor": actor,
+            "is_guest": is_guest,
+        })
+        return {"itemid": item_id, "filename": "stored-video.mp4"}
+
+    monkeypatch.setattr(
+        platform.detection,
+        "_load_detection_record_for_actor",
+        load_for_actor,
+    )
+
+    payload, status_code = platform._run_video_detection_payload(task, user_info, video_path)
+
+    assert status_code == 200
+    assert payload["status"] == "success"
+    assert payload["result"]["itemid"] == 91
+    assert verified == {
+        "table": "video_data",
+        "item_id": 91,
+        "actor": user_info,
+        "is_guest": False,
+    }
+
+
 def test_video_task_is_hidden_on_image_route_and_visible_on_video_route(client, monkeypatch):
     actor = {
         "id": 12,
