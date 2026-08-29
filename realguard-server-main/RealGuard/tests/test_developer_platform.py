@@ -1198,6 +1198,8 @@ def test_public_video_result_exposes_uncalibrated_scores_with_clear_contract():
     assert payload["result"]["confidence_score"] == 0.962
     assert payload["result"]["probability_calibrated"] is False
     assert "未经" in payload["result"]["probability_notice"]
+    assert "同时公开" in payload["result"]["explanation"]
+    assert "不发布概率" not in payload["result"]["explanation"]
     assert payload["decisionStatus"] == "review_only"
     assert payload["billable"] is False
 

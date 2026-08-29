@@ -3590,6 +3590,14 @@ def _idempotent_task(user_id, account_uuid, idempotency_key):
     return rows[0] if rows else None
 
 
+def _public_video_explanation(final_label):
+    return (
+        f"视频抽帧与时序分析给出二元结论“{final_label}”。"
+        "结果同时公开 AI 与真实两项模型原始分数；这些分数尚未经过独立数据集校准，"
+        "不等同于统计学准确率，请结合采样证据复核。"
+    )
+
+
 def _public_result_payload(payload, mode, media_type="image"):
     if not isinstance(payload, dict):
         return None
@@ -3607,6 +3615,7 @@ def _public_result_payload(payload, mode, media_type="image"):
                 result.get("fake_percentage"),
             )
             result.update(public_video_probability(result.get("fake_percentage")))
+            result["explanation"] = _public_video_explanation(result["final_label"])
         else:
             result["final_label"] = binary_final_label(
                 result.get("final_label"),
@@ -3996,6 +4005,9 @@ def _task_payload(row):
             )
             if score_rows:
                 public_result.update(public_video_probability(score_rows[0].get("fake")))
+            public_result["explanation"] = _public_video_explanation(
+                public_result.get("final_label") or "视频结论"
+            )
         url_field = "video_url" if media_type == "video" else "image_url"
         public_result[url_field] = media_link
         camel_url_field = "videoUrl" if media_type == "video" else "imageUrl"
@@ -4966,10 +4978,7 @@ def _run_video_detection_payload(task, user_info, spool_path):
         "decisionAuthority": "none",
         "reviewRequired": True,
         "billable": False,
-        "explanation": (
-            f"视频抽帧与时序分析给出二元结论“{final_label}”。"
-            "当前视频模型与聚合策略尚未通过独立签名校准，因此不发布概率分数，请结合采样证据复核。"
-        ),
+        "explanation": _public_video_explanation(final_label),
         "d3_std": data.get("d3_std"),
         "encoder": data.get("encoder") or "",
         "frame_count": max(0, int(detection._to_float(data.get("frame_count"), 0))),
@@ -5826,6 +5835,12 @@ def get_image_detection_report(task_id):
     if media_type == "video":
         result = json.loads(json.dumps(result, ensure_ascii=False, default=str))
         result.update(public_video_probability(item.get("fake")))
+        result["explanation"] = _public_video_explanation(
+            result.get("final_label") or binary_video_final_label(
+                item.get("final_label"),
+                item.get("fake"),
+            )
+        )
     pdf = (
         reporting.video_report_pdf(item, result)
         if media_type == "video"
