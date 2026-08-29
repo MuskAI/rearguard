@@ -3986,25 +3986,24 @@ def _task_payload(row):
     media_link = f"/api/openapi/v1/{resource}/{task_id}/media"
     if isinstance(public_result, dict) and row.get("result_item_id"):
         public_result = json.loads(json.dumps(public_result, ensure_ascii=False, default=str))
-        if (
-            media_type == "video"
-            and public_result.get("fake_percentage") is None
-            and row.get("account_uuid")
-        ):
-            score_rows = excute_detection_sql(
-                """
-                SELECT fake FROM video_data
-                WHERE itemid = %s AND owner_account_uuid = %s AND developer_task_id = %s
-                LIMIT 1
-                """,
-                (
-                    row.get("result_item_id"),
-                    row.get("account_uuid"),
-                    task_id,
-                ),
-            )
-            if score_rows:
-                public_result.update(public_video_probability(score_rows[0].get("fake")))
+        if media_type == "video":
+            raw_score = public_result.get("fake_percentage")
+            if raw_score is None and row.get("account_uuid"):
+                score_rows = excute_detection_sql(
+                    """
+                    SELECT fake FROM video_data
+                    WHERE itemid = %s AND owner_account_uuid = %s AND developer_task_id = %s
+                    LIMIT 1
+                    """,
+                    (
+                        row.get("result_item_id"),
+                        row.get("account_uuid"),
+                        task_id,
+                    ),
+                )
+                if score_rows:
+                    raw_score = score_rows[0].get("fake")
+            public_result.update(public_video_probability(raw_score))
             public_result["explanation"] = _public_video_explanation(
                 public_result.get("final_label") or "视频结论"
             )

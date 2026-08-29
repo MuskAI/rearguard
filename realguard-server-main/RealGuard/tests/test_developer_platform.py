@@ -2626,7 +2626,6 @@ def test_task_payload_rewrites_browser_only_media_link(monkeypatch):
 def test_video_task_payload_uses_video_resource_and_media_link(monkeypatch):
     monkeypatch.setattr(platform.admin_state, "get_detection_job", lambda task_id: None)
     monkeypatch.setattr(platform, "_reservation_payload", lambda task_id: {"status": "released"})
-    monkeypatch.setattr(platform, "excute_detection_sql", lambda *args, **kwargs: [{"fake": 64.5}])
     row = {
         "task_id": "task-video",
         "account_uuid": "00000000-0000-4000-8000-000000000084",
@@ -2642,6 +2641,10 @@ def test_video_task_payload_uses_video_resource_and_media_link(monkeypatch):
             "result": {
                 "itemid": 84,
                 "video_url": "/api/media/video/84",
+                "fake_percentage": 64.5,
+                "real_percentage": 35.5,
+                "final_label": "AI生成视频",
+                "explanation": "旧结果说明：不发布概率分数。",
                 "decisionStatus": "review_only",
                 "billable": False,
             },
@@ -2657,11 +2660,44 @@ def test_video_task_payload_uses_video_resource_and_media_link(monkeypatch):
     assert payload["result"]["fake_percentage"] == 64.5
     assert payload["result"]["real_percentage"] == 35.5
     assert payload["result"]["probability_calibrated"] is False
+    assert "同时公开" in payload["result"]["explanation"]
+    assert "不发布概率" not in payload["result"]["explanation"]
     assert payload["links"] == {
         "self": "/api/openapi/v1/video-detections/task-video",
         "report": "/api/openapi/v1/video-detections/task-video/report",
         "media": expected,
     }
+
+
+def test_video_task_payload_backfills_legacy_hidden_score(monkeypatch):
+    monkeypatch.setattr(platform.admin_state, "get_detection_job", lambda task_id: None)
+    monkeypatch.setattr(platform, "_reservation_payload", lambda task_id: {"status": "released"})
+    monkeypatch.setattr(platform, "excute_detection_sql", lambda *args, **kwargs: [{"fake": 42.25}])
+    row = {
+        "task_id": "task-video-legacy",
+        "account_uuid": "00000000-0000-4000-8000-000000000085",
+        "mode": "fast",
+        "media_type": "video",
+        "filename": "legacy.mp4",
+        "status": "success",
+        "result_item_id": 85,
+        "result_json": {
+            "status": "success",
+            "decisionStatus": "review_only",
+            "billable": False,
+            "result": {
+                "itemid": 85,
+                "final_label": "真实视频",
+                "decisionStatus": "review_only",
+                "billable": False,
+            },
+        },
+    }
+
+    payload = platform._task_payload(row)
+
+    assert payload["result"]["fake_percentage"] == 42.25
+    assert payload["result"]["real_percentage"] == 57.75
 
 
 def test_task_payload_hides_result_while_settlement_is_pending(monkeypatch):
