@@ -18,7 +18,11 @@ import requests
 from PIL import Image, UnidentifiedImageError
 from flask import Blueprint, Response, g, has_request_context, jsonify, request
 
-from imagedetection.decision_labels import binary_final_label, binary_video_final_label
+from imagedetection.decision_labels import (
+    binary_final_label,
+    binary_video_final_label,
+    public_video_probability,
+)
 from imagedetection.views import admin_state, reporting
 from imagedetection.views.admin import _admin_required
 from imagedetection.views.api import (
@@ -3602,11 +3606,7 @@ def _public_result_payload(payload, mode, media_type="image"):
                 result.get("final_label"),
                 result.get("fake_percentage"),
             )
-            # The current video model is not independently calibrated. Keep its
-            # binary label while withholding percentages that look probabilistic.
-            result["fake_percentage"] = None
-            result["real_percentage"] = None
-            result["confidence_score"] = None
+            result.update(public_video_probability(result.get("fake_percentage")))
         else:
             result["final_label"] = binary_final_label(
                 result.get("final_label"),
@@ -3759,12 +3759,12 @@ def _recovered_video_business_payload(record):
     evidence = detection._video_evidence_for_record(record)
     technical = evidence.get("technical") if isinstance(evidence, dict) else {}
     final_label = binary_video_final_label(record.get("final_label"), record.get("fake"))
+    probability = public_video_probability(record.get("fake"))
     result = {
         "itemid": item_id,
         "filename": record.get("filename") or "",
         "video_url": detection._backend_static_url("video", record),
-        "fake_percentage": None,
-        "real_percentage": None,
+        **probability,
         "final_label": final_label,
         "confidence_score": None,
         "confidence": "低",
@@ -3977,6 +3977,25 @@ def _task_payload(row):
     media_link = f"/api/openapi/v1/{resource}/{task_id}/media"
     if isinstance(public_result, dict) and row.get("result_item_id"):
         public_result = json.loads(json.dumps(public_result, ensure_ascii=False, default=str))
+        if (
+            media_type == "video"
+            and public_result.get("fake_percentage") is None
+            and row.get("account_uuid")
+        ):
+            score_rows = excute_detection_sql(
+                """
+                SELECT fake FROM video_data
+                WHERE itemid = %s AND owner_account_uuid = %s AND developer_task_id = %s
+                LIMIT 1
+                """,
+                (
+                    row.get("result_item_id"),
+                    row.get("account_uuid"),
+                    task_id,
+                ),
+            )
+            if score_rows:
+                public_result.update(public_video_probability(score_rows[0].get("fake")))
         url_field = "video_url" if media_type == "video" else "image_url"
         public_result[url_field] = media_link
         camel_url_field = "videoUrl" if media_type == "video" else "imageUrl"
@@ -4930,6 +4949,7 @@ def _run_video_detection_payload(task, user_info, spool_path):
 
     meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
     evidence = detection._normalize_video_evidence(data.get("evidence"), data, meta)
+    probability = public_video_probability(data.get("fake_percentage"))
     final_label = binary_video_final_label(
         data.get("final_label"),
         data.get("fake_percentage"),
@@ -4938,8 +4958,7 @@ def _run_video_detection_payload(task, user_info, spool_path):
         "itemid": item_id,
         "filename": task.get("filename") or "",
         "video_url": detection._backend_static_url("video", record),
-        "fake_percentage": None,
-        "real_percentage": None,
+        **probability,
         "final_label": final_label,
         "confidence_score": None,
         "confidence": "低",
@@ -5804,6 +5823,9 @@ def get_image_detection_report(task_id):
         return _error("报告记录不存在", 404, "report_not_found")
     payload = _stored_task_result(row) or {}
     result = payload.get("result") or {}
+    if media_type == "video":
+        result = json.loads(json.dumps(result, ensure_ascii=False, default=str))
+        result.update(public_video_probability(item.get("fake")))
     pdf = (
         reporting.video_report_pdf(item, result)
         if media_type == "video"
@@ -6079,6 +6101,10 @@ def _openapi_document():
             "/video-detections/{task_id}": {
                 "get": {
                     "summary": "查询视频任务状态",
+                    "description": (
+                        "成功结果公开 fake_percentage 与 real_percentage。"
+                        "probability_calibrated=false 表示这些值是未经独立校准的模型分数。"
+                    ),
                     "parameters": [{"name": "task_id", "in": "path", "required": True, "schema": {"type": "string"}}],
                     "responses": {"200": {"description": "任务状态"}, "404": {"description": "任务不存在或不属于当前账号"}},
                 },

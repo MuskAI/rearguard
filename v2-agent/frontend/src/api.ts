@@ -1282,9 +1282,11 @@ export interface VideoAgentResult {
   video_url: string;
   fake_percentage: number | null;
   real_percentage: number | null;
+  probability_calibrated?: boolean;
+  probability_notice?: string;
   final_label: string;
   confidence: string;
-  confidence_score?: number;
+  confidence_score?: number | null;
   decisionStatus?: "verdict" | "review_only";
   decisionAuthority?: string;
   reviewRequired?: boolean;
@@ -1324,6 +1326,8 @@ export interface VideoHistoryRecord {
   video_url: string;
   real_percentage: number | null;
   fake_percentage: number | null;
+  probability_calibrated?: boolean;
+  probability_notice?: string;
   final_label: string;
   confidence: string;
   createtime: string;

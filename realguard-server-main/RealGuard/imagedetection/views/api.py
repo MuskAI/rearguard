@@ -18,7 +18,11 @@ import requests
 from PIL import Image
 from flask import Blueprint, Response, jsonify, request, send_file, session, stream_with_context
 
-from imagedetection.decision_labels import binary_final_label, binary_video_final_label
+from imagedetection.decision_labels import (
+    binary_final_label,
+    binary_video_final_label,
+    public_video_probability,
+)
 from imagedetection.views.historical_record import (
     DETECTION_BACKEND_BASE_URL,
     VIDEO_DETECTION_BACKEND_BASE_URL,
@@ -1762,12 +1766,12 @@ def _image_history_matches_filter(record, filter_key):
 
 def _video_history_record(item):
     final_label = binary_video_final_label(item.get("final_label"), item.get("fake"))
+    probability = public_video_probability(item.get("fake"))
     return {
         "itemid": item.get("itemid"),
         "filename": item.get("filename", ""),
         "video_url": f"/api/media/video/{item.get('itemid')}",
-        "real_percentage": None,
-        "fake_percentage": None,
+        **probability,
         "final_label": final_label,
         "confidence": "低",
         "decision_status": "review_only",

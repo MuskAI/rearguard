@@ -8,7 +8,12 @@ from typing import Any, Mapping
 from urllib.parse import quote
 from werkzeug.exceptions import UnprocessableEntity
 
-from imagedetection.decision_labels import binary_final_label, binary_video_final_label
+from imagedetection.decision_labels import (
+    VIDEO_PROBABILITY_NOTICE,
+    binary_final_label,
+    binary_video_final_label,
+    public_video_probability,
+)
 from . import evidence_manifest
 from .report_pdf import image_report_pdf as _render_image_report_pdf
 from .report_pdf import video_report_pdf
@@ -331,10 +336,12 @@ def verify_image_report(pdf: bytes, *, signing_key: str | bytes | None = None) -
 
 def video_report_content(item: dict, result: dict) -> str:
     review_only = result.get("decisionStatus") != "verdict" or result.get("reviewRequired") is True
-    raw_probability = result.get("fake_percentage")
-    probability = None if review_only or raw_probability is None else round(float(raw_probability), 1)
+    score = public_video_probability(result.get("fake_percentage"))
+    probability = score["fake_percentage"]
+    real_probability = score["real_percentage"]
     confidence = _safe_text(result.get("confidence"), "")
-    requires_review = review_only or probability is None
+    score_available = probability is not None and real_probability is not None
+    requires_review = review_only
     final_label = binary_video_final_label(result.get("final_label"), item.get("fake"))
     accent = "#b36a12" if requires_review else ("#d9573f" if "AI" in str(final_label) else "#1b8f7a")
     video_url = escape(_safe_text(result.get("video_url"), ""))
@@ -347,13 +354,13 @@ def video_report_content(item: dict, result: dict) -> str:
           <div class="eyebrow">Huijian AI Video Report</div>
           <h1>视频鉴伪报告</h1>
           <p>报告编号：VID-{item.get('itemid')}。该报告用于留存视频鉴伪结论、基础参数与简洁分析说明。</p>
-          <div class="pill">{escape(_safe_text(final_label))} · {"未发布自动概率" if requires_review else f"{probability}%"}</div>
+          <div class="pill">{escape(_safe_text(final_label))} · {f"AI 模型分数 {probability}%" if score_available else "未返回模型分数"}</div>
           <div class="grid" style="margin-top:18px;">
             <div>
               <div class="meta-grid">
                 <div><span>文件名</span><strong>{escape(_safe_text(result.get("filename")))}</strong></div>
                 <div><span>时间</span><strong>{escape(_fmt_time(item.get("createtime")))}</strong></div>
-                <div><span>置信度</span><strong>{"不提供" if requires_review else escape(_safe_text(result.get("confidence")))}</strong></div>
+                <div><span>置信度</span><strong>{escape(confidence or "未标注")}</strong></div>
                 <div><span>时长</span><strong>{escape(_safe_text((result.get("meta") or {}).get("duration")))}</strong></div>
                 <div><span>分辨率</span><strong>{escape(_safe_text((result.get("meta") or {}).get("resolution")))}</strong></div>
                 <div><span>编码器</span><strong>{escape(_safe_text(result.get("encoder")))}</strong></div>
@@ -371,12 +378,12 @@ def video_report_content(item: dict, result: dict) -> str:
           <table>
             <thead><tr><th>字段</th><th>内容</th><th class="right">值</th></tr></thead>
             <tbody>
-              <tr><td>AI 概率</td><td>综合伪造概率</td><td class="right">{"未发布" if requires_review else f"{probability}%"}</td></tr>
-              <tr><td>真实概率</td><td>综合真实概率</td><td class="right">{"未发布" if requires_review else f"{round(float(result.get('real_percentage')), 1)}%"}</td></tr>
+              <tr><td>AI 模型分数</td><td>未经校准的生成倾向</td><td class="right">{f"{probability}%" if score_available else "未返回"}</td></tr>
+              <tr><td>真实模型分数</td><td>未经校准的真实倾向</td><td class="right">{f"{real_probability}%" if score_available else "未返回"}</td></tr>
               <tr><td>帧数</td><td>返回的分析帧计数</td><td class="right">{escape(_safe_text(result.get("frame_count")))}</td></tr>
             </tbody>
           </table>
-          <div class="footnote">说明：本报告仅作业务留档与人工复核辅助，不构成司法或监管最终鉴定结论。</div>
+          <div class="footnote">分数说明：{escape(VIDEO_PROBABILITY_NOTICE)} 本报告仅作业务留档与人工复核辅助，不构成司法或监管最终鉴定结论。</div>
         </section>
         """,
     )

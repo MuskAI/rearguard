@@ -59,6 +59,8 @@ video=<binary>
 
 视频接口接受 `mp4`、`mov`、`avi`、`mkv`、`webm`、`flv` 和 `wmv`。API Key 需要 `video:detect` scope；下载任意 PDF 报告还需要 `reports` scope。
 
+视频成功结果会返回 `fake_percentage` 与 `real_percentage`。当前字段公开的是模型原始分数，并同时返回 `probability_calibrated: false` 和 `probability_notice`；它用于表达模型倾向，尚不等同于经过独立数据集校准的统计学准确率。
+
 必须提供请求头 `Idempotency-Key`，长度为 8 到 128 个可见 ASCII 字符。同一账号、模式和文件可安全重试；同一键用于不同内容返回 `409`。每个新的业务请求应生成一个 UUID，并在网络重试时复用它。
 
 查询与报告：

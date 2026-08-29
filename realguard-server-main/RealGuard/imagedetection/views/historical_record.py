@@ -1,7 +1,11 @@
 import os
 from flask import Blueprint, render_template, session
 
-from imagedetection.decision_labels import binary_final_label, binary_video_final_label
+from imagedetection.decision_labels import (
+    binary_final_label,
+    binary_video_final_label,
+    public_video_probability,
+)
 from imagedetection.views import admin_state, evidence_manifest
 
 from imagedetection.views.utils import (
@@ -113,6 +117,7 @@ def history_video_detect():
     if result:
         for item in result:
             final_label = binary_video_final_label(item.get('final_label'), item.get('fake'))
+            probability = public_video_probability(item.get('fake'))
             if 'AI' in final_label:
                 ai_count += 1
             else:
@@ -121,8 +126,7 @@ def history_video_detect():
                 "itemid": item.get('itemid'),
                 "filename": item.get('filename', ''),
                 "video_url": _detection_static_url('video', item),
-                "fake_percentage": None,
-                "real_percentage": None,
+                **probability,
                 "final_label": final_label,
                 "confidence": "低",
                 "decision_status": "review_only",

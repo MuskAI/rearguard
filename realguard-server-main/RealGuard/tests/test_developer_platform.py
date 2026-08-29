@@ -1174,7 +1174,7 @@ def test_public_result_requires_explicit_boolean_true_to_bill():
     assert billable["billable"] is True
 
 
-def test_public_video_result_keeps_binary_label_without_uncalibrated_scores():
+def test_public_video_result_exposes_uncalibrated_scores_with_clear_contract():
     payload = platform._public_result_payload(
         {
             "status": "success",
@@ -1193,9 +1193,11 @@ def test_public_video_result_keeps_binary_label_without_uncalibrated_scores():
     )
 
     assert payload["result"]["final_label"] == "AI生成视频"
-    assert payload["result"]["fake_percentage"] is None
-    assert payload["result"]["real_percentage"] is None
-    assert payload["result"]["confidence_score"] is None
+    assert payload["result"]["fake_percentage"] == 96.2
+    assert payload["result"]["real_percentage"] == 3.8
+    assert payload["result"]["confidence_score"] == 0.962
+    assert payload["result"]["probability_calibrated"] is False
+    assert "未经" in payload["result"]["probability_notice"]
     assert payload["decisionStatus"] == "review_only"
     assert payload["billable"] is False
 
@@ -2622,8 +2624,10 @@ def test_task_payload_rewrites_browser_only_media_link(monkeypatch):
 def test_video_task_payload_uses_video_resource_and_media_link(monkeypatch):
     monkeypatch.setattr(platform.admin_state, "get_detection_job", lambda task_id: None)
     monkeypatch.setattr(platform, "_reservation_payload", lambda task_id: {"status": "released"})
+    monkeypatch.setattr(platform, "excute_detection_sql", lambda *args, **kwargs: [{"fake": 64.5}])
     row = {
         "task_id": "task-video",
+        "account_uuid": "00000000-0000-4000-8000-000000000084",
         "mode": "fast",
         "media_type": "video",
         "filename": "sample.mp4",
@@ -2648,6 +2652,9 @@ def test_video_task_payload_uses_video_resource_and_media_link(monkeypatch):
     assert payload["object"] == "video_detection"
     assert payload["mediaType"] == "video"
     assert payload["result"]["video_url"] == expected
+    assert payload["result"]["fake_percentage"] == 64.5
+    assert payload["result"]["real_percentage"] == 35.5
+    assert payload["result"]["probability_calibrated"] is False
     assert payload["links"] == {
         "self": "/api/openapi/v1/video-detections/task-video",
         "report": "/api/openapi/v1/video-detections/task-video/report",

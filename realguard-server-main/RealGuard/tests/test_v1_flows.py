@@ -798,10 +798,32 @@ def test_video_review_only_report_never_fabricates_zero_probability():
         },
     )
 
-    assert "真实视频 · 未发布自动概率" in html
-    assert "<td class=\"right\">未发布</td>" in html
+    assert "真实视频 · 未返回模型分数" in html
+    assert "<td class=\"right\">未返回</td>" in html
     assert "AI 概率 0.0%" not in html
     assert "真实概率 0.0%" not in html
+
+
+def test_video_review_only_report_displays_available_uncalibrated_score():
+    html = reporting.video_report_content(
+        {"itemid": 18, "createtime": "2026-07-20 10:00:00"},
+        {
+            "filename": "sample.mp4",
+            "decisionStatus": "review_only",
+            "decisionAuthority": "none",
+            "reviewRequired": True,
+            "fake_percentage": 73.4,
+            "real_percentage": 26.6,
+            "confidence": "低",
+            "final_label": "AI生成视频",
+            "explanation": "模型分数已公开，但仍需结合证据复核。",
+        },
+    )
+
+    assert "AI 模型分数 73.4%" in html
+    assert "<td class=\"right\">73.4%</td>" in html
+    assert "<td class=\"right\">26.6%</td>" in html
+    assert "独立数据集校准" in html
 
 
 def test_image_detect_can_use_aliyun_primary_and_records_backend_model(client, monkeypatch, tmp_path):
@@ -2853,7 +2875,9 @@ def test_video_detect_logged_in_builds_public_media_url(client, monkeypatch):
     assert detection.VIDEO_DETECT_API == "http://127.0.0.1:15000/video"
     assert payload["final_label"] == "AI生成视频"
     assert payload["confidence"] == "低"
-    assert payload["fake_percentage"] is None
+    assert payload["fake_percentage"] == pytest.approx(83.0)
+    assert payload["real_percentage"] == pytest.approx(17.0)
+    assert payload["probability_calibrated"] is False
     assert payload["decisionStatus"] == "review_only"
     assert payload["filename"] == "remote-video.mp4"
     assert payload["video_url"] == "/api/media/video/21"

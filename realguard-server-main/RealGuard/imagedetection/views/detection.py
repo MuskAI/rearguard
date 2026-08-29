@@ -24,6 +24,7 @@ from imagedetection.decision_labels import (
     binary_final_label,
     binary_video_final_label,
     normalized_fake_probability,
+    public_video_probability,
 )
 from imagedetection.image_formats import is_heif_filename
 
@@ -4381,14 +4382,16 @@ def video_detect():
             'message': str(exc),
         }), 502
     fake_pct = _to_float(data.get('fake_percentage', 0), 0.0)
-    conf_score = None
+    probability = public_video_probability(data.get('fake_percentage'))
+    conf_score = _conf_score_from_api(data.get('confidence'), fake_pct)
     final_label = binary_video_final_label(
         data.get('final_label'),
         fake_pct,
     )
     explanation = (
         f'视频抽帧与时序分析给出二元结论“{final_label}”。当前视频模型及聚合策略尚未通过独立签名校准，'
-        '因此结论置信度为低，自动真假分数不对外发布；请结合原始视频和可疑片段复核。'
+        '结果中同时公开模型原始分数；该分数未经独立数据集校准，不等同于统计学准确率，'
+        '请结合原始视频和可疑片段复核。'
     )
     conf_level = '低'
     meta = data.get('meta') or {}
@@ -4415,8 +4418,7 @@ def video_detect():
             'itemid': itemid,
             'filename': (record or {}).get('filename', ''),
             'video_url': video_file_url,
-            'fake_percentage': None,
-            'real_percentage': None,
+            **probability,
             'final_label': final_label,
             'confidence_score': conf_score,
             'confidence': conf_level,
@@ -4451,6 +4453,7 @@ def video_result_api():
     if not item:
         return jsonify({'status': 'error', 'message': '未找到该视频检测记录'}), 404
     final_label = binary_video_final_label(item.get('final_label'), item.get('fake'))
+    probability = public_video_probability(item.get('fake'))
     evidence = _video_evidence_for_record(item)
     technical = evidence.get('technical') or {}
     return jsonify({
@@ -4459,8 +4462,7 @@ def video_result_api():
             'itemid': item.get('itemid'),
             'filename': item.get('filename', ''),
             'video_url': _backend_static_url('video', item),
-            'fake_percentage': None,
-            'real_percentage': None,
+            **probability,
             'final_label': final_label,
             'confidence_score': None,
             'confidence': '低',
@@ -4468,8 +4470,8 @@ def video_result_api():
             'decisionAuthority': 'none',
             'reviewRequired': True,
             'explanation': (
-                f'该历史视频的二元结论为“{final_label}”，但缺少独立签名校准与逐帧聚合审计；'
-                '结论置信度为低，请结合原始视频复核。'
+                f'该历史视频的二元结论为“{final_label}”，并公开未经校准的模型原始分数；'
+                '该分数不等同于统计学准确率，请结合原始视频复核。'
             ),
             'd3_std': item.get('d3_std'),
             'encoder': item.get('encoder', ''),
@@ -4499,22 +4501,22 @@ def video_report_api():
         return jsonify({'status': 'error', 'message': '未找到该视频检测记录'}), 404
 
     final_label = binary_video_final_label(item.get('final_label'), item.get('fake'))
+    probability = public_video_probability(item.get('fake'))
     evidence = _video_evidence_for_record(item)
     technical = evidence.get('technical') or {}
     result = {
         'itemid': item.get('itemid'),
         'filename': item.get('filename', ''),
         'video_url': _backend_static_url('video', item),
-        'fake_percentage': None,
-        'real_percentage': None,
+        **probability,
         'final_label': final_label,
         'confidence': '低',
         'decisionStatus': 'review_only',
         'decisionAuthority': 'none',
         'reviewRequired': True,
         'explanation': (
-            f'视频模型给出二元结论“{final_label}”，但逐帧聚合策略尚未通过独立签名校准；'
-            '本报告不发布已校准概率，建议人工复核。'
+            f'视频模型给出二元结论“{final_label}”，并公开未经校准的模型原始分数；'
+            '该分数不等同于统计学准确率，建议结合采样证据复核。'
         ),
         'frame_count': item.get('frame_count', 0),
         'encoder': item.get('encoder', ''),

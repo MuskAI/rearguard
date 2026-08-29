@@ -6,6 +6,7 @@ from imagedetection.decision_labels import (
     binary_final_label,
     binary_video_final_label,
     normalized_fake_probability,
+    public_video_probability,
 )
 from imagedetection.views import report_pdf
 
@@ -37,6 +38,22 @@ def test_probability_normalization_accepts_percent_values():
     assert normalized_fake_probability(83) == 0.83
     assert normalized_fake_probability(-2) == 0.0
     assert normalized_fake_probability(120) == 1.0
+
+
+def test_public_video_probability_exposes_complementary_uncalibrated_scores():
+    score = public_video_probability(83.275)
+
+    assert score["fake_percentage"] == 83.28
+    assert score["real_percentage"] == 16.72
+    assert score["probability_calibrated"] is False
+    assert "未经" in score["probability_notice"]
+
+
+def test_public_video_probability_does_not_fabricate_missing_score():
+    score = public_video_probability(None)
+
+    assert score["fake_percentage"] is None
+    assert score["real_percentage"] is None
 
 
 def test_image_pdf_normalizes_low_risk_before_render(monkeypatch):

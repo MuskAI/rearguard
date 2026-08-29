@@ -10,6 +10,7 @@ AI_GENERATED_LABEL = "AI生成图像"
 REAL_IMAGE_LABEL = "真实图像"
 AI_GENERATED_VIDEO_LABEL = "AI生成视频"
 REAL_VIDEO_LABEL = "真实视频"
+VIDEO_PROBABILITY_NOTICE = "模型原始分数，尚未经过独立数据集校准，不等同于统计学准确率。"
 
 _AI_LABELS = {
     "ai",
@@ -49,6 +50,28 @@ def normalized_fake_probability(value: Any, default: float = 0.5) -> float:
     if probability > 1.0:
         probability /= 100.0
     return max(0.0, min(1.0, probability))
+
+
+def public_video_probability(value: Any) -> dict[str, Any]:
+    """Expose the video model score as percentages with an explicit caveat."""
+    try:
+        fake_percentage = float(value)
+    except (TypeError, ValueError):
+        fake_percentage = math.nan
+    if not math.isfinite(fake_percentage):
+        return {
+            "fake_percentage": None,
+            "real_percentage": None,
+            "probability_calibrated": False,
+            "probability_notice": VIDEO_PROBABILITY_NOTICE,
+        }
+    fake_percentage = round(max(0.0, min(100.0, fake_percentage)), 2)
+    return {
+        "fake_percentage": fake_percentage,
+        "real_percentage": round(100.0 - fake_percentage, 2),
+        "probability_calibrated": False,
+        "probability_notice": VIDEO_PROBABILITY_NOTICE,
+    }
 
 
 def binary_final_label(label: Any = "", fake_probability: Any = None) -> str:
