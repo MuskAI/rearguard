@@ -1076,7 +1076,7 @@ test("刷新工作台会恢复文档结果而不会重新上传", async ({ page 
   expect(queryCount).toBe(1);
 });
 
-test("结果页以证据链清晰组织结论并保持正文级字号", async ({ page }) => {
+test("结果页以紧凑依据清晰组织证据并保持正文级字号", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await installBaseMocks(page);
   await page.route("**/image_upload/detect_async", (route) => route.fulfill({
@@ -1134,15 +1134,15 @@ test("结果页以证据链清晰组织结论并保持正文级字号", async ({
   await expect(page.locator("#detection-result-title")).toBeVisible();
   const chain = page.locator(".evidence-chain-band");
   await expect(chain).toBeVisible();
-  await expect(chain.getByRole("heading", { name: "结论证据链" })).toBeVisible();
-  await expect(chain.getByText("2 项关键证据")).toBeVisible();
-  await expect(chain.locator(".evidence-chain-item")).toHaveCount(3);
-  await expect(chain.locator('.evidence-chain-item[data-impact="fake"]')).toHaveCount(2);
+  await expect(chain.getByRole("heading", { name: "关键判断依据" })).toBeVisible();
+  await expect(chain.getByText("2 条依据")).toBeVisible();
+  await expect(chain.locator(".evidence-chain-item")).toHaveCount(2);
+  await expect(chain.locator('.evidence-chain-item[data-impact="fake"]')).toHaveCount(1);
   await expect(chain.getByRole("heading", { name: "真实性分析" })).toBeVisible();
   await expect(chain.getByRole("heading", { name: "视觉复核" })).toBeVisible();
   await expect(chain.getByRole("heading", { name: "实拍来源证据" })).toHaveCount(0);
-  await expect(chain.locator(".evidence-chain-legend")).toHaveCount(0);
-  await expect(chain.locator(".evidence-chain-final")).toContainText("AI生成图像");
+  await expect(chain.getByText("综合结论")).toHaveCount(0);
+  await expect(chain.getByText("AI生成图像")).toHaveCount(0);
   expect(await chain.locator(".evidence-chain-item").evaluateAll((items) => (
     items.every((item) => getComputedStyle(item).animationName === "none" && getComputedStyle(item).opacity === "1")
   ))).toBeTruthy();

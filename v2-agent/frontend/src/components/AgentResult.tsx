@@ -1,5 +1,4 @@
 import {
-  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type RefCallback,
@@ -758,12 +757,11 @@ type EvidenceDirection = NonNullable<ExplanationPoint["direction"]>;
 const EVIDENCE_DIRECTION_LABELS: Record<EvidenceDirection, string> = {
   fake: "支持 AI",
   real: "支持实拍",
-  warning: "需谨慎",
-  neutral: "中性信息",
+  warning: "证据有限",
+  neutral: "背景信息",
 };
 
-function EvidenceChainIcon({ label, final = false }: { label: string; final?: boolean }) {
-  if (final) return <ShieldCheck size={20} strokeWidth={1.9} aria-hidden="true" />;
+function EvidenceChainIcon({ label }: { label: string }) {
   if (/水印|标记/.test(label)) return <ScanSearch size={19} strokeWidth={1.8} aria-hidden="true" />;
   if (/凭证|来源链/.test(label)) return <Fingerprint size={19} strokeWidth={1.8} aria-hidden="true" />;
   if (/实拍|拍摄|相机/.test(label)) return <Camera size={19} strokeWidth={1.8} aria-hidden="true" />;
@@ -774,11 +772,8 @@ function EvidenceChainIcon({ label, final = false }: { label: string; final?: bo
   return <Gauge size={19} strokeWidth={1.8} aria-hidden="true" />;
 }
 
-function EvidenceChain({ points, verdict }: { points: ExplanationPoint[]; verdict: VerdictView }) {
-  const finalPoint = points.find((point) => point.label === "综合结论");
+function EvidenceChain({ points }: { points: ExplanationPoint[] }) {
   const evidencePoints = selectCriticalEvidence(points);
-  const finalDirection: EvidenceDirection = finalPoint?.direction
-    || (verdict.reviewOnly ? "warning" : verdict.tone === "fake" ? "fake" : "real");
 
   return (
     <section className="result-band evidence-chain-band" aria-labelledby="evidence-chain-title">
@@ -786,11 +781,11 @@ function EvidenceChain({ points, verdict }: { points: ExplanationPoint[]; verdic
         <div className="section-title">
           <Layers3 size={19} />
           <div>
-            <h3 id="evidence-chain-title">结论证据链</h3>
-            <p>仅展示对结论影响最大的证据，完整细节可在下方对应区域查看。</p>
+            <h3 id="evidence-chain-title">关键判断依据</h3>
+            <p>系统实际采用的核心信号，其余检测细节收纳在下方。</p>
           </div>
         </div>
-        <span className="evidence-chain-count">{evidencePoints.length} 项关键证据</span>
+        <span className="evidence-chain-count"><strong>{evidencePoints.length}</strong> 条依据</span>
       </div>
 
       <ol className="evidence-chain-list">
@@ -801,15 +796,14 @@ function EvidenceChain({ points, verdict }: { points: ExplanationPoint[]; verdic
               className={`evidence-chain-item is-${direction}`}
               data-impact={direction}
               key={`${point.label}-${index}`}
-              style={{ "--chain-index": index } as CSSProperties}
             >
+              <span className="evidence-chain-index" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
               <span className="evidence-chain-node"><EvidenceChainIcon label={point.label} /></span>
               <div className="evidence-chain-content">
                 <div className="evidence-chain-title-row">
-                  <span className="evidence-chain-step">证据 {String(index + 1).padStart(2, "0")}</span>
                   <h4>{point.label}</h4>
                   <span className="evidence-chain-impact">
-                    {point.decisive ? `关键证据 · ${EVIDENCE_DIRECTION_LABELS[direction]}` : EVIDENCE_DIRECTION_LABELS[direction]}
+                    {point.decisive ? `关键 · ${EVIDENCE_DIRECTION_LABELS[direction]}` : EVIDENCE_DIRECTION_LABELS[direction]}
                   </span>
                 </div>
                 <p>{publicCopy(point.text)}</p>
@@ -817,27 +811,7 @@ function EvidenceChain({ points, verdict }: { points: ExplanationPoint[]; verdic
             </li>
           );
         })}
-        <li
-          className={`evidence-chain-item evidence-chain-final is-${finalDirection}`}
-          data-impact={finalDirection}
-          style={{ "--chain-index": evidencePoints.length } as CSSProperties}
-        >
-          <span className="evidence-chain-node"><EvidenceChainIcon label="综合结论" final /></span>
-          <div className="evidence-chain-content">
-            <div className="evidence-chain-title-row">
-              <span className="evidence-chain-step">证据收束</span>
-              <h4>综合结论</h4>
-              <span className="evidence-chain-impact">{EVIDENCE_DIRECTION_LABELS[finalDirection]}</span>
-            </div>
-            <div className="evidence-chain-verdict">
-              <strong>{verdict.label}</strong>
-              <span>{verdict.reviewOnly ? `置信说明：${verdict.confidence}` : `${verdict.riskLabel} ${Math.round(verdict.risk * 100)}%`}</span>
-            </div>
-            <p>{publicCopy(finalPoint?.text || verdict.description)}</p>
-          </div>
-        </li>
       </ol>
-
     </section>
   );
 }
@@ -1370,7 +1344,7 @@ export default function AgentResult(props: Props) {
 
       {tab === "summary" && (
         <div className="result-tab-panel" id="result-panel-summary" role="tabpanel" aria-labelledby="result-tab-summary" tabIndex={0}>
-          <EvidenceChain points={explanationPoints} verdict={verdict} />
+          <EvidenceChain points={explanationPoints} />
           {visualReview && (
             <section className="result-band result-priority-band">
               <details className="rationale-disclosure">
