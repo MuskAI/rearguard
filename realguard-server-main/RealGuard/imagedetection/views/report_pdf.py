@@ -16,7 +16,13 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from xml.sax.saxutils import escape
 
-from imagedetection.decision_labels import AI_GENERATED_LABEL, binary_final_label
+from imagedetection.decision_labels import (
+    AI_GENERATED_LABEL,
+    VIDEO_PROBABILITY_NOTICE,
+    binary_final_label,
+    binary_video_final_label,
+    public_video_probability,
+)
 
 FONT_NAME = "HuijianCJK"
 _FONT_LOCK = Lock()
@@ -172,6 +178,7 @@ def _build_report(
     explanation: Any,
     summary_rows: list[list[Any]],
     decision_status: str = "verdict",
+    score_summary: str | None = None,
     visible: dict[str, Any] | None = None,
     capture: dict[str, Any] | None = None,
 ) -> bytes:
@@ -188,7 +195,7 @@ def _build_report(
         title=f"慧鉴AI {title} {report_id}",
         author="慧鉴AI",
     )
-    is_fake = final_label == AI_GENERATED_LABEL
+    is_fake = final_label == AI_GENERATED_LABEL or "AI生成" in final_label
     needs_review = "复核" in final_label or confidence == "低"
     verdict_color = AMBER if needs_review else RED if is_fake else TEAL
     story: list[Any] = [
@@ -196,7 +203,7 @@ def _build_report(
         _p(f"报告编号 {report_id}", styles["subtitle"]),
         Spacer(1, 4 * mm),
     ]
-    score_summary = (
+    score_summary = score_summary or (
         "未发布自动风险分数 · 待人工复核"
         if decision_status != "verdict"
         else f"{'AI 生成风险' if 'AI生成' in final_label else '综合异常风险'} {probability:.1f}% · 置信度 {_text(confidence)}"
@@ -326,9 +333,16 @@ def image_report_pdf(item: dict[str, Any], result: dict[str, Any]) -> bytes:
 
 
 def video_report_pdf(item: dict[str, Any], result: dict[str, Any]) -> bytes:
-    probability = 0.0
-    confidence = "不适用"
-    final_label = binary_final_label(result.get("final_label"), item.get("fake"))
+    score = public_video_probability(
+        result.get("fake_percentage")
+        if result.get("fake_percentage") is not None
+        else item.get("fake")
+    )
+    probability = float(score.get("fake_percentage") or 0.0)
+    real_probability = score.get("real_percentage")
+    score_available = score.get("fake_percentage") is not None and real_probability is not None
+    confidence = result.get("confidence") or "低"
+    final_label = binary_video_final_label(result.get("final_label"), item.get("fake"))
     meta = result.get("meta") or {}
     evidence = result.get("evidence") or {}
     sampled_frames = evidence.get("sampledFrames") or []
@@ -358,11 +372,26 @@ def video_report_pdf(item: dict[str, Any], result: dict[str, Any]) -> bytes:
         explanation=result.get("explanation"),
         summary_rows=[
             ["字段", "内容", "值"],
-            ["自动风险分数", "视频校准契约尚未完成", "未发布"],
+            [
+                "AI 模型分数",
+                "未经校准的生成倾向",
+                f"{probability:.2f}%" if score_available else "未返回",
+            ],
+            [
+                "真实模型分数",
+                "未经校准的真实倾向",
+                f"{float(real_probability):.2f}%" if score_available else "未返回",
+            ],
+            ["分数说明", VIDEO_PROBABILITY_NOTICE, "未校准"],
             ["结论权限", "当前结果仅供人工复核", "review_only"],
             ["分析帧数", "返回的分析帧计数", _text(result.get("frame_count"))],
             ["采样时间点", "模型实际读取的画面位置", sample_times],
             ["检测边界", boundary, "需结合原视频复核"],
         ],
         decision_status="review_only",
+        score_summary=(
+            f"AI 模型分数 {probability:.2f}% · 未校准 · 待人工复核"
+            if score_available
+            else "未返回模型分数 · 待人工复核"
+        ),
     )

@@ -76,3 +76,31 @@ def test_image_pdf_normalizes_low_risk_before_render(monkeypatch):
 
     assert output == b"%PDF-test"
     assert captured["final_label"] == REAL_IMAGE_LABEL
+
+
+def test_video_pdf_exposes_score_and_uses_video_label(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        report_pdf,
+        "_build_report",
+        lambda **kwargs: captured.update(kwargs) or b"%PDF-video-test",
+    )
+
+    output = report_pdf.video_report_pdf(
+        {"itemid": 8, "fake": 72.5, "createtime": "2026-08-29 10:00:00"},
+        {
+            "final_label": "AI生成视频",
+            "fake_percentage": 72.5,
+            "confidence": "低",
+            "decisionStatus": "review_only",
+            "reviewRequired": True,
+            "meta": {},
+            "evidence": {},
+        },
+    )
+
+    assert output == b"%PDF-video-test"
+    assert captured["final_label"] == AI_GENERATED_VIDEO_LABEL
+    assert "72.50%" in captured["score_summary"]
+    assert captured["summary_rows"][1][2] == "72.50%"
+    assert captured["summary_rows"][2][2] == "27.50%"
