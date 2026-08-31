@@ -1167,6 +1167,7 @@ test("结果页优先展示概率与关键来源证据并保持正文级字号",
   expect((await provenanceRequest).headers()["x-huijian-csrf"]).toBe("a".repeat(40));
 
   await expect(page.locator("#detection-result-title")).toBeVisible();
+  await expect(page.getByRole("button", { name: /验证内容凭证/ })).toHaveCount(0);
   const card = page.locator(".result-decision-card");
   await expect(card).toBeVisible();
   await expect(card.getByRole("heading", { name: "关键证据" })).toBeVisible();

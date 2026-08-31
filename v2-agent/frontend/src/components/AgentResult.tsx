@@ -1508,10 +1508,6 @@ export default function AgentResult(props: Props) {
               {props.downloadBusy ? <LoaderCircle size={17} className="spin" /> : <Download size={17} />}
               {props.downloadBusy ? "正在整理报告" : "下载鉴伪报告"}
             </button>
-            <button type="button" className="secondary-button" onClick={props.onProvenance} disabled={!canDeepAnalyze || props.provenanceBusy} title={canDeepAnalyze ? "验证 C2PA 与文件元数据" : !props.provenanceAvailable ? "登录后可验证 C2PA 与完整元数据" : "历史任务需重新上传原文件后验证内容凭证"}>
-              {props.provenanceBusy ? <LoaderCircle size={17} className="spin" /> : <Fingerprint size={17} />}
-              {provenance ? "重新验证内容凭证" : "验证内容凭证"}
-            </button>
             {props.outcome.kind === "evidence" && (
               <>
                 <button type="button" className="secondary-button" onClick={() => void createShare()} disabled={shareBusy}>
