@@ -217,7 +217,10 @@ for _ in {1..30}; do
 done
 test "$health_ready" = "1"
 systemctl is-active --quiet jianzhen-v2-backend.service
-curl -fsS --connect-timeout 2 --max-time 12 "http://127.0.0.1:$detector_port/ready" >/dev/null
+# The detector can intentionally run in review_only mode while calibration is
+# incomplete. Its /ready endpoint returns 503 in that state even though the
+# service is reachable and V2 can still produce a guarded binary result.
+curl -fsS --connect-timeout 2 --max-time 12 "http://127.0.0.1:$detector_port/health" >/dev/null
 
 sudo rm -rf /var/www/v2.next "${frontend_release_root}.next"
 sudo install -d -m 755 "${frontend_release_root}.next"
