@@ -112,10 +112,20 @@ class DeveloperDetectionWorker:
         self.wake_socket_path.parent.mkdir(parents=True, exist_ok=True)
         self.wake_socket_path.unlink(missing_ok=True)
         wake_socket = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-        wake_socket.bind(str(self.wake_socket_path))
+        try:
+            wake_socket.bind(str(self.wake_socket_path))
+        except OSError as exc:
+            wake_socket.close()
+            self.wake_socket = None
+            print(
+                f"[DEVELOPER WORKER] wake socket unavailable; polling fallback active: {exc}",
+                flush=True,
+            )
+            return False
         os.chmod(self.wake_socket_path, 0o600)
         wake_socket.settimeout(POLL_INTERVAL_SECONDS)
         self.wake_socket = wake_socket
+        return True
 
     def _wait_for_work(self):
         if self.wake_socket is None:
