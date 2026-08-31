@@ -4170,8 +4170,16 @@ def _claim_next_task(worker_instance):
 
 def _web_task_job(row, *, include_cache=True):
     actor, _user_info, _is_guest = _load_web_request_context(row)
-    cached = admin_state.get_detection_job(row["job_id"]) if include_cache else None
     mode = str(row.get("mode") or "fast")
+    # Fast jobs keep their authoritative progress and result in MySQL. Reading
+    # the legacy admin JSON cache costs roughly 80-100 ms on production and is
+    # unnecessary for their fixed three-state lifecycle. Swarm still uses the
+    # cache for live expert progress.
+    cached = (
+        admin_state.get_detection_job(row["job_id"])
+        if include_cache and mode != "fast"
+        else None
+    )
     status = str(row.get("status") or "queued")
     result = None
     raw_result = row.get("result_json")
@@ -4727,13 +4735,14 @@ def _run_web_detection_job(task):
     if mode == VISUAL_REVIEW_MODE:
         _run_visual_review_job(task)
         return
-    restored = _web_task_job(task, include_cache=False)
-    admin_state.restore_detection_job(restored)
-    admin_state.update_detection_job(job_id, {
-        "status": "running",
-        "progress": 8 if mode == "swarm" else 38,
-        "summary": "多源复核已开始" if mode == "swarm" else "主鉴伪模型正在 GPU 推理",
-    })
+    if mode == "swarm":
+        restored = _web_task_job(task, include_cache=False)
+        admin_state.restore_detection_job(restored)
+        admin_state.update_detection_job(job_id, {
+            "status": "running",
+            "progress": 8,
+            "summary": "多源复核已开始",
+        })
     heartbeat_stop = threading.Event()
     lease_lost = threading.Event()
     heartbeat = BACKGROUND_THREAD_CLASS(

@@ -824,8 +824,20 @@ def test_fast_web_job_publishes_before_background_enrichment(monkeypatch):
         "lease_owner": "worker-lease",
     }
 
-    monkeypatch.setattr(platform, "_web_task_job", lambda *_args, **_kwargs: {"id": task["job_id"]})
-    monkeypatch.setattr(platform.admin_state, "restore_detection_job", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        platform,
+        "_web_task_job",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("fast jobs must not read the legacy progress cache before inference")
+        ),
+    )
+    monkeypatch.setattr(
+        platform.admin_state,
+        "restore_detection_job",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("fast jobs must not rewrite the legacy progress cache before inference")
+        ),
+    )
     monkeypatch.setattr(platform.admin_state, "update_detection_job", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         platform,
