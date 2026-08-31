@@ -1076,7 +1076,7 @@ test("刷新工作台会恢复文档结果而不会重新上传", async ({ page 
   expect(queryCount).toBe(1);
 });
 
-test("结果页以紧凑依据清晰组织证据并保持正文级字号", async ({ page }) => {
+test("结果页以三段判断卡组织核心依据并保持正文级字号", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await installBaseMocks(page);
   await page.route("**/image_upload/detect_async", (route) => route.fulfill({
@@ -1132,24 +1132,21 @@ test("结果页以紧凑依据清晰组织证据并保持正文级字号", async
   });
 
   await expect(page.locator("#detection-result-title")).toBeVisible();
-  const chain = page.locator(".evidence-chain-band");
-  await expect(chain).toBeVisible();
-  await expect(chain.getByRole("heading", { name: "关键判断依据" })).toBeVisible();
-  await expect(chain.getByText("2 条依据")).toBeVisible();
-  await expect(chain.locator(".evidence-chain-item")).toHaveCount(2);
-  await expect(chain.locator('.evidence-chain-item[data-impact="fake"]')).toHaveCount(1);
-  await expect(chain.getByRole("heading", { name: "真实性分析" })).toBeVisible();
-  await expect(chain.getByRole("heading", { name: "视觉复核" })).toBeVisible();
-  await expect(chain.getByRole("heading", { name: "实拍来源证据" })).toHaveCount(0);
-  await expect(chain.getByText("综合结论")).toHaveCount(0);
-  await expect(chain.getByText("AI生成图像")).toHaveCount(0);
-  expect(await chain.locator(".evidence-chain-item").evaluateAll((items) => (
+  const card = page.locator(".result-decision-card");
+  await expect(card).toBeVisible();
+  await expect(card.getByRole("heading", { name: "结论依据" })).toBeVisible();
+  await expect(card.getByRole("heading", { name: "来源核验" })).toBeVisible();
+  await expect(card.getByRole("heading", { name: "AI 模型分析" })).toBeVisible();
+  await expect(card.getByRole("heading", { name: "综合判断" })).toBeVisible();
+  await expect(card.locator(".decision-final-verdict").getByText("AI生成图像")).toBeVisible();
+  await expect(page.locator(".result-overview-metrics").getByText("87%")).toBeVisible();
+  expect(await card.locator(".decision-stage").evaluateAll((items) => (
     items.every((item) => getComputedStyle(item).animationName === "none" && getComputedStyle(item).opacity === "1")
   ))).toBeTruthy();
-  const sizes = await chain.locator(".evidence-chain-item").first().evaluate((item) => ({
-    title: Number.parseFloat(getComputedStyle(item.querySelector("h4")!).fontSize),
-    body: Number.parseFloat(getComputedStyle(item.querySelector("p")!).fontSize),
-    impact: Number.parseFloat(getComputedStyle(item.querySelector(".evidence-chain-impact")!).fontSize),
+  const sizes = await card.evaluate((item) => ({
+    title: Number.parseFloat(getComputedStyle(item.querySelector(".decision-stage h4")!).fontSize),
+    body: Number.parseFloat(getComputedStyle(item.querySelector(".decision-final-basis p")!).fontSize),
+    impact: Number.parseFloat(getComputedStyle(item.querySelector(".decision-stage-status")!).fontSize),
   }));
   expect(sizes.title).toBeGreaterThanOrEqual(15);
   expect(sizes.body).toBeGreaterThanOrEqual(14);
@@ -1184,7 +1181,8 @@ test("结果页以紧凑依据清晰组织证据并保持正文级字号", async
   });
   expect(mobileResult.resultLeft).toBeGreaterThanOrEqual(12);
   expect(mobileResult.resultRight).toBeLessThanOrEqual(308);
-  expect(mobileResult.previewWidth).toBeLessThanOrEqual(96.5);
+  expect(mobileResult.previewWidth).toBeGreaterThanOrEqual(260);
+  expect(mobileResult.previewWidth).toBeLessThanOrEqual(272.5);
   expect(mobileResult.dockBottom).toBeLessThanOrEqual(569);
   await expectNoHorizontalOverflow(page);
 });
