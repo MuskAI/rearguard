@@ -633,8 +633,12 @@ function verdictFor(outcome: AgentOutcome): VerdictView {
   if (outcome.kind === "image") {
     const reviewOnly = outcome.result.decisionStatus !== "verdict" || outcome.result.reviewRequired === true;
     const recoveredLegacyScore = legacyModelProbability(outcome.result.explanation);
-    const rawModelValue = outcome.result.modelScore ?? outcome.result.detector_probability ?? recoveredLegacyScore ?? outcome.result.probability;
-    const modelProbability = probabilityValue(rawModelValue);
+    const structuredModelProbability = probabilityValue(outcome.result.modelScore ?? outcome.result.detector_probability);
+    const modelProbability = recoveredLegacyScore !== null
+      && (structuredModelProbability === null || (structuredModelProbability === 0 && recoveredLegacyScore > 0))
+      ? recoveredLegacyScore
+      : structuredModelProbability ?? recoveredLegacyScore ?? probabilityValue(outcome.result.probability);
+    const rawModelValue = modelProbability;
     const finalProbability = probabilityValue(outcome.result.probability) ?? modelProbability ?? 0;
     const localizedWatermark = hasDecisiveAiWatermark(outcome.result.visibleWatermark);
     const risk = Math.max(finalProbability, localizedWatermark ? 0.95 : 0);
