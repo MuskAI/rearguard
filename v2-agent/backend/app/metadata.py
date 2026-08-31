@@ -61,6 +61,7 @@ class SignalPattern:
     label: str
     weight: int
     regex: re.Pattern[str]
+    provider_label: str | None = None
 
 
 TOOL_PATTERNS = [
@@ -72,6 +73,7 @@ TOOL_PATTERNS = [
             r"\b(stable diffusion|stable-diffusion|sdxl|sd\s?1\.5|sd\s?2\.1|sd3|stable cascade|flux\.?1|flux-dev|flux-schnell|dreamstudio|stability ai|automatic1111|a1111|webui|invokeai|fooocus)\b",
             re.I,
         ),
+        "Stability AI / Stable Diffusion",
     ),
     SignalPattern(
         "comfyui",
@@ -82,41 +84,222 @@ TOOL_PATTERNS = [
     SignalPattern(
         "novelai",
         "NovelAI 生成信息",
-        46,
+        56,
         re.compile(r"\b(novelai|novel ai|nai diffusion|nai-diffusion|novelai_diffusion)\b", re.I),
+        "NovelAI",
     ),
     SignalPattern(
         "midjourney",
         "Midjourney 生成信息",
-        44,
+        56,
         re.compile(r"\b(midjourney|niji journey|niji\s?model|--ar\s+\d+:\d+|--stylize|--sref|--cref)\b", re.I),
+        "Midjourney / Niji Journey",
     ),
     SignalPattern(
         "openai",
         "OpenAI / DALL-E 生成信息",
-        44,
+        56,
         re.compile(r"\b(openai|dall[ -]?e|dall·e|chatgpt|gpt-image|sora)\b", re.I),
+        "OpenAI / DALL-E / GPT Image",
     ),
     SignalPattern(
         "doubao",
         "豆包生成信息",
         58,
         re.compile(r"(doubao|豆包|seedream|seedance|字节跳动生成|火山引擎生成)", re.I),
+        "豆包 / Seedream",
     ),
     SignalPattern(
         "jimeng",
         "即梦 / Dreamina 生成信息",
         58,
         re.compile(r"(jimeng|即梦(?:ai)?|dreamina)", re.I),
+        "即梦 / Dreamina",
     ),
     SignalPattern(
-        "commercial-ai-tools",
-        "商业 AI 生成工具",
-        40,
+        "alibaba-wanxiang",
+        "通义万相 / Qwen Image 生成信息",
+        58,
         re.compile(
-            r"\b(adobe firefly|firefly image|runway|pika labs|pika\s?1|pika\s?2|kling|hailuo|minimax|leonardo\.?ai|ideogram|imagen|recraft|playground ai|seaart|tensor\.?art|pixai|mage\.space|canva ai)\b",
+            r"(通义万相|阿里云万相|qwen[-_ ]?image|wanx(?:[-_ ]?v?\d+(?:\.\d+)*)?|wanxiang|tongyi wanxiang)",
             re.I,
         ),
+        "阿里云通义万相 / Qwen Image",
+    ),
+    SignalPattern(
+        "baidu-yige",
+        "文心一格 / ERNIE-ViLG 生成信息",
+        58,
+        re.compile(r"(文心一格|ernie[-_ ]?vilg|文心(?:ai)?作画|百度ai作画)", re.I),
+        "百度文心一格 / ERNIE-ViLG",
+    ),
+    SignalPattern(
+        "tencent-hunyuan",
+        "腾讯混元图像生成信息",
+        58,
+        re.compile(r"(腾讯混元|hunyuan[-_ ]?(?:image|dit|image3)|hunyuanimage|混元生图)", re.I),
+        "腾讯混元",
+    ),
+    SignalPattern(
+        "kuaishou-kolors",
+        "可图 / Kolors 生成信息",
+        58,
+        re.compile(r"(快手可图|可图ai|kolors(?:[-_ ]?model)?|kwai[-_ ]?kolors)", re.I),
+        "快手可图 / Kolors",
+    ),
+    SignalPattern(
+        "kling",
+        "可灵 AI 生成信息",
+        58,
+        re.compile(r"(快手可灵|可灵(?:ai|生成|生图|视频)|kling[-_ ]?ai|klingai|kuaishou[-_ ]?kling)", re.I),
+        "可灵 AI",
+    ),
+    SignalPattern(
+        "zhipu-cogview",
+        "智谱 CogView 生成信息",
+        58,
+        re.compile(r"(智谱(?:ai)?生图|cogview(?:[-_ ]?\d+(?:-plus)?)?|zhipu[-_ ]?cogview)", re.I),
+        "智谱 CogView",
+    ),
+    SignalPattern(
+        "minimax-hailuo",
+        "海螺 / MiniMax 生成信息",
+        56,
+        re.compile(r"(海螺(?:ai|生成|生图|视频)|hailuo[-_ ]?ai|minimax[-_ ]?(?:image|video)|abab[-_ ]?image)", re.I),
+        "海螺 AI / MiniMax",
+    ),
+    SignalPattern(
+        "liblibai",
+        "LiblibAI 生成信息",
+        56,
+        re.compile(r"(liblibai|liblib\.art|哩布哩布(?:ai)?)", re.I),
+        "LiblibAI",
+    ),
+    SignalPattern(
+        "meitu-whee",
+        "美图 WHEE 生成信息",
+        56,
+        re.compile(r"(美图whee|whee[-_ ]?ai|whee\.com|美图ai生图)", re.I),
+        "美图 WHEE",
+    ),
+    SignalPattern(
+        "vidu",
+        "Vidu 生成信息",
+        56,
+        re.compile(r"(生数科技|vidu[-_ ]?(?:ai|studio|video)|vidu\.cn)", re.I),
+        "生数科技 Vidu",
+    ),
+    SignalPattern(
+        "sensemirage",
+        "商汤秒画生成信息",
+        56,
+        re.compile(r"(商汤秒画|秒画ai|sensemirage|sensetime[-_ ]?(?:mirage|image))", re.I),
+        "商汤秒画 / SenseMirage",
+    ),
+    SignalPattern(
+        "adobe-firefly",
+        "Adobe Firefly 生成式编辑信息",
+        58,
+        re.compile(r"(adobe[-_ ]?firefly|firefly[-_ ]?image|photoshop[-_ ]?generative[-_ ]?(?:fill|expand)|生成式填充|生成式扩展)", re.I),
+        "Adobe Firefly",
+    ),
+    SignalPattern(
+        "google-imagen",
+        "Google Imagen / Gemini 生成信息",
+        58,
+        re.compile(r"(google[-_ ]?imagen|imagen[-_ ]?[234](?:\.\d+)?|gemini[-_ ]?(?:image|generated)|nano[-_ ]?banana|google[-_ ]?ai[-_ ]?studio)", re.I),
+        "Google Imagen / Gemini",
+    ),
+    SignalPattern(
+        "microsoft-designer",
+        "Microsoft Designer 生成信息",
+        56,
+        re.compile(r"(microsoft[-_ ]?designer|bing[-_ ]?image[-_ ]?creator|image creator from microsoft designer|copilot[-_ ]?(?:image|designer))", re.I),
+        "Microsoft Designer / Image Creator",
+    ),
+    SignalPattern(
+        "meta-imagine",
+        "Meta Imagine 生成信息",
+        56,
+        re.compile(r"(imagine[-_ ]?with[-_ ]?meta|meta[-_ ]?ai[-_ ]?image|meta[-_ ]?emu|emu[-_ ]?(?:image|edit))", re.I),
+        "Meta Imagine",
+    ),
+    SignalPattern(
+        "xai-grok",
+        "Grok Imagine 生成信息",
+        56,
+        re.compile(r"(grok[-_ ]?imagine|grok[-_ ]?image|xai[-_ ]?aurora|aurora[-_ ]?image[-_ ]?model)", re.I),
+        "xAI Grok Imagine",
+    ),
+    SignalPattern(
+        "ideogram",
+        "Ideogram 生成信息",
+        56,
+        re.compile(r"(ideogram(?:[-_ ]?ai)?|ideogram\.ai)", re.I),
+        "Ideogram",
+    ),
+    SignalPattern(
+        "leonardo-ai",
+        "Leonardo.Ai 生成信息",
+        56,
+        re.compile(r"(leonardo\.ai|leonardo[-_ ]?ai|leonardo[-_ ]?phoenix)", re.I),
+        "Leonardo.Ai",
+    ),
+    SignalPattern(
+        "runway",
+        "Runway 生成信息",
+        56,
+        re.compile(r"(runwayml|runway[-_ ]?ai|runway[-_ ]?gen[-_ ]?[234]|gen[-_ ]?4[-_ ]?(?:image|video))", re.I),
+        "Runway",
+    ),
+    SignalPattern(
+        "pika",
+        "Pika 生成信息",
+        56,
+        re.compile(r"(pika[-_ ]?labs|pika[-_ ]?art|pika[-_ ]?(?:1|2)\.(?:0|1|2)|pika[-_ ]?ai)", re.I),
+        "Pika",
+    ),
+    SignalPattern(
+        "recraft",
+        "Recraft 生成信息",
+        56,
+        re.compile(r"(recraft[-_ ]?ai|recraft[-_ ]?v[23]|recraft\.ai)", re.I),
+        "Recraft",
+    ),
+    SignalPattern(
+        "canva-magic-media",
+        "Canva Magic Media 生成信息",
+        54,
+        re.compile(r"(canva[-_ ]?(?:magic[-_ ]?media|text[-_ ]?to[-_ ]?image|dream[-_ ]?lab)|magic media by canva)", re.I),
+        "Canva Magic Media",
+    ),
+    SignalPattern(
+        "playground-ai",
+        "Playground AI 生成信息",
+        54,
+        re.compile(r"(playgroundai|playground[-_ ]?ai|playground\.com[-_ /]?ai)", re.I),
+        "Playground AI",
+    ),
+    SignalPattern(
+        "seaart",
+        "SeaArt 生成信息",
+        54,
+        re.compile(r"(seaart[-_ ]?ai|seaart\.ai)", re.I),
+        "SeaArt AI",
+    ),
+    SignalPattern(
+        "tensor-art",
+        "Tensor.Art 生成信息",
+        54,
+        re.compile(r"(tensor\.art|tensorart[-_ ]?ai)", re.I),
+        "Tensor.Art",
+    ),
+    SignalPattern(
+        "pixai",
+        "PixAI 生成信息",
+        54,
+        re.compile(r"(pixai(?:[-_ ]?art)?|pixai\.art)", re.I),
+        "PixAI",
     ),
     SignalPattern(
         "tc260-aigc",
@@ -399,6 +582,15 @@ def analyze_ai_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
                 add_signal(pattern, row["path"], value, "命中常见 AI 元数据字段名")
 
     ranked = sorted(signals, key=lambda item: item["weight"], reverse=True)[:16]
+    matched_providers = []
+    seen_providers: set[str] = set()
+    patterns_by_id = {pattern.id: pattern for pattern in TOOL_PATTERNS}
+    for signal in ranked:
+        pattern = patterns_by_id.get(signal["id"])
+        if pattern is None or not pattern.provider_label or pattern.id in seen_providers:
+            continue
+        seen_providers.add(pattern.id)
+        matched_providers.append({"id": pattern.id, "label": pattern.provider_label})
     score = _score_signals(signals)
     confidence = _confidence(score)
     return {
@@ -408,6 +600,7 @@ def analyze_ai_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "isAiLikely": score >= 45,
         "signalCount": len(signals),
         "matchedTools": list(dict.fromkeys(signal["label"] for signal in ranked))[:8],
+        "matchedProviders": matched_providers[:8],
         "signals": ranked,
     }
 

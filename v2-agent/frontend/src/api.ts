@@ -1671,6 +1671,7 @@ export interface ProvenanceReport {
     isAiLikely: boolean;
     signalCount: number;
     matchedTools: string[];
+    matchedProviders?: { id: string; label: string }[];
     signals: {
       id: string;
       label: string;

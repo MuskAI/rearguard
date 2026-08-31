@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timezone
 from io import BytesIO
 
-from PIL import Image
+from PIL import Image, PngImagePlugin
 
 from app import capture_evidence, metadata, reporting
 
@@ -129,6 +129,27 @@ def test_plain_jpeg_structure_is_not_reported_as_embedded_metadata():
     assert report["hasMetadata"] is True
     assert report["hasEmbeddedMetadata"] is False
     assert report["metadataSummary"]["embeddedSectionCount"] == 0
+
+
+def test_png_embedded_provider_metadata_flows_through_full_inspection():
+    image = Image.new("RGB", (32, 32), "white")
+    png_info = PngImagePlugin.PngInfo()
+    png_info.add_text("Software", "阿里云通义万相 Qwen-Image")
+    output = BytesIO()
+    image.save(output, format="PNG", pnginfo=png_info)
+
+    report = metadata.inspect_metadata(
+        output.getvalue(),
+        filename="generated-sample.png",
+        mime="image/png",
+    )
+
+    assert report["hasEmbeddedMetadata"] is True
+    assert report["aiDetection"]["isAiLikely"] is True
+    assert {
+        "id": "alibaba-wanxiang",
+        "label": "阿里云通义万相 / Qwen Image",
+    } in report["aiDetection"]["matchedProviders"]
 
 
 def test_html_report_redacts_sensitive_metadata_preview_values():

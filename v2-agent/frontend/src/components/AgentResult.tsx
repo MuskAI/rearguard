@@ -835,7 +835,8 @@ function ResultDecisionCard({
     : { label: "登录后核验", detail: "登录后自动读取 C2PA 内容凭证", tone: "neutral" as const };
   const decisiveWatermark = hasDecisiveAiWatermark(visibleWatermark);
   const aiMetadata = provenance?.aiMetadata;
-  const metadataTools = (aiMetadata?.matchedTools || []).slice(0, 2).join("、");
+  const metadataProviders = (aiMetadata?.matchedProviders || []).map((item) => item.label);
+  const metadataTools = (metadataProviders.length > 0 ? metadataProviders : aiMetadata?.matchedTools || []).slice(0, 2).join("、");
   const metadata: VerificationView = aiMetadata?.isAiLikely || provenance?.metadataAiGenerated
     ? { label: "发现 AI 工具标记", detail: `${metadataTools || "生成工具关键词"} · 元数据可编辑，作为来源线索`, tone: "fake" }
     : captureEvidence?.level === "conflict"

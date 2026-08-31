@@ -372,7 +372,61 @@ def test_doubao_metadata_keyword_is_reported_as_ai_source_evidence():
     assert report["score"] >= 45
     assert report["isAiLikely"] is True
     assert "豆包生成信息" in report["matchedTools"]
+    assert {"id": "doubao", "label": "豆包 / Seedream"} in report["matchedProviders"]
     assert any(signal["id"] == "doubao" for signal in report["signals"])
+
+
+@pytest.mark.parametrize(
+    ("metadata_value", "provider_id", "provider_label"),
+    [
+        ("Qwen-Image 2.0", "alibaba-wanxiang", "阿里云通义万相 / Qwen Image"),
+        ("ERNIE-ViLG", "baidu-yige", "百度文心一格 / ERNIE-ViLG"),
+        ("Hunyuan-Image3", "tencent-hunyuan", "腾讯混元"),
+        ("Kolors model", "kuaishou-kolors", "快手可图 / Kolors"),
+        ("Kling AI", "kling", "可灵 AI"),
+        ("CogView-4", "zhipu-cogview", "智谱 CogView"),
+        ("Hailuo AI", "minimax-hailuo", "海螺 AI / MiniMax"),
+        ("LiblibAI", "liblibai", "LiblibAI"),
+        ("Meitu WHEE AI", "meitu-whee", "美图 WHEE"),
+        ("SenseMirage", "sensemirage", "商汤秒画 / SenseMirage"),
+        ("Adobe Firefly Image 3", "adobe-firefly", "Adobe Firefly"),
+        ("Google Imagen-3", "google-imagen", "Google Imagen / Gemini"),
+        ("Bing Image Creator", "microsoft-designer", "Microsoft Designer / Image Creator"),
+        ("Imagine with Meta AI", "meta-imagine", "Meta Imagine"),
+        ("Grok Imagine", "xai-grok", "xAI Grok Imagine"),
+        ("Leonardo.Ai Phoenix", "leonardo-ai", "Leonardo.Ai"),
+        ("RunwayML Gen-4", "runway", "Runway"),
+        ("Canva Magic Media", "canva-magic-media", "Canva Magic Media"),
+    ],
+)
+def test_known_ai_provider_metadata_is_attributed(
+    metadata_value: str,
+    provider_id: str,
+    provider_label: str,
+):
+    report = metadata.analyze_ai_metadata({"image": {"info": {"Software": metadata_value}}})
+
+    assert report["isAiLikely"] is True
+    assert {"id": provider_id, "label": provider_label} in report["matchedProviders"]
+    assert any(signal["id"] == provider_id for signal in report["signals"])
+
+
+@pytest.mark.parametrize(
+    "metadata_value",
+    [
+        "Adobe Photoshop 2026",
+        "Canva",
+        "runway fashion photography",
+        "imagen de prueba",
+        "海螺收藏",
+        "这个写法可灵活调整",
+    ],
+)
+def test_generic_editing_or_natural_language_metadata_is_not_ai_attribution(metadata_value: str):
+    report = metadata.analyze_ai_metadata({"image": {"info": {"Description": metadata_value}}})
+
+    assert report["isAiLikely"] is False
+    assert report["matchedProviders"] == []
 
 
 def test_invalid_ai_c2pa_requires_pixel_model_without_corroboration():
