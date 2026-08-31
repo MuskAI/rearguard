@@ -39,6 +39,38 @@ async function installBaseMocks(page: Page, authenticated = false, historyFailur
       limits: { maxUploadBytes: 25 * 1024 * 1024 },
     },
   }));
+  await page.route(/\/v2-api\/provenance(?:\?|$)/, (route) => route.fulfill({
+    json: {
+      hasCredentials: false,
+      validationState: null,
+      credentialTrusted: false,
+      generator: null,
+      issuer: null,
+      signatureAlg: null,
+      signedTime: null,
+      isAiGenerated: null,
+      actions: [],
+      ingredients: [],
+      metadataAiGenerated: false,
+      metadataSummary: {
+        sectionCount: 2,
+        embeddedSectionCount: 1,
+        fieldCount: 4,
+        sections: [{ name: "EXIF", fieldCount: 3 }, { name: "File", fieldCount: 1 }],
+        preview: [],
+        errors: [],
+      },
+      metadata: {
+        EXIF: { Make: "Apple", Model: "iPhone 15 Pro", DateTimeOriginal: "2026:08:08 10:00:00" },
+        File: { MIMEType: "image/png" },
+      },
+      captureEvidence: { level: "none", supportsRealCapture: false, summary: "未形成实拍来源证据。", evidence: [], conflicts: [] },
+      synthid: { supported: false, detected: null, note: "not checked" },
+      error: "no_manifest",
+      elapsedMs: 12,
+      fileMeta: { name: "upload.png", size: "1.0KB" },
+    },
+  }));
   await page.route("**/api/analytics/pageview", (route) => route.fulfill({
     status: 204,
     body: "",
@@ -1076,7 +1108,7 @@ test("刷新工作台会恢复文档结果而不会重新上传", async ({ page 
   expect(queryCount).toBe(1);
 });
 
-test("结果页以三段判断卡组织核心依据并保持正文级字号", async ({ page }) => {
+test("结果页优先展示概率与关键来源证据并保持正文级字号", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await installBaseMocks(page);
   await page.route("**/image_upload/detect_async", (route) => route.fulfill({
@@ -1091,13 +1123,15 @@ test("结果页以三段判断卡组织核心依据并保持正文级字号", as
           result: {
             itemid: 901,
             final_label: "AI生成图像",
-            probability: 0.87,
-            detector_probability: 0.84,
-            confidence: "高",
-            decisionStatus: "verdict",
-            decisionAuthority: "calibrated_model",
-            reviewRequired: false,
-            modelDecisionReady: true,
+            probability: null,
+            detector_probability: null,
+            modelScore: 0.87,
+            scoreCalibration: "uncalibrated",
+            confidence: "低",
+            decisionStatus: "review_only",
+            decisionAuthority: "none",
+            reviewRequired: true,
+            modelDecisionReady: false,
             explanation: "真实性分析与证据链已经完成。",
             image_url: "/brand/huijian-forensic-scanner-v3.webp",
             filename: "typography-review.png",
@@ -1125,33 +1159,47 @@ test("结果页以三段判断卡组织核心依据并保持正文级字号", as
   }));
   await page.goto("/?workspace=1");
   await page.locator(".guest-upload-consent input").check();
+  const provenanceRequest = page.waitForRequest(/\/v2-api\/provenance(?:\?|$)/);
   await page.locator('input[type="file"]').setInputFiles({
     name: "typography-review.png",
     mimeType: "image/png",
     buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"),
   });
+  expect((await provenanceRequest).headers()["x-huijian-csrf"]).toBe("a".repeat(40));
 
   await expect(page.locator("#detection-result-title")).toBeVisible();
   const card = page.locator(".result-decision-card");
   await expect(card).toBeVisible();
-  await expect(card.getByRole("heading", { name: "结论依据" })).toBeVisible();
-  await expect(card.getByRole("heading", { name: "来源核验" })).toBeVisible();
-  await expect(card.getByRole("heading", { name: "AI 模型分析" })).toBeVisible();
-  await expect(card.getByRole("heading", { name: "综合判断" })).toBeVisible();
-  await expect(card.locator(".decision-final-verdict").getByText("AI生成图像")).toBeVisible();
-  await expect(page.locator(".result-overview-metrics").getByText("87%")).toBeVisible();
-  expect(await card.locator(".decision-stage").evaluateAll((items) => (
+  await expect(card.getByRole("heading", { name: "关键证据" })).toBeVisible();
+  await expect(card.getByRole("heading", { name: "文件自身证据" })).toBeVisible();
+  await expect(card.getByRole("heading", { name: "AI 生成概率" })).toBeVisible();
+  await expect(card.getByText("C2PA 内容凭证")).toBeVisible();
+  await expect(card.getByText("4 项已读取")).toBeVisible();
+  await expect(card.locator(".decision-model-score > strong")).toContainText("87%");
+  await expect(card.getByText("模型原始输出，尚未经过独立数据集校准。")).toBeVisible();
+  await expect(card.getByRole("heading", { name: "综合判断" })).toHaveCount(0);
+  await expect(page.locator(".result-probability-metric dd")).toContainText("87%");
+  expect(await card.locator(".decision-source, .decision-model").evaluateAll((items) => (
     items.every((item) => getComputedStyle(item).animationName === "none" && getComputedStyle(item).opacity === "1")
   ))).toBeTruthy();
   const sizes = await card.evaluate((item) => ({
-    title: Number.parseFloat(getComputedStyle(item.querySelector(".decision-stage h4")!).fontSize),
-    body: Number.parseFloat(getComputedStyle(item.querySelector(".decision-final-basis p")!).fontSize),
-    impact: Number.parseFloat(getComputedStyle(item.querySelector(".decision-stage-status")!).fontSize),
+    title: Number.parseFloat(getComputedStyle(item.querySelector(".decision-source h4")!).fontSize),
+    body: Number.parseFloat(getComputedStyle(item.querySelector(".decision-model-copy")!).fontSize),
+    impact: Number.parseFloat(getComputedStyle(item.querySelector(".decision-check-list b")!).fontSize),
   }));
   expect(sizes.title).toBeGreaterThanOrEqual(15);
   expect(sizes.body).toBeGreaterThanOrEqual(14);
   expect(sizes.impact).toBeGreaterThanOrEqual(12);
   expect(await readableTextOffenders(page, ".agent-result")).toEqual([]);
+
+  await page.getByRole("tab", { name: "文件信息" }).click();
+  await expect(page.getByRole("heading", { name: "完整元数据" })).toBeVisible();
+  await expect(page.getByText("EXIF.Make", { exact: true })).toBeVisible();
+  await expect(page.getByText("iPhone 15 Pro", { exact: true })).toBeVisible();
+  await expect(page.getByText("未发现凭证", { exact: true }).first()).toBeVisible();
+  await page.getByRole("searchbox", { name: "搜索完整元数据" }).fill("DateTimeOriginal");
+  await expect(page.locator(".metadata-list > div")).toHaveCount(1);
+  await page.getByRole("tab", { name: "结论" }).click();
 
   await page.setViewportSize({ width: 320, height: 568 });
   await expectNoInternalOverflow(page, [

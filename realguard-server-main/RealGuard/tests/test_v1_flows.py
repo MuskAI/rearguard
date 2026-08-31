@@ -670,8 +670,10 @@ def test_image_detect_falls_back_to_v2_when_v1_backend_is_down(client, monkeypat
     assert payload["result"]["final_label"] == "AI生成图像"
     assert payload["result"]["probability"] is None
     assert payload["result"]["detector_probability"] is None
+    assert payload["result"]["modelScore"] == pytest.approx(0.76)
+    assert payload["result"]["scoreCalibration"] == "uncalibrated"
     assert payload["result"]["confidence"] == "低"
-    assert payload["result"]["scorePublished"] is False
+    assert payload["result"]["scorePublished"] is True
     assert payload["result"]["modelDecisionReady"] is False
     assert payload["result"]["reviewRequired"] is True
     assert payload["result"]["image_url"] == "/api/media/image/88"
@@ -885,8 +887,9 @@ def test_image_detect_can_use_aliyun_primary_and_records_backend_model(client, m
     assert payload["result"]["itemid"] == 123
     assert payload["result"]["probability"] is None
     assert payload["result"]["detector_probability"] is None
+    assert payload["result"]["modelScore"] == pytest.approx(0.82)
     assert payload["result"]["confidence"] == "低"
-    assert payload["result"]["scorePublished"] is False
+    assert payload["result"]["scorePublished"] is True
     assert payload["result"]["final_label"] == "AI生成图像"
     assert payload["result"]["reviewRequired"] is True
     assert payload["result"]["agent_reasoning"] == ""
@@ -952,8 +955,9 @@ def test_fast_image_detect_exposes_parallel_visible_watermark(client, monkeypatc
     assert result["final_label"] == "真实图像"
     assert result["probability"] is None
     assert result["detector_probability"] is None
+    assert result["modelScore"] == pytest.approx(0.21)
     assert result["confidence"] == "低"
-    assert result["scorePublished"] is False
+    assert result["scorePublished"] is True
     assert result["reviewRequired"] is True
     assert result.get("watermark_verdict_override") is None
     assert "不单独影响 AI 生成结论" in result["visibleWatermark"]["note"]
@@ -1000,7 +1004,7 @@ def test_fast_image_detect_marks_failed_watermark_evidence_as_incomplete(client,
     assert "不能据此判断图片未含水印" in result["evidenceWarnings"][0]
 
 
-def test_fast_image_detect_does_not_publish_uncalibrated_model_score(client, monkeypatch):
+def test_fast_image_detect_exposes_uncalibrated_model_score_with_clear_contract(client, monkeypatch):
     _login_session(client)
     precheck = {
         "status": "ok",
@@ -1049,8 +1053,11 @@ def test_fast_image_detect_does_not_publish_uncalibrated_model_score(client, mon
     assert result["final_label"] == "AI生成图像"
     assert result["probability"] is None
     assert result["detector_probability"] is None
+    assert result["modelScore"] == pytest.approx(0.999)
+    assert result["scoreCalibration"] == "uncalibrated"
+    assert "未校准" in result["scoreLabel"]
     assert result["confidence"] == "低"
-    assert result["scorePublished"] is False
+    assert result["scorePublished"] is True
     assert result["modelDecisionReady"] is False
     assert result["reviewRequired"] is True
     assert result["evidenceCompleteness"] is False

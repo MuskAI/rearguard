@@ -1198,6 +1198,10 @@ export interface ImageAgentResult {
   final_label: string;
   probability: number;
   detector_probability?: number;
+  modelScore?: number | null;
+  scoreCalibration?: "uncalibrated" | "calibrated" | string;
+  scoreLabel?: string;
+  scorePublished?: boolean;
   p_visual?: number | null;
   p_metadata?: number | null;
   confidence: string;
@@ -1693,6 +1697,7 @@ export interface ProvenanceReport {
 }
 
 export async function runProvenance(file: File, taskId?: string): Promise<ProvenanceReport> {
+  await ensureSessionCsrf();
   const fd = new FormData();
   fd.append("file", file);
   if (taskId) fd.append("taskId", taskId);

@@ -2303,7 +2303,13 @@ def _public_provenance_summary(summary):
 
 
 def _suppress_review_only_scores(result):
-    """Remove internal placeholders and uncalibrated scores from public output."""
+    """Keep an explicitly uncalibrated model score while hiding internals.
+
+    Review-only results still need an observable model output for product
+    transparency.  It is exposed separately from the calibrated probability
+    contract so clients can label it accurately instead of fabricating a
+    probability or showing an empty value.
+    """
     if not isinstance(result, dict):
         return result
     result['final_label'] = binary_final_label(
@@ -2312,12 +2318,24 @@ def _suppress_review_only_scores(result):
     )
     if result.get('decisionStatus') == 'verdict':
         return result
+    raw_model_score = result.get('probability')
+    if raw_model_score is None:
+        raw_model_score = result.get('detector_probability')
+    try:
+        normalized_model_score = float(raw_model_score)
+        if normalized_model_score > 1:
+            normalized_model_score /= 100
+        result['modelScore'] = max(0.0, min(1.0, normalized_model_score))
+    except (TypeError, ValueError):
+        result['modelScore'] = None
+    result['scoreCalibration'] = 'uncalibrated'
+    result['scoreLabel'] = '模型 AI 生成倾向（未校准）'
     result['probability'] = None
     result['detector_probability'] = None
     result['p_visual'] = None
     result['p_metadata'] = None
     result['confidence'] = '低'
-    result['scorePublished'] = False
+    result['scorePublished'] = result.get('modelScore') is not None
     result.pop('probabilityModel', None)
     swarm = result.get('swarm')
     if isinstance(swarm, dict):

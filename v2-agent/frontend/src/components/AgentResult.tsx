@@ -29,6 +29,7 @@ import {
   Maximize2,
   MousePointer2,
   Play,
+  Search,
   ScanSearch,
   ScanLine,
   ShieldCheck,
@@ -606,7 +607,7 @@ function ImageLightbox({
 function verdictFor(outcome: AgentOutcome): VerdictView {
   if (outcome.kind === "image") {
     const reviewOnly = outcome.result.decisionStatus !== "verdict" || outcome.result.reviewRequired === true;
-    const rawValue = outcome.result.probability ?? outcome.result.detector_probability;
+    const rawValue = outcome.result.probability ?? outcome.result.detector_probability ?? outcome.result.modelScore;
     const raw = Number(rawValue ?? 0);
     const localizedWatermark = hasDecisiveAiWatermark(outcome.result.visibleWatermark);
     const risk = Math.max(clamp01(raw > 1 ? raw / 100 : raw), localizedWatermark ? 0.95 : 0);
@@ -750,154 +751,111 @@ function ResultDisclosure({
   );
 }
 
-type EvidenceDirection = NonNullable<ExplanationPoint["direction"]>;
-
-const EVIDENCE_DIRECTION_LABELS: Record<EvidenceDirection, string> = {
-  fake: "支持 AI",
-  real: "支持实拍",
-  warning: "证据有限",
-  neutral: "背景信息",
-};
-
-function EvidenceChainIcon({ label }: { label: string }) {
-  if (/水印|标记/.test(label)) return <ScanSearch size={19} strokeWidth={1.8} aria-hidden="true" />;
-  if (/凭证|来源链/.test(label)) return <Fingerprint size={19} strokeWidth={1.8} aria-hidden="true" />;
-  if (/实拍|拍摄|相机/.test(label)) return <Camera size={19} strokeWidth={1.8} aria-hidden="true" />;
-  if (/视觉|画面/.test(label)) return <ScanLine size={19} strokeWidth={1.8} aria-hidden="true" />;
-  if (/视频|时序/.test(label)) return <Video size={19} strokeWidth={1.8} aria-hidden="true" />;
-  if (/采样|文件/.test(label)) return <FileSearch size={19} strokeWidth={1.8} aria-hidden="true" />;
-  if (/冲突|边界|异常/.test(label)) return <AlertTriangle size={19} strokeWidth={1.8} aria-hidden="true" />;
-  return <Gauge size={19} strokeWidth={1.8} aria-hidden="true" />;
-}
-
-const SOURCE_EVIDENCE_PATTERN = /水印|标记|凭证|来源链|内容来源|实拍|拍摄|相机|元数据/i;
 const MODEL_EVIDENCE_PATTERN = /真实性分析|模型|决策授权|视觉复核|画面|视频|时序|抽帧|采样/i;
 
-interface SourceEvidenceSummary {
+type VerificationTone = "real" | "fake" | "warning" | "neutral" | "pending";
+
+interface VerificationView {
   label: string;
-  note: string;
-  tone: EvidenceDirection;
+  detail: string;
+  tone: VerificationTone;
+}
+
+function provenanceView(report?: ProvenanceReport, busy = false): VerificationView {
+  if (busy && !report) return { label: "正在核验", detail: "读取内容凭证与签名状态", tone: "pending" };
+  if (!report) return { label: "尚未核验", detail: "等待读取文件内的 C2PA 凭证", tone: "neutral" };
+  const validation = String(report.validationState || "").trim().toLowerCase();
+  if (report.error === "c2pa_unavailable") return { label: "服务不可用", detail: "C2PA 解析器未正常启动", tone: "warning" };
+  if (validation === "invalid") return { label: "凭证异常", detail: "签名或内容完整性校验未通过", tone: "warning" };
+  if (report.credentialTrusted || validation === "trusted") {
+    return report.isAiGenerated === true
+      ? { label: "可信 AI 声明", detail: report.generator || report.issuer || "凭证明确声明 AI 生成", tone: "fake" }
+      : { label: "可信来源凭证", detail: report.issuer || "签名与信任链均已通过", tone: "real" };
+  }
+  if (report.hasCredentials) return { label: "发现内容凭证", detail: "签名已读取，信任关系仍需核对", tone: "neutral" };
+  return { label: "未发现凭证", detail: "C2PA 已检查；缺少凭证不代表图片为假", tone: "neutral" };
+}
+
+function ResultDecisionCard({
+  points,
+  verdict,
+  provenance,
+  provenanceBusy,
+  visibleWatermark,
+  captureEvidence,
+  metadataCount,
+}: {
   points: ExplanationPoint[];
-}
-
-function sourceEvidenceSummary(points: ExplanationPoint[]): SourceEvidenceSummary {
-  const sourcePoints = points
-    .filter((point) => point.label !== "综合结论" && SOURCE_EVIDENCE_PATTERN.test(point.label))
-    .sort((left, right) => {
-      const importance = { critical: 3, supporting: 2, context: 1 };
-      const decisiveDifference = Number(Boolean(right.decisive)) - Number(Boolean(left.decisive));
-      return decisiveDifference || importance[right.importance] - importance[left.importance];
-    })
-    .slice(0, 3);
-  const decisiveFake = sourcePoints.some((point) => point.decisive && point.direction === "fake");
-  const supportingReal = sourcePoints.some((point) => point.direction === "real" && point.importance !== "context");
-  const warning = sourcePoints.some((point) => point.direction === "warning");
-
-  if (decisiveFake) {
-    return { label: "发现 AI 来源证据", note: "已参与最终判断", tone: "fake", points: sourcePoints };
-  }
-  if (supportingReal) {
-    return { label: "存在实拍来源线索", note: "支持真实来源", tone: "real", points: sourcePoints };
-  }
-  if (warning) {
-    return { label: "来源信息需关注", note: "建议核对原文件", tone: "warning", points: sourcePoints };
-  }
-  if (sourcePoints.length > 0) {
-    return { label: "未见强来源证据", note: "不单独影响结论", tone: "neutral", points: sourcePoints };
-  }
-  return { label: "来源尚未核验", note: "暂无可用来源线索", tone: "neutral", points: [] };
-}
-
-function ResultDecisionCard({ points, verdict }: { points: ExplanationPoint[]; verdict: VerdictView }) {
-  const source = sourceEvidenceSummary(points);
+  verdict: VerdictView;
+  provenance?: ProvenanceReport;
+  provenanceBusy: boolean;
+  visibleWatermark?: VisibleWatermarkResult;
+  captureEvidence?: CaptureEvidence;
+  metadataCount: number;
+}) {
   const modelPoint = points.find((point) => point.label !== "综合结论" && MODEL_EVIDENCE_PATTERN.test(point.label));
-  const conclusionPoint = points.find((point) => point.label === "综合结论");
-  const modelDirection: EvidenceDirection = verdict.reviewOnly ? "warning" : verdict.tone === "fake" ? "fake" : "real";
   const riskPercent = Math.round(verdict.risk * 100);
-  const confidenceParts = verdict.confidence.split(/[，,]/, 2);
+  const c2pa = provenanceView(provenance, provenanceBusy);
+  const decisiveWatermark = hasDecisiveAiWatermark(visibleWatermark);
+  const metadata: VerificationView = captureEvidence?.level === "conflict"
+    ? { label: "拍摄信息冲突", detail: "元数据字段之间存在不一致", tone: "warning" }
+    : captureEvidence?.supportsRealCapture
+      ? { label: `${metadataCount} 项 · 实拍线索`, detail: "发现可核对的相机或拍摄流程信息", tone: "real" }
+      : metadataCount > 0
+        ? { label: `${metadataCount} 项已读取`, detail: "完整字段可在文件信息中查看", tone: "neutral" }
+        : { label: "未读取到字段", detail: "元数据缺失本身不参与判假", tone: "neutral" };
+  const watermark: VerificationView = !visibleWatermark
+    ? { label: "尚未返回", detail: "本次结果没有水印扫描数据", tone: "warning" }
+    : !visibleWatermark.supported
+      ? { label: "检测未完成", detail: "本项不会生成替代性结论", tone: "warning" }
+      : decisiveWatermark
+        ? { label: "确认 AI 水印", detail: "平台匹配、位置与文字/图形证据相互印证", tone: "fake" }
+        : visibleWatermark.detected
+          ? { label: "发现可见标记", detail: "平台归属未确认，不单独判假", tone: "neutral" }
+          : { label: "未检出水印", detail: "扫描已完成；未检出不等同于真实", tone: "neutral" };
+  const checks = [
+    { id: "c2pa", title: "C2PA 内容凭证", icon: <Fingerprint size={19} />, ...c2pa },
+    { id: "metadata", title: "元数据与实拍信息", icon: <Camera size={19} />, ...metadata },
+    { id: "watermark", title: "显式水印", icon: <ScanSearch size={19} />, ...watermark },
+  ];
 
   return (
     <section className={`result-decision-card tone-${verdict.tone}`} aria-labelledby="decision-card-title">
       <header className="decision-card-heading">
         <div>
-          <span>判断路径</span>
-          <h3 id="decision-card-title">结论依据</h3>
+          <h3 id="decision-card-title">关键证据</h3>
+          <p>先看文件自身的来源与完整性，再看模型输出。</p>
         </div>
-        <span>3 步完成</span>
+        <span>{checks.length} 项来源核验</span>
       </header>
 
       <div className="decision-card-grid">
-        <section className={`decision-stage decision-source is-${source.tone}`} aria-labelledby="decision-source-title">
+        <section className="decision-source" aria-labelledby="decision-source-title">
           <header>
-            <span className="decision-stage-number">01</span>
-            <div>
-              <small>第一步</small>
-              <h4 id="decision-source-title">来源核验</h4>
-            </div>
-            <span className="decision-stage-status">{source.label}</span>
+            <div><small>来源与完整性</small><h4 id="decision-source-title">文件自身证据</h4></div>
           </header>
-          {source.points.length > 0 ? (
-            <ul className="decision-signal-list">
-              {source.points.map((point, index) => {
-                const direction: EvidenceDirection = point.direction || "neutral";
-                return (
-                  <li className={`is-${direction}`} key={`${point.label}-${index}`}>
-                    <span><EvidenceChainIcon label={point.label} /></span>
-                    <strong>{point.label}</strong>
-                    <small>{EVIDENCE_DIRECTION_LABELS[direction]}</small>
-                  </li>
-                );
-              })}
-            </ul>
-          ) : (
-            <p className="decision-stage-empty">本次没有可用于核验来源的水印、内容凭证或实拍信息。</p>
-          )}
-          <p className="decision-stage-note">{source.note}</p>
+          <ul className="decision-check-list">
+            {checks.map((check) => (
+              <li className={`is-${check.tone}`} key={check.id}>
+                <span>{check.icon}</span>
+                <div><strong>{check.title}</strong><small>{check.detail}</small></div>
+                <b>{check.label}</b>
+              </li>
+            ))}
+          </ul>
         </section>
 
-        <section className={`decision-stage decision-model is-${modelDirection}`} aria-labelledby="decision-model-title">
+        <section className={`decision-model is-${verdict.tone}`} aria-labelledby="decision-model-title">
           <header>
-            <span className="decision-stage-number">02</span>
-            <div>
-              <small>第二步</small>
-              <h4 id="decision-model-title">AI 模型分析</h4>
-            </div>
-            <span className="decision-stage-status">{EVIDENCE_DIRECTION_LABELS[modelDirection]}</span>
+            <div><small>模型分析</small><h4 id="decision-model-title">AI 生成概率</h4></div>
+            <span>{verdict.reviewOnly ? "低置信" : "已完成"}</span>
           </header>
           <div className="decision-model-score">
-            <div>
-              <small>{verdict.riskLabel}</small>
-              <strong>{verdict.reviewOnly ? "暂不公开" : `${riskPercent}%`}</strong>
-            </div>
-            {!verdict.reviewOnly && <i aria-hidden="true"><span style={{ width: `${riskPercent}%` }} /></i>}
+            <strong>{riskPercent}<small>%</small></strong>
+            <i aria-hidden="true"><span style={{ width: `${riskPercent}%` }} /></i>
           </div>
           <p className="decision-model-copy">{publicCopy(modelPoint?.text || verdict.description)}</p>
-        </section>
-
-        <section className={`decision-stage decision-final is-${verdict.tone}`} aria-labelledby="decision-final-title">
-          <header>
-            <span className="decision-stage-number">03</span>
-            <div>
-              <small>第三步</small>
-              <h4 id="decision-final-title">综合判断</h4>
-            </div>
-            <span className="decision-stage-status">结论已形成</span>
-          </header>
-          <div className="decision-final-summary">
-            <div className="decision-final-verdict">
-              <small>检测结论</small>
-              <strong>{verdict.label}</strong>
-            </div>
-            <div className="decision-final-basis">
-              <small>判断依据</small>
-              <p>{publicCopy(conclusionPoint?.text || verdict.description)}</p>
-            </div>
-            <div className="decision-final-confidence">
-              <small>可信程度</small>
-              <strong>{confidenceParts[0] || "未标注"}</strong>
-              {confidenceParts[1] && <span>{confidenceParts[1]}</span>}
-            </div>
-          </div>
+          {verdict.reviewOnly && <div className="decision-calibration-note"><Info size={15} />模型原始输出，尚未经过独立数据集校准。</div>}
         </section>
       </div>
     </section>
@@ -1236,6 +1194,7 @@ export default function AgentResult(props: Props) {
   const [videoLightboxSource, setVideoLightboxSource] = useState<string | null>(null);
   const [videoCurrentTime, setVideoCurrentTime] = useState(0);
   const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
+  const [metadataQuery, setMetadataQuery] = useState("");
   const videoExpandButtonRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     setTab("summary");
@@ -1246,6 +1205,7 @@ export default function AgentResult(props: Props) {
     setLightboxOpen(false);
     setVideoLightboxSource(null);
     setVideoCurrentTime(0);
+    setMetadataQuery("");
   }, [props.outcome.id]);
   const closeVideoLightbox = useCallback(() => {
     setVideoLightboxSource(null);
@@ -1256,7 +1216,6 @@ export default function AgentResult(props: Props) {
     () => buildEvidenceExplanation(props.outcome, verdict.risk, verdict.label),
     [props.outcome, verdict.label, verdict.risk],
   );
-  const sourceSummary = useMemo(() => sourceEvidenceSummary(explanationPoints), [explanationPoints]);
   const videoSources = props.outcome.kind === "video"
     ? [props.outcome.previewUrl, props.outcome.result.video_url]
         .filter((value): value is string => Boolean(value))
@@ -1293,10 +1252,25 @@ export default function AgentResult(props: Props) {
     ? props.outcome.result.visualReview
     : undefined;
   const completeMetadata = useMemo(() => {
+    const provenanceRows = metadataRows(provenance?.metadata || {});
+    if (provenanceRows.length > 0) return provenanceRows;
     if (props.outcome.kind === "image") return metadataRows(props.outcome.result.all_metadata || {});
     if (props.outcome.kind === "video") return metadataRows(props.outcome.result.meta || {});
-    return metadataRows(provenance?.metadata || {});
+    return [];
   }, [props.outcome, provenance]);
+  const metadataFieldCount = Math.max(completeMetadata.length, Number(provenance?.metadataSummary?.fieldCount || 0));
+  const metadataSourceLabel = provenance?.metadata && Object.keys(provenance.metadata).length > 0
+    ? "来源核验读取"
+    : props.outcome.kind === "image" && Object.keys(props.outcome.result.all_metadata || {}).length > 0
+      ? "检测服务读取"
+      : props.outcome.kind === "video"
+        ? "视频容器信息"
+        : "暂无数据";
+  const normalizedMetadataQuery = metadataQuery.trim().toLowerCase();
+  const filteredMetadata = normalizedMetadataQuery
+    ? completeMetadata.filter((row) => `${row.path} ${row.value}`.toLowerCase().includes(normalizedMetadataQuery))
+    : completeMetadata;
+  const c2paStatus = provenanceView(provenance, props.provenanceBusy);
 
   async function refreshShares() {
     if (props.outcome.kind !== "evidence") return;
@@ -1399,19 +1373,23 @@ export default function AgentResult(props: Props) {
         <div className="result-verdict">
           <div className="verdict-kicker"><StatusIcon name={verdict.tone === "fake" ? "fake" : "real"} size={17} /> 小鉴综合判断</div>
           <h2 id="detection-result-title">{verdict.label}</h2>
-          <p>{verdict.description}</p>
+          <p>{publicCopy(verdict.description)}</p>
           <dl className="result-overview-metrics">
-            <div>
-              <dt>{verdict.riskLabel}</dt>
-              <dd>{verdict.reviewOnly ? "暂不公开" : `${Math.round(verdict.risk * 100)}%`}</dd>
+            <div className="result-probability-metric">
+              <dt>AI 生成概率</dt>
+              <dd>{Math.round(verdict.risk * 100)}<small>%</small></dd>
+              <i aria-hidden="true"><span style={{ width: `${Math.round(verdict.risk * 100)}%` }} /></i>
+              <small>{verdict.reviewOnly ? "模型输出 · 未校准" : verdict.riskLabel}</small>
             </div>
             <div>
-              <dt>来源状态</dt>
-              <dd>{sourceSummary.label}</dd>
+              <dt>C2PA 内容凭证</dt>
+              <dd>{c2paStatus.label}</dd>
+              <small>{c2paStatus.detail}</small>
             </div>
             <div>
-              <dt>可信程度</dt>
-              <dd>{verdict.confidence}</dd>
+              <dt>元数据</dt>
+              <dd>{metadataFieldCount > 0 ? `${metadataFieldCount} 项已读取` : props.provenanceBusy ? "正在读取" : "未读取到"}</dd>
+              <small>{metadataFieldCount > 0 ? "完整字段见文件信息" : "缺失本身不参与判假"}</small>
             </div>
           </dl>
         </div>
@@ -1434,7 +1412,15 @@ export default function AgentResult(props: Props) {
 
       {tab === "summary" && (
         <div className="result-tab-panel" id="result-panel-summary" role="tabpanel" aria-labelledby="result-tab-summary" tabIndex={0}>
-          <ResultDecisionCard points={explanationPoints} verdict={verdict} />
+          <ResultDecisionCard
+            points={explanationPoints}
+            verdict={verdict}
+            provenance={provenance}
+            provenanceBusy={props.provenanceBusy}
+            visibleWatermark={visibleWatermark}
+            captureEvidence={captureEvidence}
+            metadataCount={metadataFieldCount}
+          />
           {visualReview && (
             <section className="result-band result-priority-band">
               <details className="rationale-disclosure">
@@ -1639,17 +1625,50 @@ export default function AgentResult(props: Props) {
               </>}
               {props.outcome.kind === "evidence" && <><div><dt>文件大小</dt><dd>{props.outcome.result.fileMeta.size}</dd></div><div><dt>分辨率</dt><dd>{props.outcome.result.fileMeta.resolution || "不适用"}</dd></div><div><dt>文件指纹</dt><dd className="mono-value">{props.outcome.result.fileMeta.sha256 || "未返回"}</dd></div><div><dt>报告编号</dt><dd>{props.outcome.result.reportId}</dd></div></>}
             </dl>
+            {(props.outcome.kind === "image" || props.outcome.kind === "evidence") && (
+              <div className={`file-provenance-state is-${c2paStatus.tone}`}>
+                <span><Fingerprint size={18} /></span>
+                <div><strong>C2PA 内容凭证</strong><small>{c2paStatus.detail}</small></div>
+                <b>{c2paStatus.label}</b>
+              </div>
+            )}
           </section>
           <section className="result-band metadata-band">
-            <div className="section-title"><Fingerprint size={18} /><div><h3>完整元数据</h3><p>展示服务器从原始文件中读取到的全部字段，不省略嵌套信息。</p></div></div>
+            <div className="metadata-band-heading">
+              <div className="section-title"><Fingerprint size={18} /><div><h3>完整元数据</h3><p>展示服务器允许返回的全部原始字段；敏感定位与设备标识仍遵循隐私规则。</p></div></div>
+              <span>{metadataFieldCount} 项 · {metadataSourceLabel}</span>
+            </div>
             {completeMetadata.length > 0 ? (
-              <dl className="metadata-list">
-                {completeMetadata.map((row, index) => (
-                  <div key={`${row.path}-${index}`}><dt>{row.path}</dt><dd>{row.value}</dd></div>
-                ))}
-              </dl>
+              <>
+                <label className="metadata-search">
+                  <Search size={17} />
+                  <input
+                    type="search"
+                    value={metadataQuery}
+                    onChange={(event) => setMetadataQuery(event.target.value)}
+                    placeholder="搜索字段或值"
+                    aria-label="搜索完整元数据"
+                  />
+                  <span>{filteredMetadata.length}/{completeMetadata.length}</span>
+                </label>
+                {filteredMetadata.length > 0 ? (
+                  <dl className="metadata-list">
+                    {filteredMetadata.map((row, index) => (
+                      <div key={`${row.path}-${index}`}><dt>{row.path}</dt><dd>{row.value}</dd></div>
+                    ))}
+                  </dl>
+                ) : (
+                  <div className="metadata-empty"><Info size={16} /> 没有匹配“{metadataQuery}”的元数据字段。</div>
+                )}
+              </>
             ) : (
-              <div className="metadata-empty"><Info size={16} /> 当前文件未读取到可展示的元数据。</div>
+              <div className="metadata-empty metadata-empty-action">
+                {props.provenanceBusy ? <LoaderCircle size={17} className="spin" /> : <Info size={16} />}
+                <span>{props.provenanceBusy ? "正在从原始文件读取元数据与 C2PA 凭证。" : "当前文件未读取到可展示的元数据；字段缺失本身不代表内容为假。"}</span>
+                {canDeepAnalyze && !props.provenanceBusy && (
+                  <button type="button" onClick={props.onProvenance}>重新读取</button>
+                )}
+              </div>
             )}
           </section>
           <div className="result-disclaimer"><Info size={16} /><p>鉴伪结果是辅助判断，不等同于司法鉴定结论。高风险场景请结合原始文件、来源链路和人工复核。</p></div>

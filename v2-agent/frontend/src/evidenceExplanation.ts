@@ -205,9 +205,9 @@ function imageExplanation(outcome: Extract<AgentOutcome, { kind: "image" }>, ris
       direction: verdictDirection(verdictLabel, reviewOnly),
       importance: "critical",
       text: watermarkDecisive && result.modelDecisionReady !== true
-        ? "真实性分析尚未达到公开精确分数的条件；本次结论由已经确认的强 AI 水印直接支持。"
+        ? "真实性分析的原始分数尚未经过独立数据集校准；本次结论由已经确认的强 AI 水印直接支持。"
         : reviewOnly
-        ? `模型分析给出“${verdictLabel}”，但当前证据强度不足以公开精确概率，因此按低置信结果展示。`
+        ? `模型分析给出“${verdictLabel}”，页面同时展示未校准的模型输出分；当前证据强度有限，因此按低置信结果解释。`
         : `真实性模型已完成分析，本次 AI 生成风险为 ${percent(risk)}。`,
     },
   ];
@@ -255,7 +255,7 @@ function evidenceExplanation(outcome: Extract<AgentOutcome, { kind: "evidence" }
       direction: verdictDirection(verdictLabel, reviewOnly),
       importance: "critical",
       text: reviewOnly
-        ? "自动分析已经完成，但当前证据强度不足以公开精确概率，因此按低置信结果展示。"
+        ? "自动分析已经完成，页面展示模型原始输出分；该数值尚未经过独立数据集校准，因此按低置信结果解释。"
         : result.source === "provenance"
           ? "内容来源凭证已经通过验证，本次结论由可核对的来源记录直接支持。"
           : `模型和证据均已完成校验，本次 AI 风险为 ${percent(risk)}。`,

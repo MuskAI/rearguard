@@ -330,6 +330,7 @@ export default function App() {
   const documentRestoreAttemptRef = useRef("");
   const webRequestKeysRef = useRef(new WeakMap<File, Partial<Record<ImageAnalysisMode, string>>>());
   const historyOutcomeCacheRef = useRef(new Map<string, AgentOutcome>());
+  const provenanceAttemptedRef = useRef(new Set<string>());
   const lastTrackedPageRef = useRef<string | null>(null);
 
   const refreshHealth = useCallback(async () => {
@@ -537,6 +538,33 @@ export default function App() {
     if (!user || !outcome || !activeKey || outcome.id !== activeKey) return;
     historyOutcomeCacheRef.current.set(`${user.Userid}:${activeKey}`, outcome);
   }, [activeKey, outcome, user]);
+
+  useEffect(() => {
+    if (!outcome?.file || (outcome.kind !== "image" && outcome.kind !== "evidence")) return;
+    const existingReport = outcome.provenance
+      || (outcome.kind === "evidence" ? outcome.result.provenance || undefined : undefined);
+    if (existingReport || provenanceAttemptedRef.current.has(outcome.id)) return;
+
+    const outcomeId = outcome.id;
+    const file = outcome.file;
+    const taskId = outcome.kind === "evidence" ? outcome.result.taskId : undefined;
+    provenanceAttemptedRef.current.add(outcomeId);
+    setProvenanceBusy(true);
+    setActionError("");
+    setFailedAction(null);
+    void runProvenance(file, taskId)
+      .then((report) => {
+        setOutcome((current) => current && current.id === outcomeId && (current.kind === "image" || current.kind === "evidence")
+          ? { ...current, provenance: report }
+          : current);
+      })
+      .catch((error) => {
+        if (outcomeId !== outcome.id) return;
+        setActionError(error instanceof Error ? error.message : "来源凭证与元数据核验失败");
+        setFailedAction("provenance");
+      })
+      .finally(() => setProvenanceBusy(false));
+  }, [outcome]);
 
   useEffect(() => {
     if (!progress && !outcomeId && !documentTaskId && !errorMessage && !fallbackOffer) return;
