@@ -327,6 +327,13 @@ export interface CaptureEvidence {
   limitations: string[];
   groups: string[];
   fieldCount: number;
+  camera?: {
+    make?: string;
+    model?: string;
+    device?: string;
+    makePath?: string;
+    modelPath?: string;
+  };
   privacy?: {
     gpsRedacted?: boolean;
     serialRedacted?: boolean;

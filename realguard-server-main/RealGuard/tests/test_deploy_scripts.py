@@ -96,7 +96,7 @@ def test_v2_activation_injects_and_checks_the_primary_detector_contract():
     assert "REALGUARD_DETECTOR_INTERNAL_TOKEN" in activate
     assert "JIANZHEN_PRIMARY_IMAGE_DETECT_TOKEN" in activate
     assert "JIANZHEN_PRIMARY_IMAGE_DETECT_URL=http://127.0.0.1:%s/image" in activate
-    assert '"http://127.0.0.1:$detector_port/ready"' in activate
+    assert '"http://127.0.0.1:$detector_port/health"' in activate
 
 
 def test_public_default_nginx_rejects_ip_host_and_internal_preview_is_loopback_only():

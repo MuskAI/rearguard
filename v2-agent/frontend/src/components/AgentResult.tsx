@@ -818,6 +818,7 @@ function ResultDecisionCard({
   provenanceAvailable,
   visibleWatermark,
   captureEvidence,
+  cameraDeviceHint,
   metadataCount,
 }: {
   points: ExplanationPoint[];
@@ -827,6 +828,7 @@ function ResultDecisionCard({
   provenanceAvailable: boolean;
   visibleWatermark?: VisibleWatermarkResult;
   captureEvidence?: CaptureEvidence;
+  cameraDeviceHint?: string;
   metadataCount: number;
 }) {
   const modelPoint = points.find((point) => point.label !== "综合结论" && MODEL_EVIDENCE_PATTERN.test(point.label));
@@ -837,12 +839,21 @@ function ResultDecisionCard({
   const aiMetadata = provenance?.aiMetadata;
   const metadataProviders = (aiMetadata?.matchedProviders || []).map((item) => item.label);
   const metadataTools = (metadataProviders.length > 0 ? metadataProviders : aiMetadata?.matchedTools || []).slice(0, 2).join("、");
+  const cameraDevice = captureEvidence?.camera?.device
+    || captureEvidence?.evidence?.find((item) => item.key === "device")?.value
+    || cameraDeviceHint;
   const metadata: VerificationView = aiMetadata?.isAiLikely || provenance?.metadataAiGenerated
     ? { label: "发现 AI 工具标记", detail: `${metadataTools || "生成工具关键词"} · 元数据可编辑，作为来源线索`, tone: "fake" }
     : captureEvidence?.level === "conflict"
       ? { label: "拍摄信息冲突", detail: "元数据字段之间存在不一致", tone: "warning" }
-    : captureEvidence?.supportsRealCapture
-      ? { label: `${metadataCount} 项 · 实拍线索`, detail: "发现可核对的相机或拍摄流程信息", tone: "real" }
+    : cameraDevice
+      ? {
+          label: "发现相机型号",
+          detail: `${cameraDevice} · 属于支持实拍来源的辅助线索`,
+          tone: "real",
+        }
+      : captureEvidence?.supportsRealCapture
+        ? { label: `${metadataCount} 项 · 实拍线索`, detail: "发现可核对的相机或拍摄流程信息", tone: "real" }
       : metadataCount > 0
         ? { label: `${metadataCount} 项已读取`, detail: "完整字段可在文件信息中查看", tone: "neutral" }
         : { label: "未读取到字段", detail: "元数据缺失本身不参与判假", tone: "neutral" };
@@ -1245,6 +1256,32 @@ function metadataRows(value: unknown, path = "", rows: MetadataRow[] = []): Meta
   return rows;
 }
 
+function mergedMetadataRows(...sources: unknown[]): MetadataRow[] {
+  const rows: MetadataRow[] = [];
+  const seen = new Set<string>();
+  sources.forEach((source) => {
+    metadataRows(source).forEach((row) => {
+      const key = `${row.path.trim().toLowerCase()}\u0000${row.value}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      rows.push(row);
+    });
+  });
+  return rows;
+}
+
+function normalizedMetadataPath(path: string): string {
+  return path.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function findMetadataRow(rows: MetadataRow[], aliases: string[]): MetadataRow | undefined {
+  const normalizedAliases = aliases.map(normalizedMetadataPath).sort((a, b) => b.length - a.length);
+  return rows.find((row) => {
+    const path = normalizedMetadataPath(row.path);
+    return normalizedAliases.some((alias) => path === alias || path.endsWith(alias));
+  });
+}
+
 export default function AgentResult(props: Props) {
   const [tab, setTab] = useState<ResultTab>("summary");
   const [shareBusy, setShareBusy] = useState(false);
@@ -1314,12 +1351,25 @@ export default function AgentResult(props: Props) {
     ? props.outcome.result.visualReview
     : undefined;
   const completeMetadata = useMemo(() => {
-    const provenanceRows = metadataRows(provenance?.metadata || {});
-    if (provenanceRows.length > 0) return provenanceRows;
-    if (props.outcome.kind === "image") return metadataRows(props.outcome.result.all_metadata || {});
-    if (props.outcome.kind === "video") return metadataRows(props.outcome.result.meta || {});
+    if (props.outcome.kind === "image") {
+      return mergedMetadataRows(provenance?.metadata || {}, props.outcome.result.all_metadata || {});
+    }
+    if (props.outcome.kind === "evidence") return mergedMetadataRows(provenance?.metadata || {});
+    if (props.outcome.kind === "video") return mergedMetadataRows(props.outcome.result.meta || {});
     return [];
   }, [props.outcome, provenance]);
+  const cameraMake = findMetadataRow(completeMetadata, [
+    "image.exif.Make", "EXIF:Make", "EXIF_Make", "TIFF:Make", "cameraMake",
+  ]);
+  const cameraModel = findMetadataRow(completeMetadata, [
+    "image.exif.Model", "EXIF:Model", "EXIF_Model", "TIFF:Model", "cameraModel",
+  ]);
+  const lensModel = findMetadataRow(completeMetadata, [
+    "image.exif.LensModel", "EXIF:LensModel", "EXIF:LensInfo", "LensModel", "LensInfo",
+  ]);
+  const cameraDevice = [cameraMake?.value, cameraModel?.value]
+    .filter((value, index, values): value is string => Boolean(value) && values.indexOf(value) === index)
+    .join(" ");
   const metadataFieldCount = Math.max(completeMetadata.length, Number(provenance?.metadataSummary?.fieldCount || 0));
   const metadataSourceLabel = provenance?.metadata && Object.keys(provenance.metadata).length > 0
     ? "来源核验读取"
@@ -1487,6 +1537,7 @@ export default function AgentResult(props: Props) {
             provenanceAvailable={props.provenanceAvailable}
             visibleWatermark={visibleWatermark}
             captureEvidence={captureEvidence}
+            cameraDeviceHint={cameraDevice}
             metadataCount={metadataFieldCount}
           />
           {visualReview && (
@@ -1677,6 +1728,9 @@ export default function AgentResult(props: Props) {
               <div><dt>文件名</dt><dd>{fileName(props.outcome)}</dd></div>
               <div><dt>内容类型</dt><dd>{props.outcome.kind === "image" ? "图像" : props.outcome.kind === "video" ? "视频" : props.outcome.result.fileMeta.type === "document" ? "文档" : "图像"}</dd></div>
               {props.outcome.kind === "image" && <><div><dt>文件大小</dt><dd>{props.outcome.result.file_size || "未返回"}</dd></div><div><dt>分辨率</dt><dd>{props.outcome.result.resolution || "未返回"}</dd></div><div><dt>格式</dt><dd>{props.outcome.result.img_format || "未返回"}</dd></div><div><dt>任务编号</dt><dd>{props.outcome.result.itemid}</dd></div></>}
+              {props.outcome.kind === "image" && cameraDevice && <div><dt>拍摄设备</dt><dd>{cameraDevice}</dd></div>}
+              {props.outcome.kind === "image" && cameraModel && <div><dt>相机型号</dt><dd>{cameraModel.value}<small className="fact-source-path">{cameraModel.path}</small></dd></div>}
+              {props.outcome.kind === "image" && lensModel && <div><dt>镜头信息</dt><dd>{lensModel.value}<small className="fact-source-path">{lensModel.path}</small></dd></div>}
               {props.outcome.kind === "video" && <>
                 <div><dt>文件大小</dt><dd>{props.outcome.result.meta?.file_size || "未返回"}</dd></div>
                 <div><dt>分辨率</dt><dd>{props.outcome.result.meta?.resolution || "未返回"}</dd></div>

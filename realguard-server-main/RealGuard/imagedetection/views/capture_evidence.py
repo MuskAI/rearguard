@@ -57,15 +57,20 @@ def _flatten(value: Any, prefix: str = "", rows: list[tuple[str, str]] | None = 
     return rows
 
 
-def _field(rows: list[tuple[str, str]], *aliases: str) -> str:
+def _field_row(rows: list[tuple[str, str]], *aliases: str) -> tuple[str, str] | None:
     normalized_aliases = tuple(sorted({_normalize(alias) for alias in aliases if alias}, key=len, reverse=True))
     for alias in normalized_aliases:
         for path, value in rows:
             normalized_path = _normalize(path)
             if normalized_path == alias or normalized_path.endswith(alias):
                 if value != "[present]":
-                    return _text(value)
-    return ""
+                    return path, _text(value)
+    return None
+
+
+def _field(rows: list[tuple[str, str]], *aliases: str) -> str:
+    matched = _field_row(rows, *aliases)
+    return matched[1] if matched else ""
 
 
 def _has_field(rows: list[tuple[str, str]], *aliases: str) -> bool:
@@ -149,8 +154,10 @@ def analyze_capture_evidence(
     rows = _flatten(metadata)
     marker_texts = [_text(value, 180) for value in (ai_markers or []) if _text(value, 180)]
 
-    make = _field(rows, "EXIF:Make", "EXIF_Make", "TIFF:Make", "cameraMake")
-    model = _field(rows, "EXIF:Model", "EXIF_Model", "TIFF:Model", "cameraModel")
+    make_row = _field_row(rows, "image.exif.Make", "EXIF:Make", "EXIF_Make", "TIFF:Make", "cameraMake")
+    model_row = _field_row(rows, "image.exif.Model", "EXIF:Model", "EXIF_Model", "TIFF:Model", "cameraModel")
+    make = make_row[1] if make_row else ""
+    model = model_row[1] if model_row else ""
     lens = _field(rows, "EXIF:LensModel", "EXIF_LensModel", "LensInfo", "LensSpec", "lensModel")
     exposure = _field(rows, "EXIF:ExposureTime", "ExposureTime", "ShutterSpeedValue")
     aperture = _field(rows, "EXIF:FNumber", "FNumber", "ApertureValue")
@@ -321,6 +328,13 @@ def analyze_capture_evidence(
         "nativeSupportCount": len(native_support_groups),
         "adjustmentEligible": bool(rich_native_chain and not conflicts),
         "fieldCount": len(rows),
+        "camera": {
+            "make": make,
+            "model": model,
+            "device": device,
+            "makePath": make_row[0] if make_row else "",
+            "modelPath": model_row[0] if model_row else "",
+        },
         "privacy": {
             "gpsRedacted": has_gps,
             "serialRedacted": bool(serial),

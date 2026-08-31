@@ -54,6 +54,28 @@ def test_ai_declaration_blocks_camera_metadata_from_lowering_risk():
     assert result["conflicts"][0]["key"] == "ai_declaration"
 
 
+def test_nested_image_exif_camera_model_is_exposed_with_original_path():
+    result = capture_evidence.analyze_capture_evidence({
+        "image": {
+            "exif": {
+                "Make": "Apple",
+                "Model": "iPhone 14",
+                "ExposureTime": "1/120",
+            },
+        },
+    })
+
+    assert result["supportsRealCapture"] is True
+    assert result["camera"] == {
+        "make": "Apple",
+        "model": "iPhone 14",
+        "device": "Apple iPhone 14",
+        "makePath": "image.exif.Make",
+        "modelPath": "image.exif.Model",
+    }
+    assert result["evidence"][0]["value"] == "Apple iPhone 14"
+
+
 def test_verified_camera_credential_is_strong_but_conflicts_are_not_upgraded():
     clean = capture_evidence.analyze_capture_evidence(_camera_metadata())
     signed = capture_evidence.add_verified_camera_credential(clean, issuer="Example Camera CA")
