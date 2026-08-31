@@ -382,55 +382,37 @@
   background: #f8fafb;
 }
 
-.decision-model-score {
-  margin-top: 22px;
+.decision-model-signal {
+  margin-top: 24px;
+  padding: 15px 0;
+  border-top: 1px solid #dce4e8;
+  border-bottom: 1px solid #dce4e8;
 }
 
-.decision-model-score > strong {
+.decision-model-signal small,
+.decision-model-signal strong {
   display: block;
-  color: #243842;
-  font-size: 52px;
-  font-weight: 740;
-  letter-spacing: 0;
-  line-height: 1;
 }
 
-.decision-model-score > strong small {
-  margin-left: 3px;
-  font-size: 22px;
+.decision-model-signal small {
+  color: #71818a;
+  font-size: 12px;
   font-weight: 680;
 }
 
-.decision-model.is-fake .decision-model-score > strong {
+.decision-model-signal strong {
+  margin-top: 5px;
+  color: #243842;
+  font-size: 24px;
+  line-height: 1.25;
+}
+
+.decision-model.is-fake .decision-model-signal strong {
   color: #c4483f;
 }
 
-.decision-model.is-real .decision-model-score > strong {
+.decision-model.is-real .decision-model-signal strong {
   color: #137655;
-}
-
-.decision-model-score > i {
-  height: 7px;
-  display: block;
-  margin-top: 14px;
-  overflow: hidden;
-  background: #e8edef;
-  border-radius: 3px;
-}
-
-.decision-model-score > i > span {
-  height: 100%;
-  display: block;
-  background: #2f6bec;
-  border-radius: inherit;
-}
-
-.decision-model.is-fake .decision-model-score > i > span {
-  background: #d9574d;
-}
-
-.decision-model.is-real .decision-model-score > i > span {
-  background: #16805c;
 }
 
 .decision-model-copy {

@@ -797,7 +797,6 @@ function ResultDecisionCard({
   metadataCount: number;
 }) {
   const modelPoint = points.find((point) => point.label !== "综合结论" && MODEL_EVIDENCE_PATTERN.test(point.label));
-  const riskPercent = Math.round(verdict.risk * 100);
   const c2pa = provenanceAvailable
     ? provenanceView(provenance, provenanceBusy)
     : { label: "登录后核验", detail: "登录后自动读取 C2PA 内容凭证", tone: "neutral" as const };
@@ -852,12 +851,12 @@ function ResultDecisionCard({
 
         <section className={`decision-model is-${verdict.tone}`} aria-labelledby="decision-model-title">
           <header>
-            <div><small>模型分析</small><h4 id="decision-model-title">AI 生成概率</h4></div>
+            <div><small>模型分析</small><h4 id="decision-model-title">真实性信号</h4></div>
             <span>{verdict.reviewOnly ? "低置信" : "已完成"}</span>
           </header>
-          <div className="decision-model-score">
-            <strong>{riskPercent}<small>%</small></strong>
-            <i aria-hidden="true"><span style={{ width: `${riskPercent}%` }} /></i>
+          <div className="decision-model-signal">
+            <small>模型输出方向</small>
+            <strong>{verdict.tone === "fake" ? "偏向 AI 生成" : "偏向真实图像"}</strong>
           </div>
           <p className="decision-model-copy">{publicCopy(modelPoint?.text || verdict.description)}</p>
           {verdict.reviewOnly && <div className="decision-calibration-note"><Info size={15} />模型原始输出，尚未经过独立数据集校准。</div>}
@@ -1278,6 +1277,9 @@ export default function AgentResult(props: Props) {
   const c2paStatus = props.provenanceAvailable
     ? provenanceView(provenance, props.provenanceBusy)
     : { label: "登录后核验", detail: "登录后自动读取 C2PA 内容凭证", tone: "neutral" as const };
+  const sourceCheckCount = Number(Boolean(visibleWatermark?.supported))
+    + Number(metadataFieldCount > 0)
+    + Number(Boolean(provenance));
 
   async function refreshShares() {
     if (props.outcome.kind !== "evidence") return;
@@ -1389,14 +1391,14 @@ export default function AgentResult(props: Props) {
               <small>{verdict.reviewOnly ? "模型输出 · 未校准" : verdict.riskLabel}</small>
             </div>
             <div>
-              <dt>C2PA 内容凭证</dt>
-              <dd>{c2paStatus.label}</dd>
-              <small>{c2paStatus.detail}</small>
+              <dt>可信程度</dt>
+              <dd>{verdict.confidence}</dd>
+              <small>{verdict.reviewOnly ? "建议结合原始来源复核" : "已形成可发布结论"}</small>
             </div>
             <div>
-              <dt>元数据</dt>
-              <dd>{metadataFieldCount > 0 ? `${metadataFieldCount} 项已读取` : props.provenanceBusy ? "正在读取" : "未读取到"}</dd>
-              <small>{metadataFieldCount > 0 ? "完整字段见文件信息" : "缺失本身不参与判假"}</small>
+              <dt>来源核验</dt>
+              <dd>{props.provenanceBusy ? "正在核验" : `${sourceCheckCount}/3 项完成`}</dd>
+              <small>水印、元数据与 C2PA</small>
             </div>
           </dl>
         </div>

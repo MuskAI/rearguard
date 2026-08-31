@@ -1171,10 +1171,11 @@ test("结果页优先展示概率与关键来源证据并保持正文级字号",
   await expect(card).toBeVisible();
   await expect(card.getByRole("heading", { name: "关键证据" })).toBeVisible();
   await expect(card.getByRole("heading", { name: "文件自身证据" })).toBeVisible();
-  await expect(card.getByRole("heading", { name: "AI 生成概率" })).toBeVisible();
+  await expect(card.getByRole("heading", { name: "真实性信号" })).toBeVisible();
   await expect(card.getByText("C2PA 内容凭证")).toBeVisible();
   await expect(card.getByText("4 项已读取")).toBeVisible();
-  await expect(card.locator(".decision-model-score > strong")).toContainText("87%");
+  await expect(card.getByText("偏向 AI 生成", { exact: true })).toBeVisible();
+  await expect(card.getByText("87%", { exact: true })).toHaveCount(0);
   await expect(card.getByText("模型原始输出，尚未经过独立数据集校准。")).toBeVisible();
   await expect(card.getByRole("heading", { name: "综合判断" })).toHaveCount(0);
   await expect(page.locator(".result-probability-metric dd")).toContainText("87%");
