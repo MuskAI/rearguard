@@ -5,6 +5,7 @@ import json
 import os
 from contextlib import contextmanager
 from pathlib import Path
+import socket
 import stat
 import threading
 import time
@@ -165,6 +166,12 @@ WEB_TASK_MAX_ATTEMPTS = max(
     min(5, int(os.environ.get("REALGUARD_WEB_TASK_MAX_ATTEMPTS", "3"))),
 )
 VISUAL_REVIEW_MODE = "visual_review"
+WORKER_WAKE_SOCKET_PATH = Path(
+    os.environ.get(
+        "REALGUARD_DEVELOPER_WORKER_WAKE_SOCKET",
+        "/opt/realguard-data/developer-worker.wake",
+    )
+).expanduser()
 WEB_TASK_SPOOL_ROOT = Path(
     os.environ.get("REALGUARD_WEB_TASK_SPOOL_ROOT", "/opt/realguard-data/web-spool")
 ).expanduser()
@@ -207,6 +214,17 @@ class TaskRecoveryError(RuntimeError):
 
 class TaskSpoolError(RuntimeError):
     pass
+
+
+def _notify_detection_worker():
+    """Best-effort local wakeup; durable polling remains the recovery path."""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as notifier:
+            notifier.settimeout(0.02)
+            notifier.sendto(b"1", str(WORKER_WAKE_SOCKET_PATH))
+        return True
+    except OSError:
+        return False
 
 
 class QueueCapacityError(RuntimeError):
@@ -1023,6 +1041,7 @@ def _enqueue_web_detection_task(
                 fetch=False,
             )
         raise
+    _notify_detection_worker()
     return job_id, False
 
 
@@ -1089,6 +1108,7 @@ def _enqueue_visual_review_task(parent_task, image_bytes):
             except (OSError, TaskSpoolError):
                 pass
         raise
+    _notify_detection_worker()
     return job_id
 
 

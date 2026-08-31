@@ -40,6 +40,8 @@ class DeveloperDetectionWorker:
         hostname = socket.gethostname().split(".", 1)[0]
         self.instance = f"{hostname}-{os.getpid()}"
         self.stop_event = threading.Event()
+        self.wake_socket = None
+        self.wake_socket_path = HEARTBEAT_PATH.with_name("developer-worker.wake")
         self.executor = ThreadPoolExecutor(
             max_workers=WORKER_CONCURRENCY,
             thread_name_prefix="developer-detection",
@@ -106,6 +108,34 @@ class DeveloperDetectionWorker:
         temporary.write_text(json.dumps(payload, separators=(",", ":")) + "\n", encoding="ascii")
         os.replace(temporary, HEARTBEAT_PATH)
 
+    def _open_wake_socket(self):
+        self.wake_socket_path.parent.mkdir(parents=True, exist_ok=True)
+        self.wake_socket_path.unlink(missing_ok=True)
+        wake_socket = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        wake_socket.bind(str(self.wake_socket_path))
+        os.chmod(self.wake_socket_path, 0o600)
+        wake_socket.settimeout(POLL_INTERVAL_SECONDS)
+        self.wake_socket = wake_socket
+
+    def _wait_for_work(self):
+        if self.wake_socket is None:
+            self.stop_event.wait(POLL_INTERVAL_SECONDS)
+            return
+        try:
+            self.wake_socket.recv(64)
+        except TimeoutError:
+            pass
+        except OSError as exc:
+            if not self.stop_event.is_set():
+                print(f"[DEVELOPER WORKER ERROR] wake socket deferred: {exc}", flush=True)
+            self.stop_event.wait(POLL_INTERVAL_SECONDS)
+
+    def _close_wake_socket(self):
+        if self.wake_socket is not None:
+            self.wake_socket.close()
+            self.wake_socket = None
+        self.wake_socket_path.unlink(missing_ok=True)
+
     def _prefer_web_for_next_claim(self):
         active_kinds = set(self.futures.values())
         if WORKER_CONCURRENCY >= 2 and "web" in active_kinds and "developer" not in active_kinds:
@@ -119,6 +149,7 @@ class DeveloperDetectionWorker:
         developer_platform._ensure_web_spool_root()
         if not developer_platform._ensure_developer_platform_tables():
             raise RuntimeError("developer platform schema is unavailable")
+        self._open_wake_socket()
         self._run_maintenance(force=True)
         self._heartbeat()
         print(
@@ -133,7 +164,7 @@ class DeveloperDetectionWorker:
                 if not developer_platform._detector_ready_for_worker():
                     self.health["claimHealthy"] = False
                     self.health["lastError"] = "detector_not_ready"
-                    self.stop_event.wait(POLL_INTERVAL_SECONDS)
+                    self._wait_for_work()
                     continue
                 claimed_any = False
                 while len(self.futures) < WORKER_CONCURRENCY and not self.stop_event.is_set():
@@ -182,10 +213,11 @@ class DeveloperDetectionWorker:
                     self.prefer_web_task = kind != "web"
                     self.futures[self.executor.submit(execute, task)] = kind
                 if not claimed_any:
-                    self.stop_event.wait(POLL_INTERVAL_SECONDS)
+                    self._wait_for_work()
         finally:
             self.executor.shutdown(wait=True, cancel_futures=False)
             self._collect_finished()
+            self._close_wake_socket()
             print("[DEVELOPER WORKER] stopped cleanly", flush=True)
 
 
