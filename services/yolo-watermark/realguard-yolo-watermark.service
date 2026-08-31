@@ -10,7 +10,14 @@ WorkingDirectory=/home/ymk/services/yolo-watermark
 EnvironmentFile=/home/ymk/services/yolo-watermark/.env
 Environment=YOLO_WATERMARK_REQUIRE_CUDA=1
 Environment=YOLO_WATERMARK_DEVICE=0
-ExecStart=/home/ymk/services/yolo-watermark/.venv/bin/gunicorn --bind 127.0.0.1:5067 --workers 2 --threads 1 --timeout 90 service:app
+Environment=YOLO_WATERMARK_MODEL_NAME=huijian/yolo11x_explicit_watermark_binary
+Environment=YOLO_WATERMARK_REVISION=2026-08-31-f527d8a75420
+Environment=YOLO_WATERMARK_MODEL_SHA256=f527d8a7542061eb58b0a2953ea86b66b0ecf0b16f3c84d64886e8104c341081
+Environment=YOLO_WATERMARK_IMAGE_SIZE=512
+Environment=YOLO_WATERMARK_CONFIDENCE=0.25
+Environment=YOLO_WATERMARK_IOU=0.45
+Environment=YOLO_WATERMARK_WARMUP=1
+ExecStart=/home/ymk/services/yolo-watermark/.venv/bin/gunicorn --bind 127.0.0.1:5067 --workers 1 --threads 2 --timeout 90 service:app
 Restart=always
 RestartSec=3s
 

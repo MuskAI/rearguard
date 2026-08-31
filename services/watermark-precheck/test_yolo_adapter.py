@@ -21,7 +21,7 @@ def test_merge_corroborates_platform_hit_and_keeps_unmatched_watermark():
             "provider": "yolo11x_watermark",
             "confidence": 0.92,
             "bbox": {"x": 0.90, "y": 0.88, "w": 0.08, "h": 0.10},
-            "model": "corzent/yolo11x_watermark_detection",
+            "model": yolo_adapter.YOLO_EXPECTED_MODEL,
             "modelRevision": "revision-1",
         },
         {

@@ -294,8 +294,12 @@ import json, sys
 p=json.load(sys.stdin)
 assert p.get("status") == "ok"
 assert p.get("cudaReady") is True and p.get("device") != "cpu" and p.get("gpu")
-assert p.get("modelRevision") == "796a3b58a1121f20c5976d59314baea3db659a66"
-assert p.get("modelSha256") == "6ac71b6ab8db27ec7928b5176e60a359c65e1579a5c1d58cf2f98df30cf3085e"
+assert p.get("model") == "huijian/yolo11x_explicit_watermark_binary"
+assert p.get("modelRevision") == "2026-08-31-f527d8a75420"
+assert p.get("modelSha256") == "f527d8a7542061eb58b0a2953ea86b66b0ecf0b16f3c84d64886e8104c341081"
+assert p.get("modelResident") is True
+assert p.get("modelLoadCount") == 1
+assert p.get("warmupCompleted") is True
 print("ready")
 '\'' 2>/dev/null || printf invalid)
       watermark_http=$(curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:5066/health || printf 000)

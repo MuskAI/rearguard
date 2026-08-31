@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "model": "huijian/yolo11x_explicit_watermark_binary",
+  "revision": "2026-08-31-f527d8a75420",
+  "sha256": "f527d8a7542061eb58b0a2953ea86b66b0ecf0b16f3c84d64886e8104c341081",
+  "archiveSha256": "b425c17f9eee729af5b03c26924599b22c41bb0a37f19671c27fdd85688a04d4",
+  "artifact": "best.pt",
+  "classes": {
+    "0": "watermark"
+  },
+  "inputSize": 512,
+  "confidence": 0.25,
+  "iou": 0.45,
+  "receivedAt": "2026-08-31"
+}

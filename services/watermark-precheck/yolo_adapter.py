@@ -21,13 +21,16 @@ YOLO_TIMEOUT_SECONDS = float(os.getenv("YOLO_WATERMARK_TIMEOUT_SECONDS", "20"))
 YOLO_REQUIRE_CUDA = os.getenv("YOLO_WATERMARK_REQUIRE_CUDA", "true").lower() in {
     "1", "true", "yes", "on",
 }
-YOLO_EXPECTED_MODEL = "corzent/yolo11x_watermark_detection"
+YOLO_EXPECTED_MODEL = os.getenv(
+    "YOLO_WATERMARK_EXPECTED_MODEL",
+    "huijian/yolo11x_explicit_watermark_binary",
+)
 YOLO_EXPECTED_REVISION = os.getenv(
-    "YOLO_WATERMARK_REVISION", "796a3b58a1121f20c5976d59314baea3db659a66"
+    "YOLO_WATERMARK_REVISION", "2026-08-31-f527d8a75420"
 )
 YOLO_EXPECTED_SHA256 = os.getenv(
     "YOLO_WATERMARK_MODEL_SHA256",
-    "6ac71b6ab8db27ec7928b5176e60a359c65e1579a5c1d58cf2f98df30cf3085e",
+    "f527d8a7542061eb58b0a2953ea86b66b0ecf0b16f3c84d64886e8104c341081",
 )
 ENSEMBLE_URL = os.getenv("WATERMARK_ENSEMBLE_URL", "http://127.0.0.1:5068/v1/analyze")
 ENSEMBLE_HEALTH_URL = os.getenv("WATERMARK_ENSEMBLE_HEALTH_URL", "http://127.0.0.1:5068/health")
@@ -160,7 +163,7 @@ def _corroborate_registry_hits(
                 "yoloCorroborated": True,
                 "yoloConfidence": round(float(candidate.get("confidence") or 0.0), 4),
                 "yoloBbox": candidate.get("bbox") or {},
-                "localizationModel": candidate.get("model") or "corzent/yolo11x_watermark_detection",
+                "localizationModel": candidate.get("model") or YOLO_EXPECTED_MODEL,
                 "localizationModelRevision": candidate.get("modelRevision"),
             })
         else:
@@ -191,7 +194,7 @@ def _generic_yolo_hits(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]
         return [], {
             "available": False,
             "error": "not_configured",
-            "model": "corzent/yolo11x_watermark_detection",
+            "model": YOLO_EXPECTED_MODEL,
             "mode": "visible_watermark_detection_with_platform_attribution",
         }
     started = time.perf_counter()
@@ -231,7 +234,7 @@ def _generic_yolo_hits(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]
         "mode": "visible_watermark_detection_with_platform_attribution",
         "elapsedMs": int(payload.get("elapsedMs") or elapsed_ms),
         "roundTripMs": elapsed_ms,
-        "model": payload.get("model") or "corzent/yolo11x_watermark_detection",
+        "model": payload.get("model") or YOLO_EXPECTED_MODEL,
         "modelRevision": payload.get("modelRevision"),
         "modelSha256": payload.get("modelSha256"),
         "device": payload.get("device"),
@@ -328,7 +331,7 @@ def _visible_hits_with_yolo(
         g.generic_visible_watermark_status = {
             "available": False,
             "error": type(exc).__name__,
-            "model": "corzent/yolo11x_watermark_detection",
+            "model": YOLO_EXPECTED_MODEL,
             "mode": "visible_watermark_detection_with_platform_attribution",
             "registryElapsedMs": registry_elapsed_ms,
             "branchesParallel": True,
@@ -525,7 +528,7 @@ def precheck_with_yolo():
             {
                 "available": False,
                 "error": "not_run",
-                "model": "corzent/yolo11x_watermark_detection",
+                "model": YOLO_EXPECTED_MODEL,
                 "mode": "visible_watermark_detection_with_platform_attribution",
             },
         )
@@ -551,7 +554,7 @@ def health_with_yolo():
     payload = dict(_base_health())
     yolo = {
         "available": False,
-        "model": "corzent/yolo11x_watermark_detection",
+        "model": YOLO_EXPECTED_MODEL,
         "mode": "visible_watermark_detection_with_platform_attribution",
     }
     try:

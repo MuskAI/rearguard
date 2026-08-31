@@ -263,8 +263,12 @@ assert payload.get("coordinateSpace") == "display_normalized_v1"
 assert generic.get("available") is True
 assert generic.get("cudaReady") is True
 assert generic.get("device") != "cpu"
-assert generic.get("modelRevision") == "796a3b58a1121f20c5976d59314baea3db659a66"
-assert generic.get("modelSha256") == "6ac71b6ab8db27ec7928b5176e60a359c65e1579a5c1d58cf2f98df30cf3085e"
+assert generic.get("model") == "huijian/yolo11x_explicit_watermark_binary"
+assert generic.get("modelRevision") == "2026-08-31-f527d8a75420"
+assert generic.get("modelSha256") == "f527d8a7542061eb58b0a2953ea86b66b0ecf0b16f3c84d64886e8104c341081"
+assert generic.get("modelResident") is True
+assert generic.get("modelLoadCount") == 1
+assert generic.get("warmupCompleted") is True
 '; then
     watermark_ready=1
     break
@@ -376,8 +380,12 @@ assert precheck.get("coordinateSpace") == "display_normalized_v1"
 assert generic.get("available") is True
 assert generic.get("cudaReady") is True
 assert generic.get("device") != "cpu"
-assert generic.get("modelRevision") == "796a3b58a1121f20c5976d59314baea3db659a66"
-assert generic.get("modelSha256") == "6ac71b6ab8db27ec7928b5176e60a359c65e1579a5c1d58cf2f98df30cf3085e"
+assert generic.get("model") == "huijian/yolo11x_explicit_watermark_binary"
+assert generic.get("modelRevision") == "2026-08-31-f527d8a75420"
+assert generic.get("modelSha256") == "f527d8a7542061eb58b0a2953ea86b66b0ecf0b16f3c84d64886e8104c341081"
+assert generic.get("modelResident") is True
+assert generic.get("modelLoadCount") == 1
+assert generic.get("warmupCompleted") is True
 assert decision.get("mode") in {"review_only", "calibrated_verdict"}
 assert integrity.get("schema") == "cn.huijian.remote-inference-response-v1"
 assert integrity.get("requestNonce") == "a" * 32

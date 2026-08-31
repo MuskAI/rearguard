@@ -122,6 +122,7 @@ paths=(
   services/watermark-precheck/requirements.txt
   services/watermark-precheck/runtime.lock
   services/yolo-watermark/service.py
+  services/yolo-watermark/model-manifest.json
   services/yolo-watermark/realguard-yolo-watermark.service
   services/yolo-watermark/requirements.txt
   services/yolo-watermark/runtime.lock
@@ -185,6 +186,7 @@ cp "$WATERMARK_DIR/yolo_adapter.py" "$STAGE_DIR/watermark/"
 cp "$WATERMARK_DIR/requirements.txt" "$STAGE_DIR/watermark/"
 cp "$WATERMARK_DIR/runtime.lock" "$STAGE_DIR/watermark/"
 cp "$YOLO_DIR/service.py" "$STAGE_DIR/yolo/"
+cp "$YOLO_DIR/model-manifest.json" "$STAGE_DIR/yolo/"
 cp "$YOLO_DIR/requirements.txt" "$STAGE_DIR/yolo/"
 cp "$YOLO_DIR/runtime.lock" "$STAGE_DIR/yolo/"
 cp "$SOURCE_DIR/realguard-detection.service" "$STAGE_DIR/systemd/"

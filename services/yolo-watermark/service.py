@@ -7,6 +7,7 @@ import io
 import os
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -20,19 +21,23 @@ from ultralytics import YOLO
 
 
 MODEL_PATH = Path(os.getenv("YOLO_WATERMARK_MODEL", Path(__file__).parent / "models" / "best.pt"))
-MODEL_REVISION = os.getenv("YOLO_WATERMARK_REVISION", "796a3b58a1121f20c5976d59314baea3db659a66")
+MODEL_NAME = os.getenv(
+    "YOLO_WATERMARK_MODEL_NAME",
+    "huijian/yolo11x_explicit_watermark_binary",
+)
+MODEL_REVISION = os.getenv("YOLO_WATERMARK_REVISION", "2026-08-31-f527d8a75420")
 EXPECTED_MODEL_SHA256 = os.getenv(
     "YOLO_WATERMARK_MODEL_SHA256",
-    "6ac71b6ab8db27ec7928b5176e60a359c65e1579a5c1d58cf2f98df30cf3085e",
+    "f527d8a7542061eb58b0a2953ea86b66b0ecf0b16f3c84d64886e8104c341081",
 )
 API_TOKEN = os.getenv("YOLO_WATERMARK_TOKEN", "")
 DEVICE = os.getenv("YOLO_WATERMARK_DEVICE", "0" if torch.cuda.is_available() else "cpu")
 REQUIRE_CUDA = os.getenv("YOLO_WATERMARK_REQUIRE_CUDA", "true").lower() in {
     "1", "true", "yes", "on",
 }
-INPUT_SIZE = int(os.getenv("YOLO_WATERMARK_IMAGE_SIZE", "1280"))
-CONFIDENCE = float(os.getenv("YOLO_WATERMARK_CONFIDENCE", "0.35"))
-IOU_THRESHOLD = float(os.getenv("YOLO_WATERMARK_IOU", "0.50"))
+INPUT_SIZE = int(os.getenv("YOLO_WATERMARK_IMAGE_SIZE", "512"))
+CONFIDENCE = float(os.getenv("YOLO_WATERMARK_CONFIDENCE", "0.25"))
+IOU_THRESHOLD = float(os.getenv("YOLO_WATERMARK_IOU", "0.45"))
 MAX_DETECTIONS = int(os.getenv("YOLO_WATERMARK_MAX_DETECTIONS", "100"))
 MAX_UPLOAD_BYTES = int(os.getenv("YOLO_WATERMARK_MAX_BYTES", str(30 * 1024 * 1024)))
 WARMUP_ENABLED = os.getenv("YOLO_WATERMARK_WARMUP", "true").lower() in {"1", "true", "yes"}
@@ -55,8 +60,21 @@ checkpoint_sha256 = checkpoint_digest.hexdigest()
 if EXPECTED_MODEL_SHA256 and not hmac.compare_digest(checkpoint_sha256, EXPECTED_MODEL_SHA256):
     raise RuntimeError(f"YOLO watermark checkpoint checksum mismatch: {checkpoint_sha256}")
 
+model_load_started = time.perf_counter()
 _model = YOLO(str(MODEL_PATH))
+model_names = getattr(_model, "names", {}) or {}
+normalized_model_names = {
+    int(class_id): str(label).strip().lower()
+    for class_id, label in model_names.items()
+} if isinstance(model_names, dict) else {}
+if normalized_model_names != {0: "watermark"}:
+    raise RuntimeError(f"unexpected YOLO watermark classes: {model_names!r}")
+model_loaded_at = datetime.now(timezone.utc).isoformat()
+model_load_ms = int((time.perf_counter() - model_load_started) * 1000)
+warmup_completed = False
+warmup_ms = 0
 if WARMUP_ENABLED:
+    warmup_started = time.perf_counter()
     with torch.inference_mode():
         _model.predict(
             source=Image.new("RGB", (64, 64), color=(127, 127, 127)),
@@ -67,6 +85,8 @@ if WARMUP_ENABLED:
             device=DEVICE,
             verbose=False,
         )
+    warmup_completed = True
+    warmup_ms = int((time.perf_counter() - warmup_started) * 1000)
 
 
 def _authorized() -> bool:
@@ -132,10 +152,15 @@ def health():
         "status": "ok",
         "mode": "detect-only",
         "engine": "ultralytics-yolo11x",
-        "model": "corzent/yolo11x_watermark_detection",
+        "model": MODEL_NAME,
         "modelRevision": MODEL_REVISION,
         "modelSha256": checkpoint_sha256,
         "modelPath": str(MODEL_PATH),
+        "modelResident": True,
+        "modelLoadCount": 1,
+        "modelLoadedAt": model_loaded_at,
+        "modelLoadMs": model_load_ms,
+        "workerPid": os.getpid(),
         "device": DEVICE,
         "gpu": _gpu_name(),
         "cudaRequired": REQUIRE_CUDA,
@@ -143,6 +168,8 @@ def health():
         "inputSize": INPUT_SIZE,
         "confidenceThreshold": CONFIDENCE,
         "warmupEnabled": WARMUP_ENABLED,
+        "warmupCompleted": warmup_completed,
+        "warmupMs": warmup_ms,
         "maxUploadBytes": MAX_UPLOAD_BYTES,
     }
 
@@ -186,7 +213,7 @@ def detect():
     return {
         "status": "ok",
         "engine": "ultralytics-yolo11x",
-        "model": "corzent/yolo11x_watermark_detection",
+        "model": MODEL_NAME,
         "modelRevision": MODEL_REVISION,
         "modelSha256": checkpoint_sha256,
         "device": DEVICE,

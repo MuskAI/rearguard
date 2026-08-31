@@ -30,10 +30,13 @@ template assets inspired by these open-source projects:
   - License: Apache-2.0
   - https://github.com/wiltodelta/remove-ai-watermarks
 
-- `corzent/yolo11x_watermark_detection`
-  - Pinned revision: `796a3b58a1121f20c5976d59314baea3db659a66`
-  - Model repository metadata: MIT
-  - https://huggingface.co/corzent/yolo11x_watermark_detection
+- Project-supplied binary visible-watermark checkpoint
+  - Internal identifier: `huijian/yolo11x_explicit_watermark_binary`
+  - Pinned revision: `2026-08-31-f527d8a75420`
+  - Checkpoint SHA-256: `f527d8a7542061eb58b0a2953ea86b66b0ecf0b16f3c84d64886e8104c341081`
+  - The supplied archive did not contain a license file. Deployment operators
+    must document the checkpoint's ownership and redistribution terms before
+    distributing the model artifact.
 
 - `ultralytics` runtime
   - Deployed version: `8.4.96`
