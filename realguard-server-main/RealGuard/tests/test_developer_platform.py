@@ -804,6 +804,78 @@ def test_visual_review_update_never_overwrites_primary_verdict(monkeypatch):
     assert result["visualReview"]["nonAuthoritative"] is True
 
 
+def test_fast_web_job_publishes_before_background_enrichment(monkeypatch):
+    events = []
+    detection_kwargs = {}
+    payload = {
+        "status": "success",
+        "result": {
+            "itemid": 42,
+            "final_label": "真实图像",
+            "probability": 0.12,
+            "evidenceSnapshotReady": False,
+        },
+    }
+    task = {
+        "job_id": "job_fast_publish",
+        "mode": "fast",
+        "filename": "sample.png",
+        "mime_type": "image/png",
+        "lease_owner": "worker-lease",
+    }
+
+    monkeypatch.setattr(platform, "_web_task_job", lambda *_args, **_kwargs: {"id": task["job_id"]})
+    monkeypatch.setattr(platform.admin_state, "restore_detection_job", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(platform.admin_state, "update_detection_job", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        platform,
+        "_load_web_request_context",
+        lambda *_args: ({}, {"Userid": 7, "account_uuid": "owner-7"}, False),
+    )
+    monkeypatch.setattr(platform, "_recover_web_task_effect", lambda *_args: None)
+    monkeypatch.setattr(platform, "_read_web_task_spool", lambda *_args: b"image-bytes")
+
+    def detect(*_args, **kwargs):
+        detection_kwargs.update(kwargs)
+        events.append("analyzed")
+        return payload, 200
+
+    monkeypatch.setattr(platform.detection, "_run_image_detection_payload", detect)
+    monkeypatch.setattr(platform, "_record_web_task_effect", lambda *_args: events.append("journaled"))
+    monkeypatch.setattr(
+        platform,
+        "_finish_web_task",
+        lambda *_args: (events.append("published") or (True, "")),
+    )
+    monkeypatch.setattr(
+        platform,
+        "_enqueue_visual_review_task",
+        lambda *_args: (events.append("visual_queued") or "job_visual"),
+    )
+    monkeypatch.setattr(platform, "_update_parent_visual_review", lambda *_args: True)
+
+    def freeze(*_args):
+        assert "published" in events
+        events.append("snapshot_frozen")
+
+    monkeypatch.setattr(platform, "_freeze_published_image_evidence", freeze)
+    monkeypatch.setattr(
+        platform,
+        "excute_sql",
+        lambda sql, *_args, **_kwargs: (
+            [{"status": "success", "spool_path": None}]
+            if "SELECT status, spool_path" in " ".join(sql.split())
+            else 1
+        ),
+    )
+
+    platform._run_web_detection_job(task)
+
+    assert detection_kwargs["freeze_evidence"] is False
+    assert events.index("published") < events.index("visual_queued")
+    assert events.index("published") < events.index("snapshot_frozen")
+
+
 def test_task_status_is_not_blocked_by_unrelated_reconciliation_failure(client, monkeypatch):
     monkeypatch.setattr(
         platform,

@@ -191,6 +191,7 @@ _PLATFORM_TABLES_READY = False
 _PLATFORM_TABLES_LOCK = threading.Lock()
 _TASK_RECONCILE_LOCK = threading.Lock()
 _TASK_RECONCILE_LAST_MONOTONIC = 0.0
+_PARENT_RESULT_UPDATE_LOCK = threading.Lock()
 
 
 class BillingError(RuntimeError):
@@ -4494,6 +4495,11 @@ def _visual_review_parent_id(task):
 
 
 def _update_parent_visual_review(parent_job_id, review):
+    with _PARENT_RESULT_UPDATE_LOCK:
+        return _update_parent_visual_review_unlocked(parent_job_id, review)
+
+
+def _update_parent_visual_review_unlocked(parent_job_id, review):
     rows = excute_sql(
         """
         SELECT status, result_json
@@ -4540,6 +4546,65 @@ def _update_parent_visual_review(parent_job_id, review):
             ),
         })
     return True
+
+
+def _update_parent_evidence_snapshot(parent_job_id, ready):
+    """Update the asynchronously frozen evidence state without reopening the verdict."""
+    with _PARENT_RESULT_UPDATE_LOCK:
+        rows = excute_sql(
+            """
+            SELECT status, result_json
+            FROM web_detection_tasks
+            WHERE job_id = %s
+            LIMIT 1
+            """,
+            (parent_job_id,),
+        )
+        if not rows or str(rows[0].get("status") or "") != "success":
+            return False
+        try:
+            payload = json.loads(rows[0].get("result_json") or "")
+        except (TypeError, ValueError):
+            return False
+        result = payload.get("result") if isinstance(payload, dict) else None
+        if not isinstance(result, dict):
+            return False
+        result["evidenceSnapshotReady"] = bool(ready)
+        updated = excute_sql(
+            """
+            UPDATE web_detection_tasks
+            SET result_json = %s
+            WHERE job_id = %s AND status = 'success'
+            """,
+            (
+                json.dumps(payload, ensure_ascii=False, default=str),
+                parent_job_id,
+            ),
+            fetch=False,
+        )
+        if updated != 1:
+            return False
+        cached = admin_state.get_detection_job(parent_job_id)
+        if cached:
+            admin_state.update_detection_job(parent_job_id, {"result": payload})
+        return True
+
+
+def _freeze_published_image_evidence(task, payload, user_info, is_guest):
+    result = payload.get("result") if isinstance(payload, dict) else None
+    item_id = result.get("itemid") if isinstance(result, dict) else None
+    if item_id in (None, ""):
+        raise TaskRecoveryError("published image verdict is missing its history record")
+    item = detection._load_detection_record_for_actor(
+        "data",
+        item_id,
+        user_info,
+        is_guest=is_guest,
+    )
+    if not item:
+        raise TaskRecoveryError("published image verdict cannot reload its history record")
+    detection._freeze_persisted_image_evidence(item)
+    _update_parent_evidence_snapshot(task["job_id"], True)
 
 
 def _wait_for_visual_review_parent(parent_job_id, timeout_seconds=5.0):
@@ -4657,11 +4722,17 @@ def _run_web_detection_job(task):
         daemon=True,
     )
     heartbeat.start()
+    execution_started = time.monotonic()
+    analysis_ms = None
+    publish_ms = None
+    snapshot_ms = None
     try:
         _actor, user_info, is_guest = _load_web_request_context(task)
         payload = _recover_web_task_effect(task, user_info)
         recovered = payload is not None
         status_code = 200
+        image_bytes = None
+        enqueue_visual_after_publish = False
         if not recovered:
             image_bytes = _read_web_task_spool(task)
             if mode == "swarm":
@@ -4674,6 +4745,7 @@ def _run_web_detection_job(task):
                     job_id=job_id,
                 )
             else:
+                analysis_started = time.monotonic()
                 payload, status_code = detection._run_image_detection_payload(
                     image_bytes,
                     task.get("filename") or "upload.img",
@@ -4683,26 +4755,19 @@ def _run_web_detection_job(task):
                     mark_guest=False,
                     source_task_id=job_id,
                     defer_visual_llm=True,
+                    freeze_evidence=False,
+                    persist_result=True,
                 )
+                analysis_ms = round((time.monotonic() - analysis_started) * 1000)
             if status_code < 400 and isinstance(payload, dict) and payload.get("status") == "success":
                 if mode == "fast" and isinstance(payload.get("result"), dict):
-                    try:
-                        visual_job_id = _enqueue_visual_review_task(task, image_bytes)
-                        payload["result"]["visualReview"] = {
-                            "status": "queued",
-                            "jobId": visual_job_id,
-                            "nonAuthoritative": True,
-                            "evidence": [],
-                            "note": "主结论已完成；视觉 LLM 将在后台补充解释，不改变当前结论。",
-                        }
-                    except Exception as exc:
-                        print(f"[VISUAL REVIEW QUEUE ERROR] {type(exc).__name__}")
-                        payload["result"]["visualReview"] = {
-                            "status": "failed",
-                            "nonAuthoritative": True,
-                            "evidence": [],
-                            "note": "视觉 LLM 暂未进入后台队列，主模型结论不受影响。",
-                        }
+                    enqueue_visual_after_publish = True
+                    payload["result"]["visualReview"] = {
+                        "status": "queued",
+                        "nonAuthoritative": True,
+                        "evidence": [],
+                        "note": "主结论已完成；视觉 LLM 将在后台补充解释，不改变当前结论。",
+                    }
                 _record_web_task_effect(task, user_info, payload)
         heartbeat_stop.set()
         heartbeat.join(timeout=WEB_TASK_HEARTBEAT_SECONDS + 1)
@@ -4718,6 +4783,7 @@ def _run_web_detection_job(task):
             })
             return
         success, error_message = _finish_web_task(task, payload, status_code)
+        publish_ms = round((time.monotonic() - execution_started) * 1000)
         admin_state.update_detection_job(job_id, {
             "status": "success" if success else "failed",
             "result": payload,
@@ -4727,6 +4793,41 @@ def _run_web_detection_job(task):
                 "检测完成" if success else "检测未完成"
             ),
         })
+        if success and enqueue_visual_after_publish and image_bytes is not None:
+            try:
+                visual_job_id = _enqueue_visual_review_task(task, image_bytes)
+                _update_parent_visual_review(job_id, {
+                    "status": "queued",
+                    "jobId": visual_job_id,
+                    "nonAuthoritative": True,
+                    "evidence": [],
+                    "note": "主结论已完成；视觉 LLM 将在后台补充解释，不改变当前结论。",
+                })
+            except Exception as exc:
+                print(f"[VISUAL REVIEW QUEUE ERROR] {type(exc).__name__}", flush=True)
+                _update_parent_visual_review(job_id, {
+                    "status": "failed",
+                    "nonAuthoritative": True,
+                    "evidence": [],
+                    "note": "视觉 LLM 暂未进入后台队列，主模型结论不受影响。",
+                })
+        if success and mode == "fast" and not recovered:
+            snapshot_started = time.monotonic()
+            try:
+                _freeze_published_image_evidence(task, payload, user_info, is_guest)
+            except Exception as exc:
+                print(
+                    f"[FAST EVIDENCE SNAPSHOT ERROR] job={job_id} error={type(exc).__name__}: {str(exc)[:300]}",
+                    flush=True,
+                )
+            snapshot_ms = round((time.monotonic() - snapshot_started) * 1000)
+        if mode == "fast":
+            print(
+                f"[FAST PATH TIMING] job={job_id} analysisMs={analysis_ms} "
+                f"publishMs={publish_ms} snapshotMs={snapshot_ms} "
+                f"totalMs={round((time.monotonic() - execution_started) * 1000)}",
+                flush=True,
+            )
     except Exception as exc:
         message = str(exc)[:500]
         print(f"[WEB DETECTION TASK ERROR] job={job_id} mode={mode} error={type(exc).__name__}: {message}")

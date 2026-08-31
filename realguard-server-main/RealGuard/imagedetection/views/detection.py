@@ -1105,8 +1105,8 @@ def _record_final_decision_run(itemid, result, user_info, *, route='swarm'):
         print(f"[FINAL DECISION RUN LOG ERROR] {exc}")
 
 
-def _persist_and_freeze_completed_image_result(itemid, result, *, actor=None, is_guest=False):
-    """Persist the final fused verdict before freezing its signed evidence."""
+def _persist_completed_image_result(itemid, result, *, actor=None, is_guest=False):
+    """Persist the final fused verdict and return its authoritative history row."""
     if not itemid:
         raise RuntimeError('检测结果缺少历史记录 ID')
     probability = _clamp01((result or {}).get('probability'), 0.5)
@@ -1142,11 +1142,27 @@ def _persist_and_freeze_completed_image_result(itemid, result, *, actor=None, is
     )
     if not item:
         raise RuntimeError('最终融合结论写入后无法读取历史记录')
+    return item
+
+
+def _freeze_persisted_image_evidence(item):
+    """Freeze signed evidence after the user-visible verdict has been published."""
     try:
         reporting.freeze_image_evidence_snapshot(item)
     except Exception as exc:
         raise RuntimeError('检测结论已生成，但证据快照固化失败，请稍后重试') from exc
     return True
+
+
+def _persist_and_freeze_completed_image_result(itemid, result, *, actor=None, is_guest=False):
+    """Persist the final fused verdict before freezing its signed evidence."""
+    item = _persist_completed_image_result(
+        itemid,
+        result,
+        actor=actor,
+        is_guest=is_guest,
+    )
+    return _freeze_persisted_image_evidence(item)
 
 
 def _primary_image_endpoint():
@@ -1864,9 +1880,12 @@ def _run_image_detection_payload(
     mark_guest=True,
     include_internal_evidence=False,
     freeze_evidence=True,
+    persist_result=None,
     source_task_id='',
     defer_visual_llm=False,
 ):
+    if persist_result is None:
+        persist_result = freeze_evidence
     backend_openid, phone = _backend_identity(user_info)
     safe_name = secure_filename(filename) or filename
     if not image_bytes:
@@ -1942,7 +1961,13 @@ def _run_image_detection_payload(
             )
             api_resp.raise_for_status()
             api_json = api_resp.json()
-            api_json.setdefault('data', {}).update(_route_data(primary_model, 'primary'))
+            response_data = api_json.setdefault('data', {})
+            response_model = response_data.get('model') or {}
+            response_data.update(_route_data(
+                primary_model,
+                'primary',
+                latencyMs=response_model.get('latencyMs') if isinstance(response_model, dict) else None,
+            ))
         except requests.RequestException as e:
             upstream = getattr(e, 'response', None)
             upstream_status = int(getattr(upstream, 'status_code', 0) or 0)
@@ -2155,6 +2180,15 @@ def _run_image_detection_payload(
                 actor=user_info,
                 is_guest=is_guest,
             )
+        elif persist_result:
+            _record_final_decision_run(data_itemid, result, user_info, route='primary')
+            _persist_completed_image_result(
+                data_itemid,
+                result,
+                actor=user_info,
+                is_guest=is_guest,
+            )
+            result['evidenceSnapshotReady'] = False
         if include_internal_evidence and isinstance(data.get('remote_evidence'), dict):
             result['_remote_evidence'] = data.get('remote_evidence')
         _suppress_review_only_scores(result)
@@ -3993,7 +4027,7 @@ def image_detection_job(job_id):
             response = jsonify({'status': 'success', 'job': public_job})
             response.headers['Cache-Control'] = 'no-store'
             return response
-        time.sleep(0.25)
+        time.sleep(0.1)
         job, load_error = load_job()
         if load_error:
             return jsonify(load_error[0]), load_error[1]
