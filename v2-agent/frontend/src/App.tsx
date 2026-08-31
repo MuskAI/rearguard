@@ -540,7 +540,7 @@ export default function App() {
   }, [activeKey, outcome, user]);
 
   useEffect(() => {
-    if (!outcome?.file || (outcome.kind !== "image" && outcome.kind !== "evidence")) return;
+    if (!user || !outcome?.file || (outcome.kind !== "image" && outcome.kind !== "evidence")) return;
     const existingReport = outcome.provenance
       || (outcome.kind === "evidence" ? outcome.result.provenance || undefined : undefined);
     if (existingReport || provenanceAttemptedRef.current.has(outcome.id)) return;
@@ -564,7 +564,7 @@ export default function App() {
         setFailedAction("provenance");
       })
       .finally(() => setProvenanceBusy(false));
-  }, [outcome]);
+  }, [outcome, user]);
 
   useEffect(() => {
     if (!progress && !outcomeId && !documentTaskId && !errorMessage && !fallbackOffer) return;
@@ -1517,6 +1517,7 @@ export default function App() {
                 <div ref={resultRef} className="result-anchor" role="region" aria-label="检测结果" aria-live="polite" tabIndex={-1}>
                   <AgentResult
                     outcome={outcome}
+                    provenanceAvailable={Boolean(user)}
                     provenanceBusy={provenanceBusy}
                     downloadBusy={downloadBusy}
                     actionError={actionError}

@@ -1110,7 +1110,7 @@ test("刷新工作台会恢复文档结果而不会重新上传", async ({ page 
 
 test("结果页优先展示概率与关键来源证据并保持正文级字号", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await installBaseMocks(page);
+  await installBaseMocks(page, true);
   await page.route("**/image_upload/detect_async", (route) => route.fulfill({
     json: {
       status: "success",
@@ -1158,7 +1158,6 @@ test("结果页优先展示概率与关键来源证据并保持正文级字号",
     },
   }));
   await page.goto("/?workspace=1");
-  await page.locator(".guest-upload-consent input").check();
   const provenanceRequest = page.waitForRequest(/\/v2-api\/provenance(?:\?|$)/);
   await page.locator('input[type="file"]').setInputFiles({
     name: "typography-review.png",

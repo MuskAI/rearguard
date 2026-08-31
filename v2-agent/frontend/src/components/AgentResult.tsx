@@ -67,6 +67,7 @@ type ResultTab = "summary" | "evidence" | "file";
 
 interface Props {
   outcome: AgentOutcome;
+  provenanceAvailable: boolean;
   provenanceBusy: boolean;
   downloadBusy: boolean;
   actionError?: string;
@@ -781,6 +782,7 @@ function ResultDecisionCard({
   verdict,
   provenance,
   provenanceBusy,
+  provenanceAvailable,
   visibleWatermark,
   captureEvidence,
   metadataCount,
@@ -789,13 +791,16 @@ function ResultDecisionCard({
   verdict: VerdictView;
   provenance?: ProvenanceReport;
   provenanceBusy: boolean;
+  provenanceAvailable: boolean;
   visibleWatermark?: VisibleWatermarkResult;
   captureEvidence?: CaptureEvidence;
   metadataCount: number;
 }) {
   const modelPoint = points.find((point) => point.label !== "综合结论" && MODEL_EVIDENCE_PATTERN.test(point.label));
   const riskPercent = Math.round(verdict.risk * 100);
-  const c2pa = provenanceView(provenance, provenanceBusy);
+  const c2pa = provenanceAvailable
+    ? provenanceView(provenance, provenanceBusy)
+    : { label: "登录后核验", detail: "登录后自动读取 C2PA 内容凭证", tone: "neutral" as const };
   const decisiveWatermark = hasDecisiveAiWatermark(visibleWatermark);
   const metadata: VerificationView = captureEvidence?.level === "conflict"
     ? { label: "拍摄信息冲突", detail: "元数据字段之间存在不一致", tone: "warning" }
@@ -1222,7 +1227,7 @@ export default function AgentResult(props: Props) {
         .filter((value, index, items) => items.indexOf(value) === index)
     : [];
   const preview = props.outcome.kind === "video" ? videoSources[0] : filePreview(props.outcome);
-  const canDeepAnalyze = hasImageFile(props.outcome);
+  const canDeepAnalyze = props.provenanceAvailable && hasImageFile(props.outcome);
   const provenance = props.outcome.kind === "image" || props.outcome.kind === "evidence"
     ? props.outcome.provenance || (props.outcome.kind === "evidence" ? props.outcome.result.provenance || undefined : undefined)
     : undefined;
@@ -1270,7 +1275,9 @@ export default function AgentResult(props: Props) {
   const filteredMetadata = normalizedMetadataQuery
     ? completeMetadata.filter((row) => `${row.path} ${row.value}`.toLowerCase().includes(normalizedMetadataQuery))
     : completeMetadata;
-  const c2paStatus = provenanceView(provenance, props.provenanceBusy);
+  const c2paStatus = props.provenanceAvailable
+    ? provenanceView(provenance, props.provenanceBusy)
+    : { label: "登录后核验", detail: "登录后自动读取 C2PA 内容凭证", tone: "neutral" as const };
 
   async function refreshShares() {
     if (props.outcome.kind !== "evidence") return;
@@ -1417,6 +1424,7 @@ export default function AgentResult(props: Props) {
             verdict={verdict}
             provenance={provenance}
             provenanceBusy={props.provenanceBusy}
+            provenanceAvailable={props.provenanceAvailable}
             visibleWatermark={visibleWatermark}
             captureEvidence={captureEvidence}
             metadataCount={metadataFieldCount}
@@ -1460,7 +1468,7 @@ export default function AgentResult(props: Props) {
               {props.downloadBusy ? <LoaderCircle size={17} className="spin" /> : <Download size={17} />}
               {props.downloadBusy ? "正在整理报告" : "下载鉴伪报告"}
             </button>
-            <button type="button" className="secondary-button" onClick={props.onProvenance} disabled={!canDeepAnalyze || props.provenanceBusy} title={canDeepAnalyze ? "验证 C2PA 与文件元数据" : "历史任务需重新上传原文件后验证内容凭证"}>
+            <button type="button" className="secondary-button" onClick={props.onProvenance} disabled={!canDeepAnalyze || props.provenanceBusy} title={canDeepAnalyze ? "验证 C2PA 与文件元数据" : !props.provenanceAvailable ? "登录后可验证 C2PA 与完整元数据" : "历史任务需重新上传原文件后验证内容凭证"}>
               {props.provenanceBusy ? <LoaderCircle size={17} className="spin" /> : <Fingerprint size={17} />}
               {provenance ? "重新验证内容凭证" : "验证内容凭证"}
             </button>
