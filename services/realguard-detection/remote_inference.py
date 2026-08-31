@@ -251,14 +251,26 @@ def _visible_precheck_ready():
             response = session.get(VISIBLE_PRECHECK_HEALTH_URL, timeout=(1, 4))
         response.raise_for_status()
         payload = response.json()
+        generic = payload.get("genericVisibleWatermark") if isinstance(payload, dict) else None
+        direct_model_ready = bool(
+            payload.get("mode") == "model_direct"
+            and isinstance(generic, dict)
+            and generic.get("available") is True
+            and generic.get("mode") == "model_direct"
+            and generic.get("resultSource") == "model"
+            and generic.get("modelResident") is True
+        )
         return bool(
             isinstance(payload, dict)
             and payload.get("status") == "ok"
-            and payload.get("registryReady") is True
             and payload.get("tokenReady") is True
             and payload.get("coordinateSpace") == "display_normalized_v1"
-            and isinstance(payload.get("genericVisibleWatermark"), dict)
-            and payload["genericVisibleWatermark"].get("available") is True
+            and isinstance(generic, dict)
+            and generic.get("available") is True
+            and (
+                payload.get("registryReady") is True
+                or direct_model_ready
+            )
         )
     except (requests.RequestException, TypeError, ValueError):
         return False

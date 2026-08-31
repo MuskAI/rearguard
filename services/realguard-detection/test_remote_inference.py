@@ -193,6 +193,86 @@ def test_model_health_requires_visible_watermark_chain(monkeypatch):
     assert response.get_json()["data"]["visiblePrecheckReady"] is False
 
 
+def test_visible_precheck_health_accepts_resident_direct_model(monkeypatch):
+    module = _load_remote_inference(monkeypatch)
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "status": "ok",
+                "mode": "model_direct",
+                "coordinateSpace": "display_normalized_v1",
+                "registryReady": False,
+                "tokenReady": True,
+                "genericVisibleWatermark": {
+                    "available": True,
+                    "mode": "model_direct",
+                    "resultSource": "model",
+                    "modelResident": True,
+                },
+            }
+
+    class Session:
+        trust_env = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get(self, *_args, **_kwargs):
+            return Response()
+
+    monkeypatch.setattr(module, "VISIBLE_PRECHECK_TOKEN", "token")
+    monkeypatch.setattr(module.requests, "Session", Session)
+
+    assert module._visible_precheck_ready() is True
+
+
+def test_visible_precheck_health_rejects_unloaded_direct_model(monkeypatch):
+    module = _load_remote_inference(monkeypatch)
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "status": "ok",
+                "mode": "model_direct",
+                "coordinateSpace": "display_normalized_v1",
+                "registryReady": False,
+                "tokenReady": True,
+                "genericVisibleWatermark": {
+                    "available": True,
+                    "mode": "model_direct",
+                    "resultSource": "model",
+                    "modelResident": False,
+                },
+            }
+
+    class Session:
+        trust_env = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get(self, *_args, **_kwargs):
+            return Response()
+
+    monkeypatch.setattr(module, "VISIBLE_PRECHECK_TOKEN", "token")
+    monkeypatch.setattr(module.requests, "Session", Session)
+
+    assert module._visible_precheck_ready() is False
+
+
 def test_partial_visible_scan_accepts_valid_registry_positive(monkeypatch):
     module = _load_remote_inference(monkeypatch)
 
