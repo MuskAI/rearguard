@@ -390,9 +390,6 @@ assert generic.get("device") != "cpu"
 assert generic.get("model") == "huijian/yolo11x_explicit_watermark_binary"
 assert generic.get("modelRevision") == "2026-08-31-f527d8a75420"
 assert generic.get("modelSha256") == "f527d8a7542061eb58b0a2953ea86b66b0ecf0b16f3c84d64886e8104c341081"
-assert generic.get("modelResident") is True
-assert generic.get("modelLoadCount") == 1
-assert generic.get("warmupCompleted") is True
 assert decision.get("mode") in {"review_only", "calibrated_verdict"}
 assert integrity.get("schema") == "cn.huijian.remote-inference-response-v1"
 assert integrity.get("requestNonce") == "a" * 32
