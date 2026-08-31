@@ -130,8 +130,18 @@ export function startExpertReviewImageDetection(file: File, signal?: AbortSignal
   });
 }
 
-export function getImageDetectionJob(jobId: string, signal?: AbortSignal) {
-  return jsonRequest<{ job: DetectionJob }>(`/image_upload/jobs/${encodeURIComponent(jobId)}`, { signal });
+export function getImageDetectionJob(
+  jobId: string,
+  options: { after?: string; waitSeconds?: number; signal?: AbortSignal } = {},
+) {
+  const query = new URLSearchParams();
+  if (options.after) query.set("after", options.after);
+  if (options.waitSeconds) query.set("wait", String(options.waitSeconds));
+  const suffix = query.size ? `?${query.toString()}` : "";
+  return jsonRequest<{ job: DetectionJob }>(
+    `/image_upload/jobs/${encodeURIComponent(jobId)}${suffix}`,
+    { signal: options.signal },
+  );
 }
 
 function triggerDownload(path: string) {
@@ -310,6 +320,7 @@ export type ExpertReviewResult = {
 
 export type DetectionJob = {
   id: string;
+  version?: string;
   kind?: string;
   filename?: string;
   mode?: string;

@@ -1234,9 +1234,12 @@ function ImageDetectionPage({
         swarmAbortRef.current = null;
         throw new Error(tr("专家会诊复核暂不可用，请稍后重试", "Expert review is temporarily unavailable. Please try again later."));
       }
-      await new Promise((resolve) => window.setTimeout(resolve, 760));
       assertActive();
-      const polled = await getImageDetectionJob(current.id, controller.signal);
+      const polled = await getImageDetectionJob(current.id, {
+        after: current.version,
+        waitSeconds: 20,
+        signal: controller.signal,
+      });
       assertActive();
       current = polled.job;
       setExpertReviewJob(current);
@@ -1281,9 +1284,12 @@ function ImageDetectionPage({
         swarmAbortRef.current = null;
         throw new Error(tr("检测暂不可用，请稍后重试", "Detection is temporarily unavailable. Please try again later."));
       }
-      await new Promise((resolve) => window.setTimeout(resolve, 760));
       assertActive();
-      const polled = await getImageDetectionJob(current.id, controller.signal);
+      const polled = await getImageDetectionJob(current.id, {
+        after: current.version,
+        waitSeconds: 20,
+        signal: controller.signal,
+      });
       assertActive();
       current = polled.job;
       setStatus({ tone: "info", text: current.summary || tr("正在分析图像……", "Analyzing image...") });
