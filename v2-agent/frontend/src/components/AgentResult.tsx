@@ -652,7 +652,7 @@ function verdictFor(outcome: AgentOutcome): VerdictView {
       description: reviewOnly
         ? outcome.result.explanation || `系统给出“${label}”二元结论；当前置信度较低，建议结合原图和证据复核。`
         : localizedWatermark
-          ? "已确认强 AI 平台水印，平台匹配、区域定位与 OCR/检索证据相互印证。"
+          ? "显式水印模型直接检出高置信度水印区域，该证据已参与最终判断。"
           : tone === "real"
             ? "本次多源分析未发现足以支持 AI 生成的强证据。"
             : "检测到需要关注的生成或编辑线索，建议结合原始来源复核。",
@@ -989,6 +989,7 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
   const decisiveWatermark = hasDecisiveAiWatermark(report);
   const genericHits = hits.filter((hit) => !AI_WATERMARK_PROVIDERS.has(hit.provider));
   const detector = report.detector;
+  const modelDirect = detector?.mode === "model_direct" || report.explicitWatermark?.mode === "model_direct";
   const detected = hits.length > 0;
   const hasPlatformHit = platformHits.length > 0;
   const reusedFromSameFile = report.reanalysis?.reused === true;
@@ -997,6 +998,10 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
   const providerLabels = Array.from(new Set(platformHits.map((hit) => hit.label || hit.provider))).join("、");
   const statusText = !report.supported
     ? "可见水印检测本次不可用，未影响主鉴伪结论"
+    : modelDirect && detected
+      ? `显式水印模型检出 ${hits.length} 处区域`
+      : modelDirect
+        ? "显式水印模型扫描完成，本次未检出"
     : hasPlatformHit
       ? `识别到 ${platformHits.length} 处已知 AI 平台水印`
       : detected
@@ -1006,7 +1011,16 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
   const suppliedRegistry = detector?.engines?.find((engine) => engine.id === "known_ai_registry");
   const suppliedFusion = detector?.engines?.find((engine) => engine.id === "explicit_ai_watermark_fusion");
   const suppliedYolo = detector?.engines?.find((engine) => engine.id.includes("yolo"));
-  const engines = [
+  const suppliedDirect = detector?.engines?.find((engine) => engine.id === "explicit_watermark_model_direct");
+  const engines = modelDirect ? [{
+    ...(suppliedDirect || {}),
+    id: "explicit_watermark_model_direct",
+    label: "显式水印模型",
+    available: Boolean(suppliedDirect?.available ?? report.supported),
+    detected,
+    count: hits.length,
+    role: "direct_detection",
+  }] : [
     {
       ...(suppliedRegistry || {}),
       id: "known_ai_registry",
@@ -1037,6 +1051,10 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
   ];
   const displayNote = !report.supported
     ? "检测服务不可用时不会生成替代性水印结论。"
+    : modelDirect
+      ? detected
+        ? `结果由显式水印模型直接输出，最高置信度 ${Math.round(report.confidence * 100)}%；未使用平台模板、文字识别或图像检索。${decisiveWatermark ? " 该分数已达到强证据门槛。" : " 当前分数未达到强证据门槛，仅展示定位结果。"}`
+        : "模型已直接完成水印扫描；本次未使用平台模板、文字识别或图像检索。"
     : reusedFromSameFile
       ? reusedLegacyResult
         ? "该定位证据来自完全相同文件（SHA-256 一致）的最近一次成功扫描；系统会按当前水印规则重新计算结论。"
@@ -1054,9 +1072,9 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
         <ScanLine size={18} />
         <div><h3>可见水印检测</h3><p>{statusText}</p></div>
       </div>
-      <div className={`watermark-status ${hasPlatformHit ? "is-detected" : detected ? "is-possible" : report.supported ? "is-clear" : "is-unavailable"}`}>
-        <span>{hasPlatformHit ? `已知平台 ${platformHits.length}` : detected ? `可见水印 ${genericHits.length}` : report.supported ? "未检出" : "暂不可用"}</span>
-        <strong>{hasPlatformHit ? `${providerLabels} · ${decisiveWatermark ? "强证据确认" : "平台规则确认"}` : detected ? `${reusedFromSameFile ? "同一文件复核补充 · " : ""}通用水印线索，不单独判假` : "已完成平台规则与通用水印扫描"}</strong>
+      <div className={`watermark-status ${decisiveWatermark || hasPlatformHit ? "is-detected" : detected ? "is-possible" : report.supported ? "is-clear" : "is-unavailable"}`}>
+        <span>{modelDirect ? detected ? `模型检出 ${hits.length}` : report.supported ? "未检出" : "暂不可用" : hasPlatformHit ? `已知平台 ${platformHits.length}` : detected ? `可见水印 ${genericHits.length}` : report.supported ? "未检出" : "暂不可用"}</span>
+        <strong>{modelDirect ? detected ? `最高置信度 ${Math.round(report.confidence * 100)}% · ${decisiveWatermark ? "强证据" : "低于判定门槛"}` : "显式水印模型已完成扫描" : hasPlatformHit ? `${providerLabels} · ${decisiveWatermark ? "强证据确认" : "平台规则确认"}` : detected ? `${reusedFromSameFile ? "同一文件复核补充 · " : ""}通用水印线索，不单独判假` : "已完成平台规则与通用水印扫描"}</strong>
         {elapsed > 0 ? <time>{elapsed} ms</time> : null}
       </div>
       {report.supported && (
@@ -1090,9 +1108,11 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
                   <li className={AI_WATERMARK_PROVIDERS.has(hit.provider) ? "is-platform" : ""} key={`${hit.provider}-detail-${index}`}>
                     <span>{String(index + 1).padStart(2, "0")}</span>
                     <div>
-                      <strong>{hit.label || (AI_WATERMARK_PROVIDERS.has(hit.provider) ? "已知 AI 平台水印" : "可见水印（平台待确认）")}</strong>
+                      <strong>{hit.label || (modelDirect ? "显式水印" : AI_WATERMARK_PROVIDERS.has(hit.provider) ? "已知 AI 平台水印" : "可见水印（平台待确认）")}</strong>
                       <small>
-                        {AI_WATERMARK_PROVIDERS.has(hit.provider)
+                        {modelDirect
+                          ? `模型直接检测 · ${hit.decisive ? "达到强证据门槛" : "仅展示定位"}`
+                          : AI_WATERMARK_PROVIDERS.has(hit.provider)
                           ? hit.method === "explicit_ai_watermark_fusion"
                             ? "文字生成语义 · 平台图形检索 · 区域定位"
                             : `平台标记匹配${hit.localizationConfirmed ? " · 区域复核" : " · 视觉归属线索"}`
@@ -1105,7 +1125,7 @@ function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult
                 ))}
               </ol>
             ) : (
-              <div className="watermark-clear-state"><CheckCircle2 size={18} /><span><strong>未发现可见水印</strong><small>已完成平台标记与区域扫描</small></span></div>
+              <div className="watermark-clear-state"><CheckCircle2 size={18} /><span><strong>未发现可见水印</strong><small>{modelDirect ? "显式水印模型已完成扫描" : "已完成平台标记与区域扫描"}</small></span></div>
             )}
             <div className="watermark-model-meta">
               <span>检测能力</span>

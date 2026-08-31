@@ -10,6 +10,9 @@ MIN_EXPLICIT_VERDICT_CONFIDENCE = 0.80
 DECISIVE_PROVIDERS = frozenset({"gemini", "doubao", "jimeng", "jimeng_pill", "samsung"})
 DECISIVE_METHOD = "remove_ai_watermarks_registry"
 EXPLICIT_DECISIVE_METHOD = "explicit_ai_watermark_fusion"
+DIRECT_DECISIVE_METHOD = "explicit_watermark_model_direct"
+DIRECT_DECISIVE_PROVIDER = "yolo11x_watermark"
+DIRECT_DECISIVE_CONFIDENCE = 0.80
 DECISIVE_METHODS = frozenset({DECISIVE_METHOD, EXPLICIT_DECISIVE_METHOD})
 MIN_LOCALIZED_AREA = 0.0001
 PROVIDER_MIN_CONFIDENCE = {
@@ -171,6 +174,17 @@ def _strong_explicit_hits(visible: Any) -> list[dict[str, Any]]:
 
 
 def _decisive_hits(visible: Any) -> list[dict[str, Any]]:
+    direct_hits = [
+        hit
+        for hit in _localized_hits(visible)
+        if str(hit.get("provider") or "").strip().lower() == DIRECT_DECISIVE_PROVIDER
+        and str(hit.get("method") or "").strip() == DIRECT_DECISIVE_METHOD
+        and hit.get("decisive") is True
+        and _clamp01(hit.get("confidence")) >= DIRECT_DECISIVE_CONFIDENCE
+        and _clamp01((hit.get("bbox") or {}).get("w")) * _clamp01((hit.get("bbox") or {}).get("h")) >= MIN_LOCALIZED_AREA
+    ]
+    if direct_hits:
+        return direct_hits
     explicit_hits = _strong_explicit_hits(visible)
     if not explicit_hits:
         return []
@@ -218,10 +232,16 @@ def build_explanation(result: dict[str, Any], visible: Any) -> str:
         if label not in provider_names:
             provider_names.append(label)
     if has_decisive_ai_watermark(visible):
+        direct = any(hit.get("method") == DIRECT_DECISIVE_METHOD for hit in _decisive_hits(visible))
         line = (
-            f"强 AI 水印证据：定位到 {len(_decisive_hits(visible))} 处"
-            f"（{'、'.join(provider_names)}），已通过平台匹配、区域定位与 OCR/检索融合复核。"
-            "按当前规则，该证据可独立授权“AI生成图像”结论。"
+            f"强显式水印证据：模型直接定位到 {len(_decisive_hits(visible))} 处水印区域，"
+            "置信度达到判定门槛。该结果不依赖文字识别、平台模板或图像检索。"
+            if direct
+            else (
+                f"强 AI 水印证据：定位到 {len(_decisive_hits(visible))} 处"
+                f"（{'、'.join(provider_names)}），已通过平台匹配、区域定位与 OCR/检索融合复核。"
+                "按当前规则，该证据可独立授权“AI生成图像”结论。"
+            )
         )
     else:
         line = (
@@ -240,6 +260,7 @@ def apply(result: dict[str, Any], visible: Any) -> dict[str, Any]:
         return result
     explicit = visible.get("explicitWatermark") or {}
     explicit_verdict = explicit.get("aiWatermarkVerdict") or {}
+    direct = any(hit.get("method") == DIRECT_DECISIVE_METHOD for hit in decisive_hits)
     original_confidence = _clamp01(result.get("confidence"))
     published_confidence = max(
         MIN_WATERMARK_FAKE_CONFIDENCE,
@@ -266,7 +287,7 @@ def apply(result: dict[str, Any], visible: Any) -> dict[str, Any]:
         "reviewRequired": False,
         "watermarkVerdictOverride": {
             "applied": True,
-            "policyVersion": "explicit-ai-watermark-v2",
+            "policyVersion": "explicit-watermark-model-direct-v1" if direct else "explicit-ai-watermark-v2",
             "decisionAuthority": "decisive_provenance",
             "providers": providers,
             "hitCount": len(decisive_hits),

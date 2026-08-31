@@ -568,3 +568,32 @@ def test_remote_visible_hits_expose_generic_watermark_without_platform_match():
     assert payload["genericVisibleWatermark"]["detected"] is True
     assert payload["genericVisibleWatermark"]["count"] == 1
     assert payload["genericVisibleWatermark"]["genericCount"] == 1
+
+
+def test_direct_model_result_is_decisive_only_when_trusted():
+    payload = {
+        "mode": "model_direct",
+        "visibleHits": [{
+            "provider": "yolo11x_watermark",
+            "confidence": 0.91,
+            "decisive": True,
+            "bbox": {"x": 0.7, "y": 0.8, "w": 0.2, "h": 0.1},
+        }],
+        "genericVisibleWatermark": {
+            "available": True,
+            "mode": "model_direct",
+            "directDecisionThreshold": 0.8,
+        },
+    }
+
+    untrusted = dict(payload)
+    untrusted["visibleHits"] = [dict(payload["visibleHits"][0])]
+    untrusted["genericVisibleWatermark"] = dict(payload["genericVisibleWatermark"])
+    provenance_precheck._normalize_visible_hits(untrusted, trusted_model=False)
+    provenance_precheck._normalize_visible_hits(payload, trusted_model=True)
+
+    assert untrusted["visibleHits"][0]["decisive"] is False
+    assert untrusted["genericVisibleWatermark"]["trustedDecision"] is False
+    assert payload["visibleHits"][0]["decisive"] is True
+    assert payload["visibleHits"][0]["method"] == "explicit_watermark_model_direct"
+    assert payload["genericVisibleWatermark"]["trustedDecision"] is True

@@ -21,7 +21,7 @@ const PUBLIC_STAGE_LABELS: Record<string, string> = {
   decode: "文件读取",
   metadata: "来源信息",
   registry: "平台标记",
-  yolo: "区域定位",
+  yolo: "显式水印模型",
   ocr: "文字识别",
   retrieval: "图形检索",
   fusion: "证据融合",
@@ -32,7 +32,7 @@ const PUBLIC_STAGE_SUMMARIES: Record<string, string> = {
   decode: "读取原始文件并确认用于分析的尺寸。",
   metadata: "检查文件中可复核的来源与生成声明。",
   registry: "比对已登记的 AI 平台标记特征。",
-  yolo: "定位可能属于显式水印的图像区域。",
+  yolo: "模型直接输出显式水印区域与置信度。",
   ocr: "识别候选区域中的文字与生成语义。",
   retrieval: "将候选图形与参考库进行相似度比对。",
   fusion: "综合位置、文字、图形和来源证据。",
@@ -123,7 +123,7 @@ function StageDetails({ stage }: { stage: WatermarkPipelineStage }) {
   if (stage.id === "registry") return <CandidateList items={list(details.hits)} />;
   if (stage.id === "yolo") {
     const runtime = data(details.runtime);
-    return <><dl className="pipeline-facts"><Fact label="区域定位耗时">{duration(runtime.elapsedMs)}</Fact><Fact label="服务往返耗时">{duration(runtime.roundTripMs)}</Fact></dl><CandidateList items={list(details.candidates)} /></>;
+    return <><dl className="pipeline-facts"><Fact label="模型推理耗时">{duration(runtime.elapsedMs)}</Fact><Fact label="服务往返耗时">{duration(runtime.roundTripMs)}</Fact><Fact label="强证据门槛">{score(details.decisionThreshold)}</Fact></dl><CandidateList items={list(details.candidates)} /></>;
   }
   if (stage.id === "ocr") {
     const results = list(details.results);
@@ -140,7 +140,7 @@ function StageDetails({ stage }: { stage: WatermarkPipelineStage }) {
   if (stage.id === "verdict") {
     const verdict = data(details.verdict);
     const label = verdict.verdict === "yes" ? "存在 AI 水印" : verdict.verdict === "no" ? "未发现 AI 水印" : "需要复核";
-    return <><dl className="pipeline-facts"><Fact label="判断" tone={verdict.verdict === "yes" ? "hit" : ""}>{label}</Fact><Fact label="置信度">{score(verdict.confidence)}</Fact><Fact label="来源平台">{details.sourcePlatform}</Fact><Fact label="相关证据">{verdict.relevantHitCount ?? 0}</Fact></dl><p className="pipeline-rationale">{value(verdict.reason, stage.summary)}</p></>;
+    return <><dl className="pipeline-facts"><Fact label="判断" tone={verdict.verdict === "yes" ? "hit" : ""}>{label}</Fact><Fact label="置信度">{score(verdict.confidence)}</Fact><Fact label="结果来源">{details.resultSource === "model" ? "显式水印模型" : details.sourcePlatform}</Fact><Fact label="相关区域">{verdict.relevantHitCount ?? 0}</Fact></dl><p className="pipeline-rationale">{value(verdict.reason, stage.summary)}</p></>;
   }
   return <Empty>本阶段没有更多可公开展示的数据。</Empty>;
 }

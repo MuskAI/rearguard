@@ -87,6 +87,7 @@ function watermarkPoint(report?: VisibleWatermarkResult): ExplanationPoint {
   const hits = localizedWatermarkHits(report);
   const decisive = decisiveWatermarkHits(report);
   if (decisive.length > 0) {
+    const modelDirect = decisive.some((hit) => hit.method === "explicit_watermark_model_direct");
     const names = Array.from(new Set(
       decisive.map((hit) => hit.label || PROVIDER_LABELS[hit.provider] || "AI 平台水印"),
     ));
@@ -95,7 +96,9 @@ function watermarkPoint(report?: VisibleWatermarkResult): ExplanationPoint {
       decisive: true,
       direction: "fake",
       importance: "critical",
-      text: `定位到 ${decisive.length} 处强水印证据（${names.join("、")}），并通过平台图形、文字内容和位置三项核对，属于支持 AI 生成的强证据。`,
+      text: modelDirect
+        ? `显式水印模型直接定位到 ${decisive.length} 处水印区域，置信度达到判定门槛，属于支持 AI 生成的强证据。`
+        : `定位到 ${decisive.length} 处强水印证据（${names.join("、")}），并通过平台图形、文字内容和位置三项核对，属于支持 AI 生成的强证据。`,
     };
   }
   if (hits.length > 0) {

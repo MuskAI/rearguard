@@ -33,6 +33,9 @@ ALLOWED_REASONS = {
 }
 KNOWN_VISIBLE_PROVIDERS = frozenset({"gemini", "doubao", "jimeng", "jimeng_pill", "samsung"})
 YOLO_PROVIDER = "yolo11x_watermark"
+DIRECT_MODE = "model_direct"
+DIRECT_METHOD = "explicit_watermark_model_direct"
+DIRECT_DECISIVE_CONFIDENCE = 0.80
 
 _last_state: dict[str, Any] = {
     "available": None,
@@ -93,9 +96,51 @@ def _boxes_overlap(first: dict[str, Any], second: dict[str, Any]) -> bool:
     return iou >= 0.08 or smaller_coverage >= 0.5
 
 
-def _normalize_visible_hits(result: dict[str, Any]) -> None:
+def _normalize_visible_hits(result: dict[str, Any], *, trusted_model: bool = False) -> None:
     """Expose generic watermarks without treating them as AI provenance."""
     raw_hits = [item for item in result.get("visibleHits") or [] if isinstance(item, dict)]
+    detector = result.get("genericVisibleWatermark")
+    detector = dict(detector) if isinstance(detector, dict) else {}
+    direct_mode = result.get("mode") == DIRECT_MODE or detector.get("mode") == DIRECT_MODE
+    if direct_mode:
+        try:
+            threshold = min(1.0, max(0.0, float(
+                detector.get("directDecisionThreshold") or DIRECT_DECISIVE_CONFIDENCE
+            )))
+        except (TypeError, ValueError):
+            threshold = DIRECT_DECISIVE_CONFIDENCE
+        direct_hits = []
+        for raw in raw_hits:
+            if raw.get("provider") != YOLO_PROVIDER:
+                continue
+            hit = dict(raw)
+            confidence = min(1.0, max(0.0, float(hit.get("confidence") or 0.0)))
+            decisive = trusted_model and hit.get("decisive") is True and confidence >= threshold
+            hit.update({
+                "provider": YOLO_PROVIDER,
+                "label": "显式水印",
+                "confidence": round(confidence, 4),
+                "method": DIRECT_METHOD,
+                "decisive": decisive,
+                "corroborated": False,
+                "evidenceRole": "decisive_provenance" if decisive else "model_detection",
+            })
+            direct_hits.append(hit)
+        result["visibleHits"] = direct_hits
+        detector.update({
+            "detected": bool(direct_hits),
+            "count": len(direct_hits),
+            "genericCount": len(direct_hits),
+            "knownPlatformCount": 0,
+            "platformConfirmedCount": 0,
+            "mode": DIRECT_MODE,
+            "resultSource": "model",
+            "directDecisionThreshold": threshold,
+            "trustedDecision": trusted_model,
+        })
+        result["genericVisibleWatermark"] = detector
+        return
+
     registry_hits = [dict(item) for item in raw_hits if item.get("provider") in KNOWN_VISIBLE_PROVIDERS]
     yolo_candidates = [dict(item) for item in raw_hits if item.get("provider") == YOLO_PROVIDER]
     for hit in registry_hits:
@@ -114,7 +159,7 @@ def _normalize_visible_hits(result: dict[str, Any]) -> None:
             candidate = best[1]
             hit["yoloConfidence"] = round(float(candidate.get("confidence") or 0.0), 4)
             hit["yoloBbox"] = candidate.get("bbox") or {}
-            hit["localizationModel"] = candidate.get("model") or "corzent/yolo11x_watermark_detection"
+            hit["localizationModel"] = candidate.get("model") or "huijian/yolo11x_explicit_watermark_binary"
             hit["localizationModelRevision"] = candidate.get("modelRevision")
 
     generic_hits = []
@@ -131,7 +176,6 @@ def _normalize_visible_hits(result: dict[str, Any]) -> None:
         generic_hits.append(candidate)
     result["visibleHits"] = [*registry_hits, *generic_hits]
 
-    detector = result.get("genericVisibleWatermark")
     if isinstance(detector, dict) or yolo_candidates:
         normalized = dict(detector) if isinstance(detector, dict) else {}
         confirmed = sum(1 for hit in registry_hits if hit.get("yoloCorroborated") is True)
@@ -155,7 +199,7 @@ def normalize_embedded_visible_precheck(payload: Any) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
     result = dict(payload)
-    _normalize_visible_hits(result)
+    _normalize_visible_hits(result, trusted_model=False)
     report = result.get("report")
     if isinstance(report, dict):
         result["report"] = {**report, "c2paTrusted": False}
@@ -194,7 +238,7 @@ def _remote_inspect(data: bytes, filename: str, *, timeout: float) -> dict[str, 
         result = json.loads(payload.decode("utf-8"))
         if not isinstance(result, dict):
             raise ValueError("precheck response is not an object")
-        _normalize_visible_hits(result)
+        _normalize_visible_hits(result, trusted_model=True)
         elapsed = int((time.perf_counter() - started) * 1000)
         result["available"] = True
         result["roundTripMs"] = elapsed

@@ -1,6 +1,5 @@
 from pathlib import Path
 import sys
-import threading
 
 
 ROOT = Path(__file__).resolve().parent
@@ -10,82 +9,103 @@ if str(ROOT) not in sys.path:
 import yolo_adapter
 
 
-def test_merge_corroborates_platform_hit_and_keeps_unmatched_watermark():
-    registry_hits = [{
-        "provider": "gemini",
-        "confidence": 0.86,
-        "bbox": {"x": 0.91, "y": 0.89, "w": 0.06, "h": 0.07},
+def _runtime_payload(*, confidence: float | None = None) -> dict:
+    detections = [] if confidence is None else [{
+        "confidence": confidence,
+        "bbox": {"x": 0.75, "y": 0.82, "w": 0.18, "h": 0.10},
     }]
-    candidates = [
-        {
-            "provider": "yolo11x_watermark",
-            "confidence": 0.92,
-            "bbox": {"x": 0.90, "y": 0.88, "w": 0.08, "h": 0.10},
-            "model": yolo_adapter.YOLO_EXPECTED_MODEL,
-            "modelRevision": "revision-1",
-        },
-        {
-            "provider": "yolo11x_watermark",
-            "confidence": 0.99,
-            "bbox": {"x": 0.05, "y": 0.05, "w": 0.20, "h": 0.12},
-        },
-    ]
-
-    hits = yolo_adapter._merge_visible_hits(registry_hits, candidates)
-
-    assert len(hits) == 2
-    assert hits[0]["provider"] == "gemini"
-    assert hits[0]["yoloCorroborated"] is True
-    assert hits[0]["yoloConfidence"] == 0.92
-    assert hits[0]["localizationModelRevision"] == "revision-1"
-    assert hits[1]["provider"] == "yolo11x_watermark"
-    assert hits[1]["confidence"] == 0.99
+    return {
+        "status": "ok",
+        "model": yolo_adapter.YOLO_EXPECTED_MODEL,
+        "modelRevision": yolo_adapter.YOLO_EXPECTED_REVISION,
+        "modelSha256": yolo_adapter.YOLO_EXPECTED_SHA256,
+        "device": "0",
+        "gpu": "NVIDIA TITAN Xp",
+        "cudaRequired": True,
+        "cudaReady": True,
+        "confidenceThreshold": 0.25,
+        "elapsedMs": 9,
+        "modelResident": True,
+        "modelLoadCount": 1,
+        "image": {"width": 640, "height": 480},
+        "detected": bool(detections),
+        "count": len(detections),
+        "detections": detections,
+    }
 
 
-def test_unmatched_watermark_candidate_is_returned_as_non_decisive():
+def _mock_post(monkeypatch, payload: dict) -> None:
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return payload
+
+    monkeypatch.setattr(yolo_adapter.requests, "post", lambda *_args, **_kwargs: Response())
+
+
+def test_model_direct_hit_preserves_score_and_authority(monkeypatch, tmp_path):
+    image_path = tmp_path / "probe.png"
+    image_path.write_bytes(b"image")
+    monkeypatch.setattr(yolo_adapter, "YOLO_TOKEN", "test-token")
+    _mock_post(monkeypatch, _runtime_payload(confidence=0.9077))
+
+    hits, status = yolo_adapter._generic_yolo_hits(image_path)
+    result = yolo_adapter._direct_result(hits, status)
+
+    assert status["mode"] == "model_direct"
+    assert status["modelResident"] is True
+    assert len(hits) == 1
+    assert hits[0]["confidence"] == 0.9077
+    assert hits[0]["decisive"] is True
+    assert hits[0]["method"] == "explicit_watermark_model_direct"
+    assert result["confidence"] == 0.9077
+    assert result["aiWatermarkVerdict"]["verdict"] == "yes"
+    assert result["hits"][0]["sourcePlatform"] is None
+    assert "textAnalysis" not in result["hits"][0]
+    assert "retrievalSimilarity" not in result["hits"][0]
+
+
+def test_model_direct_low_score_is_visible_but_not_decisive(monkeypatch, tmp_path):
+    image_path = tmp_path / "probe.png"
+    image_path.write_bytes(b"image")
+    monkeypatch.setattr(yolo_adapter, "YOLO_TOKEN", "test-token")
+    _mock_post(monkeypatch, _runtime_payload(confidence=0.61))
+
+    hits, status = yolo_adapter._generic_yolo_hits(image_path)
+    result = yolo_adapter._direct_result(hits, status)
+
+    assert hits[0]["decisive"] is False
+    assert result["detected"] is True
+    assert result["confidence"] == 0.61
+    assert result["aiWatermarkVerdict"]["strongHitCount"] == 0
+
+
+def test_visible_path_calls_only_the_model(monkeypatch):
     candidates = [{
-        "provider": "yolo11x_watermark",
-        "confidence": 0.99,
-        "bbox": {"x": 0.05, "y": 0.05, "w": 0.20, "h": 0.12},
-        "decisive": False,
+        "provider": yolo_adapter.YOLO_PROVIDER,
+        "confidence": 0.9,
+        "bbox": {"x": 0.7, "y": 0.8, "w": 0.2, "h": 0.1},
+        "decisive": True,
+        "method": yolo_adapter.DIRECT_METHOD,
     }]
-
-    assert yolo_adapter._merge_visible_hits([], candidates) == candidates
-    assert yolo_adapter._merge_visible_hits([], candidates)[0]["decisive"] is False
-
-
-def test_registry_and_yolo_branches_start_in_parallel(monkeypatch):
-    rendezvous = threading.Barrier(2)
-
-    def registry(_path, provenance_path=None):
-        rendezvous.wait(timeout=2)
-        return []
-
-    def yolo(_path):
-        rendezvous.wait(timeout=2)
-        return [], {"available": True, "detected": False, "count": 0}
-
-    monkeypatch.setattr(yolo_adapter, "_registry_visible_hits", registry)
-    monkeypatch.setattr(yolo_adapter, "_generic_yolo_hits", yolo)
+    status = {"available": True, "mode": "model_direct", "elapsedMs": 7}
+    monkeypatch.setattr(yolo_adapter, "_generic_yolo_hits", lambda _path: (candidates, status))
 
     with yolo_adapter.base.app.test_request_context("/v1/precheck"):
-        assert yolo_adapter._visible_hits_with_yolo(Path("unused.png")) == []
-        status = yolo_adapter.g.generic_visible_watermark_status
+        assert yolo_adapter._visible_hits_with_yolo(Path("unused.png")) == candidates
+        assert yolo_adapter.g.explicit_watermark_result["resultSource"] == "model"
 
-    assert status["branchesParallel"] is True
-    assert status["registryElapsedMs"] >= 0
+    assert not hasattr(yolo_adapter, "_registry_visible_hits")
+    assert not hasattr(yolo_adapter, "_explicit_ensemble")
 
 
-def test_health_is_degraded_when_yolo_is_unavailable(monkeypatch):
+def test_health_is_degraded_when_model_is_unavailable(monkeypatch):
     monkeypatch.setattr(
         yolo_adapter,
         "_base_health",
-        lambda: {
-            "status": "ok",
-            "registryReady": True,
-            "tokenReady": True,
-            "coordinateSpace": "display_normalized_v1",
-        },
+        lambda: {"status": "ok", "tokenReady": True, "coordinateSpace": "display_normalized_v1"},
     )
     monkeypatch.setattr(
         yolo_adapter.requests,
@@ -97,62 +117,12 @@ def test_health_is_degraded_when_yolo_is_unavailable(monkeypatch):
 
     assert payload["status"] == "degraded"
     assert payload["genericVisibleWatermark"]["available"] is False
+    assert payload["explicitWatermarkEnsemble"]["disabled"] is True
 
 
-def test_yolo_runtime_validation_rejects_cpu_fallback(monkeypatch):
-    monkeypatch.setattr(yolo_adapter, "YOLO_REQUIRE_CUDA", True)
-    payload = {
-        "status": "ok",
-        "model": yolo_adapter.YOLO_EXPECTED_MODEL,
-        "modelRevision": yolo_adapter.YOLO_EXPECTED_REVISION,
-        "modelSha256": yolo_adapter.YOLO_EXPECTED_SHA256,
-        "device": "cpu",
-        "gpu": None,
-        "cudaReady": False,
-    }
-
-    assert yolo_adapter._yolo_runtime_error(payload) == "cuda_not_ready"
-
-
-def test_yolo_runtime_validation_accepts_pinned_cuda_runtime(monkeypatch):
-    monkeypatch.setattr(yolo_adapter, "YOLO_REQUIRE_CUDA", True)
-    payload = {
-        "status": "ok",
-        "model": yolo_adapter.YOLO_EXPECTED_MODEL,
-        "modelRevision": yolo_adapter.YOLO_EXPECTED_REVISION,
-        "modelSha256": yolo_adapter.YOLO_EXPECTED_SHA256,
-        "device": "0",
-        "gpu": "NVIDIA L20",
-        "cudaReady": True,
-    }
-
-    assert yolo_adapter._yolo_runtime_error(payload) == ""
-
-
-def test_yolo_detection_validation_rejects_empty_payload():
-    assert yolo_adapter._yolo_detection_error({}) == "service_not_ok"
-
-
-def test_generic_yolo_status_preserves_runtime_identity(monkeypatch, tmp_path):
-    image_path = tmp_path / "probe.png"
-    image_path.write_bytes(b"image")
-    monkeypatch.setattr(yolo_adapter, "YOLO_TOKEN", "test-token")
-    payload = {
-        "status": "ok",
-        "model": yolo_adapter.YOLO_EXPECTED_MODEL,
-        "modelRevision": yolo_adapter.YOLO_EXPECTED_REVISION,
-        "modelSha256": yolo_adapter.YOLO_EXPECTED_SHA256,
-        "device": "0",
-        "gpu": "NVIDIA TITAN Xp",
-        "cudaRequired": True,
-        "cudaReady": True,
-        "confidenceThreshold": 0.35,
-        "elapsedMs": 9,
-        "image": {"width": 64, "height": 64},
-        "detected": False,
-        "count": 0,
-        "detections": [],
-    }
+def test_health_reports_direct_model_without_ensemble(monkeypatch):
+    monkeypatch.setattr(yolo_adapter, "_base_health", lambda: {"status": "ok", "tokenReady": True})
+    payload = _runtime_payload()
 
     class Response:
         def raise_for_status(self):
@@ -161,67 +131,64 @@ def test_generic_yolo_status_preserves_runtime_identity(monkeypatch, tmp_path):
         def json(self):
             return payload
 
-    monkeypatch.setattr(yolo_adapter.requests, "post", lambda *_args, **_kwargs: Response())
+    monkeypatch.setattr(yolo_adapter.requests, "get", lambda *_args, **_kwargs: Response())
 
-    hits, status = yolo_adapter._generic_yolo_hits(image_path)
+    health = yolo_adapter.health_with_yolo()
 
-    assert hits == []
-    assert status["available"] is True
-    assert status["modelSha256"] == yolo_adapter.YOLO_EXPECTED_SHA256
-    assert status["device"] == "0"
-    assert status["gpu"] == "NVIDIA TITAN Xp"
-    assert status["cudaReady"] is True
+    assert health["status"] == "ok"
+    assert health["mode"] == "model_direct"
+    assert health["registryReady"] is False
+    assert health["genericVisibleWatermark"]["modelResident"] is True
+    assert health["explicitWatermarkEnsemble"] == {
+        "available": False,
+        "disabled": True,
+        "mode": "disabled",
+        "reason": "model_direct_enabled",
+    }
+
+
+def test_yolo_runtime_validation_rejects_cpu_fallback(monkeypatch):
+    monkeypatch.setattr(yolo_adapter, "YOLO_REQUIRE_CUDA", True)
+    payload = _runtime_payload()
+    payload.update({"device": "cpu", "gpu": None, "cudaReady": False})
+
+    assert yolo_adapter._yolo_runtime_error(payload) == "cuda_not_ready"
+
+
+def test_yolo_runtime_validation_accepts_pinned_cuda_runtime(monkeypatch):
+    monkeypatch.setattr(yolo_adapter, "YOLO_REQUIRE_CUDA", True)
+    assert yolo_adapter._yolo_runtime_error(_runtime_payload()) == ""
 
 
 def test_yolo_detection_validation_rejects_invalid_box(monkeypatch):
     monkeypatch.setattr(yolo_adapter, "YOLO_REQUIRE_CUDA", True)
-    payload = {
-        "status": "ok",
-        "model": yolo_adapter.YOLO_EXPECTED_MODEL,
-        "modelRevision": yolo_adapter.YOLO_EXPECTED_REVISION,
-        "modelSha256": yolo_adapter.YOLO_EXPECTED_SHA256,
-        "device": "0",
-        "gpu": "NVIDIA L20",
-        "cudaReady": True,
-        "image": {"width": 640, "height": 480},
-        "detected": True,
-        "count": 1,
-        "detections": [{"bbox": {"x": 0.9, "y": 0.2, "w": 0.3, "h": 0.2}}],
-    }
+    payload = _runtime_payload(confidence=0.9)
+    payload["detections"][0]["bbox"] = {"x": 0.9, "y": 0.2, "w": 0.3, "h": 0.2}
 
     assert yolo_adapter._yolo_detection_error(payload) == "detection_box_invalid"
 
 
-def test_pipeline_trace_exposes_each_analysis_stage():
+def test_pipeline_trace_contains_only_direct_model_stages():
     response = {
-        "elapsedMs": 120,
-        "pipelineTimings": {"decodeMs": 2, "normalizeMs": 3, "metadataMs": 8, "decisionMs": 1, "totalMs": 120},
+        "elapsedMs": 20,
+        "pipelineTimings": {"decodeMs": 2, "normalizeMs": 3},
         "encodedSize": {"width": 100, "height": 80},
         "displaySize": {"width": 100, "height": 80},
-        "sourceOrientation": 1,
-        "report": {"isAiGenerated": False, "signals": []},
-        "decision": {"verdict": None},
         "explicitWatermark": {
             "available": True,
             "detected": False,
-            "type": "none",
-            "hits": [],
-            "aiWatermarkVerdict": {"verdict": "no", "reason": "no candidate"},
-            "fusion": {"timings": {"totalMs": 9, "ocrMaxMs": 0, "retrievalMaxMs": 0}},
+            "confidence": 0.0,
+            "aiWatermarkVerdict": {"verdict": "no", "reason": "模型未检出水印"},
         },
     }
     with yolo_adapter.base.app.test_request_context("/v1/precheck"):
-        yolo_adapter.g.watermark_pipeline_branches = {
-            "registryHits": [],
-            "yoloCandidates": [],
-            "yoloStatus": {"available": True, "count": 0, "registryElapsedMs": 5, "elapsedMs": 7},
-            "ensemble": response["explicitWatermark"],
+        yolo_adapter.g.watermark_pipeline_state = {
+            "candidates": [],
+            "status": {"available": True, "mode": "model_direct", "roundTripMs": 11},
         }
         trace = yolo_adapter._build_pipeline_trace(response)
 
     assert trace["schemaVersion"] == "watermark_pipeline_trace_v1"
-    assert [stage["id"] for stage in trace["stages"]] == [
-        "decode", "metadata", "registry", "yolo", "ocr", "retrieval", "fusion", "verdict",
-    ]
-    assert trace["stages"][4]["status"] == "skipped"
+    assert [stage["id"] for stage in trace["stages"]] == ["decode", "yolo", "verdict"]
+    assert trace["stages"][1]["status"] == "clean"
     assert trace["stages"][-1]["status"] == "clean"

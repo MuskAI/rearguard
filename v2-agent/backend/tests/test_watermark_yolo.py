@@ -20,6 +20,95 @@ def _analysis():
     }
 
 
+def _direct_precheck(confidence: float | None = 0.9077):
+    hits = [] if confidence is None else [{
+        "provider": "yolo11x_watermark",
+        "label": "显式水印",
+        "confidence": confidence,
+        "bbox": {"x": 0.72, "y": 0.81, "w": 0.2, "h": 0.1},
+        "model": "huijian/yolo11x_explicit_watermark_binary",
+        "modelRevision": "2026-08-31-f527d8a75420",
+        "method": "explicit_watermark_model_direct",
+        "decisive": confidence >= 0.8,
+        "evidenceRole": "decisive_provenance" if confidence >= 0.8 else "model_detection",
+    }]
+    return {
+        "status": "ok",
+        "available": True,
+        "mode": "model_direct",
+        "engineVersion": "2026-08-31-f527d8a75420",
+        "coordinateSpace": "display_normalized_v1",
+        "displaySize": {"width": 1000, "height": 800},
+        "genericVisibleWatermark": {
+            "available": True,
+            "mode": "model_direct",
+            "resultSource": "model",
+            "detected": bool(hits),
+            "count": len(hits),
+            "maxConfidence": confidence or 0.0,
+            "directDecisionThreshold": 0.8,
+            "model": "huijian/yolo11x_explicit_watermark_binary",
+            "modelRevision": "2026-08-31-f527d8a75420",
+            "roundTripMs": 24,
+        },
+        "visibleHits": hits,
+        "explicitWatermark": {
+            "available": True,
+            "detected": bool(hits),
+            "confidence": confidence or 0.0,
+            "mode": "model_direct",
+            "resultSource": "model",
+            "aiWatermarkVerdict": {
+                "verdict": "yes" if hits else "no",
+                "isAiGeneratedWatermark": bool(hits),
+                "confidence": confidence or 0.0,
+                "relevantHitCount": len(hits),
+            },
+            "hits": [],
+        },
+    }
+
+
+def test_direct_model_result_is_the_only_watermark_engine_and_can_authorize_fake():
+    merged = watermark_yolo.merge(_analysis(), _direct_precheck())
+
+    visible = merged["visibleWatermark"]
+    assert visible["confidence"] == 0.9077
+    assert visible["evidenceLevel"] == "strong"
+    assert visible["registrySupported"] is False
+    assert len(visible["hits"]) == 1
+    assert visible["hits"][0]["method"] == "explicit_watermark_model_direct"
+    assert visible["hits"][0]["decisive"] is True
+    assert [engine["id"] for engine in visible["detector"]["engines"]] == [
+        "explicit_watermark_model_direct"
+    ]
+    assert merged["verdict"] == "highly_suspected_fake"
+    assert merged["confidence"] == 0.95
+    assert merged["watermarkVerdictOverride"]["policyVersion"] == "explicit-watermark-model-direct-v1"
+
+
+def test_direct_model_low_confidence_hit_does_not_override_main_model():
+    merged = watermark_yolo.merge(_analysis(), _direct_precheck(0.61))
+
+    assert merged["verdict"] == "real"
+    assert merged["confidence"] == 0.82
+    assert merged["visibleWatermark"]["detected"] is True
+    assert merged["visibleWatermark"]["confidence"] == 0.61
+    assert merged["visibleWatermark"]["evidenceLevel"] == "medium"
+    assert "watermarkVerdictOverride" not in merged
+
+
+def test_direct_model_clean_scan_is_exposed_without_legacy_engines():
+    merged = watermark_yolo.merge(_analysis(), _direct_precheck(None))
+
+    visible = merged["visibleWatermark"]
+    assert visible["supported"] is True
+    assert visible["detected"] is False
+    assert visible["evidenceLevel"] == "none"
+    assert visible["detector"]["mode"] == "model_direct"
+    assert len(visible["detector"]["engines"]) == 1
+
+
 def test_merge_keeps_unmatched_yolo_watermark_as_non_decisive_context():
     analysis = _analysis()
     merged = watermark_yolo.merge(analysis, {

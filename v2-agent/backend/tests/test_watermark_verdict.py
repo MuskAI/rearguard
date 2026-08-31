@@ -96,3 +96,34 @@ def test_bbox_overflow_is_rejected_instead_of_clamped():
     watermark_verdict.apply(result, visible)
 
     assert result["verdict"] == "real"
+
+
+def test_trusted_direct_model_watermark_can_authorize_fake_without_fusion():
+    result = {"verdict": "real", "confidence": 0.12, "explanation": "主模型偏向真实。"}
+    visible = {
+        "detected": True,
+        "coordinateSpace": "display_normalized_v1",
+        "displaySize": {"width": 1000, "height": 800},
+        "explicitWatermark": {
+            "available": True,
+            "detected": True,
+            "confidence": 0.91,
+            "mode": "model_direct",
+            "aiWatermarkVerdict": {"verdict": "yes", "confidence": 0.91},
+        },
+        "hits": [{
+            "provider": "yolo11x_watermark",
+            "label": "显式水印",
+            "confidence": 0.91,
+            "bbox": {"x": 0.7, "y": 0.8, "w": 0.2, "h": 0.1},
+            "method": "explicit_watermark_model_direct",
+            "decisive": True,
+        }],
+    }
+
+    watermark_verdict.apply(result, visible)
+
+    assert result["verdict"] == "highly_suspected_fake"
+    assert result["confidence"] == 0.95
+    assert result["watermarkVerdictOverride"]["policyVersion"] == "explicit-watermark-model-direct-v1"
+    assert "不依赖文字识别、平台模板或图像检索" in result["explanation"]

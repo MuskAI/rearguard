@@ -455,6 +455,9 @@ export interface ProvenancePrecheckResult {
     model?: string;
     modelRevision?: string;
     confidenceThreshold?: number;
+    maxConfidence?: number;
+    directDecisionThreshold?: number;
+    resultSource?: string;
     mode?: string;
     error?: string;
   };
@@ -596,6 +599,9 @@ export interface VisibleWatermarkResult {
     provider?: string | null;
     confidence: number;
     confidenceBand?: string;
+    mode?: string;
+    resultSource?: string;
+    decisionThreshold?: number;
     aiWatermarkVerdict?: {
       verdict: "yes" | "no" | "inconclusive" | string;
       isAiGeneratedWatermark: boolean | null;
@@ -613,9 +619,12 @@ export interface VisibleWatermarkResult {
   };
   detector?: {
     available: boolean;
+    mode?: string;
+    resultSource?: string;
     model?: string | null;
     modelRevision?: string | null;
     confidenceThreshold?: number | null;
+    directDecisionThreshold?: number | null;
     roundTripMs?: number | null;
     engines?: VisibleWatermarkEngine[];
   };
