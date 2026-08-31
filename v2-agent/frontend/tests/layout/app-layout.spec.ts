@@ -1125,14 +1125,14 @@ test("结果页优先展示概率与关键来源证据并保持正文级字号",
             final_label: "AI生成图像",
             probability: null,
             detector_probability: null,
-            modelScore: 0.87,
+            modelScore: null,
             scoreCalibration: "uncalibrated",
             confidence: "低",
             decisionStatus: "review_only",
             decisionAuthority: "none",
             reviewRequired: true,
             modelDecisionReady: false,
-            explanation: "真实性分析与证据链已经完成。",
+            explanation: "内部分析服务给出二元结果：AI生成图像。原始 AI 分数为 0.9958，固定阈值为 0.5。",
             image_url: "/brand/huijian-forensic-scanner-v3.webp",
             filename: "typography-review.png",
             file_size: "1 KB",
@@ -1175,10 +1175,10 @@ test("结果页优先展示概率与关键来源证据并保持正文级字号",
   await expect(card.getByText("C2PA 内容凭证")).toBeVisible();
   await expect(card.getByText("4 项已读取")).toBeVisible();
   await expect(card.getByText("偏向 AI 生成", { exact: true })).toBeVisible();
-  await expect(card.getByText("87%", { exact: true })).toHaveCount(0);
+  await expect(card.getByText("99.6%", { exact: true })).toHaveCount(0);
   await expect(card.getByText("模型原始输出，尚未经过独立数据集校准。")).toBeVisible();
   await expect(card.getByRole("heading", { name: "综合判断" })).toHaveCount(0);
-  await expect(page.locator(".result-probability-metric dd")).toContainText("87%");
+  await expect(page.locator(".result-probability-metric dd")).toContainText("99.6%");
   expect(await card.locator(".decision-source, .decision-model").evaluateAll((items) => (
     items.every((item) => getComputedStyle(item).animationName === "none" && getComputedStyle(item).opacity === "1")
   ))).toBeTruthy();

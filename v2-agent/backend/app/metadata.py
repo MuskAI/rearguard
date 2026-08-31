@@ -98,6 +98,18 @@ TOOL_PATTERNS = [
         re.compile(r"\b(openai|dall[ -]?e|dall·e|chatgpt|gpt-image|sora)\b", re.I),
     ),
     SignalPattern(
+        "doubao",
+        "豆包生成信息",
+        58,
+        re.compile(r"(doubao|豆包|seedream|seedance|字节跳动生成|火山引擎生成)", re.I),
+    ),
+    SignalPattern(
+        "jimeng",
+        "即梦 / Dreamina 生成信息",
+        58,
+        re.compile(r"(jimeng|即梦(?:ai)?|dreamina)", re.I),
+    ),
+    SignalPattern(
         "commercial-ai-tools",
         "商业 AI 生成工具",
         40,
@@ -377,7 +389,7 @@ def analyze_ai_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         value = row["value"]
         lower_path = row["path"].lower()
         for pattern in TOOL_PATTERNS:
-            if pattern.regex.search(value):
+            if pattern.regex.search(value) or pattern.regex.search(lower_path):
                 add_signal(pattern, row["path"], value, "命中已知 AI 生成工具或模型名称")
         for pattern in PARAMETER_PATTERNS:
             if pattern.regex.search(value):

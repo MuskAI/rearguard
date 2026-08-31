@@ -80,6 +80,7 @@ interface VerdictView {
   label: string;
   description: string;
   risk: number;
+  modelProbability: number | null;
   riskLabel: string;
   tone: "real" | "warn" | "fake";
   confidence: string;
@@ -90,6 +91,29 @@ const AI_WATERMARK_PROVIDERS = new Set(["gemini", "doubao", "jimeng", "jimeng_pi
 
 function clamp01(value: number) {
   return Math.max(0, Math.min(value, 1));
+}
+
+function probabilityValue(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return clamp01(parsed > 1 ? parsed / 100 : parsed);
+}
+
+function legacyModelProbability(explanation: unknown): number | null {
+  const match = String(explanation ?? "").match(
+    /(?:原始(?:主模型)?\s*AI\s*(?:风险|分数)|raw\s+AI\s+(?:risk|score))\s*(?:为|[:：=])\s*([+-]?\d+(?:\.\d+)?)\s*(%)?/i,
+  );
+  if (!match) return null;
+  const parsed = Number(match[1]);
+  if (!Number.isFinite(parsed)) return null;
+  return clamp01(match[2] || parsed > 1 ? parsed / 100 : parsed);
+}
+
+function probabilityText(value: number | null): string {
+  if (value === null) return "未返回";
+  const percentage = value * 100;
+  return Number.isInteger(percentage) ? String(percentage) : percentage.toFixed(1);
 }
 
 function publicCopy(value: unknown) {
@@ -608,13 +632,15 @@ function ImageLightbox({
 function verdictFor(outcome: AgentOutcome): VerdictView {
   if (outcome.kind === "image") {
     const reviewOnly = outcome.result.decisionStatus !== "verdict" || outcome.result.reviewRequired === true;
-    const rawValue = outcome.result.probability ?? outcome.result.detector_probability ?? outcome.result.modelScore;
-    const raw = Number(rawValue ?? 0);
+    const recoveredLegacyScore = legacyModelProbability(outcome.result.explanation);
+    const rawModelValue = outcome.result.modelScore ?? outcome.result.detector_probability ?? recoveredLegacyScore ?? outcome.result.probability;
+    const modelProbability = probabilityValue(rawModelValue);
+    const finalProbability = probabilityValue(outcome.result.probability) ?? modelProbability ?? 0;
     const localizedWatermark = hasDecisiveAiWatermark(outcome.result.visibleWatermark);
-    const risk = Math.max(clamp01(raw > 1 ? raw / 100 : raw), localizedWatermark ? 0.95 : 0);
+    const risk = Math.max(finalProbability, localizedWatermark ? 0.95 : 0);
     const label = binaryVerdictLabel(
       localizedWatermark ? "AI生成图像" : outcome.result.final_label,
-      rawValue,
+      rawModelValue,
     );
     const tone = isFakeVerdict(label) ? "fake" : "real";
     return {
@@ -627,6 +653,7 @@ function verdictFor(outcome: AgentOutcome): VerdictView {
             ? "本次多源分析未发现足以支持 AI 生成的强证据。"
             : "检测到需要关注的生成或编辑线索，建议结合原始来源复核。",
       risk,
+      modelProbability,
       riskLabel: outcome.result.swarm?.enabled ? "综合异常风险" : "AI 生成风险",
       tone,
       confidence: reviewOnly ? "低，建议复核" : outcome.result.confidence || "未标注",
@@ -647,6 +674,7 @@ function verdictFor(outcome: AgentOutcome): VerdictView {
           ? "抽帧与时序分析未发现明确的合成证据。"
           : "视频中存在需要人工复核的合成线索。",
       risk,
+      modelProbability: risk,
       riskLabel: "合成风险",
       tone,
       confidence: reviewOnly ? "低，建议复核" : outcome.result.confidence || "未标注",
@@ -677,6 +705,7 @@ function verdictFor(outcome: AgentOutcome): VerdictView {
       ? outcome.result.explanation || `系统给出“${label}”二元结论；当前证据有限，建议结合原始来源复核。`
       : outcome.result.explanation || "请结合证据维度与原始来源进行判断。",
     risk,
+    modelProbability: aiRisk || risk,
     riskLabel: tamperRisk >= Math.max(aiRisk, deepfakeRisk, 0.62) || deepfakeRisk >= Math.max(aiRisk, tamperRisk, 0.62)
       ? "综合异常风险"
       : "AI 生成风险",
@@ -801,8 +830,12 @@ function ResultDecisionCard({
     ? provenanceView(provenance, provenanceBusy)
     : { label: "登录后核验", detail: "登录后自动读取 C2PA 内容凭证", tone: "neutral" as const };
   const decisiveWatermark = hasDecisiveAiWatermark(visibleWatermark);
-  const metadata: VerificationView = captureEvidence?.level === "conflict"
-    ? { label: "拍摄信息冲突", detail: "元数据字段之间存在不一致", tone: "warning" }
+  const aiMetadata = provenance?.aiMetadata;
+  const metadataTools = (aiMetadata?.matchedTools || []).slice(0, 2).join("、");
+  const metadata: VerificationView = aiMetadata?.isAiLikely || provenance?.metadataAiGenerated
+    ? { label: "发现 AI 工具标记", detail: `${metadataTools || "生成工具关键词"} · 元数据可编辑，作为来源线索`, tone: "fake" }
+    : captureEvidence?.level === "conflict"
+      ? { label: "拍摄信息冲突", detail: "元数据字段之间存在不一致", tone: "warning" }
     : captureEvidence?.supportsRealCapture
       ? { label: `${metadataCount} 项 · 实拍线索`, detail: "发现可核对的相机或拍摄流程信息", tone: "real" }
       : metadataCount > 0
@@ -1386,9 +1419,9 @@ export default function AgentResult(props: Props) {
           <dl className="result-overview-metrics">
             <div className="result-probability-metric">
               <dt>AI 生成概率</dt>
-              <dd>{Math.round(verdict.risk * 100)}<small>%</small></dd>
-              <i aria-hidden="true"><span style={{ width: `${Math.round(verdict.risk * 100)}%` }} /></i>
-              <small>{verdict.reviewOnly ? "模型输出 · 未校准" : verdict.riskLabel}</small>
+              <dd>{probabilityText(verdict.modelProbability)}{verdict.modelProbability !== null && <small>%</small>}</dd>
+              <i aria-hidden="true"><span style={{ width: `${Math.round((verdict.modelProbability ?? 0) * 100)}%` }} /></i>
+              <small>{verdict.modelProbability === null ? "模型未返回可用分数" : verdict.reviewOnly ? "模型直接输出 · 未校准" : "模型直接输出"}</small>
             </div>
             <div>
               <dt>可信程度</dt>

@@ -393,6 +393,30 @@ def test_uncalibrated_remote_model_is_forced_to_review_only(monkeypatch):
     assert "不作为已校准概率发布" in payload["explanation"]
 
 
+def test_history_model_score_recovers_legacy_raw_score_from_explanation():
+    item = {
+        "fake": 0.9958,
+        "detector_probability": None,
+        "explantation": "内部分析服务给出二元结果：AI生成图像。原始 AI 分数为 0.9958，固定阈值为 0.5。",
+    }
+
+    assert detection._history_model_score(item) == pytest.approx(0.9958)
+
+
+def test_review_only_public_result_preserves_explicit_model_score():
+    result = detection._suppress_review_only_scores({
+        "final_label": "AI生成图像",
+        "probability": 0.009958,
+        "detector_probability": None,
+        "modelScore": 0.9958,
+        "decisionStatus": "review_only",
+    })
+
+    assert result["probability"] is None
+    assert result["modelScore"] == pytest.approx(0.9958)
+    assert result["scorePublished"] is True
+
+
 def test_missing_remote_model_decision_contract_fails_closed(monkeypatch):
     import detector_backend
 

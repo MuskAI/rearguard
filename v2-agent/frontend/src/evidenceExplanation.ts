@@ -177,6 +177,15 @@ function provenancePoint(report?: ProvenanceReport): ExplanationPoint {
   if (validation === "invalid") {
     return { label: "来源凭证异常", direction: "warning", importance: "critical", text: "文件包含内容来源凭证，但完整性校验未通过；其中的来源声明不会被直接采信。" };
   }
+  if (report.metadataAiGenerated === true || report.aiMetadata?.isAiLikely === true) {
+    const tools = (report.aiMetadata?.matchedTools || []).slice(0, 3).join("、");
+    return {
+      label: "AI 工具元数据",
+      direction: "fake",
+      importance: "critical",
+      text: `文件元数据中命中${tools || "已知生成工具"}标记，支持其经过 AI 生成工具处理。元数据可以被修改，因此本项作为强来源线索，但不等同于可信签名凭证。`,
+    };
+  }
   if (validation === "valid") {
     return { label: "来源凭证待确认", direction: "neutral", importance: "context", text: "内容来源凭证的签名结构有效，但签发者信任关系尚未建立；其中的声明仅作为辅助信息。" };
   }

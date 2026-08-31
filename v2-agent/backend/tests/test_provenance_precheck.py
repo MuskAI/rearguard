@@ -364,6 +364,17 @@ def test_user_controlled_filename_cannot_create_ai_metadata_evidence():
     assert report["isAiLikely"] is False
 
 
+def test_doubao_metadata_keyword_is_reported_as_ai_source_evidence():
+    report = metadata.analyze_ai_metadata(
+        {"EXIF": {"Software": "doubao image generator", "Comment": "豆包生成"}}
+    )
+
+    assert report["score"] >= 45
+    assert report["isAiLikely"] is True
+    assert "豆包生成信息" in report["matchedTools"]
+    assert any(signal["id"] == "doubao" for signal in report["signals"])
+
+
 def test_invalid_ai_c2pa_requires_pixel_model_without_corroboration():
     local = provenance_precheck._local_source_decision(
         {

@@ -784,6 +784,33 @@ def _prob01_from_percent(value):
     return max(0.0, min(1.0, _to_float(value, 0.0) / 100.0))
 
 
+_HISTORY_MODEL_SCORE_RE = re.compile(
+    r'(?:原始(?:主模型)?\s*AI\s*(?:风险|分数)|raw\s+AI\s+(?:risk|score))'
+    r'\s*(?:为|[:：=])\s*([+-]?\d+(?:\.\d+)?)\s*(%)?',
+    re.I,
+)
+
+
+def _history_model_score(item):
+    """Recover the detector's 0..1 output across historical storage formats."""
+    item = item or {}
+    detector_value = item.get('detector_probability')
+    if detector_value not in (None, ''):
+        return _clamp01(detector_value, 0.0)
+
+    explanation = str(item.get('explantation') or item.get('explanation') or '')
+    match = _HISTORY_MODEL_SCORE_RE.search(explanation)
+    if match:
+        parsed = _to_float(match.group(1), 0.0)
+        if match.group(2) or parsed > 1.0:
+            parsed /= 100.0
+        return max(0.0, min(1.0, parsed))
+
+    # The canonical database column stores a percentage.  Only the strict
+    # explanation pattern above is allowed to reinterpret legacy 0..1 values.
+    return _prob01_from_percent(item.get('fake', 0))
+
+
 def _backend_post(url, **kwargs):
     # 服务器内部调用本机鉴伪后端时必须直连，避免被 HTTP_PROXY/HTTPS_PROXY 劫持。
     headers = dict(kwargs.pop('headers', {}) or {})
@@ -2318,9 +2345,11 @@ def _suppress_review_only_scores(result):
     )
     if result.get('decisionStatus') == 'verdict':
         return result
-    raw_model_score = result.get('probability')
+    raw_model_score = result.get('modelScore')
     if raw_model_score is None:
         raw_model_score = result.get('detector_probability')
+    if raw_model_score is None:
+        raw_model_score = result.get('probability')
     try:
         normalized_model_score = float(raw_model_score)
         if normalized_model_score > 1:
@@ -4033,7 +4062,7 @@ def image_result_api():
         return jsonify({'status': 'error', 'message': '未找到该检测记录'}), 404
     filename = item.get('filename', '')
     fake_pct = _to_float(item.get('fake', 0), 0.0)
-    detector_probability = _clamp01(item.get('detector_probability'), _prob01_from_percent(fake_pct))
+    detector_probability = _history_model_score(item)
     image_url = _backend_static_url('image', item)
 
     all_metadata = _metadata_for_item(itemid)
@@ -4059,6 +4088,7 @@ def image_result_api():
         'final_label': final_label,
         'probability': fake,
         'detector_probability': detector_probability,
+        'modelScore': detector_probability,
         'p_metadata': metadata_probability,
         'confidence': '低' if review_required else item.get('clarity', ''),
         'explanation': (
@@ -4102,7 +4132,7 @@ def image_report_api():
 
     fake_pct = _to_float(item.get('fake', 0), 0.0)
     report_metadata = _metadata_for_item(itemid)
-    detector_probability = _clamp01(item.get('detector_probability'), _prob01_from_percent(fake_pct))
+    detector_probability = _history_model_score(item)
     report_probability = _prob01_from_percent(fake_pct)
     probability_model = {}
     metadata_probability = None
@@ -4114,6 +4144,7 @@ def image_report_api():
         'final_label': report_label,
         'probability': report_probability,
         'detector_probability': detector_probability,
+        'modelScore': detector_probability,
         'p_metadata': metadata_probability,
         'confidence': item.get('clarity', ''),
         'explanation': item.get('explantation') or _to_user_explanation(
