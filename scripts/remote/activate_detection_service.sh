@@ -257,10 +257,13 @@ import json, sys
 payload = json.load(sys.stdin)
 generic = payload.get("genericVisibleWatermark") or {}
 assert payload.get("status") == "ok"
-assert payload.get("registryReady") is True
+assert payload.get("mode") == "model_direct"
+assert payload.get("registryReady") is False
 assert payload.get("tokenReady") is True
 assert payload.get("coordinateSpace") == "display_normalized_v1"
 assert generic.get("available") is True
+assert generic.get("mode") == "model_direct"
+assert generic.get("resultSource") == "model"
 assert generic.get("cudaReady") is True
 assert generic.get("device") != "cpu"
 assert generic.get("model") == "huijian/yolo11x_explicit_watermark_binary"
@@ -346,6 +349,8 @@ assert payload.get("status") == "ok"
 assert payload.get("coordinateSpace") == "display_normalized_v1"
 assert int(size.get("width") or 0) > 0 and int(size.get("height") or 0) > 0
 assert generic.get("available") is True
+assert generic.get("mode") == "model_direct"
+assert generic.get("resultSource") == "model"
 '; then
     precheck_probe_ready=1
     break
@@ -378,6 +383,8 @@ assert runtime.get("deploymentCommit") == sys.argv[3]
 assert runtime.get("visiblePrecheckStatus") == "success"
 assert precheck.get("coordinateSpace") == "display_normalized_v1"
 assert generic.get("available") is True
+assert generic.get("mode") == "model_direct"
+assert generic.get("resultSource") == "model"
 assert generic.get("cudaReady") is True
 assert generic.get("device") != "cpu"
 assert generic.get("model") == "huijian/yolo11x_explicit_watermark_binary"
