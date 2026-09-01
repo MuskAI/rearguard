@@ -16,7 +16,7 @@ YOLO_METHOD = "yolo11x_watermark_detection"
 YOLO_MODEL = "huijian/yolo11x_explicit_watermark_binary"
 DIRECT_MODE = "model_direct"
 DIRECT_METHOD = "explicit_watermark_model_direct"
-DIRECT_MIN_CONFIDENCE = 0.80
+DIRECT_MIN_CONFIDENCE = 0.92
 EXPLICIT_METHOD = "explicit_ai_watermark_fusion"
 EXPLICIT_MODEL = "RapidOCR + FAISS/CLIP + rule fusion"
 EXPLICIT_MIN_CONFIDENCE = 0.80
@@ -267,10 +267,20 @@ def _generic_hits(precheck: dict[str, Any]) -> list[dict[str, Any]]:
         bbox = _bbox(raw.get("bbox"))
         if bbox is None:
             continue
+        confidence = _clamp01(raw.get("confidence"))
+        decision_eligible = watermark_verdict.is_direct_watermark_hit_eligible({
+            "confidence": confidence,
+            "bbox": bbox,
+        })
+        decisive = direct_mode and raw.get("decisive") is True and decision_eligible
         hits.append({
             "provider": YOLO_PROVIDER,
-            "label": "显式水印" if direct_mode else "可见水印（平台待确认）",
-            "confidence": _clamp01(raw.get("confidence")),
+            "label": (
+                "显式水印" if decisive
+                else "疑似标记区域（待核验）" if direct_mode
+                else "可见水印（平台待确认）"
+            ),
+            "confidence": confidence,
             "bbox": bbox,
             "method": DIRECT_METHOD if direct_mode else YOLO_METHOD,
             "frame": None,
@@ -278,10 +288,11 @@ def _generic_hits(precheck: dict[str, Any]) -> list[dict[str, Any]]:
             "crop": None,
             "model": raw.get("model") or detector.get("model") or YOLO_MODEL,
             "modelRevision": raw.get("modelRevision") or detector.get("modelRevision"),
-            "decisive": direct_mode and raw.get("decisive") is True,
+            "decisive": decisive,
+            "decisionEligible": decision_eligible,
             "evidenceRole": (
                 "decisive_provenance"
-                if direct_mode and raw.get("decisive") is True
+                if decisive
                 else "model_detection" if direct_mode else "localization"
             ),
             "localizationConfirmed": direct_mode,
@@ -302,11 +313,15 @@ def _merge_model_direct(
     detected = bool(hits)
     decisive_hits = [
         hit for hit in hits
-        if hit.get("decisive") is True and _clamp01(hit.get("confidence")) >= DIRECT_MIN_CONFIDENCE
+        if hit.get("decisive") is True and watermark_verdict.is_direct_watermark_hit_eligible(hit)
     ]
     top = max(hits, key=lambda item: _clamp01(item.get("confidence"))) if hits else None
     confidence = _clamp01(top.get("confidence")) if top else 0.0
     available = detector.get("available") is True
+    decision_threshold = max(
+        DIRECT_MIN_CONFIDENCE,
+        _clamp01(detector.get("directDecisionThreshold")),
+    )
     raw_explicit = precheck.get("explicitWatermark")
     explicit = copy.deepcopy(raw_explicit) if isinstance(raw_explicit, dict) else {
         "available": available,
@@ -324,7 +339,8 @@ def _merge_model_direct(
         "confidence": confidence,
         "mode": DIRECT_MODE,
         "resultSource": "model",
-        "decisionThreshold": detector.get("directDecisionThreshold") or DIRECT_MIN_CONFIDENCE,
+        "decisionThreshold": decision_threshold,
+        "decisionCornerMargin": watermark_verdict.DIRECT_CORNER_MARGIN,
     })
     explicit["hits"] = [
         {
@@ -338,18 +354,36 @@ def _merge_model_direct(
             "model": hit.get("model"),
             "modelRevision": hit.get("modelRevision"),
             "decisive": hit.get("decisive") is True,
+            "decisionEligible": hit.get("decisionEligible") is True,
             "evidenceRole": hit.get("evidenceRole"),
             "method": DIRECT_METHOD,
         }
         for hit in hits
     ]
-    note = (
-        f"显式水印模型直接检出 {len(hits)} 处区域，最高置信度 {confidence * 100:.1f}%。"
-        if detected
-        else "显式水印模型已完成扫描，本次未检出显式水印。"
-        if available
-        else "显式水印模型本次不可用。"
-    )
+    explicit_verdict = explicit.get("aiWatermarkVerdict")
+    explicit_verdict = dict(explicit_verdict) if isinstance(explicit_verdict, dict) else {}
+    explicit_verdict.update({
+        "verdict": "yes" if decisive_hits else "inconclusive" if detected else "no",
+        "isAiGeneratedWatermark": True if decisive_hits else None if detected else False,
+        "confidence": confidence,
+        "relevantHitCount": len(hits),
+        "strongHitCount": len(decisive_hits),
+    })
+    explicit["aiWatermarkVerdict"] = explicit_verdict
+    if decisive_hits:
+        note = (
+            f"显式水印模型定位到 {len(decisive_hits)} 处高可信角落水印，"
+            f"最高置信度 {confidence * 100:.1f}%。"
+        )
+    elif detected:
+        note = (
+            f"模型定位到 {len(hits)} 处疑似标记区域，最高置信度 {confidence * 100:.1f}%，"
+            "仅供复核，不单独影响真假结论。"
+        )
+    elif available:
+        note = "显式水印模型已完成扫描，本次未检出显式水印。"
+    else:
+        note = "显式水印模型本次不可用。"
     merged["visibleWatermark"] = {
         **existing,
         "enabled": True,
@@ -381,7 +415,8 @@ def _merge_model_direct(
             "model": detector.get("model") or YOLO_MODEL,
             "modelRevision": detector.get("modelRevision"),
             "confidenceThreshold": detector.get("confidenceThreshold"),
-            "directDecisionThreshold": detector.get("directDecisionThreshold") or DIRECT_MIN_CONFIDENCE,
+            "directDecisionThreshold": decision_threshold,
+            "directDecisionCornerMargin": watermark_verdict.DIRECT_CORNER_MARGIN,
             "roundTripMs": detector.get("roundTripMs"),
             "engines": [{
                 "id": DIRECT_METHOD,

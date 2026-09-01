@@ -35,7 +35,7 @@ KNOWN_VISIBLE_PROVIDERS = frozenset({"gemini", "doubao", "jimeng", "jimeng_pill"
 YOLO_PROVIDER = "yolo11x_watermark"
 DIRECT_MODE = "model_direct"
 DIRECT_METHOD = "explicit_watermark_model_direct"
-DIRECT_DECISIVE_CONFIDENCE = 0.80
+DIRECT_DECISIVE_CONFIDENCE = 0.92
 
 _last_state: dict[str, Any] = {
     "available": None,
@@ -104,9 +104,9 @@ def _normalize_visible_hits(result: dict[str, Any], *, trusted_model: bool = Fal
     direct_mode = result.get("mode") == DIRECT_MODE or detector.get("mode") == DIRECT_MODE
     if direct_mode:
         try:
-            threshold = min(1.0, max(0.0, float(
+            threshold = max(DIRECT_DECISIVE_CONFIDENCE, min(1.0, max(0.0, float(
                 detector.get("directDecisionThreshold") or DIRECT_DECISIVE_CONFIDENCE
-            )))
+            ))))
         except (TypeError, ValueError):
             threshold = DIRECT_DECISIVE_CONFIDENCE
         direct_hits = []
@@ -115,13 +115,23 @@ def _normalize_visible_hits(result: dict[str, Any], *, trusted_model: bool = Fal
                 continue
             hit = dict(raw)
             confidence = min(1.0, max(0.0, float(hit.get("confidence") or 0.0)))
-            decisive = trusted_model and hit.get("decisive") is True and confidence >= threshold
+            decision_eligible = watermark_verdict.is_direct_watermark_hit_eligible({
+                "confidence": confidence,
+                "bbox": hit.get("bbox"),
+            })
+            decisive = (
+                trusted_model
+                and hit.get("decisive") is True
+                and confidence >= threshold
+                and decision_eligible
+            )
             hit.update({
                 "provider": YOLO_PROVIDER,
-                "label": "显式水印",
+                "label": "显式水印" if decisive else "疑似标记区域（待核验）",
                 "confidence": round(confidence, 4),
                 "method": DIRECT_METHOD,
                 "decisive": decisive,
+                "decisionEligible": decision_eligible,
                 "corroborated": False,
                 "evidenceRole": "decisive_provenance" if decisive else "model_detection",
             })
@@ -136,6 +146,7 @@ def _normalize_visible_hits(result: dict[str, Any], *, trusted_model: bool = Fal
             "mode": DIRECT_MODE,
             "resultSource": "model",
             "directDecisionThreshold": threshold,
+            "directDecisionCornerMargin": watermark_verdict.DIRECT_CORNER_MARGIN,
             "trustedDecision": trusted_model,
         })
         result["genericVisibleWatermark"] = detector

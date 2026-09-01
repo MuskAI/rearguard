@@ -575,7 +575,7 @@ def test_direct_model_result_is_decisive_only_when_trusted():
         "mode": "model_direct",
         "visibleHits": [{
             "provider": "yolo11x_watermark",
-            "confidence": 0.91,
+            "confidence": 0.94,
             "decisive": True,
             "bbox": {"x": 0.7, "y": 0.8, "w": 0.2, "h": 0.1},
         }],
@@ -596,4 +596,28 @@ def test_direct_model_result_is_decisive_only_when_trusted():
     assert untrusted["genericVisibleWatermark"]["trustedDecision"] is False
     assert payload["visibleHits"][0]["decisive"] is True
     assert payload["visibleHits"][0]["method"] == "explicit_watermark_model_direct"
+    assert payload["genericVisibleWatermark"]["directDecisionThreshold"] == 0.92
     assert payload["genericVisibleWatermark"]["trustedDecision"] is True
+
+
+def test_direct_model_non_corner_hit_is_never_decisive():
+    payload = {
+        "mode": "model_direct",
+        "visibleHits": [{
+            "provider": "yolo11x_watermark",
+            "confidence": 0.98,
+            "decisive": True,
+            "bbox": {"x": 0.28, "y": 0.04, "w": 0.44, "h": 0.08},
+        }],
+        "genericVisibleWatermark": {
+            "available": True,
+            "mode": "model_direct",
+            "directDecisionThreshold": 0.8,
+        },
+    }
+
+    provenance_precheck._normalize_visible_hits(payload, trusted_model=True)
+
+    assert payload["visibleHits"][0]["decisive"] is False
+    assert payload["visibleHits"][0]["decisionEligible"] is False
+    assert payload["visibleHits"][0]["label"] == "疑似标记区域（待核验）"

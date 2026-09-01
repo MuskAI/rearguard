@@ -33,7 +33,11 @@ YOLO_EXPECTED_SHA256 = os.getenv(
 )
 DIRECT_DECISIVE_CONFIDENCE = min(
     1.0,
-    max(0.0, float(os.getenv("YOLO_WATERMARK_DIRECT_DECISIVE_CONFIDENCE", "0.80"))),
+    max(0.0, float(os.getenv("YOLO_WATERMARK_DIRECT_DECISIVE_CONFIDENCE", "0.92"))),
+)
+DIRECT_CORNER_MARGIN = min(
+    0.49,
+    max(0.0, float(os.getenv("YOLO_WATERMARK_DIRECT_CORNER_MARGIN", "0.12"))),
 )
 YOLO_PROVIDER = "yolo11x_watermark"
 DIRECT_MODE = "model_direct"
@@ -80,6 +84,19 @@ def _valid_normalized_box(value: Any) -> bool:
         and x + width <= 1.0
         and y + height <= 1.0
     )
+
+
+def _corner_eligible(value: Any) -> bool:
+    """Only corner-like placements can independently authorize a watermark verdict."""
+    if not _valid_normalized_box(value):
+        return False
+    x = float(value["x"])
+    y = float(value["y"])
+    width = float(value["w"])
+    height = float(value["h"])
+    horizontal_edge = x <= DIRECT_CORNER_MARGIN or x + width >= 1.0 - DIRECT_CORNER_MARGIN
+    vertical_edge = y <= DIRECT_CORNER_MARGIN or y + height >= 1.0 - DIRECT_CORNER_MARGIN
+    return horizontal_edge and vertical_edge
 
 
 def _yolo_detection_error(payload: dict[str, Any]) -> str:
@@ -133,15 +150,18 @@ def _generic_yolo_hits(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]
     candidates = []
     for item in payload.get("detections") or []:
         confidence = round(float(item.get("confidence") or 0.0), 4)
-        decisive = confidence >= DIRECT_DECISIVE_CONFIDENCE
+        bbox = item.get("bbox") or {}
+        corner_eligible = _corner_eligible(bbox)
+        decisive = confidence >= DIRECT_DECISIVE_CONFIDENCE and corner_eligible
         candidates.append({
             "provider": YOLO_PROVIDER,
-            "label": "显式水印",
+            "label": "显式水印" if decisive else "疑似标记区域（待核验）",
             "location": "localized",
             "confidence": confidence,
             "decisive": decisive,
+            "decisionEligible": corner_eligible,
             "evidenceRole": "decisive_provenance" if decisive else "model_detection",
-            "bbox": item.get("bbox") or {},
+            "bbox": bbox,
             "model": payload.get("model"),
             "modelRevision": payload.get("modelRevision"),
             "method": DIRECT_METHOD,
@@ -156,6 +176,8 @@ def _generic_yolo_hits(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]
         "mode": DIRECT_MODE,
         "resultSource": "model",
         "directDecisionThreshold": DIRECT_DECISIVE_CONFIDENCE,
+        "directDecisionCornerMargin": DIRECT_CORNER_MARGIN,
+        "strongCount": sum(1 for item in candidates if item.get("decisive") is True),
         "elapsedMs": int(payload.get("elapsedMs") or elapsed_ms),
         "roundTripMs": elapsed_ms,
     }
@@ -168,8 +190,8 @@ def _generic_yolo_hits(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]
     return candidates, status
 
 
-def _confidence_band(confidence: float) -> str:
-    if confidence >= DIRECT_DECISIVE_CONFIDENCE:
+def _confidence_band(confidence: float, *, decisive: bool = False) -> str:
+    if decisive:
         return "high"
     if confidence >= 0.5:
         return "medium"
@@ -183,11 +205,18 @@ def _direct_result(
     detected = bool(candidates)
     confidence = max((float(item.get("confidence") or 0.0) for item in candidates), default=0.0)
     strong_count = sum(1 for item in candidates if item.get("decisive") is True)
-    reason = (
-        f"显式水印模型直接定位到 {len(candidates)} 处水印区域，最高置信度 {confidence * 100:.1f}%。"
-        if detected
-        else "显式水印模型已完成扫描，未输出水印区域。"
-    )
+    if strong_count:
+        reason = (
+            f"显式水印模型定位到 {strong_count} 处高可信角落水印，"
+            f"最高置信度 {confidence * 100:.1f}%。"
+        )
+    elif detected:
+        reason = (
+            f"模型定位到 {len(candidates)} 处疑似标记区域，最高置信度 {confidence * 100:.1f}%，"
+            "但未达到直接判定门槛，仅作为复核线索。"
+        )
+    else:
+        reason = "显式水印模型已完成扫描，未输出水印区域。"
     return {
         "available": status.get("available") is True,
         "detected": detected,
@@ -195,13 +224,14 @@ def _direct_result(
         "sourcePlatform": None,
         "provider": YOLO_PROVIDER if detected else None,
         "confidence": round(confidence, 4),
-        "confidenceBand": _confidence_band(confidence),
+        "confidenceBand": _confidence_band(confidence, decisive=bool(strong_count)),
         "mode": DIRECT_MODE,
         "resultSource": "model",
         "decisionThreshold": DIRECT_DECISIVE_CONFIDENCE,
+        "decisionCornerMargin": DIRECT_CORNER_MARGIN,
         "aiWatermarkVerdict": {
-            "verdict": "yes" if detected else "no",
-            "isAiGeneratedWatermark": True if detected else False,
+            "verdict": "yes" if strong_count else "inconclusive" if detected else "no",
+            "isAiGeneratedWatermark": True if strong_count else None if detected else False,
             "confidence": round(confidence, 4),
             "reason": reason,
             "relevantHitCount": len(candidates),
@@ -219,6 +249,7 @@ def _direct_result(
                 "model": item.get("model"),
                 "modelRevision": item.get("modelRevision"),
                 "decisive": item.get("decisive") is True,
+                "decisionEligible": item.get("decisionEligible") is True,
                 "evidenceRole": item.get("evidenceRole"),
                 "method": DIRECT_METHOD,
             }
@@ -340,6 +371,7 @@ def _build_pipeline_trace(response: dict[str, Any]) -> dict[str, Any]:
                 "count": len(candidates),
                 "candidates": candidates,
                 "decisionThreshold": DIRECT_DECISIVE_CONFIDENCE,
+                "decisionCornerMargin": DIRECT_CORNER_MARGIN,
                 "runtime": {key: model_status.get(key) for key in (
                     "model", "modelRevision", "modelSha256", "device", "gpu",
                     "cudaReady", "confidenceThreshold", "elapsedMs", "roundTripMs",
@@ -356,6 +388,7 @@ def _build_pipeline_trace(response: dict[str, Any]) -> dict[str, Any]:
                 "verdict": verdict,
                 "confidence": explicit.get("confidence"),
                 "decisionThreshold": DIRECT_DECISIVE_CONFIDENCE,
+                "decisionCornerMargin": DIRECT_CORNER_MARGIN,
                 "resultSource": "model",
             },
         ),
@@ -424,6 +457,7 @@ def health_with_yolo():
         yolo["mode"] = DIRECT_MODE
         yolo["resultSource"] = "model"
         yolo["directDecisionThreshold"] = DIRECT_DECISIVE_CONFIDENCE
+        yolo["directDecisionCornerMargin"] = DIRECT_CORNER_MARGIN
     except (requests.RequestException, ValueError, TypeError) as exc:
         yolo["error"] = type(exc).__name__
     payload.update({
