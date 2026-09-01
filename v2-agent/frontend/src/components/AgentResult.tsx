@@ -650,7 +650,7 @@ function verdictFor(outcome: AgentOutcome): VerdictView {
     return {
       label,
       description: reviewOnly
-        ? outcome.result.explanation || `系统给出“${label}”二元结论；当前置信度较低，建议结合原图和证据复核。`
+        ? outcome.result.explanation || `系统给出“${label}”二元结论；模型分数尚未用独立测试集验证，建议结合原图和证据复核。`
         : localizedWatermark
           ? "显式水印模型直接检出高置信度水印区域，该证据已参与最终判断。"
           : tone === "real"
@@ -660,7 +660,7 @@ function verdictFor(outcome: AgentOutcome): VerdictView {
       modelProbability,
       riskLabel: outcome.result.swarm?.enabled ? "综合异常风险" : "AI 生成风险",
       tone,
-      confidence: reviewOnly ? "低，建议复核" : outcome.result.confidence || "未标注",
+      confidence: reviewOnly ? "尚未验证" : outcome.result.confidence || "未标注",
       reviewOnly,
     };
   }
@@ -673,7 +673,7 @@ function verdictFor(outcome: AgentOutcome): VerdictView {
     return {
       label,
       description: reviewOnly
-        ? `模型给出“${label}”二元结论${sampledCount ? `，本次联合分析了 ${sampledCount} 个采样帧` : ""}。当前置信等级较低，建议结合下方时间点与原视频核对。`
+        ? `模型给出“${label}”二元结论${sampledCount ? `，本次联合分析了 ${sampledCount} 个采样帧` : ""}。该模型分数尚未经过独立测试集验证，建议结合下方时间点与原视频核对。`
         : tone === "real"
           ? "抽帧与时序分析未发现明确的合成证据。"
           : "视频中存在需要人工复核的合成线索。",
@@ -681,7 +681,7 @@ function verdictFor(outcome: AgentOutcome): VerdictView {
       modelProbability: risk,
       riskLabel: "合成风险",
       tone,
-      confidence: reviewOnly ? "低，建议复核" : outcome.result.confidence || "未标注",
+      confidence: reviewOnly ? "尚未验证" : outcome.result.confidence || "未标注",
       reviewOnly,
     };
   }
@@ -714,7 +714,7 @@ function verdictFor(outcome: AgentOutcome): VerdictView {
       ? "综合异常风险"
       : "AI 生成风险",
     tone,
-    confidence: reviewOnly ? "低，建议复核" : outcome.result.source === "vlm"
+    confidence: reviewOnly ? "尚未验证" : outcome.result.source === "vlm"
       ? "模型分析完成"
       : outcome.result.source === "provenance"
         ? "来源证据直接命中"
@@ -1014,14 +1014,14 @@ function ResultDecisionCard({
         <section className={`decision-model is-${verdict.tone}`} aria-labelledby="decision-model-title">
           <header>
             <div><small>模型分析</small><h4 id="decision-model-title">真实性信号</h4></div>
-            <span>{verdict.reviewOnly ? "低置信" : "已完成"}</span>
+            <span>{verdict.reviewOnly ? "待验证" : "已完成"}</span>
           </header>
           <div className="decision-model-signal">
             <small>模型输出方向</small>
             <strong>{verdict.tone === "fake" ? "偏向 AI 生成" : "偏向真实图像"}</strong>
           </div>
           <p className="decision-model-copy">{publicCopy(modelPoint?.text || verdict.description)}</p>
-          {verdict.reviewOnly && <div className="decision-calibration-note"><Info size={15} />模型原始输出，尚未经过独立数据集校准。</div>}
+          {verdict.reviewOnly && <div className="decision-calibration-note"><Info size={15} />模型分数尚未用独立测试集验证；分数高表示模型倾向强，不代表实际准确率已经得到验证。</div>}
         </section>
       </div>
     </section>
@@ -1608,12 +1608,12 @@ export default function AgentResult(props: Props) {
               <dt>AI 生成概率</dt>
               <dd>{probabilityText(verdict.modelProbability)}{verdict.modelProbability !== null && <small>%</small>}</dd>
               <i aria-hidden="true"><span style={{ width: `${Math.round((verdict.modelProbability ?? 0) * 100)}%` }} /></i>
-              <small>{verdict.modelProbability === null ? "模型未返回可用分数" : verdict.reviewOnly ? "模型直接输出 · 未校准" : "模型直接输出"}</small>
+              <small>{verdict.modelProbability === null ? "模型未返回可用分数" : verdict.reviewOnly ? "模型直接输出 · 尚未独立验证" : "模型直接输出"}</small>
             </div>
             <div>
-              <dt>可信程度</dt>
+              <dt>结论可靠性</dt>
               <dd>{verdict.confidence}</dd>
-              <small>{verdict.reviewOnly ? "建议结合原始来源复核" : "已形成可发布结论"}</small>
+              <small>{verdict.reviewOnly ? "需经独立测试集验证" : "已形成可发布结论"}</small>
             </div>
             <div>
               <dt>来源核验</dt>

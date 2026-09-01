@@ -1194,7 +1194,11 @@ test("结果页优先展示概率与关键来源证据并保持正文级字号",
   await expect(card.locator(".metadata-evidence-tags .is-fake")).toHaveCount(0);
   await expect(card.getByText("偏向 AI 生成", { exact: true })).toBeVisible();
   await expect(card.getByText("99.6%", { exact: true })).toHaveCount(0);
-  await expect(card.getByText("模型原始输出，尚未经过独立数据集校准。")).toBeVisible();
+  await expect(page.locator(".result-overview-metrics").getByText("结论可靠性", { exact: true })).toBeVisible();
+  await expect(page.locator(".result-overview-metrics").getByText("尚未验证", { exact: true })).toBeVisible();
+  await expect(page.locator(".result-overview-metrics").getByText("需经独立测试集验证", { exact: true })).toBeVisible();
+  await expect(page.locator(".result-overview-metrics").getByText("低，建议复核", { exact: true })).toHaveCount(0);
+  await expect(card.getByText("模型分数尚未用独立测试集验证；分数高表示模型倾向强，不代表实际准确率已经得到验证。")).toBeVisible();
   await expect(card.getByRole("heading", { name: "综合判断" })).toHaveCount(0);
   await expect(page.locator(".result-probability-metric dd")).toContainText("99.6%");
   expect(await card.locator(".decision-source, .decision-model").evaluateAll((items) => (

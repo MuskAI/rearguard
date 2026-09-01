@@ -226,7 +226,7 @@ function imageExplanation(outcome: Extract<AgentOutcome, { kind: "image" }>, ris
       text: watermarkDecisive && result.modelDecisionReady !== true
         ? "真实性分析的原始分数尚未经过独立数据集校准；本次结论由已经确认的强 AI 水印直接支持。"
         : reviewOnly
-        ? `模型分析给出“${verdictLabel}”，页面同时展示未校准的模型输出分；当前证据强度有限，因此按低置信结果解释。`
+        ? `模型分析给出“${verdictLabel}”，页面展示的是模型原始输出分；分数高表示模型倾向强，但该分数尚未用独立测试集验证，不能等同于已经验证的准确率。`
         : `真实性模型已完成分析，本次 AI 生成风险为 ${percent(risk)}。`,
     },
   ];
@@ -255,7 +255,7 @@ function imageExplanation(outcome: Extract<AgentOutcome, { kind: "image" }>, ris
     direction: verdictDirection(verdictLabel, reviewOnly),
     importance: "critical",
     text: reviewOnly
-      ? `本次最终结论为“${verdictLabel}”，但置信度较低；建议结合原始文件、来源记录和标记位置继续核对。`
+      ? `本次最终结论为“${verdictLabel}”；模型分数尚未用独立测试集验证，建议结合原始文件、来源记录和标记位置继续核对。`
       : watermarkDecisive
         ? `已经确认的强 AI 水印直接支持“${verdictLabel}”，综合 AI 风险为 ${percent(risk)}。`
         : `综合以上证据，本次结论为“${verdictLabel}”，AI 风险为 ${percent(risk)}；建议保留原始文件和来源记录。`,
@@ -274,7 +274,7 @@ function evidenceExplanation(outcome: Extract<AgentOutcome, { kind: "evidence" }
       direction: verdictDirection(verdictLabel, reviewOnly),
       importance: "critical",
       text: reviewOnly
-        ? "自动分析已经完成，页面展示模型原始输出分；该数值尚未经过独立数据集校准，因此按低置信结果解释。"
+        ? "自动分析已经完成，页面展示模型原始输出分；分数高表示模型倾向强，但其实际准确率仍需独立测试集验证。"
         : result.source === "provenance"
           ? "内容来源凭证已经通过验证，本次结论由可核对的来源记录直接支持。"
           : `模型和证据均已完成校验，本次 AI 风险为 ${percent(risk)}。`,
@@ -297,7 +297,7 @@ function evidenceExplanation(outcome: Extract<AgentOutcome, { kind: "evidence" }
     direction: verdictDirection(verdictLabel, reviewOnly),
     importance: "critical",
     text: reviewOnly
-      ? `本次最终结论为“${verdictLabel}”，但置信度较低。缺少元数据或水印都不能单独证明文件经过生成或篡改。`
+      ? `本次最终结论为“${verdictLabel}”；模型分数尚未用独立测试集验证。缺少元数据或水印都不能单独证明文件经过生成或篡改。`
       : `综合以上证据，本次结论为“${verdictLabel}”，AI 风险为 ${percent(risk)}；建议结合原始来源复核。`,
   });
   return points;
@@ -353,7 +353,7 @@ function videoExplanation(outcome: Extract<AgentOutcome, { kind: "video" }>, ver
     direction: verdictDirection(verdictLabel, reviewOnly),
     importance: "critical",
     text: reviewOnly
-      ? `最终仍给出二元结果“${verdictLabel}”，但当前证据只支持低置信等级；应结合采样时间点、未采样片段和原始来源复核。`
+      ? `最终仍给出二元结果“${verdictLabel}”；模型分数尚未用独立测试集验证，应结合采样时间点、未采样片段和原始来源复核。`
       : `综合已授权的视频证据，本次结论为“${verdictLabel}”。`,
   });
   return points;
