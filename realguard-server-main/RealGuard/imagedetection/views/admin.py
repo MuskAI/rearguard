@@ -806,6 +806,18 @@ def apply_admin_schema():
             messages.append("admin_accounts.session_version: failed")
         else:
             messages.append("admin_accounts.session_version: ready")
+    detection_columns = _detection_data_columns()
+    if detection_columns and "admin_review" not in detection_columns:
+        result = excute_detection_sql(
+            "ALTER TABLE data ADD COLUMN admin_review TINYINT NULL DEFAULT NULL "
+            "COMMENT '管理员复核：1=正确 -1=误判' AFTER feedback",
+            fetch=False,
+        )
+        if result is None:
+            ok = False
+            messages.append("data.admin_review: failed")
+        else:
+            messages.append("data.admin_review: ready")
     admin_indexes = excute_sql("SHOW INDEX FROM admin_accounts") or []
     if admin_indexes and "idx_admin_accounts_role_status" not in {
         row.get("Key_name") for row in admin_indexes
@@ -1265,6 +1277,68 @@ def _detection_data_columns():
     return {row.get("Field") for row in rows if isinstance(row, dict) and row.get("Field")}
 
 
+_POSITIVE_FEEDBACK_VALUES = {"1", "满意", "right", "helpful", "positive", "correct"}
+_NEGATIVE_FEEDBACK_VALUES = {"-1", "不满意", "wrong", "unhelpful", "negative", "incorrect"}
+
+
+def _normalize_detection_feedback(value):
+    text = str(value or "").strip().lower()
+    if text in _POSITIVE_FEEDBACK_VALUES:
+        return 1
+    if text in _NEGATIVE_FEEDBACK_VALUES:
+        return -1
+    return None
+
+
+def _detection_feedback_label(value):
+    normalized = _normalize_detection_feedback(value)
+    if normalized == 1:
+        return "有帮助"
+    if normalized == -1:
+        return "没帮助"
+    return "未评价"
+
+
+def _admin_review_label(value):
+    normalized = _normalize_detection_feedback(value)
+    if normalized == 1:
+        return "判定正确"
+    if normalized == -1:
+        return "判定误判"
+    return "未复核"
+
+
+def _detection_feedback_counts():
+    counts = {"positive": 0, "negative": 0, "unrated": 0, "unknown": 0}
+    if "feedback" not in _detection_data_columns():
+        counts["unrated"] = _scalar(
+            f"SELECT COUNT(*) AS count FROM data WHERE {INTERNAL_TEST_OWNER_SQL}",
+            detection=True,
+        )
+        return counts
+    rows = excute_detection_sql(
+        f"""
+        SELECT feedback, COUNT(*) AS count
+        FROM data
+        WHERE {INTERNAL_TEST_OWNER_SQL}
+        GROUP BY feedback
+        """
+    ) or []
+    for row in rows:
+        raw = row.get("feedback")
+        count = int(row.get("count") or 0)
+        normalized = _normalize_detection_feedback(raw)
+        if normalized == 1:
+            counts["positive"] += count
+        elif normalized == -1:
+            counts["negative"] += count
+        elif raw in (None, "", 0, "0"):
+            counts["unrated"] += count
+        else:
+            counts["unknown"] += count
+    return counts
+
+
 def _detection_data_select_clause():
     columns = _detection_data_columns()
     select_columns = [
@@ -1277,6 +1351,7 @@ def _detection_data_select_clause():
         "aigc",
         "clarity",
         "feedback" if "feedback" in columns else "NULL AS feedback",
+        "admin_review" if "admin_review" in columns else "NULL AS admin_review",
     ]
     return ", ".join(select_columns)
 
@@ -1290,6 +1365,7 @@ def _screen_detection_select_clause():
         "aigc",
         "clarity",
         "feedback" if "feedback" in columns else "NULL AS feedback",
+        "admin_review" if "admin_review" in columns else "NULL AS admin_review",
     ]
     return ", ".join(select_columns)
 
@@ -2319,6 +2395,7 @@ def _dashboard_metrics():
     )
     last_video_at = _scalar("SELECT createtime AS latest FROM video_data ORDER BY itemid DESC LIMIT 1", detection=True, default="")
     traffic = _cached_traffic_summary()
+    feedback_counts = _detection_feedback_counts()
     return {
         "users": {
             "total": _scalar("SELECT COUNT(*) AS count FROM user"),
@@ -2343,14 +2420,10 @@ def _dashboard_metrics():
             "last7Videos": last7_video_count,
             "lastImageAt": format_createtime(last_image_at),
             "lastVideoAt": format_createtime(last_video_at),
-            "feedbackPositive": _scalar(
-                f"SELECT COUNT(*) AS count FROM data WHERE feedback IN (1, '1', '满意') AND {INTERNAL_TEST_OWNER_SQL}",
-                detection=True,
-            ),
-            "feedbackNegative": _scalar(
-                f"SELECT COUNT(*) AS count FROM data WHERE feedback IN (-1, '-1', '不满意') AND {INTERNAL_TEST_OWNER_SQL}",
-                detection=True,
-            ),
+            "feedbackPositive": feedback_counts["positive"],
+            "feedbackNegative": feedback_counts["negative"],
+            "feedbackUnrated": feedback_counts["unrated"],
+            "feedbackUnknown": feedback_counts["unknown"],
         },
         "traffic": _traffic_metrics_payload(traffic),
         "todayWindow": {
@@ -2439,29 +2512,15 @@ def _label_distribution():
 
 
 def _feedback_distribution():
-    if "feedback" not in _detection_data_columns():
-        return [{
-            "label": "未反馈",
-            "count": _scalar(
-                f"SELECT COUNT(*) AS count FROM data WHERE {INTERNAL_TEST_OWNER_SQL}",
-                detection=True,
-            ),
-        }]
-    rows = excute_detection_sql(
-        f"""
-        SELECT CASE
-                 WHEN feedback = 1 THEN '满意'
-                 WHEN feedback = -1 THEN '不满意'
-                 ELSE '未反馈'
-               END AS label,
-               COUNT(*) AS count
-        FROM data
-        WHERE {INTERNAL_TEST_OWNER_SQL}
-        GROUP BY label
-        ORDER BY count DESC
-        """
-    ) or []
-    return [{"label": row.get("label"), "count": int(row.get("count") or 0)} for row in rows]
+    counts = _detection_feedback_counts()
+    result = [
+        {"label": "有帮助", "count": counts["positive"]},
+        {"label": "没帮助", "count": counts["negative"]},
+        {"label": "未评价", "count": counts["unrated"]},
+    ]
+    if counts["unknown"]:
+        result.append({"label": "历史未知", "count": counts["unknown"]})
+    return result
 
 
 def _screen_model_run(run):
@@ -2518,7 +2577,10 @@ def _recent_detection_items(limit=12):
         items.append({
             "id": row.get("itemid"),
             "createdAt": format_createtime(row.get("createtime")),
-            "feedback": row.get("feedback"),
+            "feedback": _normalize_detection_feedback(row.get("feedback")),
+            "feedbackLabel": _detection_feedback_label(row.get("feedback")),
+            "adminReview": _normalize_detection_feedback(row.get("admin_review")),
+            "adminReviewLabel": _admin_review_label(row.get("admin_review")),
             "modelRoute": _screen_model_run(run),
             **view,
         })
@@ -4216,7 +4278,10 @@ def admin_user_detail(user_id):
                 "createdAt": format_createtime(item.get("createtime")),
                 "filename": item.get("filename"),
                 "phone": item.get("phone") if include_pii else _mask_phone(item.get("phone")),
-                "feedback": item.get("feedback"),
+                "feedback": _normalize_detection_feedback(item.get("feedback")),
+                "feedbackLabel": _detection_feedback_label(item.get("feedback")),
+                "adminReview": _normalize_detection_feedback(item.get("admin_review")),
+                "adminReviewLabel": _admin_review_label(item.get("admin_review")),
                 "modelRoute": _model_run_for_admin(
                     route_runs.get(str(item.get("itemid"))), actor, "user.read_pii"
                 ),
@@ -4546,6 +4611,7 @@ def admin_detections():
     cursor = _cursor_arg()
     query = _search_term()
     label = str(request.args.get("label") or "").strip()
+    feedback_filter = str(request.args.get("feedback") or "").strip().lower()
     filters = [INTERNAL_TEST_OWNER_SQL]
     params = []
     if query:
@@ -4555,6 +4621,16 @@ def admin_detections():
     if label:
         filters.append("aigc = %s")
         params.append(label)
+    if feedback_filter == "positive":
+        values = sorted(_POSITIVE_FEEDBACK_VALUES)
+        filters.append(f"LOWER(TRIM(CAST(feedback AS CHAR))) IN ({','.join(['%s'] * len(values))})")
+        params.extend(values)
+    elif feedback_filter == "negative":
+        values = sorted(_NEGATIVE_FEEDBACK_VALUES)
+        filters.append(f"LOWER(TRIM(CAST(feedback AS CHAR))) IN ({','.join(['%s'] * len(values))})")
+        params.extend(values)
+    elif feedback_filter == "unrated":
+        filters.append("(feedback IS NULL OR TRIM(CAST(feedback AS CHAR)) IN ('', '0'))")
     if cursor:
         filters.append("itemid < %s")
         params.append(cursor)
@@ -4581,7 +4657,10 @@ def admin_detections():
             "createdAt": format_createtime(row.get("createtime")),
             "filename": row.get("filename"),
             "phone": row.get("phone") if include_pii else _mask_phone(row.get("phone")),
-            "feedback": row.get("feedback"),
+            "feedback": _normalize_detection_feedback(row.get("feedback")),
+            "feedbackLabel": _detection_feedback_label(row.get("feedback")),
+            "adminReview": _normalize_detection_feedback(row.get("admin_review")),
+            "adminReviewLabel": _admin_review_label(row.get("admin_review")),
             "modelRoute": _model_run_for_admin(run, actor),
             **_authorized_detection_view(row, run),
         })
@@ -4766,7 +4845,10 @@ def admin_detection_detail(itemid):
         "createdAt": format_createtime(row.get("createtime")),
         "filename": row.get("filename"),
         "phone": row.get("phone") if include_pii else _mask_phone(row.get("phone")),
-        "feedback": row.get("feedback"),
+        "feedback": _normalize_detection_feedback(row.get("feedback")),
+        "feedbackLabel": _detection_feedback_label(row.get("feedback")),
+        "adminReview": _normalize_detection_feedback(row.get("admin_review")),
+        "adminReviewLabel": _admin_review_label(row.get("admin_review")),
         "explanation": row.get("explantation") or "",
         "metadata": metadata if include_pii else _redact_metadata(metadata),
         "modelRoute": _model_run_for_admin(run, actor),
@@ -4809,12 +4891,13 @@ def admin_detections_export():
             view["probability"],
             view["detectorProbability"],
             view["confidence"],
-            row.get("feedback"),
+            _detection_feedback_label(row.get("feedback")),
+            _admin_review_label(row.get("admin_review")),
             (run or {}).get("model", {}).get("id", ""),
         ])
     return _csv_response(
         "realguard-detections.csv",
-        ["ID", "Created At", "Phone", "Filename", "Label", "Probability", "Detector Probability", "Confidence", "Feedback", "Model Route"],
+        ["ID", "Created At", "Phone", "Filename", "Label", "Probability", "Detector Probability", "Confidence", "User Feedback", "Admin Review", "Model Route"],
         export_rows,
     )
 
@@ -4832,10 +4915,12 @@ def admin_review_detection(itemid):
         return jsonify({"status": "error", "message": "feedback 参数无效"}), 400
     if feedback not in (1, -1, 0, None):
         return jsonify({"status": "error", "message": "feedback 只能为 1、-1 或 0"}), 400
-    before = excute_detection_sql("SELECT itemid, feedback FROM data WHERE itemid = %s LIMIT 1", (itemid,)) or []
+    if "admin_review" not in _detection_data_columns():
+        return jsonify({"status": "error", "message": "管理员复核字段尚未完成数据库迁移"}), 503
+    before = excute_detection_sql("SELECT itemid, admin_review FROM data WHERE itemid = %s LIMIT 1", (itemid,)) or []
     db_value = feedback
     updated = excute_detection_sql(
-        "UPDATE data SET feedback = %s WHERE itemid = %s",
+        "UPDATE data SET admin_review = %s WHERE itemid = %s",
         (db_value, itemid),
         fetch=False,
     )
@@ -4843,7 +4928,7 @@ def admin_review_detection(itemid):
         return jsonify({"status": "error", "message": "检测记录更新失败"}), 500
     if updated == 0:
         return jsonify({"status": "error", "message": "检测记录不存在"}), 404
-    after = {"itemid": itemid, "feedback": db_value}
+    after = {"itemid": itemid, "adminReview": db_value}
     _audit(user, "detection.review", str(itemid), before=before[0] if before else None, after=after)
     return jsonify({"status": "success", "review": after})
 

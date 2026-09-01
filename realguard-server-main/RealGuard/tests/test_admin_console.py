@@ -1098,6 +1098,7 @@ def test_big_screen_recent_items_remove_user_and_file_identifiers(monkeypatch):
                 {"Field": "aigc"},
                 {"Field": "clarity"},
                 {"Field": "feedback"},
+                {"Field": "admin_review"},
                 {"Field": "filename"},
                 {"Field": "phone"},
             ]
@@ -1293,6 +1294,7 @@ def test_admin_detections_tolerates_missing_optional_columns(client, monkeypatch
                 {"Field": "aigc"},
                 {"Field": "clarity"},
                 {"Field": "feedback"},
+                {"Field": "admin_review"},
             ]
         recorded["sql"] = sql
         recorded["params"] = params
@@ -1305,7 +1307,8 @@ def test_admin_detections_tolerates_missing_optional_columns(client, monkeypatch
             "phone": "13329825566",
             "aigc": "AI生成图像",
             "clarity": "中",
-            "feedback": None,
+            "feedback": "right",
+            "admin_review": -1,
         }]
 
     monkeypatch.setattr(admin, "excute_detection_sql", fake_detection_sql)
@@ -1322,6 +1325,9 @@ def test_admin_detections_tolerates_missing_optional_columns(client, monkeypatch
     payload = response.get_json()
     assert payload["detections"][0]["id"] == 612
     assert payload["detections"][0]["detectorProbability"] is None
+    assert payload["detections"][0]["feedback"] == 1
+    assert payload["detections"][0]["feedbackLabel"] == "有帮助"
+    assert payload["detections"][0]["adminReview"] == -1
     assert payload["detections"][0]["modelRoute"]["model"]["id"] == "aliyun-aigc-pro"
 
 
@@ -1581,8 +1587,10 @@ def test_admin_detection_review_writes_feedback_and_audit(client, monkeypatch, t
 
     def fake_detection_sql(sql, params=None, fetch=True):
         calls.append((sql, params, fetch))
+        if sql.strip().upper().startswith("SHOW COLUMNS"):
+            return [{"Field": "feedback"}, {"Field": "admin_review"}]
         if sql.strip().upper().startswith("SELECT"):
-            return [{"itemid": 9, "feedback": None}]
+            return [{"itemid": 9, "admin_review": None}]
         if sql.strip().upper().startswith("UPDATE"):
             return 1
         return []
@@ -1592,9 +1600,26 @@ def test_admin_detection_review_writes_feedback_and_audit(client, monkeypatch, t
     response = client.post("/api/admin/detections/9/review", json={"feedback": -1}, headers=_csrf_headers(client))
 
     assert response.status_code == 200
-    assert response.get_json()["review"]["feedback"] == -1
+    assert response.get_json()["review"]["adminReview"] == -1
     assert any(call[1] == (-1, 9) for call in calls)
+    assert any("UPDATE data SET admin_review" in call[0] for call in calls)
     assert client.get("/api/admin/audit").get_json()["audit"][0]["action"] == "detection.review"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected", "label"),
+    [
+        ("right", 1, "有帮助"),
+        ("满意", 1, "有帮助"),
+        ("1", 1, "有帮助"),
+        ("不满意", -1, "没帮助"),
+        ("-1", -1, "没帮助"),
+        (None, None, "未评价"),
+    ],
+)
+def test_detection_feedback_normalizes_legacy_values(raw, expected, label):
+    assert admin._normalize_detection_feedback(raw) == expected
+    assert admin._detection_feedback_label(raw) == label
 
 
 def test_aliyun_green_health_requires_credentials(monkeypatch):

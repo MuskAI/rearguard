@@ -925,6 +925,7 @@
             <div class="toolbar">
               <input class="input" id="detectionQuery" placeholder="搜索手机号 / 文件 / 标签">
               <select class="select" id="detectionLabel"><option value="">全部标签</option><option>AI生成图像</option><option>真实图像</option></select>
+              <select class="select" id="detectionFeedback"><option value="">全部评价</option><option value="positive">有帮助</option><option value="negative">没帮助</option><option value="unrated">未评价</option></select>
               <select class="select" id="detectionLimit"><option>60</option><option>100</option><option>160</option><option>200</option></select>
               <button class="btn" onclick="loadDetections()">查询</button>
               <a class="btn secondary" href="/api/admin/detections/export">导出 CSV</a>
@@ -1336,6 +1337,7 @@
         ['网站独立访客', trafficReady ? `${traffic.siteUniqueVisitors ?? '--'} 人 · 最近 ${windowHours} 小时` : trafficMessage],
         ['累计网站访问', traffic.cumulativeReady ? `${traffic.cumulativeSitePageViews ?? '--'} 次 · ${traffic.cumulativeSiteUniqueVisitors ?? '--'} 位访客` : '累计统计尚未就绪'],
         ['用户总数', `${metrics?.users?.total ?? '--'} 人 · 今日新增 ${metrics?.users?.todayNew ?? '--'}`],
+        ['结果评价', `有帮助 ${metrics?.detections?.feedbackPositive ?? '--'} · 没帮助 ${metrics?.detections?.feedbackNegative ?? '--'}`],
         ['活跃 API 密钥', `${metrics?.users?.apiKeys ?? '--'} 个`],
         ['累计起始时间', traffic.cumulativeReady ? (traffic.cumulativeSince || '--') : '--'],
         ['数据更新时间', win.generatedAt || '-'],
@@ -1464,7 +1466,7 @@
             <div class="secondary-item"><small>注册时间</small><strong>${esc(user.createdAt || '-')}</strong></div>
             ${developer ? `<div class="secondary-item"><small>API 剩余次数</small><strong>${esc(developer.freeRemaining)}</strong></div><div class="secondary-item"><small>API 已用 / 预占</small><strong>${esc(developer.freeUsed)} / ${esc(developer.freeReserved)}</strong></div>` : ''}
           </div>
-          <h3>最近检测</h3>${table(['ID','时间','文件','结果','概率','后台模型','反馈'], (data.detections || []).map(d => `<tr><td class="mono">${esc(d.id)}</td><td>${esc(d.createdAt)}</td><td>${esc(d.filename)}</td><td>${esc(d.label)}</td><td>${esc(d.probability ?? '')}</td><td class="mono">${esc(routeModelLabel(d.modelRoute))}</td><td>${esc(d.feedback ?? '')}</td></tr>`), '暂无检测')}
+          <h3>最近检测</h3>${table(['ID','时间','文件','结果','概率','后台模型','用户评价'], (data.detections || []).map(d => `<tr><td class="mono">${esc(d.id)}</td><td>${esc(d.createdAt)}</td><td>${esc(d.filename)}</td><td>${esc(d.label)}</td><td>${esc(d.probability ?? '')}</td><td class="mono">${esc(routeModelLabel(d.modelRoute))}</td><td>${feedbackPill(d.feedback, d.feedbackLabel)}</td></tr>`), '暂无检测')}
         </section>`;
     }
     function renderDetectionDetail(){
@@ -1485,6 +1487,8 @@
             <div class="route-summary-row"><span>后台模型</span><strong>${esc(routeModelLabel(route))}</strong></div>
             <div class="route-summary-row"><span>路由</span><strong>${esc(route.route || '-')} · ${esc(route.status || '-')}</strong></div>
             <div class="route-summary-row"><span>耗时</span><strong>${esc(route.meta?.latencyMs ?? '-')} ms</strong></div>
+            <div class="route-summary-row"><span>用户评价</span><strong>${feedbackPill(data.feedback, data.feedbackLabel)}</strong></div>
+            <div class="route-summary-row"><span>管理员复核</span><strong>${adminReviewPill(data.adminReview, data.adminReviewLabel)}</strong></div>
           </div>
           <h3>说明</h3>
           <div class="warning-band">${esc(data.explanation || '暂无说明')}</div>
@@ -1605,8 +1609,8 @@
       return `<div class="table-wrap"><table class="data-table"><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
     }
     function renderDetections(){
-      const content = table(['时间','用户','文件','结果','概率','操作'], state.detections.map(d => `
-        <tr><td>${esc(d.createdAt)}</td><td>${esc(d.phone)}</td><td title="${esc(d.filename || '')}">${esc(d.filename || '')}</td><td>${resultPill(d.label)}</td><td>${esc(formatProbability(d.probability))}</td><td><div class="action-row"><button class="btn mini secondary" onclick="openDetection(${Number(d.id)})">详情</button><button class="btn mini green" ${can('detection.review') ? '' : 'disabled'} onclick="reviewDetection(${Number(d.id)},1)">正确</button><button class="btn mini red" ${can('detection.review') ? '' : 'disabled'} onclick="reviewDetection(${Number(d.id)},-1)">误判</button><button class="btn mini secondary" ${can('detection.review') ? '' : 'disabled'} onclick="reviewDetection(${Number(d.id)},0)">清除</button></div></td></tr>`));
+      const content = table(['时间','用户','文件','结果','概率','用户评价','管理员复核','操作'], state.detections.map(d => `
+        <tr><td>${esc(d.createdAt)}</td><td>${esc(d.phone)}</td><td title="${esc(d.filename || '')}">${esc(d.filename || '')}</td><td>${resultPill(d.label)}</td><td>${esc(formatProbability(d.probability))}</td><td>${feedbackPill(d.feedback, d.feedbackLabel)}</td><td>${adminReviewPill(d.adminReview, d.adminReviewLabel)}</td><td><div class="action-row"><button class="btn mini secondary" onclick="openDetection(${Number(d.id)})">详情</button><button class="btn mini green" ${can('detection.review') ? '' : 'disabled'} onclick="reviewDetection(${Number(d.id)},1)">正确</button><button class="btn mini red" ${can('detection.review') ? '' : 'disabled'} onclick="reviewDetection(${Number(d.id)},-1)">误判</button><button class="btn mini secondary" ${can('detection.review') ? '' : 'disabled'} onclick="reviewDetection(${Number(d.id)},0)">清除</button></div></td></tr>`));
       $('detections').innerHTML = content + (state.pages.detections?.hasMore ? '<div class="load-more"><button class="btn secondary" onclick="loadDetections(true)">加载更多</button></div>' : '');
     }
     function formatProbability(value){
@@ -1621,15 +1625,26 @@
       const real = /真实|real/i.test(text);
       return `<span class="pill ${fake ? 'red' : real ? 'green' : 'amber'}">${esc(text)}</span>`;
     }
+    function feedbackPill(value,label){
+      if(Number(value)===1) return `<span class="pill green"><i class="fa fa-thumbs-up" aria-hidden="true"></i> ${esc(label || '有帮助')}</span>`;
+      if(Number(value)===-1) return `<span class="pill red"><i class="fa fa-thumbs-down" aria-hidden="true"></i> ${esc(label || '没帮助')}</span>`;
+      return `<span class="pill">${esc(label || '未评价')}</span>`;
+    }
+    function adminReviewPill(value,label){
+      if(Number(value)===1) return `<span class="pill green">${esc(label || '判定正确')}</span>`;
+      if(Number(value)===-1) return `<span class="pill red">${esc(label || '判定误判')}</span>`;
+      return `<span class="pill">${esc(label || '未复核')}</span>`;
+    }
     function renderDashboardDetections(detections=state.detections){
       const rows = (detections || []).slice(0, 6).map(d => `<tr>
         <td>${esc(d.createdAt || '-')}</td>
         <td><span class="file-cell" title="${esc(d.filename || '')}">${esc(d.filename || '-')}</span></td>
         <td>${resultPill(d.label)}</td>
         <td class="mono">${esc(formatProbability(d.probability))}</td>
+        <td>${feedbackPill(d.feedback, d.feedbackLabel)}</td>
         <td><button class="icon-btn" style="width:28px;height:28px" type="button" onclick="openDetection(${Number(d.id)})" aria-label="查看检测详情" title="查看详情"><i class="fa fa-angle-right"></i></button></td>
       </tr>`);
-      $('dashboardDetections').innerHTML = `<div class="table-wrap compact-table"><table><thead><tr><th>时间</th><th>文件</th><th>结果</th><th>概率</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
+      $('dashboardDetections').innerHTML = `<div class="table-wrap compact-table"><table><thead><tr><th>时间</th><th>文件</th><th>结果</th><th>概率</th><th>用户评价</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
       if(!rows.length) $('dashboardDetections').innerHTML = '<div class="empty">暂无检测记录</div>';
     }
     function renderUsers(){
@@ -1815,7 +1830,7 @@
     }
     async function loadDetections(append=false){
       return panelLoad(['detections'],'loadDetections',async()=>{
-        const params=new URLSearchParams({limit:$('detectionLimit')?.value||'60',q:$('detectionQuery')?.value||'',label:$('detectionLabel')?.value||''});
+        const params=new URLSearchParams({limit:$('detectionLimit')?.value||'60',q:$('detectionQuery')?.value||'',label:$('detectionLabel')?.value||'',feedback:$('detectionFeedback')?.value||''});
         if(append&&state.pages.detections?.nextCursor) params.set('cursor',state.pages.detections.nextCursor);
         const data=await api(`/api/admin/detections?${params}`); state.detections=append?[...state.detections,...(data.detections||[])]:data.detections||[]; state.pages.detections=data.page||{}; renderDetections(); renderDashboardDetections();
       });
@@ -2021,7 +2036,7 @@
     async function reviewDetection(id, feedback){
       if(!can('detection.review')){ toast('当前角色无检测复核权限'); return; }
       const data = await api(`/api/admin/detections/${encodeURIComponent(id)}/review`, {method:'POST', body:JSON.stringify({feedback})});
-      const feedbackLabel=data.review.feedback===1?'标记为正确':data.review.feedback===-1?'标记为误判':'已清除反馈';
+      const feedbackLabel=data.review.adminReview===1?'标记为正确':data.review.adminReview===-1?'标记为误判':'已清除复核';
       toast(`记录 ${id}: ${feedbackLabel}`); await loadDetections(); await loadAudit();
     }
     async function editQuota(id){

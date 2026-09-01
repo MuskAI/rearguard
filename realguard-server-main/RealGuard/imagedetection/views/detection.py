@@ -4061,11 +4061,6 @@ def image_detection_feedback():
         return jsonify({'status': 'error', 'message': 'feedback 须为 1（满意）、-1（不满意）或 0（取消）'}), 400
     db_feedback = None if feedback in (0, None) else feedback
 
-    db_text = None
-    if db_feedback == 1:
-        db_text = '满意'
-    elif db_feedback == -1:
-        db_text = '不满意'
     if is_guest:
         owner_where = "Userid IS NULL AND (phone IS NULL OR phone = '') AND openid = %s"
         owner_params = (openid,)
@@ -4074,7 +4069,7 @@ def image_detection_feedback():
             user_id, phone, openid, _account_uuid(session.get('user_info'))
         )
     sql = f"UPDATE data SET feedback = %s WHERE itemid = %s AND ({owner_where})"
-    n = excute_detection_sql(sql, (db_text, itemid, *owner_params), fetch=False)
+    n = excute_detection_sql(sql, (db_feedback, itemid, *owner_params), fetch=False)
     if n is None:
         return jsonify({'status': 'error', 'message': '数据库更新失败，请确认已执行 feedback 字段迁移'}), 500
     if n == 0:
@@ -4108,8 +4103,10 @@ def image_result_api():
     decision = _stored_decision_authorization_for_item(itemid)
     legacy_calibration_unknown = decision.get('status') != 'verdict'
     review_required = legacy_calibration_unknown
-    feedback_raw = item.get('feedback')
-    feedback = 1 if feedback_raw in (1, '1', '满意') else (-1 if feedback_raw in (-1, '-1', '不满意') else None)
+    feedback_raw = str(item.get('feedback') or '').strip().lower()
+    feedback = 1 if feedback_raw in ('1', '满意', 'right', 'helpful', 'positive', 'correct') else (
+        -1 if feedback_raw in ('-1', '不满意', 'wrong', 'unhelpful', 'negative', 'incorrect') else None
+    )
 
     explanation = item.get('explantation') or _to_user_explanation(final_label, item.get('clarity', ''), has_metadata=bool(all_metadata))
     split_explanation, split_issues = _split_reasoning_sections(explanation)

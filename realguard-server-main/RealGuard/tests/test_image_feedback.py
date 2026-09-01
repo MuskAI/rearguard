@@ -41,7 +41,7 @@ def test_logged_in_feedback_is_scoped_to_current_owner(client, monkeypatch):
     assert response.get_json()["feedback"] == 1
     assert "Userid" not in captured["sql"]
     assert "owner_account_uuid = %s" in captured["sql"]
-    assert captured["params"] == ("满意", 31, "11111111-1111-4111-8111-111111111111")
+    assert captured["params"] == (1, 31, "11111111-1111-4111-8111-111111111111")
     assert captured["fetch"] is False
 
 
@@ -62,7 +62,7 @@ def test_guest_feedback_is_scoped_to_guest_session(client, monkeypatch):
     assert response.get_json()["feedback"] == -1
     assert "Userid IS NULL" in captured["sql"]
     assert "openid = %s" in captured["sql"]
-    assert captured["params"] == ("不满意", 45, "guest-session-1")
+    assert captured["params"] == (-1, 45, "guest-session-1")
 
 
 def test_guest_feedback_rejects_missing_guest_identity(client, monkeypatch):

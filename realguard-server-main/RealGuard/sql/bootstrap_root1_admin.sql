@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS `data` (
   `Userid` INT NULL,
   `owner_account_uuid` CHAR(36) NULL COMMENT 'system.user不可变账号标识',
   `feedback` TINYINT NULL DEFAULT NULL COMMENT '1=满意 -1=不满意',
+  `admin_review` TINYINT NULL DEFAULT NULL COMMENT '管理员复核：1=正确 -1=误判',
   PRIMARY KEY (`itemid`),
   KEY `idx_data_phone_ct` (`phone`, `createtime`),
   KEY `idx_data_owner_uuid_ct` (`owner_account_uuid`, `createtime`)
