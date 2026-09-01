@@ -308,17 +308,27 @@ public_ssh \
    sudo rm -f '$PUBLIC_ACTIVATE_TMP'"
 public_config_switched=1
 gpu_activation_started=1
-ssh -tt "${ssh_options[@]}" "$GPU_USER@$GPU_HOST" \
-  "set -euo pipefail; \
-   stage='$gpu_remote_stage'; \
-   cleanup_stage() { rm -rf -- \"\$stage\"; }; \
-   trap cleanup_stage EXIT; \
-   trap 'exit 129' HUP; \
-   trap 'exit 130' INT; \
-   trap 'exit 143' TERM; \
-   GPU_RELEASE_ARCHIVE=\"\$stage/realguard-detection-release.tgz\" \
-   GPU_RELEASE_MARKER=\"\$stage/realguard-detection.DEPLOYED_COMMIT\" \
-   bash \"\$stage/realguard-activate-detection.sh\""
+gpu_activation_command="set -euo pipefail; \
+  stage='$gpu_remote_stage'; \
+  cleanup_stage() { rm -rf -- \"\$stage\"; }; \
+  trap cleanup_stage EXIT; \
+  trap 'exit 129' HUP; \
+  trap 'exit 130' INT; \
+  trap 'exit 143' TERM; \
+  GPU_RELEASE_ARCHIVE=\"\$stage/realguard-detection-release.tgz\" \
+  GPU_RELEASE_MARKER=\"\$stage/realguard-detection.DEPLOYED_COMMIT\" \
+  bash \"\$stage/realguard-activate-detection.sh\""
+if [[ -n "$GPU_SUDO_PASSWORD" ]]; then
+  # Sudo timestamps are scoped to the SSH session on this host. Authenticate in
+  # the same non-interactive session that runs activation so every later sudo
+  # call can reuse the credential without hanging on an invisible TTY prompt.
+  printf '%s\n' "$GPU_SUDO_PASSWORD" \
+    | ssh -T "${ssh_options[@]}" "$GPU_USER@$GPU_HOST" \
+        "sudo -S -p '' -v; $gpu_activation_command"
+else
+  ssh -T "${ssh_options[@]}" "$GPU_USER@$GPU_HOST" \
+    "sudo -n -v; $gpu_activation_command"
+fi
 gpu_remote_stage=""
 gpu_activation_started=0
 gpu_activation_succeeded=1
