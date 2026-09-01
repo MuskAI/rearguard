@@ -3,6 +3,7 @@ from io import BytesIO
 import sys
 import threading
 
+import pytest
 from flask import g, has_request_context
 from PIL import Image
 
@@ -80,3 +81,36 @@ def test_precheck_normalizes_exif_orientation_for_all_visible_boxes(monkeypatch)
     assert data["displaySize"] == {"width": 2, "height": 4}
     assert data["sourceOrientation"] == 6
     assert observed == {"size": (2, 4), "orientation": None}
+
+
+def test_precheck_decodes_heic_before_visible_model(monkeypatch):
+    pillow_heif = pytest.importorskip("pillow_heif")
+    pillow_heif.register_heif_opener()
+    encoded = Image.new("RGB", (6, 4), "white")
+    payload = BytesIO()
+    encoded.save(payload, format="HEIF")
+    observed = {}
+
+    def collect(_original_path, visible_path=None):
+        with Image.open(visible_path) as normalized:
+            observed["format"] = normalized.format
+            observed["mode"] = normalized.mode
+            observed["size"] = normalized.size
+        return {}, [], {"metadataMs": 1, "visiblePipelineMs": 2}
+
+    monkeypatch.setattr(service, "API_TOKEN", "test-token")
+    monkeypatch.setattr(service, "_collect_evidence", collect)
+    monkeypatch.setattr(service, "build_decision", lambda *_args: {})
+
+    response = service.app.test_client().post(
+        "/v1/precheck",
+        headers={"Authorization": "Bearer test-token"},
+        data={"file": (BytesIO(payload.getvalue()), "capture.heic")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["encodedSize"] == {"width": 6, "height": 4}
+    assert data["displaySize"] == {"width": 6, "height": 4}
+    assert observed == {"format": "PNG", "mode": "RGB", "size": (6, 4)}

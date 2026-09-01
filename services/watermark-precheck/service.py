@@ -15,6 +15,14 @@ from typing import Any
 from flask import Flask, jsonify, request
 from PIL import Image, ImageOps
 
+try:
+    from pillow_heif import register_heif_opener
+except ImportError:
+    HEIF_DECODER_READY = False
+else:
+    register_heif_opener()
+    HEIF_DECODER_READY = True
+
 from policy import VISIBLE_ONLY_THRESHOLDS, build_decision, visible_hit_is_decisive
 
 
@@ -174,6 +182,7 @@ def health():
         "registryReady": registry_ready,
         "tokenReady": bool(API_TOKEN),
         "coordinateSpace": "display_normalized_v1",
+        "heifDecoderReady": HEIF_DECODER_READY,
         "visibleProviders": ["gemini", "doubao", "jimeng", "jimeng_pill", "samsung"],
         "visibleOnlyThresholds": VISIBLE_ONLY_THRESHOLDS,
         "maxUploadBytes": MAX_UPLOAD_BYTES,
@@ -198,6 +207,8 @@ def precheck():
     suffix = Path(uploaded.filename).suffix.lower()
     if suffix not in SUPPORTED_SUFFIXES:
         return jsonify({"detail": "unsupported image type"}), 415
+    if suffix in {".heic", ".heif"} and not HEIF_DECODER_READY:
+        return jsonify({"detail": "HEIF decoder is unavailable"}), 503
 
     started = time.perf_counter()
     try:
