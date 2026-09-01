@@ -1486,6 +1486,13 @@ export default function AgentResult(props: Props) {
           ) : (
             <span>{props.outcome.kind === "video" ? <Video size={30} /> : props.outcome.kind === "image" ? <ImageIcon size={30} /> : <FileText size={30} />}</span>
           )}
+          <div
+            className={`result-verdict-stamp is-${verdict.tone}`}
+            aria-label={`检测结论：${verdict.tone === "fake" ? "假" : "真"}`}
+          >
+            <strong>{verdict.tone === "fake" ? "假" : "真"}</strong>
+            <small>鉴伪结论</small>
+          </div>
         </div>
         <div className="result-verdict">
           <div className="verdict-kicker"><StatusIcon name={verdict.tone === "fake" ? "fake" : "real"} size={17} /> 小鉴综合判断</div>

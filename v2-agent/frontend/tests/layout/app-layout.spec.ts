@@ -1167,6 +1167,20 @@ test("结果页优先展示概率与关键来源证据并保持正文级字号",
   expect((await provenanceRequest).headers()["x-huijian-csrf"]).toBe("a".repeat(40));
 
   await expect(page.locator("#detection-result-title")).toBeVisible();
+  const verdictStamp = page.locator('.result-verdict-stamp');
+  await expect(verdictStamp).toHaveText(/假鉴伪结论/);
+  await expect(verdictStamp).toHaveAttribute('aria-label', '检测结论：假');
+  const stampPlacement = await page.evaluate(() => {
+    const preview = document.querySelector<HTMLElement>('.result-preview')!.getBoundingClientRect();
+    const stamp = document.querySelector<HTMLElement>('.result-verdict-stamp')!.getBoundingClientRect();
+    return {
+      contained: stamp.left >= preview.left && stamp.top >= preview.top
+        && stamp.right <= preview.right && stamp.bottom <= preview.bottom,
+      size: Number.parseFloat(getComputedStyle(document.querySelector<HTMLElement>('.result-verdict-stamp')!).width),
+    };
+  });
+  expect(stampPlacement.contained).toBeTruthy();
+  expect(stampPlacement.size).toBeGreaterThanOrEqual(70);
   await expect(page.getByRole("button", { name: /验证内容凭证/ })).toHaveCount(0);
   const card = page.locator(".result-decision-card");
   await expect(card).toBeVisible();
@@ -1235,6 +1249,7 @@ test("结果页优先展示概率与关键来源证据并保持正文级字号",
   expect(mobileResult.previewWidth).toBeGreaterThanOrEqual(260);
   expect(mobileResult.previewWidth).toBeLessThanOrEqual(272.5);
   expect(mobileResult.dockBottom).toBeLessThanOrEqual(569);
+  await expect(verdictStamp).toHaveCSS('width', '58px');
   await expectNoHorizontalOverflow(page);
 });
 
