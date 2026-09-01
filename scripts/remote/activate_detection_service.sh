@@ -331,6 +331,14 @@ assert payload.get("msg") == "Video Detection API Ready"
 from PIL import Image
 Image.new("RGB", (64, 64), (240, 244, 245)).save("/tmp/realguard-gpu-deployment-probe.png")
 '
+/home/ymk/services/watermark-precheck/.venv/bin/python -c '
+from PIL import Image
+from pillow_heif import register_heif_opener
+register_heif_opener()
+Image.new("RGB", (64, 64), (240, 244, 245)).save(
+    "/tmp/realguard-gpu-deployment-probe.heic", format="HEIF"
+)
+'
 set -a
 . /home/ymk/services/watermark-precheck/.env
 set +a
@@ -358,6 +366,30 @@ assert generic.get("resultSource") == "model"
   sleep 2
 done
 test "$precheck_probe_ready" = "1"
+
+heic_precheck_probe_ready=0
+for _ in {1..3}; do
+  if curl -fsS --max-time 60 \
+    -H "Authorization: Bearer $WATERMARK_PRECHECK_TOKEN" \
+    -F file=@/tmp/realguard-gpu-deployment-probe.heic \
+    http://127.0.0.1:5066/v1/precheck \
+    | /home/ymk/miniconda3/envs/realguard/bin/python -c '
+import json, sys
+payload = json.load(sys.stdin)
+generic = payload.get("genericVisibleWatermark") or {}
+size = payload.get("displaySize") or {}
+assert payload.get("status") == "ok"
+assert payload.get("coordinateSpace") == "display_normalized_v1"
+assert int(size.get("width") or 0) > 0 and int(size.get("height") or 0) > 0
+assert generic.get("available") is True
+assert generic.get("mode") == "model_direct"
+'; then
+    heic_precheck_probe_ready=1
+    break
+  fi
+  sleep 2
+done
+test "$heic_precheck_probe_ready" = "1"
 
 model_probe_ready=0
 for _ in {1..3}; do
