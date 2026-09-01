@@ -1,5 +1,6 @@
 import type {
   DetectResult,
+  DocumentDetectionTask,
   ForensicReport,
   ImageAgentExpert,
   ImageAgentResult,
@@ -70,4 +71,24 @@ export interface PendingFile {
   previewUrl?: string;
   previewKind?: "image" | "video";
   analysisMode?: ImageAnalysisMode;
+}
+
+export type BatchDetectionKind = "image" | "video" | "document" | "unsupported";
+export type BatchDetectionStatus = "queued" | "running" | "completed" | "failed" | "skipped" | "cancelled";
+
+export interface BatchDetectionItem {
+  id: string;
+  file: File;
+  relativePath: string;
+  kind: BatchDetectionKind;
+  status: BatchDetectionStatus;
+  progress: number;
+  startedAt?: number;
+  finishedAt?: number;
+  verdict?: "real" | "fake";
+  verdictLabel?: string;
+  probability?: number | null;
+  error?: string;
+  outcome?: AgentOutcome;
+  documentTask?: DocumentDetectionTask;
 }

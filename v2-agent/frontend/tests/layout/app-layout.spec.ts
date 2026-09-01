@@ -914,7 +914,7 @@ test("PDF 文档会展示逐图检测结果并支持放大复核", async ({ page
 
   await page.goto("/?workspace=1");
   await page.getByRole("checkbox", { name: /我授权平台处理本次上传文件/ }).check();
-  await page.locator('input[type="file"]').setInputFiles({
+  await page.locator('input[type="file"]:not(.batch-folder-input)').setInputFiles({
     name: "evidence.pdf",
     mimeType: "application/pdf",
     buffer: Buffer.from("%PDF-1.7 layout fixture"),
@@ -1031,7 +1031,7 @@ test("Router Lab 在手机端展示逐图依据并保持可滚动", async ({ pag
   await page.goto("/?router=1");
   await page
     .getByRole("region", { name: "上传测试文档" })
-    .locator('input[type="file"]')
+    .locator('input[type="file"]:not(.batch-folder-input)')
     .setInputFiles({
     name: "router.pdf",
     mimeType: "application/pdf",
@@ -1159,7 +1159,7 @@ test("结果页优先展示概率与关键来源证据并保持正文级字号",
   }));
   await page.goto("/?workspace=1");
   const provenanceRequest = page.waitForRequest(/\/v2-api\/provenance(?:\?|$)/);
-  await page.locator('input[type="file"]').setInputFiles({
+  await page.locator('input[type="file"]:not(.batch-folder-input)').setInputFiles({
     name: "typography-review.png",
     mimeType: "image/png",
     buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"),
@@ -1328,7 +1328,7 @@ test("TC260 与 AIGC 披露元数据会作为红色生成线索展示", async ({
   }));
 
   await page.goto("/?workspace=1");
-  await page.locator('input[type="file"]').setInputFiles({
+  await page.locator('input[type="file"]:not(.batch-folder-input)').setInputFiles({
     name: "tc260.png",
     mimeType: "image/png",
     buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"),
@@ -1343,6 +1343,107 @@ test("TC260 与 AIGC 披露元数据会作为红色生成线索展示", async ({
   await page.getByRole("tab", { name: "文件信息" }).click();
   await expect(page.locator(".metadata-list > div.is-fake")).toHaveCount(2);
   await expect(page.locator(".metadata-list > div.is-fake").first().getByText("AI 生成线索")).toBeVisible();
+});
+
+test("拖入多级文件夹会建立批量队列并可打开单项完整报告", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await installBaseMocks(page, true);
+  let detectionCount = 0;
+  await page.route("**/image_upload/detect_async", (route) => {
+    detectionCount += 1;
+    const fake = detectionCount % 2 === 0;
+    const itemid = 1200 + detectionCount;
+    return route.fulfill({
+      json: {
+        status: "success",
+        job: {
+          id: `batch-image-${itemid}`,
+          version: "1",
+          status: "success",
+          progress: 100,
+          result: {
+            status: "success",
+            result: {
+              itemid,
+              final_label: fake ? "AI生成图像" : "真实图像",
+              probability: fake ? 0.91 : 0.08,
+              confidence: "高",
+              explanation: fake ? "检测到生成式图像特征。" : "未发现明显生成式图像特征。",
+              image_url: "/brand/huijian-forensic-scanner-v3.webp",
+              filename: fake ? "fake.jpg" : "real.png",
+              file_size: "1 KB",
+              resolution: "1×1",
+              img_format: fake ? "JPEG" : "PNG",
+              all_metadata: {},
+              visibleWatermark: { enabled: true, supported: true, detected: false, provider: null, confidence: 0, evidenceLevel: "none", hits: [], temporal: { sampledFrames: 1, positiveFrames: 0, moving: false }, note: "未检出。" },
+            },
+          },
+        },
+      },
+    });
+  });
+
+  await page.goto("/?workspace=1");
+  const folderInput = page.locator(".batch-folder-input");
+  await expect(folderInput).toHaveAttribute("webkitdirectory", "");
+  await expect(folderInput).toHaveAttribute("multiple", "");
+  await expect(page.getByRole("button", { name: "选择文件夹" })).toBeVisible();
+
+  await page.locator(".upload-stage").evaluate((target) => {
+    const fileEntry = (name: string, type: string) => ({
+      isFile: true,
+      isDirectory: false,
+      name,
+      file: (success: (file: File) => void) => success(new File(["batch"], name, { type, lastModified: 1 })),
+    });
+    const directoryEntry = (name: string, children: unknown[]) => ({
+      isFile: false,
+      isDirectory: true,
+      name,
+      createReader: () => {
+        let delivered = false;
+        return {
+          readEntries: (success: (entries: unknown[]) => void) => {
+            if (delivered) success([]);
+            else {
+              delivered = true;
+              success(children);
+            }
+          },
+        };
+      },
+    });
+    const root = directoryEntry("dataset", [
+      directoryEntry("real", [fileEntry("camera.png", "image/png")]),
+      directoryEntry("fake", [fileEntry("generated.jpg", "image/jpeg")]),
+    ]);
+    const event = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "dataTransfer", {
+      value: { items: [{ webkitGetAsEntry: () => root }], files: [] },
+    });
+    target.dispatchEvent(event);
+  });
+
+  const panel = page.locator(".batch-detection");
+  await expect(panel).toBeVisible();
+  await expect(panel.getByText("dataset/real/camera.png", { exact: true })).toBeVisible();
+  await expect(panel.getByText("dataset/fake/generated.jpg", { exact: true })).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "批量检测已完成" })).toBeVisible();
+  await expect(panel.locator(".batch-file-row.is-completed")).toHaveCount(2);
+  await expect(panel.locator(".batch-file-row.verdict-real")).toHaveCount(1);
+  await expect(panel.locator(".batch-file-row.verdict-fake")).toHaveCount(1);
+  await expect(panel.getByText("2/2", { exact: true })).toBeVisible();
+  expect(detectionCount).toBe(2);
+
+  await panel.locator(".batch-file-row.verdict-fake").click();
+  await expect(page.locator("#detection-result-title")).toContainText("AI生成图像");
+  await expect(page.getByRole("button", { name: "返回批量检测" })).toBeVisible();
+  await page.getByRole("button", { name: "返回批量检测" }).click();
+  await expect(panel).toBeVisible();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectNoHorizontalOverflow(page);
+  await expectNoInternalOverflow(page, [".batch-detection", ".batch-file-list"]);
 });
 
 test("视频结果可预览并按采样时间点回看证据", async ({ page }) => {
@@ -1403,7 +1504,7 @@ test("视频结果可预览并按采样时间点回看证据", async ({ page }) 
 
   await page.goto("/?workspace=1");
   await page.locator(".guest-upload-consent input").check();
-  await page.locator('input[type="file"]').setInputFiles(videoFixture);
+  await page.locator('input[type="file"]:not(.batch-folder-input)').setInputFiles(videoFixture);
 
   const pendingVideo = page.getByLabel("预览待检测视频 video189.mp4");
   await expect(pendingVideo).toBeVisible();
@@ -1672,7 +1773,7 @@ test("登录用户可以围绕当前检测报告连续提问", async ({ page }) 
   });
 
   await page.goto("/?workspace=1");
-  await page.locator('input[type="file"]').setInputFiles({
+  await page.locator('input[type="file"]:not(.batch-folder-input)').setInputFiles({
     name: "qa-review.png",
     mimeType: "image/png",
     buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"),
@@ -1782,7 +1883,7 @@ test("检测进度卡使用清晰的正文级字号", async ({ page }) => {
 
   await page.goto("/?workspace=1");
   await page.locator(".guest-upload-consent input").check();
-  await page.locator('input[type="file"]').setInputFiles({
+  await page.locator('input[type="file"]:not(.batch-folder-input)').setInputFiles({
     name: "progress-typography.png",
     mimeType: "image/png",
     buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"),
@@ -1882,7 +1983,7 @@ for (const viewport of viewports.slice(0, 2)) {
     expect(Math.abs((upload!.x + upload!.width / 2) - viewport.width / 2), "匿名上传入口未相对整个视口居中").toBeLessThanOrEqual(2);
     await expect(page.locator(".sidebar-desktop")).toHaveCount(0);
     await expect(page.locator(".mobile-history-button")).toHaveCount(0);
-    await expect(page.locator('input[type="file"]')).toHaveAttribute("accept", /application\/pdf/);
+    await expect(page.locator('input[type="file"]:not(.batch-folder-input)')).toHaveAttribute("accept", /application\/pdf/);
     const homeButton = page.getByRole("button", { name: "返回慧鉴AI官网首页" });
     await expect(homeButton).toBeVisible();
     if (viewport.name === "mobile") {

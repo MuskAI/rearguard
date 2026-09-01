@@ -1,7 +1,9 @@
 import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from "react";
 import {
+  ArrowLeft,
   Check,
   FileCheck2,
+  FolderOpen,
   LogIn,
   PanelLeftOpen,
   Paperclip,
@@ -46,13 +48,15 @@ import {
   startDocumentDetection,
   waitForImageAgentJob,
 } from "./api";
-import type { AgentHistoryEntry, AgentOutcome, AgentProgress, ImageAnalysisMode, PendingFile } from "./agentTypes";
-import { binaryVerdictLabel } from "./binaryVerdict";
+import type { AgentHistoryEntry, AgentOutcome, AgentProgress, BatchDetectionItem, BatchDetectionKind, ImageAnalysisMode, PendingFile } from "./agentTypes";
+import { binaryVerdictLabel, binaryVideoVerdictLabel, isFakeVerdict } from "./binaryVerdict";
+import { batchFilesFromDrop, batchFilesFromList, dropContainsDirectory, type SelectedBatchFile } from "./batchFiles";
 import { startFastImageAgent, submitImageFeedback } from "./imageInteractionApi";
 import AgentHistory, { MobileHistoryButton } from "./components/AgentHistory";
 import AnalysisModeSwitch from "./components/AnalysisModeSwitch";
 import AccountMenu from "./components/AccountMenu";
 import AgentResult from "./components/AgentResult";
+import BatchDetectionPanel from "./components/BatchDetectionPanel";
 import AboutCooperation from "./components/AboutCooperation";
 import AuthDialog from "./components/AuthDialog";
 import BrandArtIcon from "./components/BrandArtIcon";
@@ -80,6 +84,7 @@ import "./router-lab.css";
 import "./responsive.css";
 import "./design-polish.css";
 import "./result-presentation.css";
+import "./batch-detection.css";
 
 const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 256 * 1024 * 1024;
@@ -275,6 +280,22 @@ function progressFromDocument(task: DocumentDetectionTask): AgentProgress {
   return { ...copy, percent: Math.max(4, Math.min(Number(task.progress || 0), 100)) };
 }
 
+function normalizedBatchProbability(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(0, Math.min(parsed > 1 ? parsed / 100 : parsed, 1));
+}
+
+function batchKind(file: File): BatchDetectionKind {
+  const kind = inferKind(file.name);
+  return kind === "image" || kind === "video" || kind === "document" ? kind : "unsupported";
+}
+
+function ignoredBatchFile(file: File): boolean {
+  return file.name === ".DS_Store" || file.name.startsWith("._") || file.name === "Thumbs.db";
+}
+
 export default function App() {
   const [view, setView] = useState<AppView>(initialAppView);
   const [user, setUser] = useState<AccountUser | null>(null);
@@ -301,6 +322,9 @@ export default function App() {
   const [provenanceBusy, setProvenanceBusy] = useState(false);
   const [downloadBusy, setDownloadBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [batchItems, setBatchItems] = useState<BatchDetectionItem[]>([]);
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [batchViewOpen, setBatchViewOpen] = useState(false);
   const [imageAnalysisMode, setImageAnalysisMode] = useState<ImageAnalysisMode>("fast");
   const [feedbackBusy, setFeedbackBusy] = useState(false);
   const [feedbackError, setFeedbackError] = useState("");
@@ -311,6 +335,7 @@ export default function App() {
   const [analyticsEnabled, setAnalyticsEnabled] = useState(() => analyticsConsent() !== "denied");
   const [reportQaComposerHost, setReportQaComposerHost] = useState<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const resultRef = useRef<HTMLDivElement>(null);
   const runControllerRef = useRef<AbortController | null>(null);
@@ -332,6 +357,9 @@ export default function App() {
   const historyOutcomeCacheRef = useRef(new Map<string, AgentOutcome>());
   const provenanceAttemptedRef = useRef(new Set<string>());
   const lastTrackedPageRef = useRef<string | null>(null);
+  const batchControllerRef = useRef<AbortController | null>(null);
+  const batchRunTokenRef = useRef(0);
+  const pendingBatchFilesRef = useRef<SelectedBatchFile[] | null>(null);
 
   const refreshHealth = useCallback(async () => {
     try {
@@ -607,6 +635,12 @@ export default function App() {
     activeDocumentTaskIdRef.current = null;
     documentTaskTokenRef.current = "";
     window.sessionStorage.removeItem(DOCUMENT_TASK_SESSION_KEY);
+    batchRunTokenRef.current += 1;
+    batchControllerRef.current?.abort();
+    batchControllerRef.current = null;
+    setBatchItems([]);
+    setBatchRunning(false);
+    setBatchViewOpen(false);
   }, []);
 
   useEffect(() => {
@@ -674,8 +708,10 @@ export default function App() {
   function authenticated(nextUser: AccountUser) {
     const pendingSwarmFile = pendingSwarmFileRef.current;
     const pendingGuestFile = pendingGuestFileRef.current;
+    const pendingBatchFiles = pendingBatchFilesRef.current;
     pendingSwarmFileRef.current = null;
     pendingGuestFileRef.current = null;
+    pendingBatchFilesRef.current = null;
     resetTask();
     historyTokenRef.current += 1;
     historyOutcomeCacheRef.current.clear();
@@ -687,6 +723,7 @@ export default function App() {
     void loadHistoryForUser(nextUser);
     if (pendingSwarmFile) void analyzeFile(pendingSwarmFile, "swarm", nextUser);
     else if (pendingGuestFile) void analyzeFile(pendingGuestFile, retryModeRef.current, nextUser);
+    else if (pendingBatchFiles) void startBatchDetection(pendingBatchFiles, nextUser);
   }
 
   async function logout() {
@@ -941,6 +978,254 @@ export default function App() {
     if (task.status === "cancelled") throw new Error("文档检测已取消");
   }
 
+  function updateBatchItem(runToken: number, itemId: string, patch: Partial<BatchDetectionItem>) {
+    if (batchRunTokenRef.current !== runToken) return;
+    setBatchItems((current) => current.map((item) => item.id === itemId ? { ...item, ...patch } : item));
+  }
+
+  async function startBatchImageJob(
+    file: File,
+    mode: ImageAnalysisMode,
+    idempotencyKey: string,
+    signal: AbortSignal,
+  ) {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        return mode === "swarm"
+          ? await startImageAgent(file, idempotencyKey, signal)
+          : await startFastImageAgent(file, idempotencyKey, signal);
+      } catch (error) {
+        if (!isRateLimitedError(error) || attempt === 3) throw error;
+        await wait(Math.max(error.retryAfterMs, 1_500 * (attempt + 1)), signal);
+      }
+    }
+    throw new Error("图片任务提交失败");
+  }
+
+  async function detectBatchImage(
+    item: BatchDetectionItem,
+    mode: ImageAnalysisMode,
+    runToken: number,
+    signal: AbortSignal,
+  ): Promise<Partial<BatchDetectionItem>> {
+    const started = await startBatchImageJob(item.file, mode, globalThis.crypto.randomUUID(), signal);
+    let job = started.job;
+    const deadline = Date.now() + 240_000;
+    let rateLimitRetries = 0;
+    while (Date.now() < deadline) {
+      if (job.status === "success") {
+        const result = job.result?.result;
+        if (!result) throw new Error("任务已完成，但没有返回检测结果");
+        const probability = normalizedBatchProbability(result.probability ?? result.detector_probability ?? result.modelScore);
+        const verdictLabel = binaryVerdictLabel(result.final_label, probability);
+        return {
+          outcome: { kind: "image", id: `image:${result.itemid}`, result, file: item.file, analysisMode: mode },
+          verdict: isFakeVerdict(verdictLabel) ? "fake" : "real",
+          verdictLabel,
+          probability,
+        };
+      }
+      if (job.status === "failed") throw new Error(job.error || "图片检测失败");
+      updateBatchItem(runToken, item.id, { progress: Math.max(12, Math.min(Number(job.progress || 20), 96)) });
+      try {
+        const response = await waitForImageAgentJob(job.id, job.version || "", signal);
+        job = response.job;
+        rateLimitRetries = 0;
+      } catch (error) {
+        if (!isRateLimitedError(error) || rateLimitRetries >= AGENT_POLL_RATE_LIMIT_RETRIES) throw error;
+        rateLimitRetries += 1;
+        await wait(Math.max(error.retryAfterMs, Math.min(6_000, 1_500 * rateLimitRetries)), signal);
+      }
+    }
+    throw new Error("图片任务处理超时，服务器可能仍在继续运行");
+  }
+
+  async function detectBatchDocument(
+    item: BatchDetectionItem,
+    runToken: number,
+    signal: AbortSignal,
+  ): Promise<Partial<BatchDetectionItem>> {
+    if (!extractsEmbeddedImages(item.file.name)) {
+      updateBatchItem(runToken, item.id, { progress: 42 });
+      const result = await detect(item.file, "document", signal);
+      const probability = normalizedBatchProbability(result.confidence);
+      const verdictLabel = binaryVerdictLabel(result.verdict, probability);
+      return {
+        outcome: { kind: "evidence", id: `evidence:${result.taskId}`, result, file: item.file },
+        verdict: isFakeVerdict(verdictLabel) ? "fake" : "real",
+        verdictLabel,
+        probability,
+      };
+    }
+
+    let task = await startDocumentDetection(item.file, "fast", signal);
+    const accessToken = task.accessToken || "";
+    while (["queued", "running"].includes(task.status)) {
+      updateBatchItem(runToken, item.id, { progress: Math.max(8, Math.min(Number(task.progress || 0), 96)) });
+      task = await fetchDocumentDetection(task.id, accessToken, {
+        after: task.updatedAt,
+        wait: 20,
+        limit: 100,
+        signal,
+      });
+    }
+    if (task.status === "failed") throw new Error(task.error || "文档图片检测失败");
+    if (task.status === "cancelled") throw new Error("文档检测已取消");
+    if (task.assetTotal > task.assets.length) {
+      const assets = [...task.assets];
+      for (let offset = assets.length; offset < task.assetTotal; offset += 100) {
+        const page = await fetchDocumentDetection(task.id, accessToken, { offset, limit: 100, signal });
+        assets.push(...page.assets);
+      }
+      task = { ...task, assets };
+    }
+    const probability = normalizedBatchProbability(task.summary?.averageAiProbability);
+    const verdictLabel = binaryVerdictLabel(task.summary?.verdict, probability);
+    return {
+      documentTask: task,
+      verdict: isFakeVerdict(verdictLabel) ? "fake" : "real",
+      verdictLabel: task.summary?.verdictLabel || verdictLabel,
+      probability,
+    };
+  }
+
+  async function detectBatchVideoFile(item: BatchDetectionItem, signal: AbortSignal): Promise<Partial<BatchDetectionItem>> {
+    const response = await detectVideoWithAgent(item.file, signal);
+    const probability = normalizedBatchProbability(response.result.fake_percentage);
+    const verdictLabel = binaryVideoVerdictLabel(response.result.final_label, probability);
+    return {
+      outcome: { kind: "video", id: `video:${response.result.itemid}`, result: response.result, file: item.file },
+      verdict: isFakeVerdict(verdictLabel) ? "fake" : "real",
+      verdictLabel,
+      probability,
+    };
+  }
+
+  async function runBatchDetection(items: BatchDetectionItem[], mode: ImageAnalysisMode, account: AccountUser) {
+    const controller = new AbortController();
+    batchControllerRef.current = controller;
+    const runToken = ++batchRunTokenRef.current;
+    const queue = items.filter((item) => item.status === "queued");
+    let cursor = 0;
+    setBatchRunning(queue.length > 0);
+
+    const worker = async () => {
+      while (!controller.signal.aborted) {
+        const item = queue[cursor];
+        cursor += 1;
+        if (!item) return;
+        const startedAt = Date.now();
+        updateBatchItem(runToken, item.id, { status: "running", progress: 6, startedAt, error: undefined });
+        try {
+          if (item.kind === "video") updateBatchItem(runToken, item.id, { progress: 36 });
+          const result = item.kind === "image"
+            ? await detectBatchImage(item, mode, runToken, controller.signal)
+            : item.kind === "video"
+              ? await detectBatchVideoFile(item, controller.signal)
+              : await detectBatchDocument(item, runToken, controller.signal);
+          updateBatchItem(runToken, item.id, { ...result, status: "completed", progress: 100, finishedAt: Date.now() });
+        } catch (error) {
+          if (isAbort(error) || controller.signal.aborted) {
+            updateBatchItem(runToken, item.id, { status: "cancelled", progress: 100, finishedAt: Date.now(), error: "已停止等待；已提交的服务器任务可能仍在运行" });
+            return;
+          }
+          updateBatchItem(runToken, item.id, {
+            status: "failed",
+            progress: 100,
+            finishedAt: Date.now(),
+            error: error instanceof Error ? error.message : "检测失败",
+          });
+        }
+      }
+    };
+
+    const concurrency = mode === "swarm" ? 1 : 2;
+    await Promise.all(Array.from({ length: concurrency }, () => worker()));
+    if (batchRunTokenRef.current !== runToken) return;
+    if (controller.signal.aborted) {
+      setBatchItems((current) => current.map((item) => item.status === "queued"
+        ? { ...item, status: "cancelled", progress: 100, error: "已停止，未提交到服务器" }
+        : item));
+    }
+    batchControllerRef.current = null;
+    setBatchRunning(false);
+    if (userIdRef.current === account.Userid) void loadHistoryForUser(account);
+  }
+
+  async function startBatchDetection(selectedFiles: SelectedBatchFile[], accountOverride?: AccountUser) {
+    const account = accountOverride || user;
+    if (!account) {
+      pendingBatchFilesRef.current = selectedFiles;
+      setAuthOpen(true);
+      return;
+    }
+    if (selectedFiles.length === 0) {
+      setErrorMessage("这个文件夹中没有可读取的文件");
+      return;
+    }
+    resetTask();
+    const maxUploadBytes = Number(health?.limits?.maxUploadBytes || MAX_DOCUMENT_BYTES);
+    const items: BatchDetectionItem[] = selectedFiles.map(({ file, relativePath }) => {
+      const kind = batchKind(file);
+      const maxBytes = kind === "video" ? MAX_VIDEO_BYTES : maxUploadBytes;
+      const ignored = ignoredBatchFile(file);
+      const unsupported = kind === "unsupported";
+      const oversized = file.size > maxBytes;
+      return {
+        id: globalThis.crypto.randomUUID(),
+        file,
+        relativePath,
+        kind,
+        status: ignored || unsupported || oversized ? "skipped" : "queued",
+        progress: ignored || unsupported || oversized ? 100 : 0,
+        error: ignored ? "系统文件已忽略" : unsupported ? "暂不支持该文件格式" : oversized ? `超过单文件大小限制 ${formatBytes(maxBytes)}` : undefined,
+      };
+    });
+    setBatchItems(items);
+    setBatchViewOpen(true);
+    setBatchRunning(items.some((item) => item.status === "queued"));
+    void runBatchDetection(items, imageAnalysisMode, account);
+  }
+
+  function stopBatchDetection() {
+    batchControllerRef.current?.abort();
+  }
+
+  function openBatchItem(item: BatchDetectionItem) {
+    if (!item.outcome && !item.documentTask) return;
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    const previewKind = item.kind === "video" ? "video" : item.kind === "image" ? "image" : undefined;
+    const previewUrl = previewKind && !(item.kind === "image" && isHeifImage(item.file.name))
+      ? URL.createObjectURL(item.file)
+      : undefined;
+    previewUrlRef.current = previewUrl || null;
+    retryFileRef.current = item.file;
+    setPendingFile({
+      name: item.file.name,
+      size: item.file.size,
+      typeLabel: kindLabel(inferKind(item.file.name)),
+      previewUrl,
+      previewKind,
+      analysisMode: item.kind === "image" ? imageAnalysisMode : undefined,
+    });
+    setOutcome(item.outcome ? { ...item.outcome, previewUrl } : null);
+    setDocumentTask(item.documentTask || null);
+    setErrorMessage("");
+    setProgress(null);
+    setBatchViewOpen(false);
+  }
+
+  function returnToBatch() {
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    previewUrlRef.current = null;
+    retryFileRef.current = null;
+    setPendingFile(null);
+    setOutcome(null);
+    setDocumentTask(null);
+    setErrorMessage("");
+    setBatchViewOpen(true);
+  }
+
   async function analyzeFile(file: File, modeOverride = imageAnalysisMode, accountOverride?: AccountUser) {
     if (!(accountOverride || user) && !guestConsent) {
       setConsentWarning(true);
@@ -1035,21 +1320,39 @@ export default function App() {
   }
 
   function chooseFile(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
+    const files = batchFilesFromList(event.target.files || []);
     event.target.value = "";
-    if (file) void analyzeFile(file);
+    if (files.length > 1) void startBatchDetection(files);
+    else if (files[0]) void analyzeFile(files[0].file);
   }
 
-  function dropFile(event: DragEvent<HTMLElement>) {
+  function chooseFolder(event: ChangeEvent<HTMLInputElement>) {
+    const files = batchFilesFromList(event.target.files || []);
+    event.target.value = "";
+    if (files.length > 0) void startBatchDetection(files);
+  }
+
+  async function dropFile(event: DragEvent<HTMLElement>) {
     event.preventDefault();
     setDragging(false);
     if (busy) return;
+    const isDirectory = dropContainsDirectory(event.dataTransfer);
+    let files: SelectedBatchFile[];
+    try {
+      files = await batchFilesFromDrop(event.dataTransfer);
+    } catch {
+      setErrorMessage("无法读取这个文件夹，请使用“选择文件夹”重新选择");
+      return;
+    }
+    if (isDirectory || files.length > 1) {
+      void startBatchDetection(files);
+      return;
+    }
     if (!user && !guestConsent) {
       setConsentWarning(true);
       return;
     }
-    const file = event.dataTransfer.files?.[0];
-    if (file) void analyzeFile(file);
+    if (files[0]) void analyzeFile(files[0].file);
   }
 
   function retryCurrentFile() {
@@ -1067,6 +1370,14 @@ export default function App() {
       return;
     }
     fileInputRef.current?.click();
+  }
+
+  function requestFolderSelection() {
+    if (!user) {
+      setAuthOpen(true);
+      return;
+    }
+    folderInputRef.current?.click();
   }
 
   async function runFallbackChain() {
@@ -1415,7 +1726,7 @@ export default function App() {
               </button>
             )}
             <HuijianBrand compact onClick={() => navigateToView("home")} />
-            <AnalysisModeSwitch mode={imageAnalysisMode} disabled={busy || historyDetailLoading} onChange={setImageAnalysisMode} />
+            <AnalysisModeSwitch mode={imageAnalysisMode} disabled={busy || batchRunning || historyDetailLoading} onChange={setImageAnalysisMode} />
           </div>
           <div className="topbar-actions">
             {authReady && (user ? (
@@ -1431,7 +1742,7 @@ export default function App() {
             <GuestLimitGate fileName={pendingGuestFileRef.current?.name} onLogin={() => setAuthOpen(true)} />
           )}
 
-          {!guestLimitReached && !pendingFile && !outcome && !documentTask && !errorMessage && (
+          {!guestLimitReached && batchItems.length === 0 && !pendingFile && !outcome && !documentTask && !errorMessage && (
             <WelcomeWorkspace
               busy={busy}
               dragging={dragging}
@@ -1444,13 +1755,25 @@ export default function App() {
                 if (checked) setConsentWarning(false);
               }}
               onOpenFile={requestFileSelection}
+              onOpenFolder={requestFolderSelection}
               onDragEnter={() => setDragging(true)}
               onDragLeave={() => setDragging(false)}
               onDrop={dropFile}
             />
           )}
 
-          {!guestLimitReached && !pendingFile && !outcome && !documentTask && errorMessage && (
+          {!guestLimitReached && batchItems.length > 0 && batchViewOpen && (
+            <BatchDetectionPanel
+              items={batchItems}
+              running={batchRunning}
+              mode={imageAnalysisMode}
+              onStop={stopBatchDetection}
+              onOpen={openBatchItem}
+              onSelectFolder={requestFolderSelection}
+            />
+          )}
+
+          {!guestLimitReached && batchItems.length === 0 && !pendingFile && !outcome && !documentTask && errorMessage && (
             <div className="agent-error-message workspace-error-state" role="alert">
               <span><AgentAvatar size={34} state="error" label="小鉴提示工作台连接异常" /></span>
               <div>
@@ -1466,6 +1789,9 @@ export default function App() {
 
           {pendingFile && (
             <div className="conversation-flow">
+              {batchItems.length > 0 && !batchViewOpen && (
+                <button type="button" className="batch-return-button" onClick={returnToBatch}><ArrowLeft size={16} /> 返回批量检测</button>
+              )}
               <div className="user-file-message">
                 <div className="file-message-copy"><span>请帮我鉴别这份内容</span><strong>{pendingFile.name}</strong><small>{pendingFile.typeLabel}{pendingFile.size ? ` · ${formatBytes(pendingFile.size)}` : " · 已归档任务"}{pendingFile.analysisMode ? <span className="pending-mode-chip">{pendingFile.analysisMode === "swarm" ? "Swarm 模式" : "快速检测"}</span> : null}</small></div>
                 {pendingFile.previewUrl && pendingFile.previewKind === "video" ? (
@@ -1570,8 +1896,18 @@ export default function App() {
       </div>
       )}
 
-      <input ref={fileInputRef} className="sr-only" type="file" accept={ACCEPTED_FILES} onChange={chooseFile} tabIndex={-1} aria-hidden="true" />
-      <AuthDialog open={authOpen} onClose={() => { pendingSwarmFileRef.current = null; setAuthOpen(false); }} onAuthenticated={authenticated} />
+      <input ref={fileInputRef} className="sr-only" type="file" accept={ACCEPTED_FILES} multiple onChange={chooseFile} tabIndex={-1} aria-hidden="true" />
+      <input
+        ref={folderInputRef}
+        className="sr-only batch-folder-input"
+        type="file"
+        multiple
+        {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
+        onChange={chooseFolder}
+        tabIndex={-1}
+        aria-hidden="true"
+      />
+      <AuthDialog open={authOpen} onClose={() => { pendingSwarmFileRef.current = null; pendingBatchFilesRef.current = null; setAuthOpen(false); }} onAuthenticated={authenticated} />
     </>
   );
 }
@@ -1605,6 +1941,7 @@ function WelcomeWorkspace({
   consentWarning,
   maxUploadBytes,
   onOpenFile,
+  onOpenFolder,
   onDragEnter,
   onDragLeave,
   onDrop,
@@ -1617,6 +1954,7 @@ function WelcomeWorkspace({
   consentWarning: boolean;
   maxUploadBytes: number;
   onOpenFile: () => void;
+  onOpenFolder: () => void;
   onDragEnter: () => void;
   onDragLeave: () => void;
   onDrop: (event: DragEvent<HTMLElement>) => void;
@@ -1638,12 +1976,15 @@ function WelcomeWorkspace({
             <span><i /> 统一鉴伪入口</span>
             <small>按所选模式调度</small>
           </div>
-          <button type="button" className="upload-stage-core" disabled={busy} onClick={onOpenFile}>
+          <div className="upload-stage-core">
             <div className="upload-stage-icon"><AgentAvatar size={88} state={dragging ? "receiving" : "idle"} label="小鉴文件接收入口" /></div>
-            <h3>{dragging ? "松开即可开始鉴伪" : "上传或拖放待鉴别内容"}</h3>
-            <p>图片、视频和文档将自动进入对应证据链路</p>
-            <span className="primary-button upload-button"><Paperclip size={17} /> 选择文件</span>
-          </button>
+            <h3>{dragging ? "松开即可读取文件或文件夹" : "上传或拖放待鉴别内容"}</h3>
+            <p>单个文件直接检测，文件夹自动建立批量队列</p>
+            <div className="upload-choice-actions">
+              <button type="button" className="primary-button upload-button" disabled={busy} onClick={onOpenFile}><Paperclip size={17} /> 选择文件</button>
+              <button type="button" className="secondary-button upload-folder-button" disabled={busy} onClick={onOpenFolder}><FolderOpen size={17} /> 选择文件夹</button>
+            </div>
+          </div>
           <div className="capability-strip compact-capability-strip" aria-label="支持的内容类型">
             <div><BrandArtIcon name="image" /><span><strong>图片</strong><small>真假与水印</small></span></div>
             <div><BrandArtIcon name="video" /><span><strong>视频</strong><small>关键帧分析</small></span></div>
@@ -1657,7 +1998,7 @@ function WelcomeWorkspace({
               </label>
             )}
             {consentWarning && !user && <p className="guest-consent-warning" role="alert">勾选授权后即可选择或拖放文件。</p>}
-            <small className="upload-limits">支持手机实况照片、PDF 与 DOCX 图片提取 · 图片与文档最高 {formatBytes(maxUploadBytes)} · 视频最高 {formatBytes(MAX_VIDEO_BYTES)}</small>
+            <small className="upload-limits">支持文件夹批量检测、手机实况照片、PDF 与 DOCX 图片提取 · 图片与文档最高 {formatBytes(maxUploadBytes)} · 视频最高 {formatBytes(MAX_VIDEO_BYTES)}</small>
           </div>
         </section>
       </section>

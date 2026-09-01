@@ -1,0 +1,258 @@
+.batch-detection {
+  width: min(980px, calc(100% - 32px));
+  margin: 28px auto 120px;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid #ccd9df;
+  border-radius: 8px;
+  box-shadow: 0 18px 42px rgba(22, 50, 61, 0.08);
+}
+
+.batch-detection-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 24px 26px 20px;
+  border-bottom: 1px solid #dbe4e8;
+}
+
+.batch-detection-header > div > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #176c76;
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.batch-detection-header h2 {
+  margin: 7px 0 0;
+  color: #1b303a;
+  font-size: 24px;
+  letter-spacing: 0;
+}
+
+.batch-detection-header p {
+  margin: 6px 0 0;
+  color: #667983;
+  font-size: 14px;
+}
+
+.batch-detection-header button {
+  min-height: 42px;
+  flex: 0 0 auto;
+}
+
+.batch-overall-progress {
+  padding: 20px 26px 0;
+}
+
+.batch-overall-progress > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.batch-overall-progress strong { color: #1a3540; font-size: 20px; }
+.batch-overall-progress span { color: #6b7e87; font-size: 13px; }
+.batch-overall-progress b { margin-left: auto; color: #2564b3; font-size: 14px; }
+.batch-overall-progress > i,
+.batch-item-progress {
+  display: block;
+  overflow: hidden;
+  background: #e7edf0;
+  border-radius: 999px;
+}
+.batch-overall-progress > i { height: 7px; margin-top: 10px; }
+.batch-overall-progress > i > span,
+.batch-item-progress > span { height: 100%; display: block; background: #2871cd; transition: width 240ms ease-out; }
+
+.batch-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  margin: 18px 26px 0;
+  border: 1px solid #d9e2e6;
+  border-radius: 7px;
+}
+
+.batch-summary > div {
+  min-height: 70px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-right: 1px solid #d9e2e6;
+}
+.batch-summary > div:last-child { border-right: 0; }
+.batch-summary span { color: #657983; font-size: 13px; }
+.batch-summary strong { color: #203641; font-size: 22px; }
+.batch-summary > div:first-child strong { color: #0b7655; }
+.batch-summary > div:nth-child(2) strong { color: #c3443c; }
+
+.batch-list-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 26px 0;
+}
+.batch-list-toolbar label {
+  min-height: 42px;
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 9px;
+  padding: 0 12px;
+  color: #607680;
+  background: #f8fafb;
+  border: 1px solid #d2dde2;
+  border-radius: 7px;
+}
+.batch-list-toolbar input { width: 100%; padding: 10px 0; color: #20343e; background: transparent; border: 0; outline: 0; font: inherit; font-size: 14px; }
+.batch-list-toolbar > span { color: #6e8088; font-size: 12px; }
+
+.batch-file-list {
+  margin: 10px 26px 0;
+  overflow: hidden;
+  border: 1px solid #d9e2e6;
+  border-radius: 7px;
+}
+
+.batch-file-row {
+  position: relative;
+  width: 100%;
+  min-height: 66px;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) minmax(110px, auto) 20px;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  color: #263b45;
+  background: #fff;
+  border: 0;
+  border-bottom: 1px solid #e1e7ea;
+  text-align: left;
+}
+.batch-file-row:last-child { border-bottom: 0; }
+.batch-file-row:not(:disabled) { cursor: pointer; }
+.batch-file-row:not(:disabled):hover { background: #f5f9fb; }
+.batch-file-row:disabled { opacity: 1; cursor: default; }
+.batch-file-status { width: 34px; height: 34px; display: grid; place-items: center; color: #687c85; background: #eef3f5; border-radius: 7px; }
+.batch-file-row.is-running .batch-file-status { color: #2564b3; background: #edf4ff; }
+.batch-file-row.is-completed.verdict-real .batch-file-status { color: #0a7353; background: #eaf7f1; }
+.batch-file-row.is-completed.verdict-fake .batch-file-status,
+.batch-file-row.is-failed .batch-file-status { color: #bd443c; background: #fff0ee; }
+.batch-file-copy { min-width: 0; }
+.batch-file-copy strong,
+.batch-file-copy small,
+.batch-file-result strong,
+.batch-file-result small { display: block; }
+.batch-file-copy strong { overflow: hidden; font-size: 14px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.batch-file-copy small { margin-top: 3px; overflow: hidden; color: #74858d; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.batch-file-result { text-align: right; }
+.batch-file-result strong { font-size: 13px; }
+.batch-file-row.verdict-real .batch-file-result strong { color: #0a7353; }
+.batch-file-row.verdict-fake .batch-file-result strong { color: #b64039; }
+.batch-file-result small { margin-top: 2px; color: #71818a; font-size: 12px; }
+.batch-item-progress { position: absolute; right: 0; bottom: 0; left: 0; height: 3px; border-radius: 0; }
+.batch-open-icon { color: #71858e; }
+.batch-load-more { min-height: 42px; display: block; margin: 14px auto 0; padding: 0 16px; color: #285aa6; background: #f4f8fd; border: 1px solid #cfdaea; border-radius: 6px; font-weight: 700; cursor: pointer; }
+.batch-retention-note { margin: 16px 26px 22px; color: #71818a; font-size: 12px; line-height: 1.6; }
+
+.upload-choice-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.upload-choice-actions button {
+  min-width: 142px;
+  min-height: 44px;
+}
+
+.agent-app .upload-choice-actions .upload-button,
+.agent-app .upload-choice-actions .upload-folder-button {
+  min-width: 160px;
+  min-height: 48px;
+  margin-top: 0;
+  font-size: 15px;
+}
+
+.batch-return-button {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  align-self: flex-start;
+  padding: 0 11px;
+  color: #285aa6;
+  background: #f5f8fc;
+  border: 1px solid #ccd8e7;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 720;
+  cursor: pointer;
+}
+
+.batch-return-button:hover { background: #edf4fd; }
+
+@media (max-width: 620px) {
+  .batch-detection { width: calc(100% - 20px); margin-top: 12px; }
+  .batch-detection-header { display: block; padding: 18px 16px; }
+  .batch-detection-header h2 { font-size: 21px; }
+  .batch-detection-header button { width: 100%; margin-top: 14px; }
+  .batch-overall-progress { padding: 16px 16px 0; }
+  .batch-summary { grid-template-columns: repeat(2, 1fr); margin: 15px 16px 0; }
+  .batch-summary > div:nth-child(2) { border-right: 0; }
+  .batch-summary > div:nth-child(-n + 2) { border-bottom: 1px solid #d9e2e6; }
+  .batch-list-toolbar { margin: 16px 16px 0; }
+  .batch-file-list { margin: 10px 16px 0; }
+  .batch-file-row { grid-template-columns: 34px minmax(0, 1fr) 18px; min-height: 74px; }
+  .batch-file-result { grid-column: 2; display: flex; gap: 7px; align-items: center; text-align: left; }
+  .batch-open-icon { grid-column: 3; grid-row: 1 / span 2; }
+  .batch-retention-note { margin-right: 16px; margin-left: 16px; }
+  .upload-choice-actions { width: 100%; flex-direction: column; gap: 6px; margin-top: 9px; }
+  .upload-choice-actions button { width: min(260px, 100%); }
+  .agent-app .upload-choice-actions .upload-button,
+  .agent-app .upload-choice-actions .upload-folder-button { min-height: 44px; }
+  .agent-app .upload-stage-core { padding-top: 12px; padding-bottom: 10px; }
+  .agent-app .upload-stage-icon,
+  .agent-app .upload-stage-icon .brand-agent-avatar { width: 72px; height: 72px; }
+  .agent-app .upload-stage h3 { margin-top: 10px; font-size: 23px; }
+  .agent-app .upload-stage-core > p { margin-top: 5px; }
+  .agent-app .compact-capability-strip > div,
+  .agent-app .compact-capability-strip > div:nth-child(2),
+  .agent-app .compact-capability-strip > div:nth-child(3) { min-height: 76px; }
+}
+
+@media (max-width: 360px) {
+  .agent-app .upload-stage-core { padding-top: 12px; padding-bottom: 10px; }
+  .agent-app .upload-stage-icon,
+  .agent-app .upload-stage-icon .brand-agent-avatar { width: 68px; height: 68px; }
+  .agent-app .upload-stage h3 { margin-top: 10px; font-size: 23px; }
+  .agent-app .upload-stage-core > p { margin-top: 5px; }
+}
+
+@media (min-width: 361px) and (max-width: 620px) {
+  .upload-choice-actions {
+    width: min(100%, 320px);
+    flex-direction: row;
+    gap: 8px;
+  }
+
+  .upload-choice-actions button,
+  .agent-app .upload-choice-actions .upload-button,
+  .agent-app .upload-choice-actions .upload-folder-button {
+    width: auto;
+    min-width: 0;
+    flex: 1 1 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .batch-overall-progress > i > span,
+  .batch-item-progress > span { transition: none; }
+}
