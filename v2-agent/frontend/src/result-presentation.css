@@ -412,6 +412,54 @@
   white-space: nowrap;
 }
 
+.decision-check-list .metadata-evidence-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.decision-check-list .metadata-evidence-tags > span {
+  min-width: 0;
+  min-height: 25px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 7px;
+  border: 1px solid;
+  border-radius: 5px;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.decision-check-list .metadata-evidence-tags > span.is-fake {
+  color: #a83c35;
+  background: #fff2f0;
+  border-color: #efc7c2;
+}
+
+.decision-check-list .metadata-evidence-tags > span.is-real {
+  color: #0d684b;
+  background: #edf8f3;
+  border-color: #c5e4d5;
+}
+
+.decision-check-list .metadata-evidence-tags em {
+  overflow: hidden;
+  font-style: normal;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.decision-check-list .metadata-evidence-tags small {
+  max-width: 150px;
+  margin: 0;
+  color: currentColor;
+  font-size: 11px;
+  opacity: 0.82;
+}
+
 .decision-check-list li b {
   max-width: 148px;
   padding: 5px 8px;
@@ -670,6 +718,69 @@
 .agent-result .metadata-list dt {
   color: #526670;
   background: #f3f6f7;
+}
+
+.agent-result .metadata-list dt {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.agent-result .metadata-list dt > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-result .metadata-list dt > b {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  border: 1px solid;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 760;
+  line-height: 1.35;
+}
+
+.agent-result .metadata-list > div.is-fake {
+  box-shadow: inset 3px 0 0 #d95148;
+}
+
+.agent-result .metadata-list > div.is-fake dt {
+  color: #963931;
+  background: #fff1ef;
+}
+
+.agent-result .metadata-list > div.is-fake dt > b {
+  color: #a83c35;
+  background: #ffffff;
+  border-color: #e9b9b4;
+}
+
+.agent-result .metadata-list > div.is-fake dd {
+  color: #8f332e;
+  background: #fffafa;
+}
+
+.agent-result .metadata-list > div.is-real {
+  box-shadow: inset 3px 0 0 #168060;
+}
+
+.agent-result .metadata-list > div.is-real dt {
+  color: #0e6348;
+  background: #edf8f3;
+}
+
+.agent-result .metadata-list > div.is-real dt > b {
+  color: #0d684b;
+  background: #ffffff;
+  border-color: #b9ddcd;
+}
+
+.agent-result .metadata-list > div.is-real dd {
+  color: #125b45;
+  background: #fbfefc;
 }
 
 .metadata-empty-action {

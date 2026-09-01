@@ -793,6 +793,99 @@ interface VerificationView {
   label: string;
   detail: string;
   tone: VerificationTone;
+  evidence?: MetadataEvidenceBadge[];
+}
+
+interface MetadataRow {
+  path: string;
+  value: string;
+}
+
+interface MetadataEvidenceBadge {
+  label: string;
+  value?: string;
+  tone: "fake" | "real";
+}
+
+const CAPTURE_METADATA_ALIASES = [
+  "exifmake", "tiffmake", "cameramake",
+  "exifmodel", "tiffmodel", "cameramodel",
+  "exiflensmodel", "lensmodel", "lensinfo", "lensspec",
+  "exifdatetimeoriginal", "datetimeoriginal",
+  "exifexposuretime", "exposuretime", "shutterspeedvalue",
+  "exiffnumber", "fnumber", "aperturevalue",
+  "exifiso", "photographicsensitivity", "isospeedratings",
+  "exiffocallength", "focallength", "focallengthin35mmformat",
+  "makernote", "makernotes", "gpsinfo", "gpsposition",
+] as const;
+
+const EXPLICIT_AI_METADATA_PATTERN = /(?:tc260(?::|\.|\/)?(?:aigc|contentproducer|produceid|label)|aigc[ _.-]?(?:disclosure|label|metadata|标识|披露)|trainedalgorithmicmedia|compositewithtrainedalgorithmicmedia|midjourney|stable[ _.-]?diffusion|comfyui|automatic1111|dall[ ._-]?e|seedream|豆包|即梦|firefly|runwayml|sora|flux[ ._-]?(?:pro|dev|schnell)|negative prompt|cfg[ _.-]?scale|ksampler)/i;
+
+function normalizedMetadataPath(path: string): string {
+  return path.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function isCaptureMetadataPath(path: string): boolean {
+  const normalized = normalizedMetadataPath(path);
+  return CAPTURE_METADATA_ALIASES.some((alias) => normalized === alias || normalized.endsWith(alias));
+}
+
+function metadataRowDirection(row: MetadataRow, aiSignalPaths: Set<string>): MetadataEvidenceBadge["tone"] | null {
+  const path = normalizedMetadataPath(row.path);
+  const explicitlyMatched = [...aiSignalPaths].some((signalPath) => (
+    path === signalPath || path.endsWith(signalPath) || signalPath.endsWith(path)
+  ));
+  if (explicitlyMatched || EXPLICIT_AI_METADATA_PATTERN.test(`${row.path} ${row.value}`)) return "fake";
+  if (isCaptureMetadataPath(row.path)) return "real";
+  return null;
+}
+
+function metadataEvidenceBadges(
+  aiMetadata: ProvenanceReport["aiMetadata"] | undefined,
+  metadataAiGenerated: boolean | undefined,
+  captureEvidence: CaptureEvidence | undefined,
+  rows: MetadataRow[],
+): MetadataEvidenceBadge[] {
+  const badges: MetadataEvidenceBadge[] = [];
+  const seen = new Set<string>();
+  const add = (badge: MetadataEvidenceBadge) => {
+    const key = `${badge.tone}:${badge.label}:${badge.value || ""}`.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    badges.push(badge);
+  };
+
+  const aiLabels = [
+    ...(aiMetadata?.matchedTools || []),
+    ...(aiMetadata?.matchedProviders || []).map((provider) => provider.label),
+  ];
+  aiLabels.slice(0, 3).forEach((label) => add({ label, tone: "fake" }));
+  if (metadataAiGenerated && aiLabels.length === 0) add({ label: "AI 生成元数据", tone: "fake" });
+
+  if (!badges.some((badge) => badge.tone === "fake")) {
+    rows.filter((row) => EXPLICIT_AI_METADATA_PATTERN.test(`${row.path} ${row.value}`)).slice(0, 2).forEach((row) => {
+      const label = /tc260/i.test(`${row.path} ${row.value}`) ? "TC260 AIGC 标识" : "AI 生成标记";
+      add({ label, value: row.value.length <= 36 ? row.value : undefined, tone: "fake" });
+    });
+  }
+
+  (captureEvidence?.evidence || []).slice(0, 3).forEach((item) => {
+    add({ label: item.label, value: item.value, tone: "real" });
+  });
+  const cameraMake = findMetadataRow(rows, ["image.exif.Make", "EXIF:Make", "EXIF_Make", "TIFF:Make", "cameraMake"]);
+  const cameraModel = findMetadataRow(rows, ["image.exif.Model", "EXIF:Model", "EXIF_Model", "TIFF:Model", "cameraModel"]);
+  const cameraDevice = [cameraMake?.value, cameraModel?.value]
+    .filter((value, index, values): value is string => Boolean(value) && values.indexOf(value) === index)
+    .join(" ");
+  if (cameraDevice) add({ label: "相机型号", value: cameraDevice, tone: "real" });
+  const lens = findMetadataRow(rows, ["image.exif.LensModel", "EXIF:LensModel", "EXIF:LensInfo", "LensModel", "LensInfo"]);
+  if (lens) add({ label: "镜头信息", value: lens.value, tone: "real" });
+  const captureTime = findMetadataRow(rows, ["image.exif.DateTimeOriginal", "EXIF:DateTimeOriginal", "DateTimeOriginal"]);
+  if (captureTime) add({ label: "原始拍摄时间", value: "已记录", tone: "real" });
+
+  const fake = badges.filter((badge) => badge.tone === "fake").slice(0, 3);
+  const real = badges.filter((badge) => badge.tone === "real").slice(0, 3);
+  return [...fake, ...real];
 }
 
 function provenanceView(report?: ProvenanceReport, busy = false): VerificationView {
@@ -820,6 +913,7 @@ function ResultDecisionCard({
   captureEvidence,
   cameraDeviceHint,
   metadataCount,
+  metadataRows,
 }: {
   points: ExplanationPoint[];
   verdict: VerdictView;
@@ -830,6 +924,7 @@ function ResultDecisionCard({
   captureEvidence?: CaptureEvidence;
   cameraDeviceHint?: string;
   metadataCount: number;
+  metadataRows: MetadataRow[];
 }) {
   const modelPoint = points.find((point) => point.label !== "综合结论" && MODEL_EVIDENCE_PATTERN.test(point.label));
   const c2pa = provenanceAvailable
@@ -842,20 +937,26 @@ function ResultDecisionCard({
   const cameraDevice = captureEvidence?.camera?.device
     || captureEvidence?.evidence?.find((item) => item.key === "device")?.value
     || cameraDeviceHint;
-  const metadata: VerificationView = aiMetadata?.isAiLikely || provenance?.metadataAiGenerated
-    ? { label: "发现 AI 工具标记", detail: `${metadataTools || "生成工具关键词"} · 元数据可编辑，作为来源线索`, tone: "fake" }
+  const metadataEvidence = metadataEvidenceBadges(aiMetadata, provenance?.metadataAiGenerated, captureEvidence, metadataRows);
+  const hasAiMetadata = metadataEvidence.some((item) => item.tone === "fake");
+  const hasCaptureMetadata = metadataEvidence.some((item) => item.tone === "real");
+  const metadata: VerificationView = hasAiMetadata && hasCaptureMetadata
+    ? { label: "两类线索并存", detail: "红色指向 AI 生成，绿色支持实拍；元数据可编辑，仅作来源线索", tone: "warning", evidence: metadataEvidence }
+    : hasAiMetadata || aiMetadata?.isAiLikely || provenance?.metadataAiGenerated
+    ? { label: "发现 AI 工具标记", detail: `${metadataTools || "生成工具关键词"} · 元数据可编辑，仅作来源线索`, tone: "fake", evidence: metadataEvidence }
     : captureEvidence?.level === "conflict"
-      ? { label: "拍摄信息冲突", detail: "元数据字段之间存在不一致", tone: "warning" }
+      ? { label: "拍摄信息冲突", detail: "元数据字段之间存在不一致", tone: "warning", evidence: metadataEvidence }
     : cameraDevice
       ? {
           label: "发现相机型号",
           detail: `${cameraDevice} · 属于支持实拍来源的辅助线索`,
           tone: "real",
+          evidence: metadataEvidence,
         }
       : captureEvidence?.supportsRealCapture
-        ? { label: `${metadataCount} 项 · 实拍线索`, detail: "发现可核对的相机或拍摄流程信息", tone: "real" }
+        ? { label: `${metadataCount} 项 · 实拍线索`, detail: "发现可核对的相机或拍摄流程信息", tone: "real", evidence: metadataEvidence }
       : metadataCount > 0
-        ? { label: `${metadataCount} 项已读取`, detail: "完整字段可在文件信息中查看", tone: "neutral" }
+        ? { label: `${metadataCount} 项已读取`, detail: "完整字段可在文件信息中查看", tone: "neutral", evidence: metadataEvidence }
         : { label: "未读取到字段", detail: "元数据缺失本身不参与判假", tone: "neutral" };
   const watermark: VerificationView = !visibleWatermark
     ? { label: "尚未返回", detail: "本次结果没有水印扫描数据", tone: "warning" }
@@ -891,7 +992,19 @@ function ResultDecisionCard({
             {checks.map((check) => (
               <li className={`is-${check.tone}`} key={check.id}>
                 <span>{check.icon}</span>
-                <div><strong>{check.title}</strong><small>{check.detail}</small></div>
+                <div>
+                  <strong>{check.title}</strong><small>{check.detail}</small>
+                  {check.evidence && check.evidence.length > 0 && (
+                    <div className="metadata-evidence-tags" aria-label="元数据证据方向">
+                      {check.evidence.map((item, index) => (
+                        <span className={`is-${item.tone}`} key={`${item.tone}-${item.label}-${index}`}>
+                          {item.tone === "fake" ? <AlertTriangle size={12} /> : <CheckCircle2 size={12} />}
+                          <em>{item.label}</em>{item.value && <small>{item.value}</small>}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <b>{check.label}</b>
               </li>
             ))}
@@ -1234,11 +1347,6 @@ function ProbabilitySection({ model }: { model?: ProbabilityModel }) {
   );
 }
 
-interface MetadataRow {
-  path: string;
-  value: string;
-}
-
 function metadataRows(value: unknown, path = "", rows: MetadataRow[] = []): MetadataRow[] {
   if (Array.isArray(value)) {
     if (value.length === 0 && path) rows.push({ path, value: "[]" });
@@ -1268,10 +1376,6 @@ function mergedMetadataRows(...sources: unknown[]): MetadataRow[] {
     });
   });
   return rows;
-}
-
-function normalizedMetadataPath(path: string): string {
-  return path.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 function findMetadataRow(rows: MetadataRow[], aliases: string[]): MetadataRow | undefined {
@@ -1382,6 +1486,7 @@ export default function AgentResult(props: Props) {
   const filteredMetadata = normalizedMetadataQuery
     ? completeMetadata.filter((row) => `${row.path} ${row.value}`.toLowerCase().includes(normalizedMetadataQuery))
     : completeMetadata;
+  const aiMetadataSignalPaths = new Set((provenance?.aiMetadata?.signals || []).map((signal) => normalizedMetadataPath(signal.path)));
   const c2paStatus = props.provenanceAvailable
     ? provenanceView(provenance, props.provenanceBusy)
     : { label: "登录后核验", detail: "登录后自动读取 C2PA 内容凭证", tone: "neutral" as const };
@@ -1546,6 +1651,7 @@ export default function AgentResult(props: Props) {
             captureEvidence={captureEvidence}
             cameraDeviceHint={cameraDevice}
             metadataCount={metadataFieldCount}
+            metadataRows={completeMetadata}
           />
           {visualReview && (
             <section className="result-band result-priority-band">
@@ -1778,9 +1884,18 @@ export default function AgentResult(props: Props) {
                 </label>
                 {filteredMetadata.length > 0 ? (
                   <dl className="metadata-list">
-                    {filteredMetadata.map((row, index) => (
-                      <div key={`${row.path}-${index}`}><dt>{row.path}</dt><dd>{row.value}</dd></div>
-                    ))}
+                    {filteredMetadata.map((row, index) => {
+                      const direction = metadataRowDirection(row, aiMetadataSignalPaths);
+                      return (
+                        <div className={direction ? `is-${direction}` : undefined} key={`${row.path}-${index}`}>
+                          <dt>
+                            <span>{row.path}</span>
+                            {direction && <b>{direction === "fake" ? "AI 生成线索" : "实拍线索"}</b>}
+                          </dt>
+                          <dd>{row.value}</dd>
+                        </div>
+                      );
+                    })}
                   </dl>
                 ) : (
                   <div className="metadata-empty"><Info size={16} /> 没有匹配“{metadataQuery}”的元数据字段。</div>

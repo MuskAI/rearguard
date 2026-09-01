@@ -1190,6 +1190,8 @@ test("结果页优先展示概率与关键来源证据并保持正文级字号",
   await expect(card.getByText("C2PA 内容凭证")).toBeVisible();
   await expect(card.getByText("发现相机型号")).toBeVisible();
   await expect(card.getByText(/Apple iPhone 15 Pro · 属于支持实拍来源的辅助线索/)).toBeVisible();
+  await expect(card.locator(".metadata-evidence-tags .is-real", { hasText: "相机型号" })).toContainText("Apple iPhone 15 Pro");
+  await expect(card.locator(".metadata-evidence-tags .is-fake")).toHaveCount(0);
   await expect(card.getByText("偏向 AI 生成", { exact: true })).toBeVisible();
   await expect(card.getByText("99.6%", { exact: true })).toHaveCount(0);
   await expect(card.getByText("模型原始输出，尚未经过独立数据集校准。")).toBeVisible();
@@ -1213,6 +1215,8 @@ test("结果页优先展示概率与关键来源证据并保持正文级字号",
   await expect(page.getByText("相机型号", { exact: true })).toBeVisible();
   await expect(page.getByText("EXIF.Make", { exact: true })).toBeVisible();
   await expect(page.getByText("iPhone 15 Pro", { exact: true })).toBeVisible();
+  await expect(page.locator(".metadata-list > div.is-real", { hasText: "EXIF.Make" }).getByText("实拍线索")).toBeVisible();
+  await expect(page.locator(".metadata-list > div.is-real", { hasText: "EXIF.Model" }).getByText("实拍线索")).toBeVisible();
   await expect(page.getByText("未发现凭证", { exact: true }).first()).toBeVisible();
   await page.getByRole("searchbox", { name: "搜索完整元数据" }).fill("DateTimeOriginal");
   await expect(page.locator(".metadata-list > div")).toHaveCount(1);
@@ -1233,6 +1237,10 @@ test("结果页优先展示概率与关键来源证据并保持正文级字号",
     ".report-qa-attach",
     ".report-qa-send",
   ]);
+  await expectNoInternalOverflow(page, [
+    ".decision-check-list",
+    ".metadata-evidence-tags",
+  ]);
   const mobileResult = await page.evaluate(() => {
     const result = document.querySelector<HTMLElement>(".agent-result")!.getBoundingClientRect();
     const preview = document.querySelector<HTMLElement>(".result-preview")!.getBoundingClientRect();
@@ -1251,6 +1259,90 @@ test("结果页优先展示概率与关键来源证据并保持正文级字号",
   expect(mobileResult.dockBottom).toBeLessThanOrEqual(569);
   await expect(verdictStamp).toHaveCSS('width', '58px');
   await expectNoHorizontalOverflow(page);
+});
+
+test("TC260 与 AIGC 披露元数据会作为红色生成线索展示", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await installBaseMocks(page, true);
+  await page.route(/\/v2-api\/provenance(?:\?|$)/, (route) => route.fulfill({
+    json: {
+      hasCredentials: false,
+      validationState: null,
+      credentialTrusted: false,
+      generator: null,
+      issuer: null,
+      signatureAlg: null,
+      signedTime: null,
+      isAiGenerated: null,
+      actions: [],
+      ingredients: [],
+      metadataAiGenerated: true,
+      aiMetadata: {
+        score: 92,
+        confidence: "high",
+        confidenceText: "高",
+        isAiLikely: true,
+        signalCount: 2,
+        matchedTools: ["TC260 AIGC 标识", "AIGC 披露元数据"],
+        matchedProviders: [],
+        signals: [
+          { id: "tc260-aigc", label: "TC260 AIGC 标识", weight: 70, path: "XMP.TC260:AIGC", reason: "命中 AIGC 标识", value: "Label=1" },
+          { id: "aigc-disclosure-metadata", label: "AIGC 披露元数据", weight: 54, path: "XMP.TC260:ContentProducer", reason: "命中披露字段", value: "001191110102" },
+        ],
+      },
+      metadataSummary: { sectionCount: 1, embeddedSectionCount: 1, fieldCount: 2, sections: [], preview: [], errors: [] },
+      metadata: { XMP: { "TC260:AIGC": "Label=1", "TC260:ContentProducer": "001191110102" } },
+      captureEvidence: { level: "conflict", supportsRealCapture: false, summary: "发现生成声明。", evidence: [], conflicts: [] },
+      synthid: { supported: false, detected: null, note: "not checked" },
+      error: "no_manifest",
+      elapsedMs: 10,
+      fileMeta: { name: "tc260.png", size: "1.0KB" },
+    },
+  }));
+  await page.route("**/image_upload/detect_async", (route) => route.fulfill({
+    json: {
+      status: "success",
+      job: {
+        id: "tc260-result-job",
+        version: "1",
+        status: "success",
+        result: {
+          status: "success",
+          result: {
+            itemid: 902,
+            final_label: "AI生成图像",
+            probability: 0.94,
+            confidence: "高",
+            explanation: "主模型与来源信息均指向 AI 生成。",
+            image_url: "/brand/huijian-forensic-scanner-v3.webp",
+            filename: "tc260.png",
+            file_size: "1 KB",
+            resolution: "512×512",
+            img_format: "PNG",
+            all_metadata: {},
+            visibleWatermark: { enabled: true, supported: true, detected: false, provider: null, confidence: 0, evidenceLevel: "none", hits: [], temporal: { sampledFrames: 1, positiveFrames: 0, moving: false }, note: "未检出。" },
+          },
+        },
+      },
+    },
+  }));
+
+  await page.goto("/?workspace=1");
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "tc260.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"),
+  });
+
+  const metadataCheck = page.locator(".decision-check-list li", { hasText: "元数据与实拍信息" });
+  await expect(metadataCheck.getByText("发现 AI 工具标记", { exact: true })).toBeVisible();
+  await expect(metadataCheck.locator(".metadata-evidence-tags .is-fake")).toHaveCount(2);
+  await expect(metadataCheck.locator(".metadata-evidence-tags .is-fake", { hasText: "TC260 AIGC 标识" })).toBeVisible();
+  await expect(metadataCheck.locator(".metadata-evidence-tags .is-real")).toHaveCount(0);
+
+  await page.getByRole("tab", { name: "文件信息" }).click();
+  await expect(page.locator(".metadata-list > div.is-fake")).toHaveCount(2);
+  await expect(page.locator(".metadata-list > div.is-fake").first().getByText("AI 生成线索")).toBeVisible();
 });
 
 test("视频结果可预览并按采样时间点回看证据", async ({ page }) => {
