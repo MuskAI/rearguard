@@ -68,12 +68,12 @@ restore_public_config() {
 }
 
 rollback_gpu_release() {
-  ssh -q -tt "${ssh_options[@]}" "$GPU_USER@$GPU_HOST" \
+  gpu_privileged_capture \
     'current=$(readlink -f /home/ymk/realguard-detection-releases/current 2>/dev/null || true); \
      if [[ -z "$current" || ! -f "$current/DEPLOYED_COMMIT" ]]; then exit 0; fi; \
      test "$(tr -d "[:space:]" < "$current/DEPLOYED_COMMIT")" = "'"$commit_sha"'" || exit 0; \
      rollback_script=$(cat "$current/rollback_script_path"); \
-     sudo "$rollback_script" "$current" force'
+     "$rollback_script" "$current" force'
 }
 
 cleanup() {
@@ -318,17 +318,10 @@ gpu_activation_command="set -euo pipefail; \
   GPU_RELEASE_ARCHIVE=\"\$stage/realguard-detection-release.tgz\" \
   GPU_RELEASE_MARKER=\"\$stage/realguard-detection.DEPLOYED_COMMIT\" \
   bash \"\$stage/realguard-activate-detection.sh\""
-if [[ -n "$GPU_SUDO_PASSWORD" ]]; then
-  # Sudo timestamps are scoped to the SSH session on this host. Authenticate in
-  # the same non-interactive session that runs activation so every later sudo
-  # call can reuse the credential without hanging on an invisible TTY prompt.
-  printf '%s\n' "$GPU_SUDO_PASSWORD" \
-    | ssh -T "${ssh_options[@]}" "$GPU_USER@$GPU_HOST" \
-        "sudo -S -p '' -v; $gpu_activation_command"
-else
-  ssh -T "${ssh_options[@]}" "$GPU_USER@$GPU_HOST" \
-    "sudo -n -v; $gpu_activation_command"
-fi
+# Run the complete atomic activation inside one privileged shell. On hosts that
+# scope sudo tickets by parent process, validating first and spawning a child
+# script causes every nested sudo call to prompt again and deadlock without a TTY.
+gpu_privileged_capture "$gpu_activation_command"
 gpu_remote_stage=""
 gpu_activation_started=0
 gpu_activation_succeeded=1
