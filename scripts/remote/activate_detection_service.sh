@@ -327,18 +327,24 @@ assert payload.get("code") == 200
 assert payload.get("msg") == "Video Detection API Ready"
 '
 
+probe_dir="$release_root/deployment-probes"
+probe_png="$probe_dir/watermark-probe.png"
+probe_heic="$probe_dir/watermark-probe.heic"
+install -d -m 755 "$probe_dir"
 /home/ymk/miniconda3/envs/realguard/bin/python -c '
 from PIL import Image
-Image.new("RGB", (64, 64), (240, 244, 245)).save("/tmp/realguard-gpu-deployment-probe.png")
-'
+import sys
+Image.new("RGB", (64, 64), (240, 244, 245)).save(sys.argv[1])
+' "$probe_png"
 /home/ymk/services/watermark-precheck/.venv/bin/python -c '
 from PIL import Image
 from pillow_heif import register_heif_opener
+import sys
 register_heif_opener()
 Image.new("RGB", (64, 64), (240, 244, 245)).save(
-    "/tmp/realguard-gpu-deployment-probe.heic", format="HEIF"
+    sys.argv[1], format="HEIF"
 )
-'
+' "$probe_heic"
 set -a
 . /home/ymk/services/watermark-precheck/.env
 set +a
@@ -346,7 +352,7 @@ precheck_probe_ready=0
 for _ in {1..3}; do
   if curl -fsS --max-time 60 \
     -H "Authorization: Bearer $WATERMARK_PRECHECK_TOKEN" \
-    -F file=@/tmp/realguard-gpu-deployment-probe.png \
+    -F "file=@$probe_png" \
     http://127.0.0.1:5066/v1/precheck \
     | /home/ymk/miniconda3/envs/realguard/bin/python -c '
 import json, sys
@@ -371,7 +377,7 @@ heic_precheck_probe_ready=0
 for _ in {1..3}; do
   if curl -fsS --max-time 60 \
     -H "Authorization: Bearer $WATERMARK_PRECHECK_TOKEN" \
-    -F file=@/tmp/realguard-gpu-deployment-probe.heic \
+    -F "file=@$probe_heic" \
     http://127.0.0.1:5066/v1/precheck \
     | /home/ymk/miniconda3/envs/realguard/bin/python -c '
 import json, sys
@@ -396,7 +402,7 @@ for _ in {1..3}; do
   if curl -fsS --max-time 180 \
     -H "X-RealGuard-Internal-Token: $model_token" \
     -H 'X-RealGuard-Request-Nonce: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
-    -F image_file=@/tmp/realguard-gpu-deployment-probe.png \
+    -F "image_file=@$probe_png" \
     http://127.0.0.1:5000/internal/model/predict \
     | /home/ymk/miniconda3/envs/realguard/bin/python -c '
 import json, sys
