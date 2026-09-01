@@ -56,8 +56,8 @@ import {
 } from "../api";
 import {
   buildEvidenceExplanation,
+  displayableWatermarkHits,
   hasDecisiveAiWatermark,
-  localizedWatermarkHits,
   type ExplanationPoint,
 } from "../evidenceExplanation";
 import { StatusIcon } from "./BrandSystem";
@@ -1108,7 +1108,7 @@ function CaptureEvidenceSection({ report }: { report?: CaptureEvidence }) {
 function WatermarkSection({ report, preview }: { report?: VisibleWatermarkResult; preview?: string }) {
   if (!report || !preview) return null;
   const hits = (report.hits || []).slice(0, 8);
-  const localizedHits = localizedWatermarkHits(report).slice(0, 8);
+  const localizedHits = displayableWatermarkHits(report).slice(0, 8);
   const platformHits = hits.filter((hit) => AI_WATERMARK_PROVIDERS.has(hit.provider));
   const decisiveWatermark = hasDecisiveAiWatermark(report);
   const genericHits = hits.filter((hit) => !AI_WATERMARK_PROVIDERS.has(hit.provider));
@@ -1435,7 +1435,7 @@ export default function AgentResult(props: Props) {
   const previewWatermarkMarks = useMemo(() => {
     if (!visibleWatermark) return [];
     const allHits = visibleWatermark.hits || [];
-    return localizedWatermarkHits(visibleWatermark).slice(0, 8).map((hit, localizedIndex) => ({
+    return displayableWatermarkHits(visibleWatermark).slice(0, 8).map((hit, localizedIndex) => ({
       hit,
       index: Math.max(allHits.indexOf(hit) + 1, localizedIndex + 1),
     }));

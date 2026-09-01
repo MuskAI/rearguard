@@ -19,6 +19,7 @@ export interface ExplanationPoint {
 }
 
 const CRITICAL_EVIDENCE_LIMIT = 3;
+export const WATERMARK_BOX_MIN_CONFIDENCE = 0.5;
 
 function criticalEvidenceScore(point: ExplanationPoint): number {
   if (point.importance === "context") return 0;
@@ -63,6 +64,12 @@ function isLocalizedHit(hit: VisibleWatermarkHit): boolean {
 export function localizedWatermarkHits(report?: VisibleWatermarkResult): VisibleWatermarkHit[] {
   if (!report?.detected) return [];
   return (report.hits || []).filter(isLocalizedHit);
+}
+
+export function displayableWatermarkHits(report?: VisibleWatermarkResult): VisibleWatermarkHit[] {
+  return localizedWatermarkHits(report).filter(
+    (hit) => clamp01(hit.confidence) >= WATERMARK_BOX_MIN_CONFIDENCE,
+  );
 }
 
 export function hasLocalizedWatermark(report?: VisibleWatermarkResult): boolean {
