@@ -1599,7 +1599,6 @@ export default function AgentResult(props: Props) {
         <div className="result-verdict">
           <div className="verdict-kicker"><StatusIcon name={verdict.tone === "fake" ? "fake" : "real"} size={17} /> 小鉴综合判断</div>
           <h2 id="detection-result-title">{verdict.label}</h2>
-          <p>{publicCopy(verdict.description)}</p>
           <dl className="result-overview-metrics">
             <div className="result-probability-metric">
               <dt>AI 生成概率</dt>

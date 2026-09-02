@@ -1167,6 +1167,7 @@ test("结果页优先展示概率与关键来源证据并保持正文级字号",
   expect((await provenanceRequest).headers()["x-huijian-csrf"]).toBe("a".repeat(40));
 
   await expect(page.locator("#detection-result-title")).toBeVisible();
+  await expect(page.locator(".result-presentation-hero .result-verdict > p")).toHaveCount(0);
   const verdictStamp = page.locator('.result-verdict-stamp');
   await expect(verdictStamp).toHaveText(/假鉴伪结论/);
   await expect(verdictStamp).toHaveAttribute('aria-label', '检测结论：假');
