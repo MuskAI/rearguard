@@ -965,7 +965,7 @@ function ResultDecisionCard({
       : decisiveWatermark
         ? { label: "确认 AI 水印", detail: "平台匹配、位置与文字/图形证据相互印证", tone: "fake" }
         : visibleWatermark.detected
-          ? { label: "发现可见标记", detail: "平台归属未确认，不单独判假", tone: "neutral" }
+          ? { label: "发现可见标记", detail: "平台归属未确认，不单独判假", tone: "fake" }
           : { label: "未检出水印", detail: "扫描已完成；未检出不等同于真实", tone: "neutral" };
   const checks = [
     { id: "c2pa", title: "C2PA 内容凭证", icon: <Fingerprint size={19} />, ...c2pa },
