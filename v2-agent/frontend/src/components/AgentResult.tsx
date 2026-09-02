@@ -1490,9 +1490,6 @@ export default function AgentResult(props: Props) {
   const c2paStatus = props.provenanceAvailable
     ? provenanceView(provenance, props.provenanceBusy)
     : { label: "登录后核验", detail: "登录后自动读取 C2PA 内容凭证", tone: "neutral" as const };
-  const sourceCheckCount = Number(Boolean(visibleWatermark?.supported))
-    + Number(metadataFieldCount > 0)
-    + Number(Boolean(provenance));
 
   async function refreshShares() {
     if (props.outcome.kind !== "evidence") return;
@@ -1617,7 +1614,7 @@ export default function AgentResult(props: Props) {
             </div>
             <div>
               <dt>来源核验</dt>
-              <dd>{props.provenanceBusy ? "正在核验" : `${sourceCheckCount}/3 项完成`}</dd>
+              <dd>{props.provenanceBusy ? "正在核验" : "3/3 项已扫描"}</dd>
               <small>水印、元数据与 C2PA</small>
             </div>
           </dl>

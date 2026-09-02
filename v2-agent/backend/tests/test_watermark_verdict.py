@@ -101,6 +101,7 @@ def test_bbox_overflow_is_rejected_instead_of_clamped():
 def test_trusted_direct_model_watermark_can_authorize_fake_without_fusion():
     result = {"verdict": "real", "confidence": 0.12, "explanation": "主模型偏向真实。"}
     visible = {
+        "supported": True,
         "detected": True,
         "coordinateSpace": "display_normalized_v1",
         "displaySize": {"width": 1000, "height": 800},
@@ -125,13 +126,14 @@ def test_trusted_direct_model_watermark_can_authorize_fake_without_fusion():
 
     assert result["verdict"] == "highly_suspected_fake"
     assert result["confidence"] == 0.95
-    assert result["watermarkVerdictOverride"]["policyVersion"] == "explicit-watermark-model-direct-v2"
+    assert result["watermarkVerdictOverride"]["policyVersion"] == "explicit-watermark-model-direct-v3"
     assert "不依赖文字识别、平台模板或图像检索" in result["explanation"]
 
 
-def test_direct_model_non_corner_detection_cannot_authorize_fake():
+def test_direct_model_non_corner_detection_authorizes_fake():
     result = {"verdict": "real", "confidence": 0.12, "explanation": "主模型偏向真实。"}
     visible = {
+        "supported": True,
         "detected": True,
         "coordinateSpace": "display_normalized_v1",
         "displaySize": {"width": 1000, "height": 800},
@@ -139,6 +141,28 @@ def test_direct_model_non_corner_detection_cannot_authorize_fake():
             "provider": "yolo11x_watermark",
             "label": "疑似标记区域（待核验）",
             "confidence": 0.98,
+            "bbox": {"x": 0.28, "y": 0.04, "w": 0.44, "h": 0.08},
+            "method": "explicit_watermark_model_direct",
+            "decisive": True,
+        }],
+    }
+
+    watermark_verdict.apply(result, visible)
+
+    assert result["verdict"] == "highly_suspected_fake"
+    assert result["watermarkVerdictOverride"]["policyVersion"] == "explicit-watermark-model-direct-v3"
+
+
+def test_direct_model_detection_below_display_threshold_stays_non_decisive():
+    result = {"verdict": "real", "confidence": 0.12, "explanation": "主模型偏向真实。"}
+    visible = {
+        "detected": True,
+        "coordinateSpace": "display_normalized_v1",
+        "displaySize": {"width": 1000, "height": 800},
+        "hits": [{
+            "provider": "yolo11x_watermark",
+            "label": "疑似显式水印",
+            "confidence": 0.49,
             "bbox": {"x": 0.28, "y": 0.04, "w": 0.44, "h": 0.08},
             "method": "explicit_watermark_model_direct",
             "decisive": True,

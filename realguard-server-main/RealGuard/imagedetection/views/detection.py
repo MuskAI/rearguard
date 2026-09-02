@@ -4122,11 +4122,7 @@ def image_result_api():
         'modelScore': detector_probability,
         'p_metadata': metadata_probability,
         'confidence': '低' if review_required else item.get('clarity', ''),
-        'explanation': (
-            f'该记录的二元结论为“{final_label}”，但缺少可验证的已校准模型授权或决定性来源证据；'
-            '结论置信度为低，原始分数不作为已校准概率发布，建议结合原件来源复核。'
-            if legacy_calibration_unknown else explanation
-        ),
+        'explanation': explanation,
         'agent_reasoning': '',
         'visual_issues': visual_issues,
         'image_url': image_url,

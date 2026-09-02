@@ -596,11 +596,11 @@ def test_direct_model_result_is_decisive_only_when_trusted():
     assert untrusted["genericVisibleWatermark"]["trustedDecision"] is False
     assert payload["visibleHits"][0]["decisive"] is True
     assert payload["visibleHits"][0]["method"] == "explicit_watermark_model_direct"
-    assert payload["genericVisibleWatermark"]["directDecisionThreshold"] == 0.92
+    assert payload["genericVisibleWatermark"]["directDecisionThreshold"] == 0.5
     assert payload["genericVisibleWatermark"]["trustedDecision"] is True
 
 
-def test_direct_model_non_corner_hit_is_never_decisive():
+def test_direct_model_non_corner_hit_is_decisive():
     payload = {
         "mode": "model_direct",
         "visibleHits": [{
@@ -618,6 +618,6 @@ def test_direct_model_non_corner_hit_is_never_decisive():
 
     provenance_precheck._normalize_visible_hits(payload, trusted_model=True)
 
-    assert payload["visibleHits"][0]["decisive"] is False
-    assert payload["visibleHits"][0]["decisionEligible"] is False
-    assert payload["visibleHits"][0]["label"] == "疑似标记区域（待核验）"
+    assert payload["visibleHits"][0]["decisive"] is True
+    assert payload["visibleHits"][0]["decisionEligible"] is True
+    assert payload["visibleHits"][0]["label"] == "显式水印"

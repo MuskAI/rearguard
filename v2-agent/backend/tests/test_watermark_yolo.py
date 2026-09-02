@@ -87,44 +87,43 @@ def test_direct_model_result_is_the_only_watermark_engine_and_can_authorize_fake
     ]
     assert merged["verdict"] == "highly_suspected_fake"
     assert merged["confidence"] == 0.95
-    assert merged["watermarkVerdictOverride"]["policyVersion"] == "explicit-watermark-model-direct-v2"
+    assert merged["watermarkVerdictOverride"]["policyVersion"] == "explicit-watermark-model-direct-v3"
 
 
-def test_direct_model_low_confidence_hit_does_not_override_main_model():
+def test_direct_model_hit_above_display_threshold_overrides_main_model():
     merged = watermark_yolo.merge(_analysis(), _direct_precheck(0.61))
 
-    assert merged["verdict"] == "real"
-    assert merged["confidence"] == 0.82
+    assert merged["verdict"] == "highly_suspected_fake"
+    assert merged["confidence"] == 0.95
     assert merged["visibleWatermark"]["detected"] is True
     assert merged["visibleWatermark"]["confidence"] == 0.61
-    assert merged["visibleWatermark"]["evidenceLevel"] == "medium"
-    assert "watermarkVerdictOverride" not in merged
+    assert merged["visibleWatermark"]["evidenceLevel"] == "strong"
+    assert merged["watermarkVerdictOverride"]["policyVersion"] == "explicit-watermark-model-direct-v3"
 
 
-def test_news_headline_false_positive_cannot_override_main_model():
+def test_direct_model_detection_no_longer_requires_corner_placement():
     merged = watermark_yolo.merge(_analysis(), _direct_precheck(
         0.8361,
         {"x": 0.2229, "y": 0.0755, "w": 0.2208, "h": 0.0415},
     ))
 
     hit = merged["visibleWatermark"]["hits"][0]
-    assert merged["verdict"] == "real"
-    assert merged["confidence"] == 0.82
-    assert hit["decisive"] is False
-    assert hit["label"] == "疑似标记区域（待核验）"
-    assert merged["visibleWatermark"]["detector"]["directDecisionThreshold"] == 0.92
-    assert "watermarkVerdictOverride" not in merged
+    assert merged["verdict"] == "highly_suspected_fake"
+    assert merged["confidence"] == 0.95
+    assert hit["decisive"] is True
+    assert hit["label"] == "显式水印"
+    assert merged["visibleWatermark"]["detector"]["directDecisionThreshold"] == 0.5
 
 
-def test_upstream_decisive_flag_cannot_promote_non_corner_text():
+def test_non_corner_direct_detection_is_decision_eligible():
     merged = watermark_yolo.merge(_analysis(), _direct_precheck(
         0.98,
         {"x": 0.28, "y": 0.04, "w": 0.44, "h": 0.08},
     ))
 
-    assert merged["verdict"] == "real"
-    assert merged["visibleWatermark"]["hits"][0]["decisionEligible"] is False
-    assert "watermarkVerdictOverride" not in merged
+    assert merged["verdict"] == "highly_suspected_fake"
+    assert merged["visibleWatermark"]["hits"][0]["decisionEligible"] is True
+    assert merged["watermarkVerdictOverride"]["policyVersion"] == "explicit-watermark-model-direct-v3"
 
 
 def test_direct_model_clean_scan_is_exposed_without_legacy_engines():

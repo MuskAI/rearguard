@@ -16,7 +16,7 @@ YOLO_METHOD = "yolo11x_watermark_detection"
 YOLO_MODEL = "huijian/yolo11x_explicit_watermark_binary"
 DIRECT_MODE = "model_direct"
 DIRECT_METHOD = "explicit_watermark_model_direct"
-DIRECT_MIN_CONFIDENCE = 0.92
+DIRECT_MIN_CONFIDENCE = 0.50
 EXPLICIT_METHOD = "explicit_ai_watermark_fusion"
 EXPLICIT_MODEL = "RapidOCR + FAISS/CLIP + rule fusion"
 EXPLICIT_MIN_CONFIDENCE = 0.80
@@ -272,7 +272,7 @@ def _generic_hits(precheck: dict[str, Any]) -> list[dict[str, Any]]:
             "confidence": confidence,
             "bbox": bbox,
         })
-        decisive = direct_mode and raw.get("decisive") is True and decision_eligible
+        decisive = direct_mode and decision_eligible
         hits.append({
             "provider": YOLO_PROVIDER,
             "label": (
@@ -318,10 +318,7 @@ def _merge_model_direct(
     top = max(hits, key=lambda item: _clamp01(item.get("confidence"))) if hits else None
     confidence = _clamp01(top.get("confidence")) if top else 0.0
     available = detector.get("available") is True
-    decision_threshold = max(
-        DIRECT_MIN_CONFIDENCE,
-        _clamp01(detector.get("directDecisionThreshold")),
-    )
+    decision_threshold = DIRECT_MIN_CONFIDENCE
     raw_explicit = precheck.get("explicitWatermark")
     explicit = copy.deepcopy(raw_explicit) if isinstance(raw_explicit, dict) else {
         "available": available,
@@ -372,7 +369,7 @@ def _merge_model_direct(
     explicit["aiWatermarkVerdict"] = explicit_verdict
     if decisive_hits:
         note = (
-            f"显式水印模型定位到 {len(decisive_hits)} 处高可信角落水印，"
+            f"显式水印模型定位到 {len(decisive_hits)} 处可信水印，"
             f"最高置信度 {confidence * 100:.1f}%。"
         )
     elif detected:

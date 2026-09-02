@@ -77,6 +77,13 @@ export function hasLocalizedWatermark(report?: VisibleWatermarkResult): boolean 
 }
 
 export function decisiveWatermarkHits(report?: VisibleWatermarkResult): VisibleWatermarkHit[] {
+  const directModelAvailable = report?.supported === true || report?.explicitWatermark?.available === true;
+  const directHits = directModelAvailable
+    ? localizedWatermarkHits(report).filter(
+        (hit) => hit.method === "explicit_watermark_model_direct" && clamp01(hit.confidence) >= WATERMARK_BOX_MIN_CONFIDENCE,
+      )
+    : [];
+  if (directHits.length > 0) return directHits;
   if (
     report?.explicitWatermark?.available !== true
     || report.explicitWatermark.detected !== true

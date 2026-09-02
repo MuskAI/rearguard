@@ -10,6 +10,9 @@ MIN_EXPLICIT_VERDICT_CONFIDENCE = 0.80
 DECISIVE_PROVIDERS = frozenset({"gemini", "doubao", "jimeng", "jimeng_pill", "samsung"})
 DECISIVE_METHOD = "remove_ai_watermarks_registry"
 EXPLICIT_DECISIVE_METHOD = "explicit_ai_watermark_fusion"
+DIRECT_DECISIVE_METHOD = "explicit_watermark_model_direct"
+DIRECT_DECISIVE_PROVIDER = "yolo11x_watermark"
+DIRECT_DECISIVE_CONFIDENCE = 0.50
 DECISIVE_METHODS = frozenset({DECISIVE_METHOD, EXPLICIT_DECISIVE_METHOD})
 MIN_LOCALIZED_AREA = 0.0001
 PROVIDER_MIN_CONFIDENCE = {
@@ -118,6 +121,18 @@ def has_localized_watermark(visible: Any) -> bool:
     return bool(_localized_hits(visible))
 
 
+def _direct_watermark_hits(visible: Any) -> list[dict[str, Any]]:
+    return [
+        hit
+        for hit in _localized_hits(visible)
+        if str(hit.get("provider") or "").strip().lower() == DIRECT_DECISIVE_PROVIDER
+        and str(hit.get("method") or "").strip() == DIRECT_DECISIVE_METHOD
+        and _clamp01(hit.get("confidence")) >= DIRECT_DECISIVE_CONFIDENCE
+        and _clamp01((hit.get("bbox") or {}).get("w"))
+        * _clamp01((hit.get("bbox") or {}).get("h")) >= MIN_LOCALIZED_AREA
+    ]
+
+
 def _provider_id(value: Any) -> str:
     return _PROVIDER_ALIASES.get(str(value or "").strip().lower(), "")
 
@@ -182,6 +197,9 @@ def _strong_explicit_hits(visible: Any) -> list[dict[str, Any]]:
 
 
 def _decisive_hits(visible: Any) -> list[dict[str, Any]]:
+    direct_hits = _direct_watermark_hits(visible)
+    if direct_hits:
+        return direct_hits
     explicit_hits = _strong_explicit_hits(visible)
     if not explicit_hits:
         return []
@@ -240,10 +258,16 @@ def build_explanation(result: dict[str, Any], visible: Any) -> str:
         if label not in provider_names:
             provider_names.append(label)
     if has_decisive_ai_watermark(visible):
+        direct = any(hit.get("method") == DIRECT_DECISIVE_METHOD for hit in _decisive_hits(visible))
         line = (
-            f"强 AI 水印证据：定位到 {len(_decisive_hits(visible))} 处"
-            f"（{'、'.join(provider_names)}），已通过平台匹配、区域定位与 OCR/检索融合复核。"
-            "按当前决策规则，该证据可独立授权“AI生成图像”结论。"
+            f"强显式水印证据：模型直接定位到 {len(_decisive_hits(visible))} 处水印区域，"
+            "置信度达到判定门槛，已直接支持“AI生成图像”结论。"
+            if direct
+            else (
+                f"强 AI 水印证据：定位到 {len(_decisive_hits(visible))} 处"
+                f"（{'、'.join(provider_names)}），已通过平台匹配、区域定位与 OCR/检索融合复核。"
+                "按当前决策规则，该证据可独立授权“AI生成图像”结论。"
+            )
         )
     else:
         line = (
@@ -274,6 +298,7 @@ def apply_to_result(result: dict[str, Any], visible: Any) -> bool:
         for hit in decisive_hits
         if str(hit.get("provider") or "").strip()
     })
+    direct = any(hit.get("method") == DIRECT_DECISIVE_METHOD for hit in decisive_hits)
     result.update({
         "probability": round(published_probability, 4),
         "final_label": "AI生成图像",
@@ -284,7 +309,7 @@ def apply_to_result(result: dict[str, Any], visible: Any) -> bool:
         "scorePublished": True,
         "watermark_verdict_override": {
             "applied": True,
-            "policyVersion": "explicit-ai-watermark-v2",
+            "policyVersion": "explicit-watermark-model-direct-v3" if direct else "explicit-ai-watermark-v2",
             "decisionAuthority": "decisive_provenance",
             "providers": providers,
             "hitCount": len(decisive_hits),

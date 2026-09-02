@@ -12,8 +12,10 @@ DECISIVE_METHOD = "remove_ai_watermarks_registry"
 EXPLICIT_DECISIVE_METHOD = "explicit_ai_watermark_fusion"
 DIRECT_DECISIVE_METHOD = "explicit_watermark_model_direct"
 DIRECT_DECISIVE_PROVIDER = "yolo11x_watermark"
-DIRECT_DECISIVE_CONFIDENCE = 0.92
-DIRECT_CORNER_MARGIN = 0.12
+DIRECT_DECISIVE_CONFIDENCE = 0.50
+# Kept in the public diagnostics for backward compatibility. Direct model
+# detections are no longer restricted to image corners.
+DIRECT_CORNER_MARGIN = 0.0
 DECISIVE_METHODS = frozenset({DECISIVE_METHOD, EXPLICIT_DECISIVE_METHOD})
 MIN_LOCALIZED_AREA = 0.0001
 PROVIDER_MIN_CONFIDENCE = {
@@ -62,7 +64,7 @@ def _nonnegative_int(value: Any) -> int:
 
 
 def is_direct_watermark_hit_eligible(hit: Any) -> bool:
-    """Apply the local decision policy even when an upstream service says decisive."""
+    """Accept a valid direct-model localization at the public display threshold."""
     if not isinstance(hit, dict) or _clamp01(hit.get("confidence")) < DIRECT_DECISIVE_CONFIDENCE:
         return False
     bbox = hit.get("bbox")
@@ -86,9 +88,7 @@ def is_direct_watermark_hit_eligible(hit: Any) -> bool:
         and y + height <= 1.0
     ):
         return False
-    horizontal_edge = x <= DIRECT_CORNER_MARGIN or x + width >= 1.0 - DIRECT_CORNER_MARGIN
-    vertical_edge = y <= DIRECT_CORNER_MARGIN or y + height >= 1.0 - DIRECT_CORNER_MARGIN
-    return horizontal_edge and vertical_edge
+    return True
 
 
 def _localized_hits(visible: Any) -> list[dict[str, Any]]:
@@ -205,12 +205,20 @@ def _strong_explicit_hits(visible: Any) -> list[dict[str, Any]]:
 
 
 def _decisive_hits(visible: Any) -> list[dict[str, Any]]:
+    direct_model_available = bool(
+        isinstance(visible, dict)
+        and (
+            visible.get("supported") is True
+            or isinstance(visible.get("explicitWatermark"), dict)
+            and visible["explicitWatermark"].get("available") is True
+        )
+    )
     direct_hits = [
         hit
         for hit in _localized_hits(visible)
-        if str(hit.get("provider") or "").strip().lower() == DIRECT_DECISIVE_PROVIDER
+        if direct_model_available
+        and str(hit.get("provider") or "").strip().lower() == DIRECT_DECISIVE_PROVIDER
         and str(hit.get("method") or "").strip() == DIRECT_DECISIVE_METHOD
-        and hit.get("decisive") is True
         and is_direct_watermark_hit_eligible(hit)
         and _clamp01((hit.get("bbox") or {}).get("w")) * _clamp01((hit.get("bbox") or {}).get("h")) >= MIN_LOCALIZED_AREA
     ]
@@ -318,7 +326,7 @@ def apply(result: dict[str, Any], visible: Any) -> dict[str, Any]:
         "reviewRequired": False,
         "watermarkVerdictOverride": {
             "applied": True,
-            "policyVersion": "explicit-watermark-model-direct-v2" if direct else "explicit-ai-watermark-v2",
+            "policyVersion": "explicit-watermark-model-direct-v3" if direct else "explicit-ai-watermark-v2",
             "decisionAuthority": "decisive_provenance",
             "providers": providers,
             "hitCount": len(decisive_hits),

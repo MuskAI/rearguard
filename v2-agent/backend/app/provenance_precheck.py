@@ -35,7 +35,7 @@ KNOWN_VISIBLE_PROVIDERS = frozenset({"gemini", "doubao", "jimeng", "jimeng_pill"
 YOLO_PROVIDER = "yolo11x_watermark"
 DIRECT_MODE = "model_direct"
 DIRECT_METHOD = "explicit_watermark_model_direct"
-DIRECT_DECISIVE_CONFIDENCE = 0.92
+DIRECT_DECISIVE_CONFIDENCE = 0.50
 
 _last_state: dict[str, Any] = {
     "available": None,
@@ -97,18 +97,13 @@ def _boxes_overlap(first: dict[str, Any], second: dict[str, Any]) -> bool:
 
 
 def _normalize_visible_hits(result: dict[str, Any], *, trusted_model: bool = False) -> None:
-    """Expose generic watermarks without treating them as AI provenance."""
+    """Normalize direct-model hits and keep untrusted generic hits non-decisive."""
     raw_hits = [item for item in result.get("visibleHits") or [] if isinstance(item, dict)]
     detector = result.get("genericVisibleWatermark")
     detector = dict(detector) if isinstance(detector, dict) else {}
     direct_mode = result.get("mode") == DIRECT_MODE or detector.get("mode") == DIRECT_MODE
     if direct_mode:
-        try:
-            threshold = max(DIRECT_DECISIVE_CONFIDENCE, min(1.0, max(0.0, float(
-                detector.get("directDecisionThreshold") or DIRECT_DECISIVE_CONFIDENCE
-            ))))
-        except (TypeError, ValueError):
-            threshold = DIRECT_DECISIVE_CONFIDENCE
+        threshold = DIRECT_DECISIVE_CONFIDENCE
         direct_hits = []
         for raw in raw_hits:
             if raw.get("provider") != YOLO_PROVIDER:
@@ -121,7 +116,6 @@ def _normalize_visible_hits(result: dict[str, Any], *, trusted_model: bool = Fal
             })
             decisive = (
                 trusted_model
-                and hit.get("decisive") is True
                 and confidence >= threshold
                 and decision_eligible
             )

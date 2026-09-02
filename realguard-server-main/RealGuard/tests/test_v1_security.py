@@ -1004,6 +1004,7 @@ def test_image_result_api_queries_with_account_uuid(client, monkeypatch):
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["result"]["itemid"] == 7
+    assert "该记录的二元结论" not in payload["result"]["explanation"]
     assert any(params == ("7", ACCOUNT_UUID) for _, params in calls)
 
 

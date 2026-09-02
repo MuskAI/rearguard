@@ -162,3 +162,48 @@ def test_backend_data_uses_same_strong_watermark_decision():
     assert data["final_label"] == "AI生成图像"
     assert data["confidence"] == "高"
     assert data["watermark_verdict_override"]["decisionAuthority"] == "decisive_provenance"
+
+
+def test_direct_model_visible_watermark_above_display_threshold_authorizes_fake():
+    visible = {
+        "supported": True,
+        "detected": True,
+        "coordinateSpace": "display_normalized_v1",
+        "displaySize": {"width": 1000, "height": 800},
+        "hits": [{
+            "provider": "yolo11x_watermark",
+            "label": "显式水印",
+            "confidence": 0.61,
+            "bbox": {"x": 0.28, "y": 0.04, "w": 0.44, "h": 0.08},
+            "method": "explicit_watermark_model_direct",
+            "decisive": False,
+        }],
+    }
+    result = _review_result()
+
+    assert watermark_verdict.apply_to_result(result, visible) is True
+    assert result["final_label"] == "AI生成图像"
+    assert result["probability"] == 0.95
+    assert result["decisionAuthority"] == "decisive_provenance"
+    assert result["watermark_verdict_override"]["policyVersion"] == "explicit-watermark-model-direct-v3"
+
+
+def test_direct_model_visible_watermark_below_display_threshold_does_not_override():
+    visible = {
+        "supported": True,
+        "detected": True,
+        "coordinateSpace": "display_normalized_v1",
+        "displaySize": {"width": 1000, "height": 800},
+        "hits": [{
+            "provider": "yolo11x_watermark",
+            "label": "疑似显式水印",
+            "confidence": 0.49,
+            "bbox": {"x": 0.28, "y": 0.04, "w": 0.44, "h": 0.08},
+            "method": "explicit_watermark_model_direct",
+            "decisive": True,
+        }],
+    }
+    result = _review_result()
+
+    assert watermark_verdict.apply_to_result(result, visible) is False
+    assert result["final_label"] == "需人工复核"
