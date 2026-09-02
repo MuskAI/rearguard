@@ -1614,7 +1614,7 @@ export default function AgentResult(props: Props) {
             </div>
             <div>
               <dt>来源核验</dt>
-              <dd>{props.provenanceBusy ? "正在核验" : "3/3 项已扫描"}</dd>
+              <dd>{props.provenanceBusy ? "正在核验" : "核验状态已同步"}</dd>
               <small>水印、元数据与 C2PA</small>
             </div>
           </dl>
